@@ -24,12 +24,14 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
+#include "boost/range/join.hpp"
 #include <map>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
+#include <absl/container/flat_hash_map.h>
 
 #include "fsm.hh"
 #include "log.hh"
@@ -148,6 +150,12 @@ private:
     // And the promise signalled when it is successfully applied or there was an error
     std::unordered_map<server_id, promise<snapshot_reply>> _snapshot_application_done;
 
+    struct append_request_queue {
+        size_t count = 0;
+        future<> f = make_ready_future<>();
+    };
+    absl::flat_hash_map<server_id, append_request_queue> _append_request_status;
+
     // An id of last loaded snapshot into a state machine
     snapshot_id _last_loaded_snapshot_id;
 
@@ -168,7 +176,7 @@ private:
     future<> applier_fiber();
 
     template <typename T> future<> add_entry_internal(T command, wait_type type);
-    template <typename Message> future<> send_message(server_id id, Message m);
+    template <typename Message> void send_message(server_id id, Message m);
 
     // Abort all snapshot transfers.
     // Called when no longer a leader or on shutdown
@@ -387,15 +395,30 @@ void server_impl::drop_waiters(std::optional<index_t> idx) {
 }
 
 template <typename Message>
-future<> server_impl::send_message(server_id id, Message m) {
-    return std::visit([this, id] (auto&& m) {
+void server_impl::send_message(server_id id, Message m) {
+    std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
             _stats.append_entries_reply_sent++;
             _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
             _stats.append_entries_sent++;
-            return _rpc->send_append_entries(id, m);
+             _append_request_status[id].count++;
+             _append_request_status[id].f = _append_request_status[id].f.then([this, cm = std::move(m), cid = id] () noexcept -> future<> {
+                // We need to copy everything from the capture because it cannot be accessed after co-routine yields.
+                server_impl* server = this;
+                auto m = std::move(cm);
+                auto id = cid;
+                try {
+                    co_await server->_rpc->send_append_entries(id, m);
+                } catch(...) {
+                    logger.debug("[{}] io_fiber failed to send a message to {}: {}", server->_id, id, std::current_exception());
+                }
+                server->_append_request_status[id].count--;
+                if (server->_append_request_status[id].count == 0) {
+                   server->_append_request_status.erase(id);
+                }
+            });
         } else if constexpr (std::is_same_v<T, vote_request>) {
             _stats.vote_request_sent++;
             _rpc->send_vote_request(id, m);
@@ -419,7 +442,6 @@ future<> server_impl::send_message(server_id id, Message m) {
         } else {
             static_assert(!sizeof(T*), "not all message types are handled");
         }
-        return make_ready_future<>();
     }, std::move(m));
 }
 
@@ -505,17 +527,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 }
             }
 
-            if (batch.messages.size()) {
-                // After entries are persisted we can send messages.
-                co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
-                    return send_message(message.first, std::move(message.second)).then_wrapped([this, &message] (future<>&& f) {
-                        if (f.failed()) {
-                            // Not being able to send a message is not a critical error
-                            logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, message.first, f.get_exception());
-                        }
-                        return make_ready_future();
-                    });
-                });
+             // After entries are persisted we can send messages.
+            for (auto&& m : batch.messages) {
+                try {
+                    send_message(m.first, std::move(m.second));
+                } catch(...) {
+                    // Not being able to send a message is not a critical error
+                    logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, m.first, std::current_exception());
+                }
             }
 
             if (batch.rpc_configuration) {
@@ -677,7 +696,11 @@ future<> server_impl::abort() {
 
     auto snp_futures = _aborted_snapshot_transfers | boost::adaptors::map_values;
 
-    co_await seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
+    auto append_futures = _append_request_status | boost::adaptors::map_values |  boost::adaptors::transformed([] (append_request_queue& a) -> future<>& { return a.f; });
+
+    auto all_futures = boost::range::join(snp_futures, append_futures);
+
+    co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
 
 future<> server_impl::set_configuration(server_address_set c_new) {
