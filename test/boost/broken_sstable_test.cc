@@ -142,9 +142,9 @@ SEASTAR_THREAD_TEST_CASE(broken_open_tombstone) {
                        .with_column("val", utf8_type, column_kind::regular_column)
                        .build(schema_builder::compact_storage::no);
     broken_sst("test/resource/sstables/broken_open_tombstone", 122, s,
-        "Range tombstones have to be disjoint: current opened range tombstone { clustering: "
-        "ckp{00056b65793262}, kind: incl start, tombstone: {tombstone: timestamp=1544745393692803, "
-        "deletion_time=1544745393} }, new tombstone {tombstone: timestamp=1544745393692803, "
+        "Range tombstones have to be disjoint: current opened range tombstone "
+        "{tombstone: timestamp=1544745393692803, deletion_time=1544745393}, "
+        "new tombstone {tombstone: timestamp=1544745393692803, "
         "deletion_time=1544745393} in sstable "
         "test/resource/sstables/broken_open_tombstone/mc-122-big-Data.db",
         sstable::version_types::mc);

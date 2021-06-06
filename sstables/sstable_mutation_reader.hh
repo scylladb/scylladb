@@ -35,6 +35,7 @@
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
+#include "flat_mutation_reader_v2.hh"
 
 namespace sstables {
 
@@ -191,19 +192,7 @@ void set_range_tombstone_start_from_end_open_marker(Consumer& c, const schema& s
         auto open_end_marker = idx.end_open_marker();
         if (open_end_marker) {
             auto[pos, tomb] = *open_end_marker;
-            if (pos.is_clustering_row()) {
-                auto ck = pos.key();
-                bool was_non_full = clustering_key::make_full(s, ck);
-                c.set_range_tombstone_start(
-                        std::move(ck),
-                        was_non_full ? bound_kind::incl_start : bound_kind::excl_start,
-                        tomb);
-            } else {
-                auto view = position_in_partition_view(pos).as_start_bound_view();
-                c.set_range_tombstone_start(view.prefix(), view.kind(), tomb);
-            }
-        } else {
-            c.reset_range_tombstone_start();
+            c.set_range_tombstone_start(tomb);
         }
     }
 }
