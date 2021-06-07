@@ -1116,9 +1116,12 @@ public:
     environment(const environment&) = delete;
     environment(environment&&) = delete;
 
-    // TODO: adjustable/randomizable ticking ratios
-    void tick() {
+    void tick_network() {
         _network.tick();
+    }
+
+    // TODO: adjustable/randomizable ticking ratios
+    void tick_servers() {
         for (auto& [_, r] : _routes) {
             r._server->tick();
             r._fd->tick();
@@ -1316,7 +1319,8 @@ SEASTAR_TEST_CASE(basic_test) {
         using output_t = typename ExReg::output_t;
 
         t.start([&] {
-            env.tick();
+            env.tick_network();
+            env.tick_servers();
             timer.tick();
         }, 10'000);
 
