@@ -131,6 +131,11 @@ public:
     // unlock()
     virtual future<> read_barrier() = 0;
 
+    // Initiate leader stepdown process.
+    // If the node is not a leader returns not_a_leader exception.
+    // In case of a timeout returns timeout_error.
+    virtual future<> stepdown(logical_clock::duration timeout) = 0;
+
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;

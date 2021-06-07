@@ -39,6 +39,8 @@ struct fsm_output {
     // Latest configuration obtained from the log in case it has changed
     // since last fsm output poll.
     std::optional<server_address_set> rpc_configuration;
+    // Set to true if a leadership transfer was aborted since the last output
+    bool abort_leadership_transfer;
 
     // True if there is no new output
     bool empty() const {
@@ -93,10 +95,13 @@ struct leader {
     const fsm& fsm;
     // Used to limit log size
     seastar::semaphore log_limiter_semaphore;
-    // True if the leader is in the process of transferring the leadership
-    bool stepdown = false;
-    // True it timeout_now was already sent to one of the followers
-    bool timeout_now_sent = false;
+    // If the leader is in the process of transferring the leadership
+    // contains a time point in the future the transfer will be aborted at
+    // unless completes successfully till then.
+    std::optional<logical_clock::time_point> stepdown;
+    // If timeout_now was already sent to one of the followers contains the id of the follower
+    // it was sent to
+    std::optional<server_id> timeout_now_sent;
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(max_log_size) {}
     ~leader();
 };
@@ -155,6 +160,8 @@ class fsm {
     failure_detector& _failure_detector;
     // fsm configuration
     fsm_config _config;
+    // This is set to true when leadership transfer process is aborted due to a timeout
+    bool _abort_leadership_transfer = false;
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -166,12 +173,14 @@ class fsm {
         snapshot _snapshot;
         index_t _last_conf_idx;
         term_t _last_term;
+        bool _abort_leadership_transfer;
 
         bool is_equal(const fsm& fsm) const {
             return _current_term == fsm._current_term && _voted_for == fsm._voted_for &&
                 _commit_idx == fsm._commit_idx && _snapshot.id == fsm._log.get_snapshot().id &&
                 _last_conf_idx == fsm._log.last_conf_idx() &&
-                _last_term == fsm._log.last_term();
+                _last_term == fsm._log.last_term() &&
+                _abort_leadership_transfer == fsm._abort_leadership_transfer;
         }
 
         void advance(const fsm& fsm) {
@@ -181,6 +190,7 @@ class fsm {
             _snapshot = fsm._log.get_snapshot();
             _last_conf_idx = fsm._log.last_conf_idx();
             _last_term = fsm._log.last_term();
+            _abort_leadership_transfer = fsm._abort_leadership_transfer;
         }
     } _observed;
 
@@ -382,7 +392,7 @@ public:
     // sends timeout_now rpc to it and makes it initiate new election.
     // Can be used for leader stepdown if new configuration does not contain
     // current leader.
-    void transfer_leadership();
+    void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0));
 
     void stop();
 

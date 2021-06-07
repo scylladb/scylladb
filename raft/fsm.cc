@@ -295,6 +295,9 @@ fsm_output fsm::get_output() {
     // to not lose messages in case arrays population throws
     std::swap(output.messages, _messages);
 
+    // Get status of leadership transfer (if any)
+    output.abort_leadership_transfer = std::exchange(_abort_leadership_transfer, false);
+
     // Fill server_address_set corresponding to the configuration from
     // the rpc point of view.
     //
@@ -433,9 +436,10 @@ void fsm::tick_leader() {
         return become_follower(server_id{});
     }
 
-    auto active =  leader_state().tracker.get_activity_tracker();
+    auto& state = leader_state();
+    auto active = state.tracker.get_activity_tracker();
     active(_my_id); // +1 for self
-    for (auto& [id, progress] : leader_state().tracker) {
+    for (auto& [id, progress] : state.tracker) {
         if (progress.id != _my_id) {
             if (_failure_detector.is_alive(progress.id)) {
                 active(progress.id);
@@ -467,6 +471,26 @@ void fsm::tick_leader() {
         // Advance last election time if we heard from
         // the quorum during this tick.
         _last_election_time = _clock.now();
+    }
+
+    if (state.stepdown) {
+        logger.trace("tick[{}]: stepdown is active", _my_id);
+        if (leader_state().tracker.find(_my_id) == nullptr) {
+            // Do not abort stepdown if not part of the current
+            // config.
+        } else if (*state.stepdown <= _clock.now()) {
+            logger.trace("tick[{}]: cancel stepdown", _my_id);
+            // Cancel stepdown (only if the leader is part of the cluster)
+            leader_state().log_limiter_semaphore.signal(_config.max_log_size);
+            state.stepdown.reset();
+            state.timeout_now_sent.reset();
+            _abort_leadership_transfer = true;
+            _sm_events.signal(); // signal to handle aborting of leadership transfer
+        } else if (state.timeout_now_sent) {
+            logger.trace("tick[{}]: resend timeout_now", _my_id);
+            // resend timeout now in case it was lost
+            send_to(*state.timeout_now_sent, timeout_now{_current_term});
+        }
     }
 }
 
@@ -898,10 +922,17 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
     return true;
 }
 
-void fsm::transfer_leadership() {
+void fsm::transfer_leadership(logical_clock::duration timeout) {
     check_is_leader();
-    leader_state().stepdown = true;
-    // Stop new requests from commig in
+    auto leader = leader_state().tracker.find(_my_id);
+    if (configuration::voter_count(get_configuration().current) == 1 && leader && leader->can_vote) {
+        // If there is only one voter and it is this node we cannot have another node
+        // to transfer leadership to
+        throw raft::no_other_voting_member();
+    }
+
+    leader_state().stepdown = _clock.now() + timeout;
+    // Stop new requests from coming in
     leader_state().log_limiter_semaphore.consume(_config.max_log_size);
     // If there is a fully up-to-date voting replica make it start an election
     for (auto&& [_, p] : leader_state().tracker) {
@@ -915,7 +946,7 @@ void fsm::transfer_leadership() {
 void fsm::send_timeout_now(server_id id) {
     logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
     send_to(id, timeout_now{_current_term});
-    leader_state().timeout_now_sent = true;
+    leader_state().timeout_now_sent = id;
     if (leader_state().tracker.find(_my_id) == nullptr) {
         logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});

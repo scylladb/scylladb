@@ -77,6 +77,7 @@ public:
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
+    future<> stepdown(logical_clock::duration timeout) override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -87,6 +88,7 @@ private:
     // id of this server
     server_id _id;
     server::configuration _config;
+    std::optional<promise<>> _stepdown_promise;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
     queue<std::vector<log_entry_ptr>> _apply_entries = queue<std::vector<log_entry_ptr>>(10);
@@ -554,6 +556,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (!_fsm->is_leader()) {
+                if (_stepdown_promise) {
+                    std::exchange(_stepdown_promise, std::nullopt)->set_value();
+                }
                 if (!_current_rpc_config.contains(server_address{_id})) {
                     // If the node is no longer part of a config and no longer the leader
                     // it will never know the status of entries it submitted
@@ -561,6 +566,10 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 }
                 // request aborts of snapshot transfers
                 abort_snapshot_transfers();
+            } else if (batch.abort_leadership_transfer) {
+                if (_stepdown_promise) {
+                    std::exchange(_stepdown_promise, std::nullopt)->set_exception(timeout_error("Stepdown process timed out"));
+                }
             }
         }
     } catch (seastar::broken_condition_variable&) {
@@ -844,6 +853,19 @@ void server_impl::add_to_rpc_config(server_address srv) {
 
 void server_impl::remove_from_rpc_config(const server_address& srv) {
     _current_rpc_config.erase(srv);
+}
+
+future<> server_impl::stepdown(logical_clock::duration timeout) {
+    if (_stepdown_promise) {
+        return make_exception_future<>(std::logic_error("Stepdown is already in progress"));
+    }
+    try {
+        _fsm->transfer_leadership(timeout);
+    } catch (...) {
+        return make_exception_future<>(std::current_exception());
+    }
+    _stepdown_promise = promise<>();
+    return _stepdown_promise->get_future();
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
