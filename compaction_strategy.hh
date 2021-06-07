@@ -29,11 +29,11 @@
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
 #include "compaction_strategy_type.hh"
+#include "flat_mutation_reader.hh"
 
 class table;
 using column_family = table;
 
-class flat_mutation_reader;
 struct mutation_source_metadata;
 class compaction_backlog_tracker;
 
@@ -44,8 +44,6 @@ class sstable;
 class sstable_set;
 struct compaction_descriptor;
 struct resharding_descriptor;
-
-using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
 
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;

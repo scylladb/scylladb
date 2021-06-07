@@ -25,7 +25,6 @@
 #include "mutation_reader.hh"
 
 namespace mutation_writer {
-using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
 
 class bucket_writer {
     schema_ptr _schema;
