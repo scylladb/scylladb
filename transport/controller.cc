@@ -61,8 +61,7 @@ future<> controller::do_start_server() {
     }
 
     return seastar::async([this] {
-        _server = std::make_unique<distributed<cql_transport::cql_server>>();
-        auto cserver = &*_server;
+        auto cserver = std::make_unique<distributed<cql_transport::cql_server>>();
 
         auto& cfg = _db.local().get_config();
         auto addr = cfg.rpc_address();
@@ -150,21 +149,20 @@ future<> controller::do_start_server() {
         }
 
         cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), std::ref(_db), std::ref(_mem_limiter), cql_server_config, std::ref(_sl_controller)).get();
+        auto on_error = defer([&cserver] { cserver->stop().get(); });
 
-        try {
-            parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-                return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
-                    logger.info("Starting listening for CQL clients on {} ({}, {})"
-                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
-                    );
-                });
-            }).get();
-        } catch (...) {
-            cserver->stop().get();
-            throw;
-        }
-        
+        parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
+            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
+                logger.info("Starting listening for CQL clients on {} ({}, {})"
+                        , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+                );
+            });
+        }).get();
+
         set_cql_ready(true).get();
+
+        on_error.cancel();
+        _server = std::move(cserver);
     });
 }
 
@@ -196,7 +194,7 @@ future<> controller::do_stop_server() {
     return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).then([&cserver] {
+            return set_cql_ready(false).finally([&cserver] {
                 return cserver->stop().then([] {
                     logger.info("CQL server stopped");
                 });
