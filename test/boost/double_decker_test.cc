@@ -58,15 +58,15 @@ public:
     bool operator!=(const compound_key& other) const { return !(*this == other); }
 
     struct compare {
-        int operator()(const int& a, const int& b) const { return a - b; }
-        int operator()(const int& a, const compound_key& b) const { return a - b.key; }
-        int operator()(const compound_key& a, const int& b) const { return a.key - b; }
+        std::strong_ordering operator()(const int& a, const int& b) const { return a <=> b; }
+        std::strong_ordering operator()(const int& a, const compound_key& b) const { return a <=> b.key; }
+        std::strong_ordering operator()(const compound_key& a, const int& b) const { return a.key <=> b; }
 
-        int operator()(const compound_key& a, const compound_key& b) const {
+        std::strong_ordering operator()(const compound_key& a, const compound_key& b) const {
             if (a.key != b.key) {
                 return this->operator()(a.key, b.key);
             } else {
-                return a.sub_key.compare(b.sub_key);
+                return a.sub_key.compare(b.sub_key) <=> 0;
             }
         }
     };
@@ -122,13 +122,13 @@ public:
 
     struct compare {
         compound_key::compare kcmp;
-        int operator()(const int& a, const int& b) { return kcmp(a, b); }
-        int operator()(const compound_key& a, const int& b) { return kcmp(a.key, b); }
-        int operator()(const int& a, const compound_key& b) { return kcmp(a, b.key); }
-        int operator()(const compound_key& a, const compound_key& b) { return kcmp(a, b); }
-        int operator()(const compound_key& a, const test_data& b) { return kcmp(a, b._key); }
-        int operator()(const test_data& a, const compound_key& b) { return kcmp(a._key, b); }
-        int operator()(const test_data& a, const test_data& b) { return kcmp(a._key, b._key); }
+        std::strong_ordering operator()(const int& a, const int& b) { return kcmp(a, b); }
+        std::strong_ordering operator()(const compound_key& a, const int& b) { return kcmp(a.key, b); }
+        std::strong_ordering operator()(const int& a, const compound_key& b) { return kcmp(a, b.key); }
+        std::strong_ordering operator()(const compound_key& a, const compound_key& b) { return kcmp(a, b); }
+        std::strong_ordering operator()(const compound_key& a, const test_data& b) { return kcmp(a, b._key); }
+        std::strong_ordering operator()(const test_data& a, const compound_key& b) { return kcmp(a._key, b); }
+        std::strong_ordering operator()(const test_data& a, const test_data& b) { return kcmp(a._key, b._key); }
     };
 };
 
