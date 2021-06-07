@@ -188,6 +188,7 @@ class indexed_table_select_statement : public select_statement {
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
 public:
+    static constexpr size_t max_base_table_query_result_bytes = 1024*1024;
     static constexpr size_t max_base_table_query_concurrency = 4096;
 
     static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,

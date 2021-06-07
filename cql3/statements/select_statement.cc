@@ -535,12 +535,13 @@ indexed_table_select_statement::do_execute_base_query(
         base_query_state(const base_query_state&) = delete;
     };
 
+    const bool is_paged = bool(paging_state);
     base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
-    return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
+    return do_with(std::move(query_state), [this, is_paged, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
         auto& concurrency = query_state.concurrency;
-        return repeat([this, &ranges_to_vnodes, &merger, &proxy, &state, &options, &concurrency, cmd, timeout]() {
+        return repeat([this, is_paged, &ranges_to_vnodes, &merger, &proxy, &state, &options, &concurrency, cmd, timeout]() {
             // Starting with 1 range, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more ranges than before
             dht::partition_range_vector prange = ranges_to_vnodes(concurrency);
@@ -578,10 +579,12 @@ indexed_table_select_statement::do_execute_base_query(
                 concurrency *= 2;
             }
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-            .then([&ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
+            .then([is_paged, &ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
                 auto is_short_read = qr.query_result->is_short_read();
+                // Results larger than 1MB should be shipped to the client immediately
+                const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= max_base_table_query_result_bytes;
                 merger(std::move(qr.query_result));
-                return stop_iteration(is_short_read || ranges_to_vnodes.empty());
+                return stop_iteration(is_short_read || ranges_to_vnodes.empty() || page_limit_reached);
             });
         }).then([&merger]() {
             return merger.get();
@@ -631,11 +634,12 @@ indexed_table_select_statement::do_execute_base_query(
     };
 
     base_query_state query_state{cmd->get_row_limit(), std::move(primary_keys)};
-    return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
+    const bool is_paged = bool(paging_state);
+    return do_with(std::move(query_state), [this, is_paged, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
         auto &merger = query_state.merger;
         auto &keys = query_state.primary_keys;
         auto &key_it = query_state.current_primary_key;
-        return repeat([this, &keys, &key_it, &merger, &proxy, &state, &options, cmd, timeout]() {
+        return repeat([this, is_paged, &keys, &key_it, &merger, &proxy, &state, &options, cmd, timeout]() {
             // Starting with 1 key, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more key than before
             auto already_done = std::distance(keys.begin(), key_it);
@@ -657,11 +661,13 @@ indexed_table_select_statement::do_execute_base_query(
                 .then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
-            }, std::move(oneshot_merger)).then([&key_it, key_it_end = std::move(key_it_end), &keys, &merger] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+            }, std::move(oneshot_merger)).then([is_paged, &key_it, key_it_end = std::move(key_it_end), &keys, &merger] (foreign_ptr<lw_shared_ptr<query::result>> result) {
                 auto is_short_read = result->is_short_read();
+                // Results larger than 1MB should be shipped to the client immediately
+                const bool page_limit_reached = is_paged && result->buf().size() >= max_base_table_query_result_bytes;
                 merger(std::move(result));
                 key_it = key_it_end;
-                return stop_iteration(is_short_read || key_it == keys.end());
+                return stop_iteration(is_short_read || key_it == keys.end() || page_limit_reached);
             });
         }).then([&merger] () {
             return merger.get();
