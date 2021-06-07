@@ -574,7 +574,9 @@ indexed_table_select_statement::do_execute_base_query(
                     command->slice.set_range(*_schema, base_pk, row_ranges);
                 }
             }
-            concurrency *= 2;
+            if (concurrency < max_base_table_query_concurrency) {
+                concurrency *= 2;
+            }
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
             .then([&ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
                 auto is_short_read = qr.query_result->is_short_read();
@@ -638,7 +640,7 @@ indexed_table_select_statement::do_execute_base_query(
             // we continue exponentially, asking for 2x more key than before
             auto already_done = std::distance(keys.begin(), key_it);
             auto next_iteration = already_done + 1;
-            next_iteration = std::min<size_t>(next_iteration, keys.size() - already_done);
+            next_iteration = std::min<size_t>({next_iteration, keys.size() - already_done, max_base_table_query_concurrency});
             auto key_it_end = key_it + next_iteration;
             auto command = ::make_lw_shared<query::read_command>(*cmd);
 
