@@ -1022,36 +1022,36 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
             auto& rp = buf_rp.position;
 
             while (true) {
-            // Check that we can still send the next hint. Don't try to send it if the destination host
-            // is DOWN or if we have already failed to send some of the previous hints.
-            if (!draining() && ctx_ptr->segment_replay_failed) {
-                co_return;
-            }
+                // Check that we can still send the next hint. Don't try to send it if the destination host
+                // is DOWN or if we have already failed to send some of the previous hints.
+                if (!draining() && ctx_ptr->segment_replay_failed) {
+                    co_return;
+                }
 
-            // Break early if stop() was called or the destination node went down.
-            if (!can_send()) {
-                ctx_ptr->segment_replay_failed = true;
-                co_return;
-            }
+                // Break early if stop() was called or the destination node went down.
+                if (!can_send()) {
+                    ctx_ptr->segment_replay_failed = true;
+                    co_return;
+                }
 
-            co_await flush_maybe();
+                co_await flush_maybe();
 
-            if (utils::get_local_injector().enter("hinted_handoff_pause_hint_replay")) {
-                // We cannot send the hint because hint replay is paused.
-                // Sleep 100ms and do the whole loop again.
-                //
-                // Jumping to the beginning of the loop makes sure that
-                // - We regularly check if we should stop - so that we won't
-                //   get stuck in shutdown.
-                // - flush_maybe() is called regularly - so that new segments
-                //   are created and we help enforce the "at most 10s worth of
-                //   hints in a segment".
-                co_await sleep(std::chrono::milliseconds(100));
-                continue;
-            } else {
-                co_await send_one_hint(ctx_ptr, std::move(buf), rp, secs_since_file_mod, fname);
-                break;
-            }
+                if (utils::get_local_injector().enter("hinted_handoff_pause_hint_replay")) {
+                    // We cannot send the hint because hint replay is paused.
+                    // Sleep 100ms and do the whole loop again.
+                    //
+                    // Jumping to the beginning of the loop makes sure that
+                    // - We regularly check if we should stop - so that we won't
+                    //   get stuck in shutdown.
+                    // - flush_maybe() is called regularly - so that new segments
+                    //   are created and we help enforce the "at most 10s worth of
+                    //   hints in a segment".
+                    co_await sleep(std::chrono::milliseconds(100));
+                    continue;
+                } else {
+                    co_await send_one_hint(ctx_ptr, std::move(buf), rp, secs_since_file_mod, fname);
+                    break;
+                }
             };
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
