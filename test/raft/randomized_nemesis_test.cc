@@ -26,6 +26,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/weak_ptr.hh>
 #include <seastar/util/defer.hh>
 
 #include "raft/server.hh"
@@ -1068,7 +1069,7 @@ static raft::server_id to_raft_id(size_t id) {
 // Needs to be periodically `tick()`ed which ticks the network
 // and underlying servers.
 template <PureStateMachine M>
-class environment {
+class environment : public seastar::weakly_referencable<environment<M>> {
     using input_t = typename M::output_t;
     using state_t = typename M::state_t;
     using output_t = typename M::output_t;
@@ -1322,14 +1323,14 @@ SEASTAR_TEST_CASE(basic_test) {
         auto leader_id = co_await env.new_server(true);
 
         // Wait at most 100 ticks for the server to elect itself as a leader.
-        co_await timer.with_timeout(timer.now() + 100_t, ([&] () -> future<> {
+        co_await timer.with_timeout(timer.now() + 100_t, ([] (weak_ptr<environment<ExReg>> env, raft::server_id leader_id) -> future<> {
             while (true) {
-                if (env.get_server(leader_id).is_leader()) {
+                if (!env || env->get_server(leader_id).is_leader()) {
                     co_return;
                 }
                 co_await timer.sleep(1_t);
             }
-        })());
+        })(env.weak_from_this(), leader_id));
 
         assert(env.get_server(leader_id).is_leader());
 
