@@ -39,7 +39,10 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
             auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{4321, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
-            assert_that(res).is_rows().with_size(4321);
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            BOOST_REQUIRE_NE(rows, nullptr);
+            // It's fine to get less rows than requested due to paging limit, but never more than that
+            BOOST_REQUIRE_LE(rows->rs().get_metadata().column_count(), 4321);
         });
 
         eventually([&] {
