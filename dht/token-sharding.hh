@@ -55,7 +55,7 @@ public:
      * is called `spans` times, each time applied to its return value, but efficiently. This allows
      * selecting ranges that include multiple round trips around the 0..smp::count-1 shard span:
      *
-     *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_shard(t, shard, 1), spans - 1)
+     *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_next_shard(t, shard, 1), spans - 1)
      *
      * On overflow, maximum_token() is returned.
      */
