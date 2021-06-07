@@ -148,6 +148,7 @@ def pid_to_ip(pid):
 # Specific code for running *Scylla*:
 
 import cassandra.cluster
+import ssl
 
 # Find a Scylla executable. By default, we take the latest build/*/scylla
 # next to the location of this script, but this can be overridden by setting
@@ -216,23 +217,41 @@ def run_scylla_cmd(pid, dir):
         '--authenticator', 'PasswordAuthenticator',
         ], {})
 
+# Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
+# port number as default - replacing the unencrypted server)
+def run_scylla_ssl_cql_cmd(pid, dir):
+    (cmd, env) = run_scylla_cmd(pid, dir)
+    setup_ssl_certificate(dir)
+    cmd += ['--client-encryption-options', 'enabled=true',
+            '--client-encryption-options', f'keyfile={dir}/scylla.key',
+            '--client-encryption-options', f'certificate={dir}/scylla.crt',
+    ]
+    return (cmd, env)
+
 # Get a Cluster object to connect to CQL at the given IP address (and with
 # the appropriate username and password). It's important to shutdown() this
 # Cluster object when done with it, otherwise we can get errors at the end
 # of the run when background tasks continue to spawn futures after exit.
-def get_cql_cluster(ip):
+def get_cql_cluster(ip, ssl_context=None):
     auth_provider = cassandra.auth.PlainTextAuthProvider(username='cassandra', password='cassandra')
-    return cassandra.cluster.Cluster([ip], auth_provider=auth_provider)
+    return cassandra.cluster.Cluster([ip],
+        auth_provider=auth_provider,
+        ssl_context=ssl_context)
 
 ## Test that CQL is serving, for wait_for_services() below.
-def check_cql(ip):
+def check_cql(ip, ssl_context=None):
     try:
-        cluster = get_cql_cluster(ip)
+        cluster = get_cql_cluster(ip, ssl_context)
         cluster.connect()
         cluster.shutdown()
     except cassandra.cluster.NoHostAvailable:
         raise NotYetUp
     # Any other exception may indicate a problem, and is passed to the caller.
+def check_ssl_cql(ip):
+    # Note that Scylla does not support any earlier TLS protocol. If you
+    # try, you get mysterious EOF errors (see issue #6971) :-(
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    check_cql(ip, ssl_context)
 
 # wait_for_services() waits for scylla to finish booting successfully and
 # listen to services checked by the given "checkers". Raises an exception

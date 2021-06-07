@@ -8,6 +8,7 @@ Cassandra in most features.
 To run all tests against an already-running local installation of Scylla
 or Cassandra on localhost, just run `pytest`. The "--host" and "--port"
 can be used to give a different location for the running Scylla or Cassanra.
+The "--ssl" option can be used to use an encrypted (TLSv1.2) connection.
 
 More conveniently, we have two scripts - "run" and "run-cassandra" - which
 do all the work necessary to start Scylla or Cassandra (respectively),

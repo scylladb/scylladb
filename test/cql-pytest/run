@@ -6,10 +6,18 @@ import run   # run.py in this directory
 
 print('Scylla is: ' + run.scylla + '.')
 
-pid = run.run_with_temporary_dir(run.run_scylla_cmd)
+ssl = '--ssl' in sys.argv
+if ssl:
+    cmd = run.run_scylla_ssl_cql_cmd
+    check_cql = run.check_ssl_cql
+else:
+    cmd = run.run_scylla_cmd
+    check_cql = run.check_cql
+
+pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
-run.wait_for_cql(pid, ip)
+run.wait_for_services(pid, [lambda: check_cql(ip)])
 success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'
