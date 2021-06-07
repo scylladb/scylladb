@@ -38,7 +38,6 @@
 #include "service/memory_limiter.hh"
 #include "service/storage_proxy.hh"
 #include "db/consistency_level_type.hh"
-#include "database.hh"
 #include "db/write_type.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
@@ -153,12 +152,12 @@ event::event_type parse_event_type(const sstring& value)
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        service::migration_notifier& mn, database& db, service::memory_limiter& ml, cql_server_config config, qos::service_level_controller& sl_controller)
+        service::migration_notifier& mn, service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg, qos::service_level_controller& sl_controller)
     : server("CQLServer", clogger)
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
-    , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard)
+    , _max_concurrent_requests(db_cfg.max_concurrent_requests_per_shard)
     , _memory_available(ml.get_semaphore())
     , _notifier(std::make_unique<event_notifier>(mn))
     , _auth_service(auth_service)

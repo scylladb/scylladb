@@ -54,7 +54,6 @@ namespace service {
 class memory_limiter;
 }
 
-class database;
 enum class client_type;
 struct client_data;
 
@@ -166,8 +165,9 @@ private:
     qos::service_level_controller& _sl_controller;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
-            service::migration_notifier& mn, database& db, service::memory_limiter& ml,
+            service::migration_notifier& mn, service::memory_limiter& ml,
             cql_server_config config,
+            const db::config& db_cfg,
             qos::service_level_controller& sl_controller);
 public:
     using response = cql_transport::response;

@@ -1327,7 +1327,7 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
-            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller, *cfg);
 
             ss.register_client_shutdown_hook("native transport", [&cql_server_ctl] {
                 cql_server_ctl.stop().get();
