@@ -979,6 +979,20 @@ public:
 };
 
 std::unique_ptr<incremental_selector_impl> compound_sstable_set::make_incremental_selector() const {
+    if (_sets.empty()) {
+        // compound_sstable_set must manage one sstable set at least.
+        abort();
+    }
+    auto sets = _sets;
+    auto it = std::partition(sets.begin(), sets.end(), [] (const lw_shared_ptr<sstable_set>& set) { return !set->all()->empty(); });
+    auto non_empty_set_count = std::distance(sets.begin(), it);
+
+    // optimize for common case where only primary set contains sstables, so its selector can be built without an interposer.
+    // optimization also applies when no set contains sstable, so any set can be picked as selection will be a no-op anyway.
+    if (non_empty_set_count <= 1) {
+        const auto& set = sets.front();
+        return set->_impl->make_incremental_selector();
+    }
     return std::make_unique<incremental_selector>(*_schema, _sets);
 }
 

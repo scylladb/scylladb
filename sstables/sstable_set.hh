@@ -154,6 +154,8 @@ public:
             streamed_mutation::forwarding,
             mutation_reader::forwarding,
             read_monitor_generator& rmg = default_read_monitor_generator()) const;
+
+    friend class compound_sstable_set;
 };
 
 /// Read a range from the passed-in sstables.
