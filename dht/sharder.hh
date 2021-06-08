@@ -133,10 +133,8 @@ class selective_token_range_sharder {
     const sharder& _sharder;
     dht::token_range _range;
     shard_id _shard;
-    bool _done = false;
     shard_id _next_shard;
-    dht::token _start_token;
-    std::optional<range_bound<dht::token>> _start_boundary;
+    std::optional<dht::token> _start_token; // If empty, then we have reached the end.
 public:
     // Initializes the selective_token_range_sharder with a token range and shard_id of interest.
     selective_token_range_sharder(const sharder& sharder, dht::token_range range, shard_id shard)
@@ -144,9 +142,10 @@ public:
             , _range(std::move(range))
             , _shard(shard)
             , _next_shard(_shard + 1 == _sharder.shard_count() ? 0 : _shard + 1)
-            , _start_token(_range.start() ? _range.start()->value() : minimum_token())
-            , _start_boundary(_sharder.shard_of(_start_token) == shard ?
-                _range.start() : range_bound<dht::token>(_sharder.token_for_next_shard(_start_token, shard))) {
+            , _start_token(_range.start() ? _range.start()->value() : minimum_token()) {
+        if (_sharder.shard_of(*_start_token) != _shard) {
+            _start_token = _sharder.maybe_token_for_next_shard(*_start_token, _shard);
+        }
     }
     // Returns the next token_range that is both wholly contained within the input range and also
     // wholly owned by the input shard_id. When the input range is exhausted, std::nullopt is returned.
