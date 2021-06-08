@@ -85,10 +85,7 @@ class position_in_partition;
 ///
 ///   1) The stream _may_ contain fragments with information
 ///      about _some_ of the writes which are relevant to clustering ranges
-///      outside of the requested ranges. For example, it may return
-///      some of the range tombstones relevant to the clustering ranges
-///      outside of the requested ranges, but this information may not
-///      be complete (e.g. there could be a more recent deletion).
+///      outside of the requested ranges.
 ///
 ///   2) The stream will not contain writes which are absent in the unrestricted stream,
 ///      both for the requested clustering ranges and not requested ranges.
@@ -96,10 +93,10 @@ class position_in_partition;
 ///      Even though it may be incomplete for non-requested ranges, it won't contain
 ///      incorrect information.
 ///
-///   3) All clustering_row fragments have position() which is within the requested
+///   3) All clustered fragments have position() which is within the requested
 ///      ranges.
 ///
-///   4) range_tombstone fragments can have position() outside of requested ranges.
+///   4) range_tombstone ranges are trimmed to the boundaries of requested ranges.
 ///
 /// \section Intra-partition fast-forwarding mode
 ///
@@ -121,7 +118,8 @@ class position_in_partition;
 ///       the position_range passed to fast_forward_to().
 ///
 ///    3) The position_range passed to fast_forward_to() is a clustering key restriction.
-///       Same rules apply as with clustering restrictions described above.
+///       Same rules apply as with clustering restrictions described above except for point (4) above:
+///       range tombstones can extend the range passed to fast_forward_to().
 ///
 ///    4) range_tombstones produced in earlier sub-stream which are also relevant
 ///       for next sub-streams do not have to be repeated. They _may_ be repeated
