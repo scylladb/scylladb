@@ -581,7 +581,7 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
         try {
             s = db.local().find_column_family(table_ids[idx]).schema();
         } catch(...) {
-            throw std::runtime_error(format("No column family '{}' in keyspace '{}'", table_ids[idx], keyspace));
+            throw no_such_column_family(keyspace, table_ids[idx]);
         }
         if (last_s && last_s->get_sharder() != s->get_sharder()) {
             throw std::runtime_error(

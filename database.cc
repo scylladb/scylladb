@@ -1189,6 +1189,11 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, std::stri
 {
 }
 
+no_such_column_family::no_such_column_family(std::string_view ks_name, const utils::UUID& uuid)
+    : runtime_error{format("Can't find a column family with UUID {} in keyspace {}", uuid, ks_name)}
+{
+}
+
 column_family& database::find_column_family(const schema_ptr& schema) {
     return find_column_family(schema->id());
 }

@@ -1201,6 +1201,7 @@ class no_such_column_family : public std::runtime_error {
 public:
     no_such_column_family(const utils::UUID& uuid);
     no_such_column_family(std::string_view ks_name, std::string_view cf_name);
+    no_such_column_family(std::string_view ks_name, const utils::UUID& uuid);
 };
 
 
