@@ -362,13 +362,10 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                 }
                 if (_next_row_in_range) {
                     maybe_update_continuity();
-                    add_to_buffer(_next_row);
-                    try {
-                        move_to_next_entry();
-                    } catch (const std::bad_alloc&) {
-                        // We cannot reenter the section, since we may have moved to the new range, and
-                        // because add_to_buffer() should not be repeated.
-                        _snp->region().allocator().invalidate_references(); // Invalidates _next_row
+                    if (!_next_row.dummy()) {
+                        _lower_bound = position_in_partition::before_key(_next_row.key());
+                    } else {
+                        _lower_bound = _next_row.position();
                     }
                 } else {
                     if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
