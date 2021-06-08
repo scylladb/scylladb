@@ -79,11 +79,17 @@ struct tagged_id {
     bool operator==(const tagged_id& o) const {
         return id == o.id;
     }
+    bool operator<(const tagged_id& o) const {
+        return id < o.id;
+    }
     explicit operator bool() const {
         // The default constructor sets the id to nil, which is
         // guaranteed to not match any valid id.
         return id != utils::UUID();
     }
+    static tagged_id create_random_id() { return tagged_id{utils::make_random_uuid()}; }
+    explicit tagged_id(const utils::UUID& uuid) : id(uuid) {}
+    tagged_id() = default;
 };
 
 template<typename Tag>

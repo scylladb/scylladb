@@ -37,9 +37,11 @@
 
 logging::logger rslog("raft_services");
 
-raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp)
-    : _ms(ms), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
-{}
+raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp)
+    : _ms(ms), _gossiper(gs), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
+{
+    (void) _gossiper;
+}
 
 void raft_services::init_rpc_verbs() {
     auto handle_raft_rpc = [this] (
@@ -127,13 +129,16 @@ future<> raft_services::stop_servers() {
 }
 
 seastar::future<> raft_services::init() {
+    // Once a Raft server starts, it soon times out
+    // and starts an election, so RPC must be ready by
+    // then to send VoteRequest messages.
     init_rpc_verbs();
     auto uninit_rpc_verbs = defer([this] { this->uninit_rpc_verbs().get(); });
     // schema raft server instance always resides on shard 0
     if (this_shard_id() == 0) {
         // FIXME: Server id will change each time scylla server restarts,
         // need to persist it or find a deterministic way to compute!
-        raft::server_id id = {.id = utils::make_random_uuid()};
+        raft::server_id id = raft::server_id::create_random_id();
         co_await add_server(id, create_schema_server(id));
     }
     uninit_rpc_verbs.cancel();
@@ -156,7 +161,7 @@ raft_rpc& raft_services::get_rpc(raft::server_id id) {
 raft_services::create_server_result raft_services::create_schema_server(raft::server_id id) {
     auto rpc = std::make_unique<raft_rpc>(_ms, *this, schema_raft_state_machine::gid, id);
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp, schema_raft_state_machine::gid);
+    auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), schema_raft_state_machine::gid);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
 
     return std::pair(raft::create_server(id,

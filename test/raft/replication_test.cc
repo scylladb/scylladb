@@ -375,7 +375,7 @@ public:
         (*_snapshots)[_id].hasher = *hasher;
         tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
         (*_snapshots)[_id].idx = raft::index_t{_seen};
-        return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
+        return make_ready_future<raft::snapshot_id>(raft::snapshot_id::create_random_id());
     }
     void drop_snapshot(raft::snapshot_id id) override {
         (*_snapshots).erase(_id);

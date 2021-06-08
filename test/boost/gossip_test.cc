@@ -32,6 +32,7 @@
 #include "gms/feature_service.hh"
 #include <seastar/core/seastar.hh>
 #include "service/storage_service.hh"
+#include "service/raft/raft_services.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include "cdc/generation_service.hh"
@@ -62,6 +63,8 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<cdc::generation_service> cdc_generation_service;
         sharded<repair_service> repair;
         sharded<service::migration_manager> migration_manager;
+        sharded<cql3::query_processor> qp;
+        sharded<raft_services> raft_svcs;
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
@@ -87,7 +90,19 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
 
-        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(migration_manager), std::ref(token_metadata), std::ref(_messaging), std::ref(cdc_generation_service), std::ref(repair), true).get();
+        raft_svcs.start(std::ref(_messaging), std::ref(gms::get_gossiper()), std::ref(qp)).get();
+        auto stop_raft = defer([&raft_svcs] { raft_svcs.stop().get(); });
+
+        service::get_storage_service().start(std::ref(abort_sources),
+            std::ref(db), std::ref(gms::get_gossiper()),
+            std::ref(sys_dist_ks),
+            std::ref(view_update_generator),
+            std::ref(feature_service), sscfg,
+            std::ref(migration_manager), std::ref(token_metadata),
+            std::ref(_messaging),
+            std::ref(cdc_generation_service), std::ref(repair),
+            std::ref(raft_svcs),
+            true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         sharded<semaphore> sst_dir_semaphore;

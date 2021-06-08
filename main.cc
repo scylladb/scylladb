@@ -494,7 +494,7 @@ int main(int ac, char** av) {
     sharded<netw::messaging_service> messaging;
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
-    sharded<raft_services> raft_srvs;
+    sharded<raft_services> raft_svcs;
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
 
@@ -525,7 +525,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs, &service_memory_limiter,
+                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_svcs, &service_memory_limiter,
                 &repair] {
           try {
             // disable reactor stall detection during startup
@@ -858,10 +858,19 @@ int main(int ac, char** av) {
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
             // #293 - do not stop anything
             //engine().at_exit([]{ return gms::get_gossiper().stop(); });
+            supervisor::notify("starting Raft service");
+            raft_svcs.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
+            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_svcs] {
+                raft_svcs.stop().get();
+            });
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm, token_metadata, messaging, cdc_generation_service, repair).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(),
+                db, gossiper, sys_dist_ks, view_update_generator,
+                feature_service, sscfg, mm, token_metadata,
+                messaging, cdc_generation_service, repair,
+                raft_svcs).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -1084,11 +1093,10 @@ int main(int ac, char** av) {
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
-            supervisor::notify("initializing Raft services");
-            raft_srvs.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
-            raft_srvs.invoke_on_all(&raft_services::init).get();
-            auto stop_raft_sc_handlers = defer_verbose_shutdown("Raft services", [&raft_srvs] {
-                raft_srvs.invoke_on_all(&raft_services::uninit).get();
+            supervisor::notify("starting Raft RPC");
+            raft_svcs.invoke_on_all(&raft_services::init).get();
+            auto stop_raft_rpc = defer_verbose_shutdown("Raft RPC", [&raft_svcs] {
+                raft_svcs.invoke_on_all(&raft_services::uninit).get();
             });
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();
