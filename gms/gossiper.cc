@@ -2131,6 +2131,32 @@ bool gossiper::is_alive(inet_address ep) const {
     return false;
 }
 
+// Runs inside seastar::async context
+void gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+    auto start_time = std::chrono::steady_clock::now();
+    for (;;) {
+        std::vector<gms::inet_address> live_nodes;
+        for (const auto& node: nodes) {
+            size_t nr_alive = container().map_reduce0([node] (gossiper& g) -> size_t {
+                return g.is_alive(node) ? 1 : 0;
+            }, 0, std::plus<size_t>()).get0();
+            logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
+            if (nr_alive == smp::count) {
+                live_nodes.push_back(node);
+            }
+        }
+        logger.debug("Waited for marking node as up, replace_nodes={}, live_nodes={}", nodes, live_nodes);
+        if (live_nodes.size() == nodes.size()) {
+            break;
+        }
+        if (std::chrono::steady_clock::now() > timeout + start_time) {
+            throw std::runtime_error(format("Failed to mark node as alive in {} ms, nodes={}, live_nodes={}",
+                    timeout.count(), nodes, live_nodes));
+        }
+        sleep_abortable(std::chrono::milliseconds(100), _abort_source).get();
+    }
+}
+
 const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
     auto* eps = get_endpoint_state_for_endpoint_ptr(std::move(endpoint));
     if (!eps) {
