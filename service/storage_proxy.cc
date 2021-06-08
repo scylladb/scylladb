@@ -4687,7 +4687,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
     }
 
     // divide the queryRange into pieces delimited by the ring
-    auto ring_iter = _tmptr->ring_range(cr.start(), false);
+    auto ring_iter = _tmptr->ring_range(cr.start());
     for (const dht::token& upper_bound_token : ring_iter) {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
