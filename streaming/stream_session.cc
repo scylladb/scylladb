@@ -104,6 +104,14 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
     return coordinator->get_or_create_session(from);
 }
 
+static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
+    static const std::unordered_set<streaming::stream_reason> operations_supported = {
+        streaming::stream_reason::bootstrap,
+        streaming::stream_reason::replace,
+    };
+    return sstables::offstrategy(operations_supported.contains(reason));
+}
+
 void stream_session::init_messaging_service_handler(netw::messaging_service& ms, shared_ptr<service::migration_manager> mm) {
     ms.register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
@@ -182,7 +190,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
                 make_generating_reader(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer("streaming", *_db, *_sys_dist_ks, *_view_update_generator, estimated_partitions, reason, sstables::offstrategy::no),
+                make_streaming_consumer("streaming", *_db, *_sys_dist_ks, *_view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
                 cf.stream_in_progress()
             ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
                 int32_t status = 0;
