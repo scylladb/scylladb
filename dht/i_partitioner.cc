@@ -209,19 +209,18 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto shard = _range.start() ? _sharder.shard_of(_range.start()->value().token()) : token::shard_of_minimum_token();
+    auto start_token = _range.start() ? _range.start()->value().token() : minimum_token();
+    auto shard = _sharder.shard_of(start_token);
     auto next_shard = shard + 1 < _sharder.shard_count() ? shard + 1 : 0;
-    auto shard_boundary_token = _sharder.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token(), next_shard);
-    auto shard_boundary = ring_position::starting_at(shard_boundary_token);
-    if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
-            && shard_boundary_token != maximum_token()) {
-        // split the range at end_of_shard
-        auto start = _range.start();
-        auto end = range_bound<ring_position>(shard_boundary, false);
-        _range = dht::partition_range(
-                range_bound<ring_position>(std::move(shard_boundary), true),
-                std::move(_range.end()));
-        return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
+    if (auto shard_boundary_token = _sharder.maybe_token_for_next_shard(start_token, next_shard)) {
+        auto shard_boundary = ring_position::starting_at(*shard_boundary_token);
+        if (!_range.end() || shard_boundary.less_compare(s, _range.end()->value())) {
+            // split the range at end_of_shard
+            auto start = _range.start();
+            auto end = range_bound<ring_position>(shard_boundary, false);
+            _range = dht::partition_range(shard_boundary, _range.end());
+            return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
+        }
     }
     _done = true;
     return ring_position_range_and_shard{std::move(_range), shard};
