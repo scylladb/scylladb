@@ -1851,6 +1851,40 @@ future<> storage_service::do_stop_stream_manager() {
     });
 }
 
+future<> storage_service::node_ops_cmd_heartbeat_updater(const node_ops_cmd& cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done) {
+    return seastar::async([this, cmd, uuid, nodes = std::move(nodes), heartbeat_updater_done] {
+        std::string ops;
+        if (cmd == node_ops_cmd::decommission_heartbeat) {
+            ops = "decommission";
+        } else if (cmd == node_ops_cmd::removenode_heartbeat) {
+            ops = "removenode";
+        } else if (cmd == node_ops_cmd::replace_heartbeat) {
+            ops = "replace";
+        } else if (cmd == node_ops_cmd::bootstrap_heartbeat) {
+            ops = "bootstrap";
+        } else {
+            throw std::runtime_error(format("node_ops_cmd_heartbeat_updater: node_ops_cmd is not supported"));
+        }
+        slogger.info("{}[{}]: Started heartbeat_updater", ops, uuid);
+        while (!(*heartbeat_updater_done)) {
+            auto req = node_ops_cmd_request{cmd, uuid, {}, {}, {}};
+            parallel_for_each(nodes, [this, ops, uuid, &req] (const gms::inet_address& node) {
+                return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([ops, uuid, node] (node_ops_cmd_response resp) {
+                    slogger.info("{}[{}]: Got heartbeat response from node={}", ops, uuid, node);
+                    return make_ready_future<>();
+                });
+            }).handle_exception([ops, uuid] (std::exception_ptr ep) {
+                slogger.warn("{}[{}]: Failed to send heartbeat: {}", ops, uuid, ep);
+            }).get();
+            int nr_seconds = 10;
+            while (!(*heartbeat_updater_done) && nr_seconds--) {
+                sleep(std::chrono::seconds(1)).get();
+            }
+        }
+        slogger.info("{}[{}]: Stopped heartbeat_updater", ops, uuid);
+    });
+}
+
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
@@ -1887,11 +1921,8 @@ future<> storage_service::decommission() {
             // TODO: wire ignore_nodes provided by user
             std::list<gms::inet_address> ignore_nodes;
 
-            future<> heartbeat_updater = make_ready_future<>();
-            auto heartbeat_updater_done = make_lw_shared<bool>(false);
-
             // Step 1: Decide who needs to sync data
-            std::vector<gms::inet_address> nodes;
+            std::list<gms::inet_address> nodes;
             for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
                 seastar::thread::maybe_yield();
                 if (std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
@@ -1928,25 +1959,8 @@ future<> storage_service::decommission() {
                 }
 
                 // Step 3: Start heartbeat updater
-                heartbeat_updater = seastar::async([&ss, &nodes, uuid, heartbeat_updater_done] {
-                    slogger.debug("decommission[{}]: Started heartbeat_updater", uuid);
-                    while (!(*heartbeat_updater_done)) {
-                        auto req = node_ops_cmd_request{node_ops_cmd::decommission_heartbeat, uuid, {}, {}, {}};
-                        parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                            return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                                slogger.debug("decommission[{}]: Got heartbeat response from node={}", uuid, node);
-                                return make_ready_future<>();
-                            });
-                        }).handle_exception([uuid] (std::exception_ptr ep) {
-                            slogger.warn("decommission[{}]: Failed to send heartbeat: {}", uuid, ep);
-                        }).get();
-                        int nr_seconds = 10;
-                        while (!(*heartbeat_updater_done) && nr_seconds--) {
-                            sleep(std::chrono::seconds(1)).get();
-                        }
-                    }
-                    slogger.debug("decommission[{}]: Stopped heartbeat_updater", uuid);
-                });
+                auto heartbeat_updater_done = make_lw_shared<bool>(false);
+                auto heartbeat_updater = ss.node_ops_cmd_heartbeat_updater(node_ops_cmd::decommission_heartbeat, uuid, nodes, heartbeat_updater_done);
                 auto stop_heartbeat_updater = defer([&] {
                     *heartbeat_updater_done = true;
                     heartbeat_updater.get();
@@ -2062,8 +2076,6 @@ void storage_service::run_bootstrap_ops() {
     };
     auto req = node_ops_cmd_request(node_ops_cmd::bootstrap_prepare, uuid, ignore_nodes, {}, {}, bootstrap_nodes);
     slogger.info("bootstrap[{}]: Started bootstrap operation, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, bootstrap_nodes, sync_nodes, ignore_nodes);
-    future<> heartbeat_updater = make_ready_future<>();
-    auto heartbeat_updater_done = make_lw_shared<bool>(false);
     try {
         // Step 3: Prepare to sync data
         parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
@@ -2089,25 +2101,8 @@ void storage_service::run_bootstrap_ops() {
         }
 
         // Step 4: Start heartbeat updater
-        heartbeat_updater = seastar::async([this, &sync_nodes, uuid, heartbeat_updater_done] {
-            slogger.debug("bootstrap[{}]: Started heartbeat_updater", uuid);
-            while (!(*heartbeat_updater_done)) {
-                auto req = node_ops_cmd_request(node_ops_cmd::bootstrap_heartbeat, uuid);
-                parallel_for_each(sync_nodes, [this, req, uuid] (const gms::inet_address& node) {
-                    return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                        slogger.debug("bootstrap[{}]: Got heartbeat response from node={}", uuid, node);
-                        return make_ready_future<>();
-                    });
-                }).handle_exception([uuid] (std::exception_ptr ep) {
-                    slogger.warn("bootstrap[{}]: Failed to send heartbeat: {}", uuid, ep);
-                }).get();
-                int nr_seconds = 10;
-                while (!(*heartbeat_updater_done) && nr_seconds--) {
-                    sleep(std::chrono::seconds(1)).get();
-                }
-            }
-            slogger.debug("bootstrap[{}]: Stopped heartbeat_updater", uuid);
-        });
+        auto heartbeat_updater_done = make_lw_shared<bool>(false);
+        auto heartbeat_updater = node_ops_cmd_heartbeat_updater(node_ops_cmd::bootstrap_heartbeat, uuid, sync_nodes, heartbeat_updater_done);
         auto stop_heartbeat_updater = defer([&] {
             *heartbeat_updater_done = true;
             heartbeat_updater.get();
@@ -2178,8 +2173,6 @@ void storage_service::run_replace_ops() {
     std::unordered_set<gms::inet_address> nodes_aborted;
     auto req = node_ops_cmd_request{node_ops_cmd::replace_prepare, uuid, ignore_nodes, {}, replace_nodes};
     slogger.info("replace[{}]: Started replace operation, replace_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, replace_nodes, sync_nodes, ignore_nodes);
-    future<> heartbeat_updater = make_ready_future<>();
-    auto heartbeat_updater_done = make_lw_shared<bool>(false);
     try {
         // Step 2: Prepare to sync data
         parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
@@ -2205,25 +2198,8 @@ void storage_service::run_replace_ops() {
         }
 
         // Step 3: Start heartbeat updater
-        heartbeat_updater = seastar::async([this, &sync_nodes, uuid, heartbeat_updater_done] {
-            slogger.debug("replace[{}]: Started heartbeat_updater", uuid);
-            while (!(*heartbeat_updater_done)) {
-                auto req = node_ops_cmd_request{node_ops_cmd::replace_heartbeat, uuid, {}, {}, {}};
-                parallel_for_each(sync_nodes, [this, req, uuid] (const gms::inet_address& node) {
-                    return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                        slogger.debug("replace[{}]: Got heartbeat response from node={}", uuid, node);
-                        return make_ready_future<>();
-                    });
-                }).handle_exception([uuid] (std::exception_ptr ep) {
-                    slogger.warn("replace[{}]: Failed to send heartbeat: {}", uuid, ep);
-                }).get();
-                int nr_seconds = 10;
-                while (!(*heartbeat_updater_done) && nr_seconds--) {
-                    sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-                }
-            }
-            slogger.debug("replace[{}]: Stopped heartbeat_updater", uuid);
-        });
+        auto heartbeat_updater_done = make_lw_shared<bool>(false);
+        auto heartbeat_updater = node_ops_cmd_heartbeat_updater(node_ops_cmd::replace_heartbeat, uuid, sync_nodes, heartbeat_updater_done);
         auto stop_heartbeat_updater = defer([&] {
             *heartbeat_updater_done = true;
             heartbeat_updater.get();
@@ -2310,9 +2286,6 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
             auto tokens = tmptr->get_tokens(endpoint);
             auto leaving_nodes = std::list<gms::inet_address>{endpoint};
 
-            future<> heartbeat_updater = make_ready_future<>();
-            auto heartbeat_updater_done = make_lw_shared<bool>(false);
-
             // Step 1: Decide who needs to sync data
             //
             // By default, we require all nodes in the cluster to participate
@@ -2322,7 +2295,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
             // If the user want the removenode opeartion to succeed even if some of the nodes
             // are not available, the user has to explicitly pass a list of
             // node that can be skipped for the operation.
-            std::vector<gms::inet_address> nodes;
+            std::list<gms::inet_address> nodes;
             for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
                 seastar::thread::maybe_yield();
                 if (x.first != endpoint && std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
@@ -2359,25 +2332,8 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
                 }
 
                 // Step 3: Start heartbeat updater
-                heartbeat_updater = seastar::async([&ss, &nodes, uuid, heartbeat_updater_done] {
-                    slogger.debug("removenode[{}]: Started heartbeat_updater", uuid);
-                    while (!(*heartbeat_updater_done)) {
-                        auto req = node_ops_cmd_request{node_ops_cmd::removenode_heartbeat, uuid, {}, {}, {}};
-                        parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
-                            return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
-                                slogger.debug("removenode[{}]: Got heartbeat response from node={}", uuid, node);
-                                return make_ready_future<>();
-                            });
-                        }).handle_exception([uuid] (std::exception_ptr ep) {
-                            slogger.warn("removenode[{}]: Failed to send heartbeat", uuid);
-                        }).get();
-                        int nr_seconds = 10;
-                        while (!(*heartbeat_updater_done) && nr_seconds--) {
-                            sleep_abortable(std::chrono::seconds(1), ss._abort_source).get();
-                        }
-                    }
-                    slogger.debug("removenode[{}]: Stopped heartbeat_updater", uuid);
-                });
+                auto heartbeat_updater_done = make_lw_shared<bool>(false);
+                auto heartbeat_updater = ss.node_ops_cmd_heartbeat_updater(node_ops_cmd::removenode_heartbeat, uuid, nodes, heartbeat_updater_done);
                 auto stop_heartbeat_updater = defer([&] {
                     *heartbeat_updater_done = true;
                     heartbeat_updater.get();

@@ -72,6 +72,7 @@
 class node_ops_cmd_request;
 class node_ops_cmd_response;
 class node_ops_info;
+enum class node_ops_cmd : uint32_t;
 class repair_service;
 class raft_services;
 
@@ -819,6 +820,7 @@ public:
     future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
+    future<> node_ops_cmd_heartbeat_updater(const node_ops_cmd& cmd, utils::UUID uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
 
     future<sstring> get_operation_mode();
 
