@@ -105,7 +105,7 @@ inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
  * Finds the first token in token range (`start`, `end`] that belongs to shard shard_idx.
  *
  * If there is no token that belongs to shard shard_idx in this range,
- * `end` is returned.
+ * empty optional is returned.
  *
  * The first token means the one that appears first on the ring when going
  * from `start` to `end`.
@@ -114,7 +114,7 @@ inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
  * shard shard_idx then token 110 is the first because it appears first
  * when going from 100 to 10 on the ring.
  */
-dht::token find_first_token_for_shard(
+std::optional<dht::token> find_first_token_for_shard(
         const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
 
 } //namespace dht
