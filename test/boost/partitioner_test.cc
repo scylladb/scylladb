@@ -241,11 +241,11 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
         BOOST_REQUIRE_EQUAL(sharder.shard_of(lim), i % shards);
         if (i != 0) {
             BOOST_REQUIRE_EQUAL(sharder.shard_of(prev_token(lim)), (i - 1) % shards);
-            BOOST_REQUIRE_EQUAL(lim, sharder.token_for_next_shard(prev_token(lim), i % shards));
+            BOOST_REQUIRE_EQUAL(lim, *sharder.maybe_token_for_next_shard(prev_token(lim), i % shards));
         }
         if (i != (shards << ignorebits) - 1) {
             auto next_shard = (i + 1) % shards;
-            BOOST_REQUIRE_EQUAL(sharder.shard_of(sharder.token_for_next_shard(lim, next_shard)), next_shard);
+            BOOST_REQUIRE_EQUAL(sharder.shard_of(*sharder.maybe_token_for_next_shard(lim, next_shard)), next_shard);
         }
     }
 }
