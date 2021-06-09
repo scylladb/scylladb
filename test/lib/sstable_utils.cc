@@ -172,7 +172,12 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
         return do_until([&] { return ret_sst || v == all_sstable_versions.rend(); }, [this, schema, generation, &ret_sst, &ret_ep, &dir, &v] {
             return reusable_sst(schema, dir, generation, *v++).then_wrapped([&] (future<shared_sstable> f) {
                 if (f.failed()) {
-                    ret_ep = f.get_exception();
+                    auto ex = f.get_exception();
+                    std::string errstr = format("{}", ex);
+                    auto save = (errstr.find("file not found") == std::string::npos);
+                    if (!ret_ep || save) {
+                        ret_ep = std::move(ex);
+                    }
                 } else {
                     ret_sst = f.get0();
                 }
