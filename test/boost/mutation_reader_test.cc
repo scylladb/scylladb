@@ -2146,7 +2146,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
 
         for (auto i = 0u; i < additional_shards; ++i) {
             shard = (shard + 1) % smp::count;
-            end_token = sharder.token_for_next_shard(end_token, shard);
+            end_token = *sharder.maybe_token_for_next_shard(end_token, shard);
             expected_shards_touched[shard] = true;
         }
         const auto inclusive_end = !additional_shards || tests::random::get_bool();
