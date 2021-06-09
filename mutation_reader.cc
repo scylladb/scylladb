@@ -2093,7 +2093,10 @@ queue_reader_handle::queue_reader_handle(queue_reader& reader) : _reader(&reader
     _reader->_handle = this;
 }
 
-queue_reader_handle::queue_reader_handle(queue_reader_handle&& o) : _reader(std::exchange(o._reader, nullptr)) {
+queue_reader_handle::queue_reader_handle(queue_reader_handle&& o) noexcept
+        : _reader(std::exchange(o._reader, nullptr))
+        , _ex(std::exchange(o._ex, nullptr))
+{
     if (_reader) {
         _reader->_handle = this;
     }

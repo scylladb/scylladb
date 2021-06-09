@@ -572,7 +572,7 @@ private:
     void abandon();
 
 public:
-    queue_reader_handle(queue_reader_handle&& o);
+    queue_reader_handle(queue_reader_handle&& o) noexcept;
     ~queue_reader_handle();
     queue_reader_handle& operator=(queue_reader_handle&& o);
 
