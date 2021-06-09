@@ -310,12 +310,18 @@ static
 dht::partition_range
 normalize(dht::partition_range pr) {
     auto start = pr.start();
-    if (start && start->value().token() == dht::minimum_token()) {
+    if (start && start->value().is_min()) {
         start = std::nullopt;
     }
+    if (start) {
+        start = dht::partition_range::bound(start->value(), false);
+    }
     auto end = pr.end();
-    if (end && end->value().token() == dht::maximum_token()) {
+    if (end && end->value().is_max()) {
         end = std::nullopt;
+    }
+    if (end) {
+        end = dht::partition_range::bound(end->value(), false);
     }
     return dht::partition_range(start, end);
 };
