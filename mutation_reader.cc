@@ -2089,7 +2089,7 @@ void queue_reader_handle::abandon() {
     abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("Abandoned queue_reader_handle")));
 }
 
-queue_reader_handle::queue_reader_handle(queue_reader& reader) : _reader(&reader) {
+queue_reader_handle::queue_reader_handle(queue_reader& reader) noexcept : _reader(&reader) {
     _reader->_handle = this;
 }
 
