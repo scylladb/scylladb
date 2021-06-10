@@ -27,10 +27,14 @@
 #include "dht/murmur3_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/algorithm/sort.hpp>
+#include "sstables/version.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_permit.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -166,29 +170,16 @@ std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(u
     return token_generation_for_shard(tokens_to_generate, this_shard_id());
 }
 
+static sstring toc_filename(const sstring& dir, schema_ptr schema, unsigned int generation, sstable_version_types v) {
+    return sstable::filename(dir, schema->ks_name(), schema->cf_name(), v, generation,
+                             sstable_format_types::big, component_type::TOC);
+}
+
 future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
-    return seastar::do_with(shared_sstable(), std::exception_ptr(), std::move(dir), all_sstable_versions.rbegin(),
-            [this, schema, generation] (shared_sstable& ret_sst, std::exception_ptr& ret_ep, sstring& dir, auto& v) {
-        return do_until([&] { return ret_sst || v == all_sstable_versions.rend(); }, [this, schema, generation, &ret_sst, &ret_ep, &dir, &v] {
-            return reusable_sst(schema, dir, generation, *v++).then_wrapped([&] (future<shared_sstable> f) {
-                if (f.failed()) {
-                    auto ex = f.get_exception();
-                    std::string errstr = format("{}", ex);
-                    auto save = (errstr.find("file not found") == std::string::npos);
-                    if (!ret_ep || save) {
-                        ret_ep = std::move(ex);
-                    }
-                } else {
-                    ret_sst = f.get0();
-                }
-            });
-        }).then([&] {
-            if (ret_sst) {
-                return make_ready_future<shared_sstable>(std::move(ret_sst));
-            } else {
-                assert(ret_ep);
-                return make_exception_future<shared_sstable>(std::move(ret_ep));
-            }
-        });
-    });
+    for (auto v : boost::adaptors::reverse(all_sstable_versions)) {
+        if (co_await file_exists(toc_filename(dir, schema, generation, v))) {
+            co_return co_await reusable_sst(schema, dir, generation, v);
+        }
+    }
+    throw sst_not_found(dir, generation);
 }

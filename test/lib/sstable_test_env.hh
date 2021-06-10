@@ -56,6 +56,12 @@ public:
         return _mgr->make_sstable(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
+    struct sst_not_found : public std::runtime_error {
+        sst_not_found(const sstring& dir, unsigned long generation)
+            : std::runtime_error(format("no versions of sstable generation {} found in {}", generation, dir))
+        {}
+    };
+
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         auto sst = make_sstable(std::move(schema), dir, generation, version, f);
