@@ -444,7 +444,7 @@ void compaction_manager::postpone_compaction_for_column_family(column_family* cf
 }
 
 future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
-    cmlog.info("Stopping {} ongoing compactions", _compactions.size());
+    cmlog.info("Stopping {} ongoing compactions due to {}", _compactions.size(), reason);
 
     // Stop all ongoing compaction.
     for (auto& info : _compactions) {
