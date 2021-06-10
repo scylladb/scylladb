@@ -580,14 +580,14 @@ indexed_table_select_statement::do_execute_base_query(
                     command->slice.set_range(*_schema, base_pk, row_ranges);
                 }
             }
-            if (previous_result_size < max_base_table_query_result_bytes && concurrency < max_base_table_query_concurrency) {
+            if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
             }
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
             .then([is_paged, &previous_result_size, &ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
                 auto is_short_read = qr.query_result->is_short_read();
                 // Results larger than 1MB should be shipped to the client immediately
-                const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= max_base_table_query_result_bytes;
+                const bool page_limit_reached = is_paged && qr.query_result->buf().size() >= query::result_memory_limiter::maximum_result_size;
                 previous_result_size = qr.query_result->buf().size();
                 merger(std::move(qr.query_result));
                 return stop_iteration(is_short_read || ranges_to_vnodes.empty() || page_limit_reached);
@@ -655,7 +655,7 @@ indexed_table_select_statement::do_execute_base_query(
             auto already_done = std::distance(keys.begin(), key_it);
             // If the previous result already provided 1MB worth of data,
             // stop increasing the number of fetched partitions
-            if (previous_result_size < max_base_table_query_result_bytes) {
+            if (previous_result_size < query::result_memory_limiter::maximum_result_size) {
                 next_iteration_size = already_done + 1;
             }
             next_iteration_size = std::min<size_t>({next_iteration_size, keys.size() - already_done, max_base_table_query_concurrency});
@@ -678,7 +678,7 @@ indexed_table_select_statement::do_execute_base_query(
             }, std::move(oneshot_merger)).then([is_paged, &previous_result_size, &key_it, key_it_end = std::move(key_it_end), &keys, &merger] (foreign_ptr<lw_shared_ptr<query::result>> result) {
                 auto is_short_read = result->is_short_read();
                 // Results larger than 1MB should be shipped to the client immediately
-                const bool page_limit_reached = is_paged && result->buf().size() >= max_base_table_query_result_bytes;
+                const bool page_limit_reached = is_paged && result->buf().size() >= query::result_memory_limiter::maximum_result_size;
                 previous_result_size = result->buf().size();
                 merger(std::move(result));
                 key_it = key_it_end;
