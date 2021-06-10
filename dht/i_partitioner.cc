@@ -49,18 +49,9 @@ sharder::shard_of(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
-token
-sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
-    return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
-}
-
 std::optional<token>
 sharder::maybe_token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
-    auto result = token_for_next_shard(t, shard, spans);
-    if (result.is_maximum()) {
-        return std::nullopt;
-    }
-    return result;
+    return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {

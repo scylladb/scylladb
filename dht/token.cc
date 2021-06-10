@@ -217,14 +217,14 @@ shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t
     abort();
 }
 
-token
+std::optional<token>
 token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans) {
     uint64_t n = 0;
     switch (t._kind) {
         case token::kind::before_all_keys:
             break;
         case token::kind::after_all_keys:
-            return maximum_token();
+            return std::nullopt;
         case token::kind::key:
             n = unbias(t);
             break;
@@ -235,13 +235,13 @@ token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_co
         // This ought to be the same as the else branch, but avoids shifts by 64
         n = shard_start[shard];
         if (spans > 1 || shard <= s) {
-            return maximum_token();
+            return std::nullopt;
         }
     } else {
         auto left_part = n >> (64 - sharding_ignore_msb_bits);
         left_part += spans - unsigned(shard > s);
         if (left_part >= (1u << sharding_ignore_msb_bits)) {
-            return maximum_token();
+            return std::nullopt;
         }
         left_part <<= (64 - sharding_ignore_msb_bits);
         auto right_part = shard_start[shard];
