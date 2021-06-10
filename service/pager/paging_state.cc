@@ -46,16 +46,13 @@
 #include "idl/keys.dist.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/paging_state.dist.hh"
-#include "idl/token.dist.hh"
-#include "idl/range.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "idl/paging_state.dist.impl.hh"
-#include "idl/token.dist.impl.hh"
-#include "idl/range.dist.impl.hh"
 #include "message/messaging_service.hh"
 #include "utils/bit_cast.hh"
+#include "dht/token_serializers.hh"
 
 service::pager::paging_state::paging_state(partition_key pk,
         std::optional<clustering_key> ck,

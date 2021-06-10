@@ -55,6 +55,7 @@
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
 #include "utils/maybe_yield.hh"
+#include "serializer.hh"
 
 namespace sstables {
 

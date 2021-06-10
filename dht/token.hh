@@ -42,6 +42,36 @@ enum class token_kind {
     after_all_keys,
 };
 
+struct legacy_token {
+    token_kind _kind;
+    int64_t _data;
+
+    legacy_token(token_kind k, int64_t d) : _kind(k), _data(d) {}
+
+    // IDL constructor.
+    legacy_token(token_kind k, const bytes& b) : _kind(k) {
+        switch (k) {
+        case token_kind::before_all_keys:
+            _data = std::numeric_limits<int64_t>::min();
+            break;
+        case token_kind::after_all_keys:
+            _data = std::numeric_limits<int64_t>::max();
+            break;
+        default:
+            if (b.size() != sizeof(_data)) {
+                throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
+            }
+            _data = net::ntoh(read_unaligned<int64_t>(b.begin()));
+        }
+    }
+
+    bytes data() const {
+        bytes b(bytes::initialized_later(), sizeof(_data));
+        write_unaligned<int64_t>(b.begin(), net::hton(_data));
+        return b;
+    }
+};
+
 class token {
     // INT64_MIN is not a legal token, but a special value used to represent
     // infinity in token intervals.
@@ -63,10 +93,7 @@ public:
         : _kind(std::move(k))
         , _data(normalize(d)) { }
 
-    // This constructor seems redundant with the bytes_view constructor, but
-    // it's necessary for IDL, which passes a deserialized_bytes_proxy here.
-    // (deserialized_bytes_proxy is convertible to bytes&&, but not bytes_view.)
-    token(kind k, const bytes& b) : _kind(std::move(k)) {
+    token(kind k, bytes_view b) : _kind(std::move(k)) {
         if (_kind != kind::key) {
             _data = 0;
         } else {
@@ -77,15 +104,9 @@ public:
         }
     }
 
-    token(kind k, bytes_view b) : _kind(std::move(k)) {
-        if (_kind != kind::key) {
-            _data = 0;
-        } else {
-            if (b.size() != sizeof(_data)) {
-                throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
-            }
-            _data = net::ntoh(read_unaligned<int64_t>(b.begin()));
-        }
+    token(legacy_token t) : _kind(t._kind), _data(t._data) {}
+    legacy_token legacy() const {
+        return legacy_token(_kind, _data);
     }
 
     bool is_minimum() const noexcept {

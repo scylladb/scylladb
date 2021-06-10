@@ -32,6 +32,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "sstables/key.hh"
+#include "serializer.hh"
 #include <seastar/core/thread.hh>
 
 namespace dht {
@@ -359,3 +360,4 @@ split_range_to_shards(dht::partition_range pr, const schema& s) {
 }
 
 }
+
