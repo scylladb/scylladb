@@ -382,7 +382,7 @@ SEASTAR_THREAD_TEST_CASE(read_range) {
   test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak"), to_bytes("gustaf"), to_bytes("vinna") };
     do_with(std::move(expected), [&env] (auto& expected) {
-        return test_range_reads(env, dht::minimum_token(), dht::maximum_token(), expected);
+        return test_range_reads(env, dht::minimum_token(), dht::greatest_token(), expected);
     }).get();
   }).get();
 }
@@ -391,7 +391,7 @@ SEASTAR_THREAD_TEST_CASE(read_partial_range) {
   test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak") };
     do_with(std::move(expected), [&env] (auto& expected) {
-        return test_range_reads(env, uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::maximum_token(), expected);
+        return test_range_reads(env, uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::greatest_token(), expected);
     }).get();
   }).get();
 }
