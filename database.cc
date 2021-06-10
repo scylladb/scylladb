@@ -1412,26 +1412,23 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     auto& semaphore = get_reader_concurrency_semaphore();
     auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
-    return _data_query_stage(&cf,
-            std::move(s),
-            seastar::cref(cmd),
-            class_config,
-            opts,
-            seastar::cref(ranges),
-            std::move(trace_state),
-            seastar::ref(get_result_memory_limiter()),
-            timeout,
-            std::move(cache_ctx)).then_wrapped([this, s = _stats, &semaphore, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
-        if (f.failed()) {
-            ++semaphore.get_stats().total_failed_reads;
-            return make_exception_future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>(f.get_exception());
-        } else {
-            ++semaphore.get_stats().total_successful_reads;
-            auto result = f.get0();
-            s->short_data_queries += bool(result->is_short_read());
-            return make_ready_future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>(std::tuple(std::move(result), hit_rate));
-        }
-    });
+
+    lw_shared_ptr<query::result> result;
+
+    try {
+        auto op = cf.read_in_progress();
+
+        result = co_await _data_query_stage(&cf, std::move(s), seastar::cref(cmd), class_config, opts, seastar::cref(ranges),
+                std::move(trace_state), seastar::ref(get_result_memory_limiter()), timeout, std::move(cache_ctx));
+    } catch (...) {
+        ++semaphore.get_stats().total_failed_reads;
+        throw;
+    }
+
+    auto hit_rate = cf.get_global_cache_hit_rate();
+    ++semaphore.get_stats().total_successful_reads;
+    _stats->short_data_queries += bool(result->is_short_read());
+    co_return std::tuple(std::move(result), hit_rate);
 }
 
 future<std::tuple<reconcilable_result, cache_temperature>>
