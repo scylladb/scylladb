@@ -41,17 +41,11 @@ inline int64_t long_token(const token& t) {
 }
 
 static const token min_token{ token::kind::before_all_keys, 0 };
-static const token max_token{ token::kind::after_all_keys, 0 };
 static const token greatest_token_static{ token::kind::key, std::numeric_limits<int64_t>::max() };
 
 const token&
 minimum_token() noexcept {
     return min_token;
-}
-
-const token&
-maximum_token() noexcept {
-    return max_token;
 }
 
 const token& greatest_token() noexcept {
