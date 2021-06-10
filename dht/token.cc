@@ -53,25 +53,15 @@ const token& greatest_token() noexcept {
 }
 
 std::strong_ordering tri_compare(const token& t1, const token& t2) {
-    if (t1._kind < t2._kind) {
-            return std::strong_ordering::less;
-    } else if (t1._kind > t2._kind) {
-            return std::strong_ordering::greater;
-    } else if (t1._kind == token_kind::key) {
-        return tri_compare_raw(long_token(t1), long_token(t2));
-    }
-    return std::strong_ordering::equal;
+    return t1._data <=> t2._data;
 }
 
 std::ostream& operator<<(std::ostream& out, const token& t) {
-    if (t._kind == token::kind::after_all_keys) {
-        out << "maximum token";
-    } else if (t._kind == token::kind::before_all_keys) {
-        out << "minimum token";
+    if (t.is_minimum()) {
+        return out << "minimum token";
     } else {
-        out << t.to_sstring();
+        return out << t.to_sstring();
     }
-    return out;
 }
 
 sstring token::to_sstring() const {
@@ -199,30 +189,12 @@ init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) 
 
 unsigned
 shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t) {
-    switch (t._kind) {
-        case token::kind::before_all_keys:
-            return token::shard_of_minimum_token();
-        case token::kind::after_all_keys:
-            return shard_count - 1;
-        case token::kind::key:
-            uint64_t adjusted = unbias(t);
-            return zero_based_shard_of(adjusted, shard_count, sharding_ignore_msb_bits);
-    }
-    abort();
+    return zero_based_shard_of(unbias(t), shard_count, sharding_ignore_msb_bits);
 }
 
 std::optional<token>
 token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans) {
-    uint64_t n = 0;
-    switch (t._kind) {
-        case token::kind::before_all_keys:
-            break;
-        case token::kind::after_all_keys:
-            return std::nullopt;
-        case token::kind::key:
-            n = unbias(t);
-            break;
-    }
+    uint64_t n = unbias(t);
     auto s = zero_based_shard_of(n, shard_count, sharding_ignore_msb_bits);
 
     if (!sharding_ignore_msb_bits) {
