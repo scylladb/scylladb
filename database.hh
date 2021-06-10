@@ -764,15 +764,21 @@ public:
     // is absent in the results.
     //
     // 'source' doesn't have to survive deferring.
+    //
+    // The saved_querier parameter is an input-output parameter which contains
+    // the saved querier from the previous page (if there was one) and after
+    // completion it contains the to-be saved querier for the next page (if
+    // there is one). Pass nullptr when queriers are not saved.
     future<reconcilable_result>
     mutation_query(schema_ptr s,
+            reader_permit permit,
             const query::read_command& cmd,
             query::query_class_config class_config,
             const dht::partition_range& range,
             tracing::trace_state_ptr trace_state,
             query::result_memory_accounter accounter,
             db::timeout_clock::time_point timeout,
-            query::querier_cache_context cache_ctx = { });
+            std::optional<query::mutation_querier>* saved_querier = { });
 
     void start();
     future<> stop();
@@ -1306,13 +1312,14 @@ private:
     inheriting_concrete_execution_stage<future<reconcilable_result>,
         table*,
         schema_ptr,
+        reader_permit,
         const query::read_command&,
         query::query_class_config,
         const dht::partition_range&,
         tracing::trace_state_ptr,
         query::result_memory_accounter,
         db::timeout_clock::time_point,
-        query::querier_cache_context> _mutation_query_stage;
+        std::optional<query::mutation_querier>*> _mutation_query_stage;
 
     inheriting_concrete_execution_stage<
             future<>,

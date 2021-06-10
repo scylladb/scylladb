@@ -2057,32 +2057,41 @@ table::query(schema_ptr s,
 
 future<reconcilable_result>
 table::mutation_query(schema_ptr s,
+        reader_permit permit,
         const query::read_command& cmd,
         query::query_class_config class_config,
         const dht::partition_range& range,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
         db::timeout_clock::time_point timeout,
-        query::querier_cache_context cache_ctx) {
+        std::optional<query::mutation_querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
     }
 
-    auto querier_opt = cache_ctx.lookup_mutation_querier(*s, range, cmd.slice, trace_state);
-    auto q = querier_opt
-            ? std::move(*querier_opt)
-            : query::mutation_querier(as_mutation_source(), s, class_config.semaphore.make_permit(s.get(), "mutation-query"), range, cmd.slice,
-                    service::get_local_sstable_query_read_priority(), trace_state);
+    std::optional<query::mutation_querier> querier_opt;
+    if (saved_querier) {
+        querier_opt = std::move(*saved_querier);
+    }
+    if (!querier_opt) {
+        querier_opt = query::mutation_querier(as_mutation_source(), s, permit, range, cmd.slice,
+                service::get_local_sstable_query_read_priority(), trace_state);
+    }
+    auto& q = *querier_opt;
 
     std::exception_ptr ex;
   try {
     auto rrb = reconcilable_result_builder(*s, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, timeout, class_config.max_memory_for_unlimited_query);
 
-    if (q.are_limits_reached() || r.is_short_read()) {
-        cache_ctx.insert(std::move(q), std::move(trace_state));
+    if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
+        co_await q.close();
+        querier_opt = {};
     }
-    co_await q.close();
+    if (saved_querier) {
+        *saved_querier = std::move(querier_opt);
+    }
+
     co_return r;
   } catch (...) {
     ex = std::current_exception();
