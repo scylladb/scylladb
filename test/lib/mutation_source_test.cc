@@ -1699,6 +1699,36 @@ void run_mutation_source_tests(populate_fn populate) {
 
 void run_mutation_source_tests(populate_fn_ex populate) {
     run_mutation_reader_tests(populate);
+
+    // ? -> v2 -> v1 -> *
+    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+        return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
+                                              reader_permit permit,
+                                              const dht::partition_range& pr,
+                                              const query::partition_slice& slice,
+                                              const io_priority_class& pc,
+                                              tracing::trace_state_ptr tr,
+                                              streamed_mutation::forwarding fwd,
+                                              mutation_reader::forwarding mr_fwd) {
+            return downgrade_to_v1(
+                    ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
+        });
+    });
+
+    // ? -> v1 -> v2 -> *
+    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+        return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
+                                              reader_permit permit,
+                                              const dht::partition_range& pr,
+                                              const query::partition_slice& slice,
+                                              const io_priority_class& pc,
+                                              tracing::trace_state_ptr tr,
+                                              streamed_mutation::forwarding fwd,
+                                              mutation_reader::forwarding mr_fwd) {
+            return upgrade_to_v2(
+                    ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
+        });
+    });
 }
 
 struct mutation_sets {
