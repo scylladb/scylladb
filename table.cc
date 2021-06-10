@@ -1983,6 +1983,7 @@ struct query_state {
 
 future<lw_shared_ptr<query::result>>
 table::query(schema_ptr s,
+        reader_permit permit,
         const query::read_command& cmd,
         query::query_class_config class_config,
         query::result_options opts,
@@ -1990,7 +1991,7 @@ table::query(schema_ptr s,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
-        query::querier_cache_context cache_ctx) {
+        std::optional<query::data_querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return make_lw_shared<query::result>();
     }
@@ -2013,30 +2014,42 @@ table::query(schema_ptr s,
 
     query_state qs(s, cmd, opts, partition_ranges, std::move(accounter));
 
+    std::optional<query::data_querier> querier_opt;
+    if (saved_querier) {
+        querier_opt = std::move(*saved_querier);
+    }
+
     while (!qs.done()) {
         auto&& range = *qs.current_partition_range++;
 
-        auto querier_opt = cache_ctx.lookup_data_querier(*s, range, qs.cmd.slice, trace_state);
-        auto q = querier_opt
-                ? std::move(*querier_opt)
-                : query::data_querier(as_mutation_source(), s, class_config.semaphore.make_permit(s.get(), "data-query"), range, qs.cmd.slice,
-                        service::get_local_sstable_query_read_priority(), trace_state);
+        if (!querier_opt) {
+            querier_opt = query::data_querier(as_mutation_source(), s, permit, range, qs.cmd.slice,
+                    service::get_local_sstable_query_read_priority(), trace_state);
+        }
+        auto& q = *querier_opt;
 
         std::exception_ptr ex;
       try {
         co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, timeout,
                 class_config.max_memory_for_unlimited_query);
-
-        if (q.are_limits_reached() || qs.builder.is_short_read()) {
-            cache_ctx.insert(std::move(q), std::move(trace_state));
-        }
       } catch (...) {
         ex = std::current_exception();
       }
-        co_await q.close();
+        if (ex || !qs.done()) {
+            co_await q.close();
+            querier_opt = {};
+        }
         if (ex) {
             std::rethrow_exception(std::move(ex));
         }
+    }
+
+    if (!saved_querier || (querier_opt && !querier_opt->are_limits_reached() && !qs.builder.is_short_read())) {
+        co_await querier_opt->close();
+        querier_opt = {};
+    }
+    if (saved_querier) {
+        *saved_querier = std::move(querier_opt);
     }
 
     co_return make_lw_shared<query::result>(qs.builder.build());

@@ -737,7 +737,13 @@ public:
     void apply(const mutation& m, db::rp_handle&& = {});
 
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(schema_ptr,
+    // The saved_querier parameter is an input-output parameter which contains
+    // the saved querier from the previous page (if there was one) and after
+    // completion it contains the to-be saved querier for the next page (if
+    // there is one). Pass nullptr when queriers are not saved.
+    future<lw_shared_ptr<query::result>>
+    query(schema_ptr,
+        reader_permit permit,
         const query::read_command& cmd,
         query::query_class_config class_config,
         query::result_options opts,
@@ -745,7 +751,7 @@ public:
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
-        query::querier_cache_context cache_ctx = { });
+        std::optional<query::data_querier>* saved_querier = { });
 
     // Performs a query on given data source returning data in reconcilable form.
     //
@@ -1287,6 +1293,7 @@ private:
     inheriting_concrete_execution_stage<future<lw_shared_ptr<query::result>>,
         column_family*,
         schema_ptr,
+        reader_permit,
         const query::read_command&,
         query::query_class_config,
         query::result_options,
@@ -1294,7 +1301,7 @@ private:
         tracing::trace_state_ptr,
         query::result_memory_limiter&,
         db::timeout_clock::time_point,
-        query::querier_cache_context> _data_query_stage;
+        std::optional<query::data_querier>*> _data_query_stage;
 
     inheriting_concrete_execution_stage<future<reconcilable_result>,
         table*,

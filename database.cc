@@ -1411,18 +1411,36 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     column_family& cf = find_column_family(cmd.cf_id);
     auto& semaphore = get_reader_concurrency_semaphore();
     auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
-    query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
 
+    std::optional<query::data_querier> querier_opt;
     lw_shared_ptr<query::result> result;
+    std::exception_ptr ex;
+
+    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state);
+    }
+
+    auto permit = querier_opt ? querier_opt->permit() : semaphore.make_permit(s.get(), "data-query");
 
     try {
         auto op = cf.read_in_progress();
 
-        result = co_await _data_query_stage(&cf, std::move(s), seastar::cref(cmd), class_config, opts, seastar::cref(ranges),
-                std::move(trace_state), seastar::ref(get_result_memory_limiter()), timeout, std::move(cache_ctx));
+        result = co_await _data_query_stage(&cf, std::move(s), std::move(permit), seastar::cref(cmd), class_config, opts, seastar::cref(ranges),
+                std::move(trace_state), seastar::ref(get_result_memory_limiter()), timeout, &querier_opt);
+
+        if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+        }
     } catch (...) {
         ++semaphore.get_stats().total_failed_reads;
-        throw;
+        ex = std::current_exception();
+    }
+
+    if (querier_opt) {
+        co_await querier_opt->close();
+    }
+    if(ex) {
+        std::rethrow_exception(std::move(ex));
     }
 
     auto hit_rate = cf.get_global_cache_hit_rate();
