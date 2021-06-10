@@ -241,11 +241,11 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
         BOOST_REQUIRE_EQUAL(sharder.shard_of(lim), i % shards);
         if (i != 0) {
             BOOST_REQUIRE_EQUAL(sharder.shard_of(prev_token(lim)), (i - 1) % shards);
-            BOOST_REQUIRE_EQUAL(lim, *sharder.maybe_token_for_next_shard(prev_token(lim), i % shards));
+            BOOST_REQUIRE_EQUAL(lim, *sharder.token_for_next_shard(prev_token(lim), i % shards));
         }
         if (i != (shards << ignorebits) - 1) {
             auto next_shard = (i + 1) % shards;
-            BOOST_REQUIRE_EQUAL(sharder.shard_of(*sharder.maybe_token_for_next_shard(lim, next_shard)), next_shard);
+            BOOST_REQUIRE_EQUAL(sharder.shard_of(*sharder.token_for_next_shard(lim, next_shard)), next_shard);
         }
     }
 }
@@ -483,9 +483,9 @@ SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
     const unsigned cpu_count = 3;
     const unsigned ignore_msb_bits = 10;
     dht::sharder sharder(cpu_count, ignore_msb_bits);
-    dht::token first_boundary = sharder.maybe_token_for_next_shard(dht::minimum_token(), 1).value();
-    dht::token second_boundary = sharder.maybe_token_for_next_shard(dht::minimum_token(), 2).value();
-    dht::token third_boundary = sharder.maybe_token_for_next_shard(dht::minimum_token(), 0).value();
+    dht::token first_boundary = sharder.token_for_next_shard(dht::minimum_token(), 1).value();
+    dht::token second_boundary = sharder.token_for_next_shard(dht::minimum_token(), 2).value();
+    dht::token third_boundary = sharder.token_for_next_shard(dht::minimum_token(), 0).value();
     auto next_token = [] (dht::token t) {
         assert(dht::token::to_int64(t) < std::numeric_limits<int64_t>::max());
         return dht::token::from_int64(dht::token::to_int64(t) + 1);

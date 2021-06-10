@@ -266,7 +266,7 @@ std::optional<dht::token> find_first_token_for_shard_in_not_wrap_around_range(co
     if (sharder.shard_of(t) == shard_idx) {
         return t;
     }
-    if (auto x = sharder.maybe_token_for_next_shard(t, shard_idx)) {
+    if (auto x = sharder.token_for_next_shard(t, shard_idx)) {
         if (*x <= end) {
             return x;
         }

@@ -144,7 +144,7 @@ public:
             , _next_shard(_shard + 1 == _sharder.shard_count() ? 0 : _shard + 1)
             , _start_token(_range.start() ? _range.start()->value() : minimum_token()) {
         if (_sharder.shard_of(*_start_token) != _shard) {
-            _start_token = _sharder.maybe_token_for_next_shard(*_start_token, _shard);
+            _start_token = _sharder.token_for_next_shard(*_start_token, _shard);
         }
     }
     // Returns the next token_range that is both wholly contained within the input range and also

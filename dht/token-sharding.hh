@@ -59,7 +59,7 @@ public:
      *
      * On overflow, empty optional is returned.
      */
-    virtual std::optional<token> maybe_token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+    virtual std::optional<token> token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
 
     /**
      * @return number of shards configured for this partitioner

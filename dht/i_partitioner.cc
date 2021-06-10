@@ -50,7 +50,7 @@ sharder::shard_of(const token& t) const {
 }
 
 std::optional<token>
-sharder::maybe_token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
@@ -184,12 +184,12 @@ selective_token_range_sharder::next() {
     if (_start_token && _range.overlaps(token_range::make_starting_with(*_start_token), dht::token_comparator())) {
         auto start_bound = token_range::bound(*_start_token);
         std::optional<token_range::bound> end_bound;
-        if (auto maybe_end_token = _sharder.maybe_token_for_next_shard(*_start_token, _next_shard)) {
+        if (auto maybe_end_token = _sharder.token_for_next_shard(*_start_token, _next_shard)) {
             end_bound = token_range::bound(*maybe_end_token, false);
         }
         auto candidate = dht::token_range(start_bound, end_bound);
         auto intersection = _range.intersection(std::move(candidate), dht::token_comparator());
-        _start_token = _sharder.maybe_token_for_next_shard(*_start_token, _shard);
+        _start_token = _sharder.token_for_next_shard(*_start_token, _shard);
         return intersection;
     }
     return {};
@@ -203,7 +203,7 @@ ring_position_range_sharder::next(const schema& s) {
     auto start_token = _range.start() ? _range.start()->value().token() : minimum_token();
     auto shard = _sharder.shard_of(start_token);
     auto next_shard = shard + 1 < _sharder.shard_count() ? shard + 1 : 0;
-    if (auto shard_boundary_token = _sharder.maybe_token_for_next_shard(start_token, next_shard)) {
+    if (auto shard_boundary_token = _sharder.token_for_next_shard(start_token, next_shard)) {
         auto shard_boundary = ring_position::starting_at(*shard_boundary_token);
         if (!_range.end() || shard_boundary.less_compare(s, _range.end()->value())) {
             // split the range at end_of_shard

@@ -42,5 +42,5 @@ public:
     }
 
     virtual unsigned shard_of(const dht::token& t) const override;
-    virtual std::optional<dht::token> maybe_token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
+    virtual std::optional<dht::token> token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
 };
