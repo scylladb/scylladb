@@ -2032,7 +2032,13 @@ public:
         return _full->get_future();
     }
     virtual future<> next_partition() override {
-        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty() && !is_end_of_stream()) {
+            return fill_buffer(db::no_timeout).then([this] {
+                return next_partition();
+            });
+        }
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
