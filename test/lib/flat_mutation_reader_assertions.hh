@@ -23,7 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/backtrace.hh>
-#include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "mutation_assertions.hh"
 #include "schema.hh"
 #include "test/lib/log.hh"
@@ -497,26 +497,15 @@ flat_reader_assertions assert_that(flat_mutation_reader r) {
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions_v2 {
-    flat_mutation_reader _reader;
+    flat_mutation_reader_v2 _reader;
     dht::partition_range _pr;
-    range_tombstone_list _tombstones;
 private:
-    mutation_fragment_opt read_next() {
+    mutation_fragment_v2_opt read_next() {
         return _reader(db::no_timeout).get0();
     }
-
-    static bool are_tombstones_mergeable(const schema& s, const range_tombstone& a, const range_tombstone& b) {
-        const auto range_a = position_range(position_in_partition(a.position()), position_in_partition(a.end_position()));
-        const auto tri_cmp = position_in_partition::tri_compare(s);
-        return (a.tomb <=> b.tomb) == 0 && (range_a.overlaps(s, b.position(), b.end_position()) ||
-                                            tri_cmp(a.end_position(), b.position()) == 0 ||
-                                            tri_cmp(b.end_position(), a.position()) == 0);
-    }
-
 public:
-    flat_reader_assertions_v2(flat_mutation_reader reader)
+    flat_reader_assertions_v2(flat_mutation_reader_v2 reader)
             : _reader(std::move(reader))
-            , _tombstones(*_reader.schema())
     { }
 
     ~flat_reader_assertions_v2() {
@@ -531,7 +520,6 @@ public:
             _reader.close().get();
             _reader = std::move(o._reader);
             _pr = std::move(o._pr);
-            _tombstones = std::move(o._tombstones);
         }
         return *this;
     }
@@ -544,15 +532,14 @@ public:
             BOOST_FAIL(format("Expected: partition start with key {}, got end of stream", dk));
         }
         if (!mfopt->is_partition_start()) {
-            BOOST_FAIL(format("Expected: partition start with key {}, got: {}", dk, mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected: partition start with key {}, got: {}", dk, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         if (!mfopt->as_partition_start().key().equal(*_reader.schema(), dk)) {
-            BOOST_FAIL(format("Expected: partition start with key {}, got: {}", dk, mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected: partition start with key {}, got: {}", dk, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         if (tomb && mfopt->as_partition_start().partition_tombstone() != *tomb) {
-            BOOST_FAIL(format("Expected: partition start with tombstone {}, got: {}", *tomb, mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected: partition start with tombstone {}, got: {}", *tomb, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
-        _tombstones.clear();
         return *this;
     }
 
@@ -563,52 +550,23 @@ public:
             BOOST_FAIL("Expected static row, got end of stream");
         }
         if (!mfopt->is_static_row()) {
-            BOOST_FAIL(format("Expected static row, got: {}", mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected static row, got: {}", mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_row_with_key(const clustering_key& ck, std::optional<api::timestamp_type> active_range_tombstone = std::nullopt) {
+    flat_reader_assertions_v2& produces_row_with_key(const clustering_key& ck) {
         testlog.trace("Expect {}", ck);
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
         }
         if (!mfopt->is_clustering_row()) {
-            BOOST_FAIL(format("Expected row with key {}, but got {}", ck, mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected row with key {}, but got {}", ck, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
             BOOST_FAIL(format("Expected row with key {}, but key is {}", ck, actual));
-        }
-        if (active_range_tombstone) {
-            BOOST_CHECK_EQUAL(*active_range_tombstone, _tombstones.search_tombstone_covering(*_reader.schema(), ck).timestamp);
-        }
-        return *this;
-    }
-
-    flat_reader_assertions_v2& may_produce_tombstones(position_range range) {
-        while (mutation_fragment* next = _reader.peek(db::no_timeout).get0()) {
-            if (next->is_range_tombstone()) {
-                if (!range.overlaps(*_reader.schema(), next->as_range_tombstone().position(), next->as_range_tombstone().end_position())) {
-                    break;
-                }
-                testlog.trace("Received range tombstone: {}", mutation_fragment::printer(*_reader.schema(), *next));
-                range = position_range(position_in_partition(next->position()), range.end());
-                _tombstones.apply(*_reader.schema(), _reader(db::no_timeout).get0()->as_range_tombstone());
-            } else if (next->is_clustering_row() && next->as_clustering_row().empty()) {
-                if (!range.contains(*_reader.schema(), next->position())) {
-                    break;
-                }
-                // There is no difference between an empty row and a row that doesn't exist.
-                // While readers that emit spurious empty rows may be wasteful, it is not
-                // incorrect to do so, so let's ignore them.
-                testlog.trace("Received empty clustered row: {}", mutation_fragment::printer(*_reader.schema(), *next));
-                range = position_range(position_in_partition(next->position()), range.end());
-                _reader(db::no_timeout).get();
-            } else {
-                break;
-            }
         }
         return *this;
     }
@@ -631,7 +589,7 @@ public:
             BOOST_FAIL("Expected static row, got end of stream");
         }
         if (!mfopt->is_static_row()) {
-            BOOST_FAIL(format("Expected static row, got: {}", mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected static row, got: {}", mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         auto& cells = mfopt->as_static_row().cells();
         if (cells.size() != columns.size()) {
@@ -661,7 +619,7 @@ public:
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
         }
         if (!mfopt->is_clustering_row()) {
-            BOOST_FAIL(format("Expected row with key {}, but got {}", ck, mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected row with key {}, but got {}", ck, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
@@ -700,7 +658,7 @@ public:
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
         }
         if (!mfopt->is_clustering_row()) {
-            BOOST_FAIL(format("Expected row with key {}, but got {}", ck, mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected row with key {}, but got {}", ck, mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         auto& actual = mfopt->as_clustering_row().key();
         if (!actual.equal(*_reader.schema(), ck)) {
@@ -721,38 +679,17 @@ public:
         return *this;
     }
 
-    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
-    flat_reader_assertions_v2& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
+    flat_reader_assertions_v2& produces_range_tombstone_change(const range_tombstone_change& rt) {
         testlog.trace("Expect {}", rt);
         auto mfo = read_next();
         if (!mfo) {
             BOOST_FAIL(format("Expected range tombstone {}, but got end of stream", rt));
         }
-        if (!mfo->is_range_tombstone()) {
-            BOOST_FAIL(format("Expected range tombstone {}, but got {}", rt, mutation_fragment::printer(*_reader.schema(), *mfo)));
+        if (!mfo->is_range_tombstone_change()) {
+            BOOST_FAIL(format("Expected range tombstone change {}, but got {}", rt, mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
         }
-        const schema& s = *_reader.schema();
-        range_tombstone_list actual_list(s);
-        actual_list.apply(s, mfo->as_range_tombstone());
-        _tombstones.apply(s, mfo->as_range_tombstone());
-        position_in_partition::equal_compare eq(s);
-        while (mutation_fragment* next = _reader.peek(db::no_timeout).get0()) {
-            if (!next->is_range_tombstone() || !are_tombstones_mergeable(s, *actual_list.begin(), next->as_range_tombstone())) {
-                break;
-            }
-            auto rt = _reader(db::no_timeout).get0()->as_range_tombstone();
-            actual_list.apply(s, rt);
-            assert(actual_list.size() == 1);
-            _tombstones.apply(s, rt);
-        }
-        {
-            range_tombstone_list expected_list(s);
-            expected_list.apply(s, rt);
-            actual_list.trim(s, ck_ranges);
-            expected_list.trim(s, ck_ranges);
-            if (!actual_list.equal(s, expected_list)) {
-                BOOST_FAIL(format("Expected {}, but got {}", expected_list, actual_list));
-            }
+        if (!mfo->as_range_tombstone_change().equal(*_reader.schema(), rt)) {
+            BOOST_FAIL(format("Expected {}, but got {}", rt, mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
         }
         return *this;
     }
@@ -764,22 +701,18 @@ public:
             BOOST_FAIL(format("Expected partition end but got end of stream"));
         }
         if (!mfopt->is_end_of_partition()) {
-            BOOST_FAIL(format("Expected partition end but got {}", mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected partition end but got {}", mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
-        _tombstones.clear();
         return *this;
     }
 
-    flat_reader_assertions_v2& produces(const schema& s, const mutation_fragment& mf) {
+    flat_reader_assertions_v2& produces(const schema& s, const mutation_fragment_v2& mf) {
         auto mfopt = read_next();
         if (!mfopt) {
-            BOOST_FAIL(format("Expected {}, but got end of stream", mutation_fragment::printer(*_reader.schema(), mf)));
+            BOOST_FAIL(format("Expected {}, but got end of stream", mutation_fragment_v2::printer(*_reader.schema(), mf)));
         }
         if (!mfopt->equal(s, mf)) {
-            BOOST_FAIL(format("Expected {}, but got {}", mutation_fragment::printer(*_reader.schema(), mf), mutation_fragment::printer(*_reader.schema(), *mfopt)));
-        }
-        if (mf.is_range_tombstone()) {
-            _tombstones.apply(*_reader.schema(), mf.as_range_tombstone());
+            BOOST_FAIL(format("Expected {}, but got {}", mutation_fragment_v2::printer(*_reader.schema(), mf), mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
@@ -788,12 +721,12 @@ public:
         testlog.trace("Expecting end of stream");
         auto mfopt = read_next();
         if (bool(mfopt)) {
-            BOOST_FAIL(format("Expected end of stream, got {}", mutation_fragment::printer(*_reader.schema(), *mfopt)));
+            BOOST_FAIL(format("Expected end of stream, got {}", mutation_fragment_v2::printer(*_reader.schema(), *mfopt)));
         }
         return *this;
     }
 
-    flat_reader_assertions_v2& produces(mutation_fragment::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
+    flat_reader_assertions_v2& produces(mutation_fragment_v2::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
         std::vector<bytes> ck_bytes;
         for (auto&& e : ck_elements) {
             ck_bytes.emplace_back(int32_type->decompose(e));
@@ -813,9 +746,6 @@ public:
         clustering_key::equality ck_eq(*_reader.schema());
         if (!ck_eq(mfopt->key(), ck)) {
             BOOST_FAIL(format("Expected key {}, got: {}", ck, mfopt->key()));
-        }
-        if (mfopt->is_range_tombstone()) {
-            _tombstones.apply(*_reader.schema(), mfopt->as_range_tombstone());
         }
         return *this;
     }
@@ -861,8 +791,8 @@ public:
 
     void has_monotonic_positions() {
         position_in_partition::less_compare less(*_reader.schema());
-        mutation_fragment_opt previous_fragment;
-        mutation_fragment_opt previous_partition;
+        mutation_fragment_v2_opt previous_fragment;
+        mutation_fragment_v2_opt previous_partition;
         bool inside_partition = false;
         for (;;) {
             auto mfo = read_next();
@@ -874,7 +804,7 @@ public:
                 auto& dk = mfo->as_partition_start().key();
                 if (previous_partition && !previous_partition->as_partition_start().key().less_compare(*_reader.schema(), dk)) {
                     BOOST_FAIL(format("previous partition had greater or equal key: prev={}, current={}",
-                                      mutation_fragment::printer(*_reader.schema(), *previous_partition), mutation_fragment::printer(*_reader.schema(), *mfo)));
+                                      mutation_fragment_v2::printer(*_reader.schema(), *previous_partition), mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
                 }
                 previous_partition = std::move(mfo);
                 previous_fragment = std::nullopt;
@@ -885,9 +815,9 @@ public:
             } else {
                 BOOST_REQUIRE(inside_partition);
                 if (previous_fragment) {
-                    if (less(mfo->position(), previous_fragment->position())) {
-                        BOOST_FAIL(format("previous fragment has greater position: prev={}, current={}",
-                                          mutation_fragment::printer(*_reader.schema(), *previous_fragment), mutation_fragment::printer(*_reader.schema(), *mfo)));
+                    if (!less(previous_fragment->position(), mfo->position())) {
+                        BOOST_FAIL(format("previous fragment is not strictly before: prev={}, current={}",
+                                          mutation_fragment_v2::printer(*_reader.schema(), *previous_fragment), mutation_fragment_v2::printer(*_reader.schema(), *mfo)));
                     }
                 }
                 previous_fragment = std::move(mfo);
@@ -956,3 +886,8 @@ public:
         _reader.set_max_buffer_size(size);
     }
 };
+
+inline
+flat_reader_assertions_v2 assert_that(flat_mutation_reader_v2 r) {
+    return { std::move(r) };
+}
