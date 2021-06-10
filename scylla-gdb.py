@@ -2991,11 +2991,6 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\n")
 
             group = std_shared_ptr(ioq['_group']).get().dereference()
-            try:
-                gdb.write("\tMax bytes count:     {}\n".format(group['_max_bytes_count']))
-            except gdb.error:
-                # Compatibility: _maximum_request_size was renamed to _max_bytes_count in scylla version 4.6
-                gdb.write("\tMax request size:    {}\n".format(group['_maximum_request_size']))
             gdb.write("\tMax capacity:        {}\n".format(self.ticket(group['_fg']['_maximum_capacity'])))
             gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_tail']).get())))
             gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_head']).get())))
