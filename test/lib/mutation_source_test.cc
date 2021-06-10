@@ -1634,6 +1634,8 @@ void test_reader_conversions(populate_fn_ex populate) {
     });
 }
 
+void test_next_partition(populate_fn_ex);
+
 void run_mutation_reader_tests(populate_fn_ex populate) {
     test_range_tombstones_v2(populate);
     test_reader_conversions(populate);
@@ -1650,6 +1652,9 @@ void run_mutation_reader_tests(populate_fn_ex populate) {
     test_range_queries(populate);
     test_query_only_static_row(populate);
     test_query_no_clustering_ranges_no_static_columns(populate);
+    test_next_partition(populate);
+    test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
+    test_slicing_with_overlapping_range_tombstones(populate);
 }
 
 void test_next_partition(populate_fn_ex populate) {
@@ -1685,12 +1690,6 @@ void test_next_partition(populate_fn_ex populate) {
         .produces_end_of_stream();
 }
 
-void run_flat_mutation_reader_tests(populate_fn_ex populate) {
-    test_next_partition(populate);
-    test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
-    test_slicing_with_overlapping_range_tombstones(populate);
-}
-
 void run_mutation_source_tests(populate_fn populate) {
     auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
         return populate(std::move(s), muts);
@@ -1700,7 +1699,6 @@ void run_mutation_source_tests(populate_fn populate) {
 
 void run_mutation_source_tests(populate_fn_ex populate) {
     run_mutation_reader_tests(populate);
-    run_flat_mutation_reader_tests(populate);
 }
 
 struct mutation_sets {
