@@ -24,7 +24,7 @@
 
 namespace tests {
 
-thread_local reader_concurrency_semaphore the_semaphore{reader_concurrency_semaphore::no_limits{}};
+thread_local reader_concurrency_semaphore the_semaphore{reader_concurrency_semaphore::no_limits{}, "global_test_semaphore"};
 
 reader_concurrency_semaphore& semaphore() {
     return the_semaphore;

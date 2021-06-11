@@ -198,6 +198,9 @@ private:
 public:
     struct no_limits { };
 
+    /// Create a semaphore with the specified limits
+    ///
+    /// The semaphore's name has to be unique!
     reader_concurrency_semaphore(int count,
             ssize_t memory,
             sstring name,
@@ -207,7 +210,8 @@ public:
     /// Create a semaphore with practically unlimited count and memory.
     ///
     /// And conversely, no queue limit either.
-    explicit reader_concurrency_semaphore(no_limits, sstring name = "unlimited reader_concurrency_semaphore");
+    /// The semaphore's name has to be unique!
+    explicit reader_concurrency_semaphore(no_limits, sstring name);
 
     ~reader_concurrency_semaphore();
 

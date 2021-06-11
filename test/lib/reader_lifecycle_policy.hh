@@ -90,11 +90,14 @@ public:
         } else if (_contexts[shard]->semaphore) {
             return *_contexts[shard]->semaphore;
         }
+        // To support multiple reader life-cycle instances alive at the same
+        // time, incorporate `this` into the name, to make their names unique.
+        auto name = format("tests::reader_lifecycle_policy@{}@shard_id={}", fmt::ptr(this), shard);
         if (_evict_paused_readers) {
             // Create with no memory, so all inactive reads are immediately evicted.
-            _contexts[shard]->semaphore.emplace(1, 0, format("reader_concurrency_semaphore @shard_id={}", shard));
+            _contexts[shard]->semaphore.emplace(1, 0, std::move(name));
         } else {
-            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{});
+            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{}, std::move(name));
         }
         return *_contexts[shard]->semaphore;
     }

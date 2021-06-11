@@ -1774,7 +1774,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     };
 
     return new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro).then([this, &pc] (file index_file) {
-        return do_with(std::move(index_file), std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}),
+        return do_with(std::move(index_file), std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::generate_summary()"),
                 [this, &pc] (file index_file, std::unique_ptr<reader_concurrency_semaphore>& sem) {
             return index_file.size().then([this, &pc, index_file, &sem] (auto index_size) {
                 // an upper bound. Surely to be less than this.
@@ -2679,7 +2679,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     if (!filter_has_key(hk)) {
         return make_ready_future<bool>(false);
     }
-    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
+    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
     auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem->make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
     auto& lh_index = *lh_index_ptr;
     return lh_index.advance_lower_and_check_if_present(dk).then([lh_index_ptr = std::move(lh_index_ptr), s, sem = std::move(sem)] (bool present) mutable {
