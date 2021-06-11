@@ -1549,3 +1549,272 @@ BOOST_AUTO_TEST_CASE(test_reordered_reject) {
     raft::logger.trace("delivering second reject");
     deliver(routes, fsm2.id(), std::move(reject_2.messages));
 }
+
+BOOST_AUTO_TEST_CASE(test_non_voter_stays_pipeline) {
+    // Check that a node stays in PIPELINE mode
+    // through configuration changes.
+    server_id A_id = id(), B_id = id();
+    raft::server_address_set addrset{raft::server_address{A_id}, raft::server_address{B_id, false}};
+    raft::configuration cfg(addrset);
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PROBE);
+    A.add_entry(log_entry::dummy{});
+    // We need to deliver a probe from A to B so that B gets
+    // a change to respond and A can switch B to PIPELINE mode.
+    A.tick();
+    communicate(A, B);
+    BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
+    raft::configuration newcfg({A_id, B_id});
+    A.add_entry(newcfg);
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{B_id})->can_vote, true);
+    BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
+    A.add_entry(cfg);
+    auto tick_occasionally = [&A, &B]() {
+        if (rolladice()) {
+            A.tick(); B.tick();
+        }
+        return false;
+    };
+    communicate_until(tick_occasionally, A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{B_id})->can_vote, false);
+    BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {
+    // Test a two-node cluster, change a leader to a non-voter.
+    server_id A_id = id(), B_id = id();
+    raft::server_address_set oldset{raft::server_address{A_id, true}, raft::server_address{B_id, false}};
+    raft::configuration cfg(oldset);
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    raft::server_address_set newset{raft::server_address{A_id, false}, raft::server_address{B_id, true}};
+    raft::configuration newcfg(newset);
+    A.add_entry(newcfg);
+    A.tick();
+    communicate(A, B);
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(B.is_leader());
+    // Try to switch the leader to a non-voter, leaving no other voters.
+    newset = raft::server_address_set{raft::server_address{A_id, false}, raft::server_address{B_id, false}};
+    newcfg = raft::configuration(newset);
+    BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
+    // Try to remove the last remaining voter
+    newset = raft::server_address_set{raft::server_address{B_id, false}};
+    newcfg = raft::configuration(newset);
+    BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(test_non_voter_gets_timeout_now) {
+    // Test that even if a non-voter gets timeout now, there is no
+    // elections and later this learner can rejoin the cluster,
+    // although it does  disrupt the cluster a bit (through
+    // leader's having to increase its term).
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    C.step(A.id(), raft::timeout_now{.current_term = A.get_current_term()});
+    C.tick();
+    auto output = C.get_output();
+    BOOST_CHECK(C.is_follower());
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+    BOOST_CHECK(!output.term_and_vote);
+    A.add_entry(log_entry::dummy{});
+    communicate(A, B, C);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK(A.is_leader());
+}
+
+BOOST_AUTO_TEST_CASE(test_non_voter_election_timeout) {
+    // Test that non-voter doesn't start election even if its
+    // election timeout expires and it doesn't see a valid leader.
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    fd.mark_all_dead();
+    auto C_term = C.get_current_term();
+    election_timeout(C);
+    BOOST_CHECK(C.is_follower());
+    BOOST_CHECK_EQUAL(C_term, C.get_current_term());
+}
+
+BOOST_AUTO_TEST_CASE(test_non_voter_voter_loop) {
+    // Test voter-non-voter change in a loop
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg({A_id, B_id, C_id});
+    raft::configuration cfg_with_non_voter(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    for (int i = 0; i < 100; ++i) {
+        A.add_entry(i % 2 ? cfg_with_non_voter : cfg);
+        if (rolladice()) {
+            A.add_entry(log_entry::dummy{});
+        }
+        communicate(A, B, C);
+        if (rolladice()) {
+            A.add_entry(log_entry::dummy());
+            communicate(A, B, C);
+        }
+        // If iteration count is large, this helps save some
+        // memory
+        if (rolladice(1./1000)) {
+            A.apply_snapshot(log_snapshot(A.get_log(), A.log_last_idx()), 0);
+        }
+        if (rolladice(1./100)) {
+            B.apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+        }
+        if (rolladice(1./5000)) {
+            C.apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+        }
+    }
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+}
+
+BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
+    // Test non-voter learns it's a non-voter via snapshot
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg({A_id, B_id, C_id});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    A.add_entry(log_entry::dummy{});
+    raft::configuration cfg_with_non_voter(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+    A.tick();
+    A.add_entry(cfg_with_non_voter);
+    A.tick();
+    // Majority commits the configuration change
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, false);
+    A.tick();
+    raft::snapshot A_snp{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
+    A.apply_snapshot(A_snp, 0);
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    // A non-voter doesn't become candidate on election timeout
+    fd.mark_all_dead();
+    election_timeout(C);
+    BOOST_CHECK(C.is_follower());
+    // Now try the same trick, but this time convert a non-voter
+    // to a voter with a snapshot
+    fd.mark_all_alive();
+    A.tick();
+    for (int i = 0; i < 100; i++) {
+        A.add_entry(log_entry::dummy{});
+    }
+    A.add_entry(cfg);
+    A.tick();
+    // Majority commits the configuration change
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, true);
+    A.tick();
+    A_snp = raft::snapshot{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
+    A.apply_snapshot(A_snp, 0);
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    fd.mark_all_dead();
+    election_timeout(C);
+    BOOST_CHECK(C.is_candidate());
+    // Check an ex-voter can become a leader alright (LearnerPromotion)
+    election_threshold(B);
+    communicate(C, B);
+    BOOST_CHECK(C.is_leader());
+}
+
+BOOST_AUTO_TEST_CASE(test_non_voter_can_vote) {
+    // Test non-voter can vote when it is requested to - it may
+    // not be aware of the configuration in which it is a voter
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    raft::configuration cfg_all_voters({A_id, B_id, C_id});
+    A.add_entry(cfg_all_voters);
+    // Majority commits the configuration change
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, true);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), B.log_last_idx());
+    fd.mark_dead(A_id);
+    election_timeout(B);
+    election_threshold(C);
+    // B and C are enough to elect B in the new configuration.
+    communicate(B, C);
+    BOOST_CHECK(B.is_leader());
+    BOOST_CHECK_EQUAL(B.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(B.log_last_idx(), C.log_last_idx());
+}

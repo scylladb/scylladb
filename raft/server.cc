@@ -704,12 +704,13 @@ future<> server_impl::abort() {
 }
 
 future<> server_impl::set_configuration(server_address_set c_new) {
+    const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server
     // from its current configuration (C old ), it appends the new
     // configuration (C new ) as an entry in its log and replicates
     // that entry using the normal Raft mechanism.
-    auto [joining, leaving] = _fsm->get_configuration().diff(c_new);
+    auto [joining, leaving] = cfg.diff(c_new);
     if (joining.size() == 0 && leaving.size() == 0) {
         co_return;
     }

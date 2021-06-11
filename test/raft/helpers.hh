@@ -29,6 +29,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 #include "serializer_impl.hh"
 #include <limits>
 
@@ -75,6 +76,7 @@ public:
     void mark_dead(raft::server_id id) { _dead.emplace(id); }
     void mark_alive(raft::server_id id) { _dead.erase(id); }
     void mark_all_dead() { _is_alive = false; }
+    void mark_all_alive() { _is_alive = true; }
 };
 
 template <typename T> void add_entry(raft::log& log, T cmd) {
@@ -218,8 +220,8 @@ raft::server_address_set address_set(std::vector<raft::server_id> ids) {
     return set;
 }
 
-raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
-    return raft::fsm(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
+fsm_debug create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
+    return fsm_debug(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
 }
 
 
@@ -240,4 +242,9 @@ raft::server_address to_server_address(size_t local_id) {
 
 size_t to_local_id(utils::UUID uuid) {
     return uuid.get_least_significant_bits() - 1;
+}
+
+// Return true upon a random event with given probability
+bool rolladice(float probability = 1.0/2.0) {
+    return tests::random::get_real(0.0, 1.0) < probability;
 }

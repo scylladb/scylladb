@@ -129,14 +129,24 @@ struct configuration {
         return !previous.empty();
     }
 
-    // Check the proposed configuration and compute a diff
-    // between it and the current one.
-    configuration_diff diff(const server_address_set& c_new) const {
+    // Count the number of voters in a configuration
+    static size_t voter_count(const server_address_set& c_new) {
+        return std::count_if(c_new.begin(), c_new.end(), [] (const server_address& s) { return s.can_vote; });
+    }
+
+    // Check if transitioning to a proposed configuration is safe.
+    static void check(const server_address_set& c_new) {
         // We must have at least one voting member in the config.
-        if (std::count_if(c_new.begin(), c_new.end(), [] (const server_address& s) { return s.can_vote; }) == 0) {
+        if (c_new.empty()) {
             throw std::invalid_argument("Attempt to transition to an empty Raft configuration");
         }
+        if (voter_count(c_new) == 0) {
+            throw std::invalid_argument("The configuration must have at least one voter");
+        }
+    }
 
+    // Compute a diff between a proposed configuration and the current one.
+    configuration_diff diff(const server_address_set& c_new) const {
         configuration_diff diff;
         // joining
         for (const auto& s : c_new) {
