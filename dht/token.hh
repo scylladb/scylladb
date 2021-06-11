@@ -214,11 +214,7 @@ public:
 };
 
 static inline std::strong_ordering tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {
-    if (l1 == l2) {
-        return std::strong_ordering::equal;
-    } else {
-        return l1 < l2 ? std::strong_ordering::less : std::strong_ordering::greater;
-    }
+    return l1 <=> l2;
 }
 
 template <typename T>
@@ -256,14 +252,11 @@ struct raw_token_less_comparator {
 
 const token& minimum_token() noexcept;
 const token& greatest_token() noexcept;
-std::strong_ordering tri_compare(const token& t1, const token& t2);
-inline bool operator==(const token& t1, const token& t2) { return tri_compare(t1, t2) == 0; }
-inline bool operator<(const token& t1, const token& t2) { return tri_compare(t1, t2) < 0; }
 
-inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
-inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
-inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::operator<=(t1, t2); }
-inline bool operator>=(const token& t1, const token& t2) { return std::rel_ops::operator>=(t1, t2); }
+inline std::strong_ordering operator<=>(const token& t1, const token& t2) { return t1._data <=> t2._data; }
+inline bool operator==(const token& t1, const token& t2) { return t1._data == t2._data; }
+inline std::strong_ordering tri_compare(const token& t1, const token& t2) { return t1 <=> t2; }
+
 std::ostream& operator<<(std::ostream& out, const token& t);
 
 } // namespace dht

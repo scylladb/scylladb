@@ -44,10 +44,6 @@ const token& greatest_token() noexcept {
     return greatest_token_static;
 }
 
-std::strong_ordering tri_compare(const token& t1, const token& t2) {
-    return t1._data <=> t2._data;
-}
-
 std::ostream& operator<<(std::ostream& out, const token& t) {
     if (t.is_minimum()) {
         return out << "minimum token";
