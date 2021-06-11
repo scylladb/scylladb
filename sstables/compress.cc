@@ -405,9 +405,10 @@ public:
                 auto compressed_len = addr.chunk_len - 4;
                 // FIXME: Do not always calculate checksum - Cassandra has a
                 // probability (defaulting to 1.0, but still...)
-                auto checksum = read_be<uint32_t>(buf.get() + compressed_len);
-                if (checksum != ChecksumType::checksum(buf.get(), compressed_len)) {
-                    throw sstables::malformed_sstable_exception("compressed chunk failed checksum");
+                auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
+                auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
+                if (expected_checksum != actual_checksum) {
+                    throw sstables::malformed_sstable_exception(format("compressed chunk of size {} at file offset {} failed checksum, expected={}, actual={}", addr.chunk_len, _underlying_pos, expected_checksum, actual_checksum));
                 }
 
                 // We know that the uncompressed data will take exactly
