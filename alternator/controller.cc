@@ -21,5 +21,32 @@
 
 #include "controller.hh"
 
+using namespace seastar;
+
 namespace alternator {
+
+controller::controller(sharded<service::storage_proxy>& proxy,
+        sharded<service::migration_manager>& mm,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<cdc::generation_service>& cdc_gen_svc,
+        sharded<cql3::query_processor>& qp,
+        sharded<service::memory_limiter>& memory_limiter,
+        const db::config& config)
+    : _proxy(proxy)
+    , _mm(mm)
+    , _sys_dist_ks(sys_dist_ks)
+    , _cdc_gen_svc(cdc_gen_svc)
+    , _qp(qp)
+    , _memory_limiter(memory_limiter)
+    , _config(config)
+{
+    (void)_proxy;
+    (void)_mm;
+    (void)_sys_dist_ks;
+    (void)_cdc_gen_svc;
+    (void)_qp;
+    (void)_memory_limiter;
+    (void)_config;
+}
+
 }

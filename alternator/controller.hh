@@ -21,5 +21,48 @@
 
 #pragma once
 
+#include <seastar/core/sharded.hh>
+
+namespace service {
+class storage_proxy;
+class migration_manager;
+class memory_limiter;
+}
+
+namespace db {
+class system_distributed_keyspace;
+class config;
+}
+
+namespace cdc {
+class generation_service;
+}
+
+namespace cql3 {
+class query_processor;
+}
+
 namespace alternator {
+
+using namespace seastar;
+
+class controller {
+    sharded<service::storage_proxy>& _proxy;
+    sharded<service::migration_manager>& _mm;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<cdc::generation_service>& _cdc_gen_svc;
+    sharded<cql3::query_processor>& _qp;
+    sharded<service::memory_limiter>& _memory_limiter;
+    const db::config& _config;
+
+public:
+    controller(sharded<service::storage_proxy>& proxy,
+        sharded<service::migration_manager>& mm,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<cdc::generation_service>& cdc_gen_svc,
+        sharded<cql3::query_processor>& qp,
+        sharded<service::memory_limiter>& memory_limiter,
+        const db::config& config);
+};
+
 }

@@ -90,6 +90,7 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
+#include "alternator/controller.hh"
 
 #include "service/raft/raft_services.hh"
 
@@ -1373,6 +1374,9 @@ int main(int ac, char** av) {
             auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
                 api::unset_rpc_controller(ctx).get();
             });
+
+            alternator::controller alternator_ctl(proxy, mm, sys_dist_ks, cdc_generation_service, qp, service_memory_limiter, *cfg);
+            (void)alternator_ctl;
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
