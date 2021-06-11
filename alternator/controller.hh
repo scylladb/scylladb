@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
+#include <seastar/core/smp.hh>
 
 namespace service {
 class storage_proxy;
@@ -46,6 +47,9 @@ namespace alternator {
 
 using namespace seastar;
 
+class executor;
+class server;
+
 class controller {
     sharded<service::storage_proxy>& _proxy;
     sharded<service::migration_manager>& _mm;
@@ -55,6 +59,10 @@ class controller {
     sharded<service::memory_limiter>& _memory_limiter;
     const db::config& _config;
 
+    sharded<executor> _executor;
+    sharded<server> _server;
+    std::optional<smp_service_group> _ssg;
+
 public:
     controller(sharded<service::storage_proxy>& proxy,
         sharded<service::migration_manager>& mm,
@@ -63,6 +71,9 @@ public:
         sharded<cql3::query_processor>& qp,
         sharded<service::memory_limiter>& memory_limiter,
         const db::config& config);
+
+    future<> start();
+    future<> stop();
 };
 
 }
