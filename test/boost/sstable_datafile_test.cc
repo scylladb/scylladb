@@ -7376,6 +7376,41 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
             check(sel, decorated_keys[7], {0});
         }
 
+        {
+            // reproduces use-after-free failure in incremental reader selector with compound set where the next position
+            // returned by a set can be used after freed as selector position in another set, producing incorrect results.
+
+            enum class strategy_param : bool {
+                ICS = false,
+                LCS = true,
+            };
+
+            auto incremental_selection_test = [&] (strategy_param param) {
+                auto set1 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s, make_lw_shared<sstable_list>(), false));
+                auto set2 = make_lw_shared<sstable_set>(sstables::make_partitioned_sstable_set(s, make_lw_shared<sstable_list>(), bool(param)));
+                set1->insert(sstable_for_overlapping_test(env, s, 0, key_and_token_pair[1].first, key_and_token_pair[1].first, 1));
+                set2->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[2].first, 1));
+                set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[3].first, key_and_token_pair[3].first, 1));
+                set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
+
+                sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
+                sstable_set::incremental_selector sel = compound.make_incremental_selector();
+
+                dht::ring_position_view pos = dht::ring_position_view::min();
+                std::unordered_set<sstables::shared_sstable> sstables;
+                do {
+                    auto ret = sel.select(pos);
+                    pos = ret.next_position;
+                    sstables.insert(ret.sstables.begin(), ret.sstables.end());
+                } while (!pos.is_max());
+
+                BOOST_REQUIRE(sstables.size() == 4);
+            };
+
+            incremental_selection_test(strategy_param::ICS);
+            incremental_selection_test(strategy_param::LCS);
+        }
+
         return make_ready_future<>();
     });
 }

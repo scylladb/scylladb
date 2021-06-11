@@ -305,16 +305,13 @@ class partitioned_sstable_set::incremental_selector : public incremental_selecto
     const uint64_t& _leveled_sstables_change_cnt;
     uint64_t _last_known_leveled_sstables_change_cnt;
     map_iterator _it;
-    // Only to back the dht::ring_position_view returned from select().
-    dht::ring_position _next_position;
 private:
-    dht::ring_position_view next_position(map_iterator it) {
+    dht::ring_position_ext next_position(map_iterator it) {
         if (it == _leveled_sstables.end()) {
-            _next_position = dht::ring_position::max();
             return dht::ring_position_view::max();
         } else {
-            _next_position = partitioned_sstable_set::to_ring_position(it->first.lower());
-            return dht::ring_position_view(_next_position, dht::ring_position_view::after_key(!boost::icl::is_left_closed(it->first.bounds())));
+            auto&& next_position = partitioned_sstable_set::to_ring_position(it->first.lower());
+            return dht::ring_position_ext(next_position, dht::ring_position_ext::after_key(!boost::icl::is_left_closed(it->first.bounds())));
         }
     }
     static bool is_before_interval(const compatible_ring_position_or_view& crp, const interval_type& interval) {
@@ -338,10 +335,9 @@ public:
         , _leveled_sstables(leveled_sstables)
         , _leveled_sstables_change_cnt(leveled_sstables_change_cnt)
         , _last_known_leveled_sstables_change_cnt(leveled_sstables_change_cnt)
-        , _it(leveled_sstables.begin())
-        , _next_position(dht::ring_position::min()) {
+        , _it(leveled_sstables.begin()) {
     }
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view> select(const dht::ring_position_view& pos) override {
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
         auto crp = compatible_ring_position_or_view(*_schema, pos);
         auto ssts = _unleveled_sstables;
         using namespace dht;
@@ -411,7 +407,7 @@ std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_increme
 
         selector(const time_series_sstable_set& set) : _set(set) {}
 
-        virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view>
+        virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext>
         select(const dht::ring_position_view&) override {
             return std::make_tuple(dht::partition_range::make_open_ended_both_sides(), _set.select(), dht::ring_position_view::max());
         }
@@ -954,7 +950,7 @@ public:
             , _selectors(make_selectors(sets)) {
     }
 
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view> select(const dht::ring_position_view& pos) override {
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
         // Return all sstables selected on the requested position from all selectors.
         std::vector<shared_sstable> sstables;
         // Return the lowest next position from all selectors, such that this function will be called again to select the
@@ -974,7 +970,7 @@ public:
             }
         }
 
-        return std::make_tuple(std::move(current_range), std::move(sstables), lowest_next_position);
+        return std::make_tuple(std::move(current_range), std::move(sstables), dht::ring_position_ext(lowest_next_position));
     }
 };
 

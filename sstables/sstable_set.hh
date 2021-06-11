@@ -77,7 +77,7 @@ public:
         mutable std::optional<dht::partition_range> _current_range;
         mutable std::optional<nonwrapping_range<dht::ring_position_view>> _current_range_view;
         mutable std::vector<shared_sstable> _current_sstables;
-        mutable dht::ring_position_view _current_next_position = dht::ring_position_view::min();
+        mutable dht::ring_position_ext _current_next_position = dht::ring_position_view::min();
     public:
         ~incremental_selector();
         incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s);
