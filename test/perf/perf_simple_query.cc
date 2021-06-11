@@ -36,7 +36,6 @@
 #include "release.hh"
 #include <fstream>
 #include "service/storage_proxy.hh"
-#include "service/storage_service.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -366,8 +365,7 @@ static std::vector<perf_result> do_alternator_test(std::string isolation_level,
     assert(cfg.frontend == test_config::frontend_type::alternator);
     std::cout << "Running test with config: " << cfg << std::endl;
 
-    alternator_test_env env(qp.local().proxy().container(),
-            mm, service::get_storage_service(), qp);
+    alternator_test_env env(qp.local().proxy().container(), mm, qp);
     env.start(isolation_level).get();
     auto stop_env = defer([&] {
         env.stop().get();
