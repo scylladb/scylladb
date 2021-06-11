@@ -1642,11 +1642,13 @@ future<> shard_reader::close() noexcept {
     // TODO: return future upstream as part of close()
     return _lifecycle_policy->destroy_reader(_shard, f.then([this] {
         return smp::submit_to(_shard, [this] {
-            auto ret = std::tuple(
-                    make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(*_reader).inactive_read_handle())),
-                    make_foreign(std::make_unique<const flat_mutation_reader::tracked_buffer>(_reader->detach_buffer())));
-            _reader.reset();
-            return ret;
+            auto irh = std::move(*_reader).inactive_read_handle();
+            return with_closeable(flat_mutation_reader(_reader.release()), [irh = std::move(irh)] (flat_mutation_reader& reader) mutable {
+                auto ret = std::tuple(
+                        make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(irh))),
+                        make_foreign(std::make_unique<const flat_mutation_reader::tracked_buffer>(reader.detach_buffer())));
+                return std::move(ret);
+            });
         }).then([this] (std::tuple<foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>>,
                 foreign_ptr<std::unique_ptr<const flat_mutation_reader::tracked_buffer>>> remains) {
             auto&& [irh, remote_buffer] = remains;
