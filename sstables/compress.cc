@@ -30,6 +30,7 @@
 
 #include "../compress.hh"
 #include "compress.hh"
+#include "exceptions.hh"
 #include "unimplemented.hh"
 #include "segmented_compress_params.hh"
 #include "utils/class_registrator.hh"
@@ -406,7 +407,7 @@ public:
                 // probability (defaulting to 1.0, but still...)
                 auto checksum = read_be<uint32_t>(buf.get() + compressed_len);
                 if (checksum != ChecksumType::checksum(buf.get(), compressed_len)) {
-                    throw std::runtime_error("compressed chunk failed checksum");
+                    throw sstables::malformed_sstable_exception("compressed chunk failed checksum");
                 }
 
                 // We know that the uncompressed data will take exactly
