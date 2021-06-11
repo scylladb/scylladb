@@ -1379,10 +1379,19 @@ int main(int ac, char** av) {
             (void)alternator_ctl;
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
-                alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
-                alternator::executor::set_default_timeout(std::chrono::milliseconds(cfg->alternator_timeout_in_ms()));
                 static sharded<alternator::executor> alternator_executor;
                 static sharded<alternator::server> alternator_server;
+                // Create an smp_service_group to be used for limiting the
+                // concurrency when forwarding Alternator request between
+                // shards - if necessary for LWT.
+                smp_service_group_config c;
+                c.max_nonlocal_requests = 5000;
+                smp_service_group ssg = create_smp_service_group(c).get0();
+
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&] () mutable {
+
+                alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
+                alternator::executor::set_default_timeout(std::chrono::milliseconds(cfg->alternator_timeout_in_ms()));
 
                 net::inet_address addr;
                 try {
@@ -1390,12 +1399,6 @@ int main(int ac, char** av) {
                 } catch (...) {
                     std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", cfg->alternator_address())));
                 }
-                // Create an smp_service_group to be used for limiting the
-                // concurrency when forwarding Alternator request between
-                // shards - if necessary for LWT.
-                smp_service_group_config c;
-                c.max_nonlocal_requests = 5000;
-                smp_service_group ssg = create_smp_service_group(c).get0();
                 alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), ssg).get();
                 alternator_server.start(std::ref(alternator_executor), std::ref(qp)).get();
                 std::optional<uint16_t> alternator_port;
@@ -1431,8 +1434,6 @@ int main(int ac, char** av) {
                     }
                 }
                 bool alternator_enforce_authorization = cfg->alternator_enforce_authorization();
-                with_scheduling_group(dbcfg.statement_scheduling_group,
-                        [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter] () mutable {
                     return alternator_server.invoke_on_all(
                             [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter] (alternator::server& server) mutable {
                         return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization,
