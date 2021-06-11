@@ -33,6 +33,11 @@
 
 logger rcslog("reader_concurrency_semaphore");
 
+std::ostream& operator<<(std::ostream& os , const reader_resources& r) {
+    os << "{" << r.count << ", " << r.memory << "}";
+    return os;
+}
+
 reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res) noexcept
     : _permit(std::move(permit)), _resources(res) {
     _permit.consume(res);

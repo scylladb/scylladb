@@ -77,6 +77,8 @@ inline bool operator==(const reader_resources& a, const reader_resources& b) {
     return a.count == b.count && a.memory == b.memory;
 }
 
+std::ostream& operator<<(std::ostream& os, const reader_resources& r);
+
 class reader_concurrency_semaphore;
 
 /// A permit for a specific read.

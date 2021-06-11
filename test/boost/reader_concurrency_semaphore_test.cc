@@ -71,7 +71,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
         auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name());
         auto units2 = permit.consume_memory(1024);
     }
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 
     // Not admitted, inactive
     {
@@ -81,14 +81,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
         BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
     }
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 
     // Admitted, active
     {
         auto permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout).get0();
         auto units1 = permit.consume_memory(1024);
     }
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 
     // Admitted, inactive
     {
@@ -98,7 +98,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
         BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
     }
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_closes_reader) {
@@ -128,19 +128,19 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
     auto stop_sem = deferred_stop(semaphore);
 
     reader_permit_opt permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout).get();
-    BOOST_REQUIRE(permit->consumed_resources() == base_resources);
+    BOOST_REQUIRE_EQUAL(permit->consumed_resources(), base_resources);
 
     std::optional<reader_permit::resource_units> residue_units;
 
     for (int i = 0; i < 10; ++i) {
         residue_units.emplace(permit->consume_resources(reader_resources(0, 100)));
-        BOOST_REQUIRE(semaphore.available_resources() == initial_resources - permit->consumed_resources());
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), *permit));
         BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
-        BOOST_REQUIRE(permit->consumed_resources() == residue_units->resources());
+        BOOST_REQUIRE_EQUAL(permit->consumed_resources(), residue_units->resources());
 
-        BOOST_REQUIRE(semaphore.available_resources() == initial_resources - permit->consumed_resources());
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
         if (i % 2) {
             const auto consumed_resources = semaphore.available_resources();
@@ -155,19 +155,19 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
             permit->maybe_wait_readmission(db::no_timeout).get();
         }
 
-        BOOST_REQUIRE(permit->consumed_resources() == residue_units->resources() + base_resources);
-        BOOST_REQUIRE(semaphore.available_resources() == initial_resources - permit->consumed_resources());
+        BOOST_REQUIRE_EQUAL(permit->consumed_resources(), residue_units->resources() + base_resources);
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
     }
 
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources - permit->consumed_resources());
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
     residue_units.reset();
 
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources - permit->consumed_resources());
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
     permit = {};
 
-    BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 }
 
 // This unit test checks that the semaphore doesn't get into a deadlock
