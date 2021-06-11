@@ -32,14 +32,6 @@ namespace dht {
 
 using uint128_t = unsigned __int128;
 
-inline int64_t long_token(const token& t) {
-    if (t.is_minimum() || t.is_maximum()) {
-        return std::numeric_limits<int64_t>::min();
-    }
-
-    return t._data;
-}
-
 static const token min_token{ token::kind::before_all_keys, 0 };
 static const token greatest_token_static{ token::kind::key, std::numeric_limits<int64_t>::max() };
 
@@ -65,12 +57,12 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
 }
 
 sstring token::to_sstring() const {
-    return seastar::to_sstring<sstring>(long_token(*this));
+    return seastar::to_sstring<sstring>(to_int64());
 }
 
 token token::midpoint(const token& t1, const token& t2) {
-    uint64_t l1 = long_token(t1);
-    uint64_t l2 = long_token(t2);
+    uint64_t l1 = t1.to_int64();
+    uint64_t l2 = t2.to_int64();
     int64_t mid = l1 + (l2 - l1)/2;
     return token{kind::key, mid};
 }
@@ -128,11 +120,11 @@ token::describe_ownership(const std::vector<token>& sorted_tokens) {
     } else {
         const token& start = sorted_tokens[0];
 
-        int64_t ti = long_token(start);  // The first token and its value
+        int64_t ti = start.to_int64();  // The first token and its value
         int64_t start_long = ti;
         int64_t tim1 = ti; // The last token and its value (after loop)
         for (i++; i != sorted_tokens.end(); i++) {
-            ti = long_token(*i); // The next token and its value
+            ti = i->to_int64(); // The next token and its value
             ownerships[*i]= ratio_helper(ti, tim1);  // save (T(i) -> %age)
             tim1 = ti;
         }
@@ -150,7 +142,7 @@ token::get_token_validator() {
 }
 
 static uint64_t unbias(const token& t) {
-    return uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
+    return uint64_t(t.to_int64()) + uint64_t(std::numeric_limits<int64_t>::min());
 }
 
 static token bias(uint64_t n) {
@@ -216,10 +208,6 @@ token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_co
     return bias(n);
 }
 
-int64_t token::to_int64(token t) {
-    return long_token(t);
-}
-
 dht::token token::from_int64(int64_t i) {
     return {kind::key, i};
 }
@@ -228,7 +216,7 @@ static
 std::optional<dht::token> find_first_token_for_shard_in_not_wrap_around_range(const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
     // Invariant start < end
     // It is guaranteed that start is not MAX_INT64 because end is greater
-    auto t = dht::token::from_int64(dht::token::to_int64(start) + 1);
+    auto t = dht::token::from_int64(start.to_int64() + 1);
     if (sharder.shard_of(t) == shard_idx) {
         return t;
     }

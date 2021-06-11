@@ -192,7 +192,9 @@ public:
     /**
      * Returns int64_t representation of the token
      */
-    static int64_t to_int64(token);
+    int64_t to_int64() const noexcept {
+        return _data;
+    }
 
     /**
      * Creates token from its int64_t representation
@@ -209,17 +211,6 @@ public:
     static std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens);
 
     static data_type get_token_validator();
-
-    int64_t raw() const noexcept {
-        if (is_minimum()) {
-            return std::numeric_limits<int64_t>::min();
-        }
-        if (is_maximum()) {
-            return std::numeric_limits<int64_t>::max();
-        }
-
-        return _data;
-    }
 };
 
 static inline std::strong_ordering tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {
@@ -243,19 +234,19 @@ struct raw_token_less_comparator {
     template <typename Key>
     requires TokenCarrier<Key>
     bool operator()(const Key& k1, const int64_t k2) const noexcept {
-        return dht::tri_compare_raw(k1.token().raw(), k2) < 0;
+        return dht::tri_compare_raw(k1.token().to_int64(), k2) < 0;
     }
 
     template <typename Key>
     requires TokenCarrier<Key>
     bool operator()(const int64_t k1, const Key& k2) const noexcept {
-        return dht::tri_compare_raw(k1, k2.token().raw()) < 0;
+        return dht::tri_compare_raw(k1, k2.token().to_int64()) < 0;
     }
 
     template <typename Key>
     requires TokenCarrier<Key>
     int64_t simplify_key(const Key& k) const noexcept {
-        return k.token().raw();
+        return k.token().to_int64();
     }
 
     int64_t simplify_key(int64_t k) const noexcept {

@@ -357,7 +357,7 @@ static list_type_impl::native_type prepare_cdc_generation_description(const cdc:
         }
 
         ret.push_back(make_tuple_value(cdc_token_range_description_type,
-                { data_value(dht::token::to_int64(e.token_range_end))
+                { data_value(e.token_range_end.to_int64())
                 , make_list_value(cdc_streams_list_type, std::move(streams))
                 , data_value(int8_t(e.sharding_ignore_msb))
                 }));
@@ -475,7 +475,7 @@ static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
         }
 
         size_estimate += e.streams.size() * 20;
-        auto ckey = clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end));
+        auto ckey = clustering_key::from_singular(*s, e.token_range_end.to_int64());
         res.back().set_cell(ckey, to_bytes("streams"), make_set_value(cdc_streams_set_type, std::move(streams)), ts);
         res.back().set_cell(ckey, to_bytes("ignore_msb"), int8_t(e.sharding_ignore_msb), ts);
 
@@ -573,7 +573,7 @@ static future<std::vector<mutation>> get_cdc_streams_descriptions_v2_mutation(
         // but there's metadata to be taken into account.
         // It has been verified experimentally that 20 bytes per stream ID is a good estimate.
         size_estimate += e.streams.size() * 20;
-        res.back().set_cell(clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end)),
+        res.back().set_cell(clustering_key::from_singular(*s, e.token_range_end.to_int64()),
                 to_bytes("streams"), make_set_value(cdc_streams_set_type, std::move(streams)), ts);
 
         co_await make_ready_future<>(); // maybe yield

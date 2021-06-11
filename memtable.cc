@@ -226,7 +226,7 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     auto i = partitions.lower_bound(key, dht::ring_position_comparator(*_schema), hint);
     if (i == partitions.end() || !hint.match) {
         partitions_type::iterator entry = partitions.emplace_before(i,
-                key.token().raw(), hint,
+                key.token().to_int64(), hint,
                 _schema, dht::decorated_key(key), mutation_partition(_schema));
         ++nr_partitions;
         ++_table_stats.memtable_partition_insertions;

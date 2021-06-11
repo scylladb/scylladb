@@ -835,7 +835,7 @@ cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row
     return do_find_or_create_entry(ps.key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
         // Create an fully discontinuous, except for the partition tombstone, entry
         mutation_partition mp = mutation_partition::make_incomplete(*_schema, ps.partition_tombstone());
-        partitions_type::iterator entry = _partitions.emplace_before(i, ps.key().token().raw(), hint,
+        partitions_type::iterator entry = _partitions.emplace_before(i, ps.key().token().to_int64(), hint,
                 _schema, ps.key(), std::move(mp));
         _tracker.insert(*entry);
         return entry;
@@ -851,7 +851,7 @@ cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
     return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
         mutation_partition mp(_schema);
         bool cont = i->continuous();
-        partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
+        partitions_type::iterator entry = _partitions.emplace_before(i, key.token().to_int64(), hint,
                 _schema, key, std::move(mp));
         _tracker.insert(*entry);
         entry->set_continuous(cont);
@@ -864,7 +864,7 @@ cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
 void row_cache::populate(const mutation& m, const previous_entry_pointer* previous) {
   _populate_section(_tracker.region(), [&] {
     do_find_or_create_entry(m.decorated_key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) {
-        partitions_type::iterator entry = _partitions.emplace_before(i, m.decorated_key().token().raw(), hint,
+        partitions_type::iterator entry = _partitions.emplace_before(i, m.decorated_key().token().to_int64(), hint,
                 m.schema(), m.decorated_key(), m.partition());
         _tracker.insert(*entry);
         entry->set_continuous(i->continuous());
@@ -1034,7 +1034,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
                    || with_allocator(standard_allocator(), [&] { return is_present(mem_e.key()); })
                       == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
-            partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().raw(), hint,
+            partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().to_int64(), hint,
                 cache_entry::evictable_tag(), _schema, dht::decorated_key(mem_e.key()),
                 partition_entry::make_evictable(*_schema, mutation_partition(_schema)));
             entry->set_continuous(cache_i->continuous());
@@ -1186,7 +1186,7 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
     with_allocator(_tracker.allocator(), [this, cont] {
         cache_entry entry(cache_entry::dummy_entry_tag{});
         entry.set_continuous(bool(cont));
-        _partitions.insert(entry.position().token().raw(), std::move(entry), dht::ring_position_comparator{*_schema});
+        _partitions.insert(entry.position().token().to_int64(), std::move(entry), dht::ring_position_comparator{*_schema});
     });
 }
 

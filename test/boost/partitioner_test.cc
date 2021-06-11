@@ -487,12 +487,12 @@ SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
     dht::token second_boundary = sharder.token_for_next_shard(dht::minimum_token(), 2).value();
     dht::token third_boundary = sharder.token_for_next_shard(dht::minimum_token(), 0).value();
     auto next_token = [] (dht::token t) {
-        assert(dht::token::to_int64(t) < std::numeric_limits<int64_t>::max());
-        return dht::token::from_int64(dht::token::to_int64(t) + 1);
+        assert(t.to_int64() < std::numeric_limits<int64_t>::max());
+        return dht::token::from_int64(t.to_int64() + 1);
     };
     auto prev_token = [] (dht::token t) {
-        assert(dht::token::to_int64(t) > std::numeric_limits<int64_t>::min() + 1);
-        return dht::token::from_int64(dht::token::to_int64(t) - 1);
+        assert(t.to_int64() > std::numeric_limits<int64_t>::min() + 1);
+        return dht::token::from_int64(t.to_int64() - 1);
     };
 
     BOOST_REQUIRE_EQUAL(dht::token::from_int64(std::numeric_limits<int64_t>::min() + 1),

@@ -101,7 +101,7 @@ stream_id::stream_id(dht::token token, size_t vnode_index)
         | mask_shift(rand, stream_id_random_bits, stream_id_random_shift)
         ;
 
-    copy_int_to_bytes(dht::token::to_int64(token), 0, _value);
+    copy_int_to_bytes(token.to_int64(), 0, _value);
     copy_int_to_bytes(low_qword, sizeof(int64_t), _value);
     // not a hot code path. make sure we did not mess up the shifts and masks.
     assert(version() == version_1);
