@@ -495,7 +495,16 @@ void fsm::step(server_id from, Message&& msg) {
             leader = from;
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
-                if (current_leader() != server_id{} && election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
+                if (from == current_leader()) {
+                    // Leader request is considered to avoid hung elections
+                    // in presence of a disrupting candidate without prevote
+                    // while failure detector reports leader is still up
+                    logger.trace("{} [term: {}] vote request from leader {}"
+                            "within a minimum election timeout, elapsed {}",
+                            _my_id, _current_term, current_leader(),
+                            election_elapsed());
+                } else if (current_leader() != server_id{} &&
+                        election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
                     // 4.2.3 Disruptive servers
                     // If a server receives a RequestVote request
                     // within the minimum election timeout of

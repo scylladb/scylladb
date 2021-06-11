@@ -1360,6 +1360,22 @@ RAFT_TEST_CASE(drops_04, (test_case{
          .nodes = 4,
          .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}}));
 
+// Repro for dueling candidate for non-prevote scenarios where
+// node (0) is dropped and becomes candidate bumping its term over and over.
+// Meanwhile another node (2) becomes leader and adds entry.
+// When dropped (0) rejoins, followers (1,3) ignore it (leader up and no timeout)
+// but they should not ignore vote requests by current leader (2)
+// or else the elections never succeed
+// Note: for it to hang there has to be 4+ total nodes so
+//       2 dueling candidates don't have enough quorum to resolve election
+RAFT_TEST_CASE(drops_04_dueling_repro, (test_case{
+         .nodes = 4,
+         .updates = {entries{1},partition{0,2,3},entries{1},  // 0 leader
+                     partition{1,leader{2},3},entries{1},     // 0 dropped, 2 leader
+                     tick{40},                                // 0 becomes candidate, bumps term
+                     partition{0,1,2,3},entries{1},           // 0 re-joinin and 0 disrupts
+                     }}));
+
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
     replication_test(
