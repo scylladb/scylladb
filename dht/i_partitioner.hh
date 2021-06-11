@@ -244,7 +244,7 @@ public:
     }
 
     bool is_max() const noexcept {
-        return _token.is_maximum() || (_token == greatest_token() && !_key && _token_bound == token_bound::end);
+        return _token == greatest_token() && !_key && _token_bound == token_bound::end;
     }
 
     static ring_position starting_at(dht::token token) {
@@ -365,7 +365,7 @@ public:
     }
 
     bool is_max() const noexcept {
-        return _token->is_maximum() || (*_token == greatest_token() && !_key && _weight == 1);
+        return *_token == greatest_token() && !_key && _weight == 1;
     }
 
     static ring_position_view for_range_start(const partition_range& r) {
@@ -482,7 +482,7 @@ public:
     }
 
     bool is_max() const noexcept {
-        return _token.is_maximum() || (_token == greatest_token() && !_key && _weight == 1);
+        return _token == greatest_token() && !_key && _weight == 1;
     }
 
     static ring_position_ext for_range_start(const partition_range& r) {

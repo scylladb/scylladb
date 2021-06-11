@@ -211,7 +211,7 @@ static future<std::vector<token_range>> get_local_ranges(database& db) {
             return r.end() && (!r.start() || r.start()->value().is_minimum());
         });
         auto right_inf = boost::find_if(ranges, [] (auto&& r) {
-            return r.start() && (!r.end() || r.end()->value().is_maximum());
+            return r.start() && !r.end();
         });
         if (left_inf != right_inf && left_inf != ranges.end() && right_inf != ranges.end()) {
             local_ranges.push_back(token_range{to_bytes(right_inf->start()), to_bytes(left_inf->end())});

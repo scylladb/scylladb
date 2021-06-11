@@ -143,10 +143,6 @@ public:
         return _data == std::numeric_limits<int64_t>::min();
     }
 
-    bool is_maximum() const noexcept {
-        return false;
-    }
-
     size_t external_memory_usage() const {
         return 0;
     }

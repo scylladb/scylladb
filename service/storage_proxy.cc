@@ -4118,7 +4118,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (!end_token(range) || end_token(range)->is_maximum()) {
+            if (!end_token(range)) {
                 break;
             }
 
@@ -4708,9 +4708,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
     }
 
     auto is_empty_range = [] (const std::optional<dht::token> s, const std::optional<dht::token> e) -> bool {
-        bool case_1 = e && e->is_minimum();
-        bool case_2 = s && s->is_maximum();
-        return case_1 || case_2;
+        return e && e->is_minimum();
     };
     auto is_singular_range = [] (const std::optional<dht::token> s, const std::optional<dht::token> e) -> bool {
         return s && e && *s == *e;
