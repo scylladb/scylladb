@@ -84,4 +84,78 @@ struct serializer<dht::token> {
     }
 };
 
+inline wrapping_interval<dht::token> convert_intervals(const wrapping_interval<dht::legacy_token>& legacy) {
+    const auto& start = legacy.start();
+    const auto& end = legacy.end();
+    bool singular = legacy.is_singular();
+    std::optional<interval_bound<dht::token>> left;
+    if (start) {
+        left = interval_bound<dht::token>(start->value(), start->is_inclusive());
+    }
+    std::optional<interval_bound<dht::token>> right;
+    if (end) {
+        right = interval_bound<dht::token>(end->value(), end->is_inclusive());
+    }
+
+    bool sane_start = !start || start->value()._kind == dht::token_kind::key;
+    bool sane_end = !end || end->value()._kind == dht::token_kind::key;
+
+    // Edge case hell.
+    if (sane_start && sane_end) [[likely]] {
+        // The sane case. Hopefully other cases never happen.
+        return wrapping_interval<dht::token>(std::move(left), std::move(right), singular);
+    } else if (sane_start) {
+        if (end->value()._kind == dht::token_kind::before_all_keys) {
+            return wrapping_interval<dht::token>(std::move(left), interval_bound<dht::token>(dht::minimum_token(), false), singular);
+        } else {
+            return wrapping_interval<dht::token>(std::move(left), {}, singular);
+        }
+    } else if (singular) {
+        // What would a singular maximum_token() mean?
+        return wrapping_interval<dht::token>({}, dht::minimum_token());
+    } else if (sane_end) {
+        if (start->value()._kind == dht::token_kind::after_all_keys) {
+            return wrapping_interval<dht::token>(interval_bound<dht::token>(dht::greatest_token(), false), std::move(right));
+        } else {
+            return wrapping_interval<dht::token>({}, std::move(right));
+        }
+    } else {
+        auto score = [](const std::optional<interval_bound<dht::legacy_token>>& b) -> int {
+            if (!b) {
+                return 0;
+            }
+            switch (b->value()._kind) {
+                case dht::token_kind::after_all_keys:
+                    return -1;
+                case dht::token_kind::before_all_keys:
+                    return 1;
+                default:
+                    return 0;
+            }
+        };
+        int start_score = score(start);
+        int end_score = score(end);
+        bool is_wrapping = (end_score < start_score) || (end_score == start_score && (!start->is_inclusive() || !end->is_inclusive()));
+        if (is_wrapping) {
+            return wrapping_interval<dht::token>::make_open_ended_both_sides();
+        } else {
+            return wrapping_interval<dht::token>::make_starting_with(interval_bound<dht::token>(dht::greatest_token(), false));
+        }
+    }
+}
+
+template<>
+template<typename Input>
+range<dht::token> serializer<range<dht::token>>::read(Input& in) {
+    auto legacy_range = deserialize(in, boost::type<range<dht::legacy_token>>());
+    return convert_intervals(legacy_range);
+}
+
+template<>
+template<typename Input>
+nonwrapping_range<dht::token> serializer<nonwrapping_range<dht::token>>::read(Input& in) {
+    auto legacy_range = deserialize(in, boost::type<nonwrapping_range<dht::legacy_token>>());
+    return nonwrapping_range<dht::token>(convert_intervals(legacy_range));
+}
+
 } // namespace ser
