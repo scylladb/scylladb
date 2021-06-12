@@ -372,7 +372,7 @@ protected:
     size_t _total_block_for = 0;
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
-    std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
+    inet_address_vector_replica_set _targets; // who we sent this mutation to
     // added dead_endpoints as a memeber here as well. This to be able to carry the info across
     // calls in helper methods in a convinient way. Since we hope this will be empty most of the time
     // it should not be a huge burden. (flw)
@@ -400,7 +400,7 @@ protected:
 
 public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
+            std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, tracing::trace_state_ptr trace_state,
             storage_proxy::write_stats& stats, service_permit permit, size_t pending_endpoints = 0, inet_address_vector_topology_change dead_endpoints = {})
             : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)) {
@@ -481,10 +481,12 @@ public:
     }
     // return true on last ack
     bool response(gms::inet_address from) {
-        auto it = _targets.find(from);
+        auto it = boost::find(_targets, from);
         if (it != _targets.end()) {
             signal(from);
-            _targets.erase(it);
+            using std::swap;
+            swap(*it, _targets.back());
+            _targets.pop_back();
         } else {
             slogger.warn("Receive outdated write ack from {}", from);
         }
@@ -493,7 +495,7 @@ public:
     // return true if handler is no longer needed because
     // CL cannot be reached
     bool failure_response(gms::inet_address from, size_t count, error err) {
-        if (!_targets.contains(from)) {
+        if (boost::find(_targets, from) == _targets.end()) {
             // There is a little change we can get outdated reply
             // if the coordinator was restarted after sending a request and
             // getting reply back. The chance is low though since initial
@@ -592,7 +594,7 @@ public:
     future<> wait() {
         return _ready.get_future();
     }
-    const std::unordered_set<gms::inet_address>& get_targets() const {
+    const inet_address_vector_replica_set& get_targets() const {
         return _targets;
     }
     const inet_address_vector_topology_change& get_dead_endpoints() const {
@@ -637,7 +639,7 @@ class datacenter_write_response_handler : public abstract_write_response_handler
 
 public:
     datacenter_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
+            std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
@@ -652,7 +654,7 @@ class write_response_handler : public abstract_write_response_handler {
     }
 public:
     write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
+            std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
@@ -664,7 +666,7 @@ public:
 class view_update_write_response_handler : public write_response_handler, public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
 public:
     view_update_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
+            std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
             storage_proxy::write_stats& stats, service_permit permit):
                 write_response_handler(p, ks, cl, db::write_type::VIEW, std::move(mh),
@@ -744,7 +746,7 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
     }
 public:
     datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, const inet_address_vector_topology_change& pending_endpoints,
+            std::unique_ptr<mutation_holder> mh, inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints,
             inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit) :
         abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), stats, std::move(permit), 0, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
@@ -884,11 +886,11 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
                 // those nodes, and retry.
                 auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-                std::unordered_set<gms::inet_address> missing_mrc = summary.replicas_missing_most_recent_commit(_schema, now_in_sec);
+                inet_address_vector_replica_set missing_mrc = summary.replicas_missing_most_recent_commit(_schema, now_in_sec);
                 if (missing_mrc.size() > 0) {
                     paxos::paxos_state::logger.debug("CAS[{}] Repairing replicas that missed the most recent commit", _id);
                     tracing::trace(tr_state, "Repairing replicas that missed the most recent commit");
-                    std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>, 1>
+                    std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>, 1>
                       m{std::make_tuple(make_lw_shared<paxos::proposal>(std::move(*summary.most_recent_commit)), _schema, _key.token(), std::move(missing_mrc))};
                     // create_write_response_handler is overloaded for paxos::proposal and will
                     // create cas_mutation holder, which consequently will ensure paxos::learn is
@@ -1422,7 +1424,7 @@ future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_
 }
 
 storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
-                             std::unordered_set<gms::inet_address> targets, const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
+                             inet_address_vector_replica_set targets, const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
                              storage_proxy::write_stats& stats, service_permit permit)
 {
     shared_ptr<abstract_write_response_handler> h;
@@ -1953,11 +1955,11 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     }
 
     // filter live endpoints from dead ones
-    std::unordered_set<gms::inet_address> live_endpoints;
+    inet_address_vector_replica_set live_endpoints;
     inet_address_vector_topology_change dead_endpoints;
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
-    std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()),
+    std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
             std::back_inserter(dead_endpoints), std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()));
 
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
@@ -1990,7 +1992,8 @@ storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consiste
 
 storage_proxy::response_id_type
 storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
-    std::unordered_set<gms::inet_address> endpoints(m.size());
+    inet_address_vector_replica_set endpoints;
+    endpoints.reserve(m.size());
     boost::copy(m | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
     auto mh = std::make_unique<per_destination_mutation>(m);
 
@@ -2013,7 +2016,7 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
 }
 
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
+storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>& meta,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
     auto& [commit, s, token, endpoints] = meta;
 
@@ -2404,7 +2407,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         service_permit _permit;
 
         const utils::UUID _batch_uuid;
-        const std::unordered_set<gms::inet_address> _batchlog_endpoints;
+        const inet_address_vector_replica_set _batchlog_endpoints;
 
     public:
         context(storage_proxy & p, std::vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
@@ -2419,7 +2422,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 , _permit(std::move(permit))
                 , _batch_uuid(utils::UUID_gen::get_time_UUID())
                 , _batchlog_endpoints(
-                        [this]() -> std::unordered_set<gms::inet_address> {
+                        [this]() -> inet_address_vector_replica_set {
                             auto local_addr = utils::fb_utilities::get_broadcast_address();
                             auto& topology = _tmptr->get_topology();
                             auto& local_endpoints = topology.get_datacenter_racks().at(get_local_dc());
@@ -2532,7 +2535,7 @@ future<> storage_proxy::send_to_endpoint(
                 std::unique_ptr<mutation_holder>& m,
                 db::consistency_level cl,
                 db::write_type type, service_permit permit) mutable {
-        std::unordered_set<gms::inet_address> targets;
+        inet_address_vector_replica_set targets;
         targets.reserve(pending_endpoints.size() + 1);
         inet_address_vector_topology_change dead_endpoints;
         boost::algorithm::partition_copy(
@@ -5441,7 +5444,8 @@ void storage_proxy::retire_view_response_handlers(noncopyable_function<bool(cons
 
 void storage_proxy::on_down(const gms::inet_address& endpoint) {
     return retire_view_response_handlers([endpoint] (const abstract_write_response_handler& handler) {
-        return handler.get_targets().contains(endpoint);
+        const auto& targets = handler.get_targets();
+        return boost::find(targets, endpoint) != targets.end();
     });
 };
 

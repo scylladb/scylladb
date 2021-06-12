@@ -43,6 +43,7 @@
 #pragma once
 #include "utils/UUID_gen.hh"
 #include "service/paxos/proposal.hh"
+#include "inet_address_vectors.hh"
 
 namespace service {
 
@@ -83,7 +84,7 @@ public:
 
 public:
     prepare_summary(size_t node_count);
-    std::unordered_set<gms::inet_address> replicas_missing_most_recent_commit(schema_ptr s, std::chrono::seconds now_in_sec) const;
+    inet_address_vector_replica_set replicas_missing_most_recent_commit(schema_ptr s, std::chrono::seconds now_in_sec) const;
     void update_most_recent_promised_ballot(utils::UUID ballot);
 };
 
