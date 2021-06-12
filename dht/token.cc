@@ -48,7 +48,7 @@ token token::midpoint(token t1, token t2) {
     uint64_t l1 = t1.to_int64();
     uint64_t l2 = t2.to_int64();
     int64_t mid = l1 + (l2 - l1)/2;
-    return token{kind::key, mid};
+    return token::from_int64(mid);
 }
 
 token token::get_random_token() {
@@ -57,16 +57,12 @@ token token::get_random_token() {
     // be used for regular tokens.
     static thread_local std::uniform_int_distribution<int64_t> dist(
             std::numeric_limits<int64_t>::min() + 1);
-    return token(kind::key, dist(re));
+    return token::from_int64_unchecked(dist(re));
 }
 
 token token::from_sstring(const sstring& t) {
-    auto lp = boost::lexical_cast<long>(t);
-    if (lp == std::numeric_limits<long>::min()) {
-        return minimum_token();
-    } else {
-        return token(kind::key, uint64_t(lp));
-    }
+    auto lp = boost::lexical_cast<int64_t>(t);
+    return token::from_int64_unchecked(lp);
 }
 
 token token::from_bytes(bytes_view bytes) {
@@ -75,11 +71,7 @@ token token::from_bytes(bytes_view bytes) {
     }
 
     auto tok = net::ntoh(read_unaligned<int64_t>(bytes.begin()));
-    if (tok == std::numeric_limits<int64_t>::min()) {
-        return minimum_token();
-    } else {
-        return dht::token(dht::token::kind::key, tok);
-    }
+    return token::from_int64_unchecked(tok);
 }
 
 static float ratio_helper(int64_t a, int64_t b) {
@@ -130,7 +122,7 @@ static uint64_t unbias(token t) {
 }
 
 static token bias(uint64_t n) {
-    return token(token::kind::key, n - uint64_t(std::numeric_limits<int64_t>::min()));
+    return token::from_int64_unchecked(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
 inline
@@ -190,10 +182,6 @@ token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_co
         n = left_part | right_part;
     }
     return bias(n);
-}
-
-dht::token token::from_int64(int64_t i) {
-    return {kind::key, i};
 }
 
 static

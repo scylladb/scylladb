@@ -93,43 +93,13 @@ class token {
     static inline int64_t normalize(int64_t t) {
         return t == std::numeric_limits<int64_t>::min() ? std::numeric_limits<int64_t>::max() : t;
     }
+
+    token(int64_t d) : _data(d) {}
 public:
     using kind = token_kind;
     int64_t _data;
 
     token() : _data(std::numeric_limits<int64_t>::min()) {}
-
-    token(token_kind k, int64_t d) {
-        switch (k) {
-        case token_kind::before_all_keys:
-            _data = std::numeric_limits<int64_t>::min();
-            break;
-        case token_kind::after_all_keys:
-            // Should not be happening. Throw?
-            _data = std::numeric_limits<int64_t>::max();
-            break;
-        default:
-            _data = normalize(d);
-            break;
-        }
-    }
-
-    token(token_kind k, bytes_view b) {
-        switch (k) {
-        case token_kind::before_all_keys:
-            _data = std::numeric_limits<int64_t>::min();
-            break;
-        case token_kind::after_all_keys:
-            // Should not be happening. Throw?
-            _data = std::numeric_limits<int64_t>::max();
-            break;
-        default:
-            if (b.size() != sizeof(_data)) {
-                throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
-            }
-            _data = net::ntoh(read_unaligned<int64_t>(b.begin()));
-        }
-    }
 
     token(legacy_token t) : _data(t._data) {}
     legacy_token legacy() const {
@@ -195,7 +165,18 @@ public:
     /**
      * Creates token from its int64_t representation
      */
-    static dht::token from_int64(int64_t);
+    static dht::token from_int64(int64_t d) {
+        return token(normalize(d));
+    }
+
+    /**
+     * Creates token from its int64_t representation.
+     * Does not normalize the value. Use with caution.
+     * Mainly for internal use in dht/token.{hh,cc}
+     */
+    static dht::token from_int64_unchecked(int64_t d) {
+        return token(d);
+    }
 
     /**
      * Calculate the deltas between tokens in the ring in order to compare
@@ -247,10 +228,10 @@ struct raw_token_less_comparator {
 };
 
 inline token minimum_token() noexcept {
-    return token(token::kind::before_all_keys, std::numeric_limits<int64_t>::min());
+    return token::from_int64_unchecked(std::numeric_limits<int64_t>::min());
 }
 inline token greatest_token() noexcept {
-    return token(token::kind::key, std::numeric_limits<int64_t>::max());
+    return token::from_int64_unchecked(std::numeric_limits<int64_t>::max());
 }
 
 inline std::strong_ordering operator<=>(token t1, token t2) { return t1._data <=> t2._data; }

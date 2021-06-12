@@ -40,7 +40,7 @@ murmur3_partitioner::get_token(bytes_view key) const {
 
 token
 murmur3_partitioner::get_token(uint64_t value) const {
-    return token(token::kind::key, value);
+    return token::from_int64(value);
 }
 
 token

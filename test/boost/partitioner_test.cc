@@ -44,14 +44,6 @@ debug(Args&&... args) {
     }
 }
 
-static dht::token token_from_long(uint64_t value) {
-    return dht::token(dht::token::kind::key, value);
-}
-
-static int64_t long_from_token(dht::token token) {
-    return token._data;
-}
-
 SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
@@ -64,13 +56,13 @@ SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto dk = partitioner.decorate_key(*s, key);
 
     // Expected value was taken from Origin
-    BOOST_REQUIRE_EQUAL(dk._token, token_from_long(4958784316840156970));
+    BOOST_REQUIRE_EQUAL(dk._token, dht::token::from_int64(4958784316840156970));
     BOOST_REQUIRE(dk._key.equal(*s, key));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
-    auto t1 = token_from_long(0x7000'0000'0000'0000);
-    auto t2 = token_from_long(0xa000'0000'0000'0000);
+    auto t1 = dht::token::from_int64(0x7000'0000'0000'0000);
+    auto t2 = dht::token::from_int64(0xa000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
     // Even without knowing what the midpoint is, it needs to be inside the
@@ -78,17 +70,17 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
     auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
     // We can also calculate the actual value the midpoint should have:
-    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x8800'0000'0000'0000));
+    BOOST_REQUIRE_EQUAL(midpoint, dht::token::from_int64(0x8800'0000'0000'0000));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_wraparound_2) {
-    auto t1 = token_from_long(0x6000'0000'0000'0000);
-    auto t2 = token_from_long(0x9000'0000'0000'0000);
+    auto t1 = dht::token::from_int64(0x6000'0000'0000'0000);
+    auto t2 = dht::token::from_int64(0x9000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
     auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x7800'0000'0000'0000));
+    BOOST_REQUIRE_EQUAL(midpoint, dht::token::from_int64(0x7800'0000'0000'0000));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
@@ -219,17 +211,17 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
-    auto t1 = token_from_long(0x5000'0000'0000'0000);
-    auto t2 = token_from_long(0x7000'0000'0000'0000);
+    auto t1 = dht::token::from_int64(0x5000'0000'0000'0000);
+    auto t2 = dht::token::from_int64(0x7000'0000'0000'0000);
     BOOST_REQUIRE(t1 < t2);
     auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
+    BOOST_REQUIRE_EQUAL(midpoint, dht::token::from_int64(0x6000'0000'0000'0000));
 }
 
 void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht::token> shard_limits, unsigned ignorebits = 0) {
     auto prev_token = [] (dht::token token) {
-        return token_from_long(long_from_token(token) - 1);
+        return dht::token::from_int64(token.to_int64() - 1);
     };
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
@@ -253,7 +245,7 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
     auto make_token_vector = [] (std::vector<int64_t> v) {
         return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(token_from_long));
+                v | boost::adaptors::transformed(dht::token::from_int64));
     };
     dht::sharder mm3p7s(7);
     auto mm3p7s_shard_limits = make_token_vector({
@@ -277,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
     auto make_token_vector = [] (std::vector<int64_t> v) {
         return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(token_from_long));
+                v | boost::adaptors::transformed(dht::token::from_int64));
     };
     dht::sharder mm3p7s2i(7, 2);
     auto mm3p7s2i_shard_limits = make_token_vector({
@@ -340,10 +332,10 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
             dht::sharder(4, 0),
             dht::sharder(32, 8),  // More, and we OOM since memory isn't configured
     };
-    auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
-    auto t2 = token_from_long(int64_t(-1));
-    auto t3 = token_from_long(int64_t(1));
-    auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto t1 = dht::token::from_int64(int64_t(-0x7fff'ffff'ffff'fffe));
+    auto t2 = dht::token::from_int64(int64_t(-1));
+    auto t3 = dht::token::from_int64(int64_t(1));
+    auto t4 = dht::token::from_int64(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::ring_position rp) {
         return std::make_optional(range_bound<dht::ring_position>(std::move(rp)));
     };
@@ -412,10 +404,10 @@ test_something_with_some_interesting_ranges_and_sharder_with_token_range(std::fu
             dht::sharder(4, 0),
             dht::sharder(32, 8),  // More, and we OOM since memory isn't configured
     };
-    auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
-    auto t2 = token_from_long(int64_t(-1));
-    auto t3 = token_from_long(int64_t(1));
-    auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto t1 = dht::token::from_int64(int64_t(-0x7fff'ffff'ffff'fffe));
+    auto t2 = dht::token::from_int64(int64_t(-1));
+    auto t3 = dht::token::from_int64(int64_t(1));
+    auto t4 = dht::token::from_int64(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::token t) {
         return range_bound<dht::token>(std::move(t));
     };

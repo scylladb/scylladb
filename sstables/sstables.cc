@@ -2638,8 +2638,8 @@ sstable::compute_shards_for_this_sstable() const {
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
     } else {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
-            auto t1 = dht::token(dht::token::kind::key, bytes_view(dtr.left.token));
-            auto t2 = dht::token(dht::token::kind::key, bytes_view(dtr.right.token));
+            auto t1 = dht::token::from_bytes(bytes_view(dtr.left.token));
+            auto t2 = dht::token::from_bytes(bytes_view(dtr.right.token));
             return dht::partition_range::make(
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
