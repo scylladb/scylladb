@@ -327,7 +327,7 @@ private:
     void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
-    response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,
+    response_id_type create_write_response_handler_helper(schema_ptr s, dht::token token,
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
@@ -348,9 +348,9 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    inet_address_vector_replica_set get_live_endpoints(keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_endpoints(keyspace& ks, dht::token token) const;
     static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
-    inet_address_vector_replica_set get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_sorted_endpoints(keyspace& ks, dht::token token) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -529,7 +529,7 @@ public:
     future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);
 
     paxos_participants
-    get_paxos_participants(const sstring& ks_name, const dht::token& token, db::consistency_level consistency_for_paxos);
+    get_paxos_participants(const sstring& ks_name, dht::token token, db::consistency_level consistency_for_paxos);
 
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);

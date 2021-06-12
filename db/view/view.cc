@@ -1138,7 +1138,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
 // does not hold, we return an empty optional.
 static std::optional<gms::inet_address>
 get_view_natural_endpoint(const sstring& keyspace_name,
-        const dht::token& base_token, const dht::token& view_token) {
+        dht::token base_token, dht::token view_token) {
     auto &db = service::get_local_storage_proxy().local_db();
     auto& rs = db.find_keyspace(keyspace_name).get_replication_strategy();
     auto my_address = utils::fb_utilities::get_broadcast_address();
@@ -1179,7 +1179,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 }
 
 static future<> apply_to_remote_endpoints(gms::inet_address target, inet_address_vector_topology_change&& pending_endpoints,
-        frozen_mutation_and_schema&& mut, const dht::token& base_token, const dht::token& view_token,
+        frozen_mutation_and_schema&& mut, dht::token base_token, dht::token view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
 
     tracing::trace(tr_state, "Sending view update for {}.{} to {}, with pending endpoints = {}; base token = {}; view token = {}",

@@ -3761,7 +3761,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
 }
 
 inet_address_vector_replica_set
-storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos) const {
+storage_service::get_natural_endpoints(const sstring& keyspace, token pos) const {
     return _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(pos);
 }
 

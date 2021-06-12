@@ -382,7 +382,7 @@ static bool has_sufficient_replicas(
 }
 
 static std::vector<inet_address> calculate_natural_endpoints(
-                const token& search_token, const token_metadata& tm,
+                token search_token, const token_metadata& tm,
                 snitch_ptr& snitch,
                 const std::unordered_map<sstring, size_t>& datacenters) {
     //
@@ -435,7 +435,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     // not aware of any cluster members
     assert(!all_endpoints.empty() && !racks.empty());
 
-    for (auto& next : tm.ring_range(search_token)) {
+    for (auto next : tm.ring_range(search_token)) {
 
         if (has_sufficient_replicas(dc_replicas, all_endpoints, datacenters)) {
             break;

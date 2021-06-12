@@ -76,7 +76,7 @@ protected:
      * progress in each DC, rack etc.
      */
     virtual inet_address_vector_replica_set calculate_natural_endpoints(
-        const token& search_token, const token_metadata& tm, can_yield) const override;
+        token search_token, const token_metadata& tm, can_yield) const override;
 
     virtual void validate_options() const override;
 

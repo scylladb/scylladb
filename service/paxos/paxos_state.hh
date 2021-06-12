@@ -62,8 +62,8 @@ private:
         using semaphore = basic_semaphore<semaphore_default_exception_factory, clock_type>;
         using map = std::unordered_map<dht::token, semaphore>;
 
-        semaphore& get_semaphore_for_key(const dht::token& key);
-        void release_semaphore_for_key(const dht::token& key);
+        semaphore& get_semaphore_for_key(dht::token key);
+        void release_semaphore_for_key(dht::token key);
 
         map _locks;
     public:
@@ -74,7 +74,7 @@ private:
         // are no waiters.
         ///
         template<typename Func>
-        futurize_t<std::result_of_t<Func()>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
+        futurize_t<std::result_of_t<Func()>> with_locked_key(dht::token key, clock_type::time_point timeout, Func func) {
             return with_semaphore(get_semaphore_for_key(key), 1, timeout - clock_type::now(), std::move(func)).finally([key, this] {
                 release_semaphore_for_key(key);
             });
@@ -96,7 +96,7 @@ private:
     // protects acess to system.paxos
     template<typename Func>
     static
-    futurize_t<std::result_of_t<Func()>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {
+    futurize_t<std::result_of_t<Func()>> with_locked_key(dht::token key, clock_type::time_point timeout, Func func) {
         return _paxos_table_lock.with_locked_key(key, timeout, std::move(func));
     }
 
@@ -117,7 +117,7 @@ public:
             _locked = true;
             return f;
         }
-        guard(key_lock_map& map, const dht::token& key, clock_type::time_point timeout) : _map(map), _key(key), _timeout(timeout) {};
+        guard(key_lock_map& map, dht::token key, clock_type::time_point timeout) : _map(map), _key(key), _timeout(timeout) {};
         guard(guard&& o) noexcept : _map(o._map), _key(std::move(o._key)), _timeout(o._timeout), _locked(o._locked) {
             o._locked = false;
         }
@@ -129,7 +129,7 @@ public:
         }
     };
 
-    static future<guard> get_cas_lock(const dht::token& key, clock_type::time_point timeout);
+    static future<guard> get_cas_lock(dht::token key, clock_type::time_point timeout);
 
     static logging::logger logger;
 

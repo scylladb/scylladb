@@ -176,9 +176,9 @@ static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, 
     return timestamp;
 }
 
-static bool belongs_to_current_node(const dht::token& t, const dht::token_range_vector& sorted_owned_ranges) {
+static bool belongs_to_current_node(dht::token t, const dht::token_range_vector& sorted_owned_ranges) {
     auto low = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), t,
-            [] (const range<dht::token>& a, const dht::token& b) {
+            [] (const range<dht::token>& a, dht::token b) {
         // check that range a is before token b.
         return a.after(b, dht::token_comparator());
     });

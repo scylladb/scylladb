@@ -343,7 +343,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst3_k2) {
   }).get();
 }
 
-future<> test_range_reads(sstables::test_env& env, const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
+future<> test_range_reads(sstables::test_env& env, dht::token min, dht::token max, std::vector<bytes>& expected) {
     return env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([min, max, &expected] (auto sstp) mutable {
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);

@@ -257,7 +257,7 @@ public:
             }
         }
     }
-    dht::token& token() {
+    dht::token token() {
         return _token;
     }
 };
@@ -1919,7 +1919,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
 }
 
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
+storage_proxy::create_write_response_handler_helper(schema_ptr s, dht::token token, std::unique_ptr<mutation_holder> mh,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
     auto keyspace_name = s->ks_name();
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
@@ -2246,7 +2246,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 }
 
 storage_proxy::paxos_participants
-storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
+storage_proxy::get_paxos_participants(const sstring& ks_name, dht::token token, db::consistency_level cl_for_paxos) {
     keyspace& ks = _db.local().find_keyspace(ks_name);
     auto& rs = ks.get_replication_strategy();
     inet_address_vector_replica_set natural_endpoints = rs.get_natural_endpoints_without_node_being_replaced(token);
@@ -3860,7 +3860,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         const inet_address_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
         service_permit permit) {
-    const dht::token& token = pr.start()->value().token();
+    dht::token token = pr.start()->value().token();
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
@@ -4635,7 +4635,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     co_return condition_met;
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) const {
+inet_address_vector_replica_set storage_proxy::get_live_endpoints(keyspace& ks, dht::token token) const {
     auto& rs = ks.get_replication_strategy();
     inet_address_vector_replica_set eps = rs.get_natural_endpoints_without_node_being_replaced(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
@@ -4652,7 +4652,7 @@ void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set&
     }
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const {
+inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(keyspace& ks, dht::token token) const {
     auto eps = get_live_endpoints(ks, token);
     sort_endpoints_by_proximity(eps);
     return eps;
@@ -4730,7 +4730,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 
     // divide the queryRange into pieces delimited by the ring
     auto ring_iter = _tmptr->ring_range(cr.start());
-    for (const dht::token& upper_bound_token : ring_iter) {
+    for (dht::token upper_bound_token : ring_iter) {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
          *   - if remainder is tokens, then we'll just split using the provided token.

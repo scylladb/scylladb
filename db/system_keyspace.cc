@@ -2091,7 +2091,7 @@ mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estim
     return m_to_apply;
 }
 
-future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token) {
+future<> register_view_for_building(sstring ks_name, sstring view_name, dht::token token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, generation_number, cpu_id, first_token) VALUES (?, ?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
     return qctx->execute_cql(
@@ -2103,7 +2103,7 @@ future<> register_view_for_building(sstring ks_name, sstring view_name, const dh
             token.to_sstring()).discard_result();
 }
 
-future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
+future<> update_view_build_progress(sstring ks_name, sstring view_name, dht::token token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
     return qctx->execute_cql(

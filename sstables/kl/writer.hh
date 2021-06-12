@@ -90,7 +90,7 @@ private:
             const std::vector<bytes_view>& column_names,
             composite::eoc marker = composite::eoc::none);
 
-    void maybe_add_summary_entry(const dht::token& token, bytes_view key);
+    void maybe_add_summary_entry(dht::token token, bytes_view key);
     uint64_t get_offset() const;
     file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
     // Emits all tombstones which start before pos.

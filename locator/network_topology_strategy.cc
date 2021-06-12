@@ -104,7 +104,7 @@ network_topology_strategy::network_topology_strategy(
 
 inet_address_vector_replica_set
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, const token_metadata& tm, can_yield can_yield) const {
+    token search_token, const token_metadata& tm, can_yield can_yield) const {
 
     using endpoint_set = utils::sequenced_set<inet_address>;
     using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
@@ -242,7 +242,7 @@ network_topology_strategy::calculate_natural_endpoints(
 
     auto dcs_to_fill = dcs.size();
 
-    for (auto& next : tm.ring_range(search_token)) {
+    for (auto next : tm.ring_range(search_token)) {
         if (dcs_to_fill == 0) {
             break;
         }

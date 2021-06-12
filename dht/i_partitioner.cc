@@ -46,12 +46,12 @@ sharder::sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits)
 {}
 
 unsigned
-sharder::shard_of(const token& t) const {
+sharder::shard_of(token t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
 std::optional<token>
-sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+sharder::token_for_next_shard(token t, shard_id shard, unsigned spans) const {
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
@@ -163,7 +163,7 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
 }
 
 std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
-    out << "{" << *pos._token;
+    out << "{" << pos._token;
     if (pos._key) {
         out << ", " << *pos._key;
     }
@@ -176,7 +176,7 @@ std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
     return out << "}";
 }
 
-unsigned shard_of(const schema& s, const token& t) {
+unsigned shard_of(const schema& s, token t) {
     return s.get_sharder().shard_of(t);
 }
 
@@ -275,7 +275,7 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
 }
 
 std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh) {
-    auto token_cmp = tri_compare(*lh._token, *rh._token);
+    auto token_cmp = tri_compare(lh._token, rh._token);
     if (token_cmp != 0) {
         return token_cmp;
     }
@@ -296,7 +296,7 @@ std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_vi
 }
 
 std::strong_ordering ring_position_comparator_for_sstables::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
-    auto token_cmp = tri_compare(*lh._token, rh.token());
+    auto token_cmp = tri_compare(lh._token, rh.token());
     if (token_cmp != 0) {
         return token_cmp;
     }

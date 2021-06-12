@@ -379,7 +379,7 @@ static void write_index_promoted(sstable_version_types v, file_writer& out, byte
     }
 }
 
-void sstable_writer_k_l::maybe_add_summary_entry(const dht::token& token, bytes_view key) {
+void sstable_writer_k_l::maybe_add_summary_entry(dht::token token, bytes_view key) {
     return sstables::maybe_add_summary_entry(_sst._components->summary, token, key, get_offset(),
         _index->offset(), _index_sampling_state);
 }

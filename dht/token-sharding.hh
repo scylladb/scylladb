@@ -31,9 +31,9 @@ inline sstring cpu_sharding_algorithm_name() {
 
 std::vector<uint64_t> init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits);
 
-unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t);
+unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, token t);
 
-std::optional<token> token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans);
+std::optional<token> token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, token t, shard_id shard, unsigned spans);
 
 class sharder {
 protected:
@@ -46,7 +46,7 @@ public:
     /**
      * Calculates the shard that handles a particular token.
      */
-    virtual unsigned shard_of(const token& t) const;
+    virtual unsigned shard_of(token t) const;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
@@ -59,7 +59,7 @@ public:
      *
      * On overflow, empty optional is returned.
      */
-    virtual std::optional<token> token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+    virtual std::optional<token> token_for_next_shard(token t, shard_id shard, unsigned spans = 1) const;
 
     /**
      * @return number of shards configured for this partitioner

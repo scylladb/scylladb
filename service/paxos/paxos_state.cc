@@ -41,18 +41,18 @@ logging::logger paxos_state::logger("paxos");
 thread_local paxos_state::key_lock_map paxos_state::_paxos_table_lock;
 thread_local paxos_state::key_lock_map paxos_state::_coordinator_lock;
 
-paxos_state::key_lock_map::semaphore& paxos_state::key_lock_map::get_semaphore_for_key(const dht::token& key) {
+paxos_state::key_lock_map::semaphore& paxos_state::key_lock_map::get_semaphore_for_key(dht::token key) {
     return _locks.try_emplace(key, 1).first->second;
 }
 
-void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key) {
+void paxos_state::key_lock_map::release_semaphore_for_key(dht::token key) {
     auto it = _locks.find(key);
     if (it != _locks.end() && (*it).second.current() == 1) {
         _locks.erase(it);
     }
 }
 
-future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
+future<paxos_state::guard> paxos_state::get_cas_lock(dht::token key, clock_type::time_point timeout) {
     guard m(_coordinator_lock, key, timeout);
     co_await m.lock();
     co_return m;

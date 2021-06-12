@@ -627,7 +627,7 @@ private:
 
     void drain_tombstones(std::optional<position_in_partition_view> pos = {});
 
-    void maybe_add_summary_entry(const dht::token& token, bytes_view key) {
+    void maybe_add_summary_entry(dht::token token, bytes_view key) {
         return sstables::maybe_add_summary_entry(
             _sst._components->summary, token, key, get_data_offset(),
             _index_writer->offset(), _index_sampling_state);

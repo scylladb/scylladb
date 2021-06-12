@@ -596,7 +596,7 @@ void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v,
     }
 }
 
-void maybe_add_summary_entry(summary&, const dht::token&, bytes_view key, uint64_t data_offset,
+void maybe_add_summary_entry(summary&, dht::token, bytes_view key, uint64_t data_offset,
     uint64_t index_offset, index_sampling_state&);
 
 // Get the currently loaded configuration, or the default configuration in

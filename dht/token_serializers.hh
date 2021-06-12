@@ -75,7 +75,7 @@ struct serializer<dht::token> {
         return serializer<dht::legacy_token>::read(in);
     }
     template<typename Output>
-    static void write(Output& out, const dht::token& obj) {
+    static void write(Output& out, dht::token obj) {
         return serializer<dht::legacy_token>::write(out, obj.legacy());
     }
     template<typename Input>

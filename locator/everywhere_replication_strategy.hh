@@ -46,8 +46,8 @@ class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
     everywhere_replication_strategy(const sstring& keyspace_name, const shared_token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring,sstring>& config_options);
 
-    virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) const override;
-    inet_address_vector_replica_set do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) override;
+    virtual inet_address_vector_replica_set calculate_natural_endpoints(token search_token, const token_metadata& tm, can_yield) const override;
+    inet_address_vector_replica_set do_get_natural_endpoints(token search_token, const token_metadata& tm, can_yield) override;
 
     virtual void validate_options() const override { /* noop */ }
 

@@ -41,6 +41,6 @@ public:
         , _tokens(boost::copy_range<std::vector<dht::token>>(something_by_token | boost::adaptors::map_keys)) {
     }
 
-    virtual unsigned shard_of(const dht::token& t) const override;
-    virtual std::optional<dht::token> token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
+    virtual unsigned shard_of(dht::token t) const override;
+    virtual std::optional<dht::token> token_for_next_shard(dht::token t, shard_id shard, unsigned spans = 1) const override;
 };

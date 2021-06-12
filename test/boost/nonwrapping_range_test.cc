@@ -33,7 +33,7 @@
 using ring_position = dht::ring_position;
 
 static
-bool includes_token(const schema& s, const dht::partition_range& r, const dht::token& tok) {
+bool includes_token(const schema& s, const dht::partition_range& r, dht::token tok) {
     dht::ring_position_comparator cmp(s);
 
     return !r.before(dht::ring_position(tok, dht::ring_position::token_bound::end), cmp)

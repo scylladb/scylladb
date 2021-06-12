@@ -168,7 +168,7 @@ public:
      *
      * @return The approximate midpoint between left and right.
      */
-    static token midpoint(const token& left, const token& right);
+    static token midpoint(token left, token right);
 
     /**
      * @return a randomly generated token
@@ -215,7 +215,7 @@ static inline std::strong_ordering tri_compare_raw(const int64_t l1, const int64
 
 template <typename T>
 concept TokenCarrier = requires (const T& v) {
-    { v.token() } noexcept -> std::same_as<const token&>;
+    { v.token() } noexcept -> std::same_as<token>;
 };
 
 struct raw_token_less_comparator {
@@ -246,13 +246,17 @@ struct raw_token_less_comparator {
     }
 };
 
-const token& minimum_token() noexcept;
-const token& greatest_token() noexcept;
+inline token minimum_token() noexcept {
+    return token(token::kind::before_all_keys, std::numeric_limits<int64_t>::min());
+}
+inline token greatest_token() noexcept {
+    return token(token::kind::key, std::numeric_limits<int64_t>::max());
+}
 
-inline std::strong_ordering operator<=>(const token& t1, const token& t2) { return t1._data <=> t2._data; }
-inline bool operator==(const token& t1, const token& t2) { return t1._data == t2._data; }
-inline std::strong_ordering tri_compare(const token& t1, const token& t2) { return t1 <=> t2; }
+inline std::strong_ordering operator<=>(token t1, token t2) { return t1._data <=> t2._data; }
+inline bool operator==(token t1, token t2) { return t1._data == t2._data; }
+inline std::strong_ordering tri_compare(token t1, token t2) { return t1 <=> t2; }
 
-std::ostream& operator<<(std::ostream& out, const token& t);
+std::ostream& operator<<(std::ostream& out, token t);
 
 } // namespace dht

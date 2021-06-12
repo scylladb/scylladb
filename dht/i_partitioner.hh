@@ -115,7 +115,7 @@ public:
     std::strong_ordering tri_compare(const schema& s, const decorated_key& other) const;
     std::strong_ordering tri_compare(const schema& s, const ring_position& other) const;
 
-    const dht::token& token() const noexcept {
+    dht::token token() const noexcept {
         return _token;
     }
 
@@ -281,7 +281,7 @@ public:
         , _key(std::make_optional(std::move(dk._key)))
     { }
 
-    const dht::token& token() const noexcept {
+    dht::token token() const noexcept {
         return _token;
     }
 
@@ -344,7 +344,7 @@ class ring_position_view {
     // For example {_token=t1, _key=nullptr, _weight=1} is ordered after {_token=t1, _key=k1, _weight=0},
     // but {_token=t1, _key=nullptr, _weight=-1} is ordered before it.
     //
-    const dht::token* _token; // always not nullptr
+    dht::token _token;
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
 public:
@@ -361,11 +361,11 @@ public:
     }
 
     bool is_min() const noexcept {
-        return _token->is_minimum();
+        return _token.is_minimum();
     }
 
     bool is_max() const noexcept {
-        return *_token == greatest_token() && !_key && _weight == 1;
+        return _token == greatest_token() && !_key && _weight == 1;
     }
 
     static ring_position_view for_range_start(const partition_range& r) {
@@ -384,16 +384,16 @@ public:
         return ring_position_view(after_key_tag(), view);
     }
 
-    static ring_position_view starting_at(const dht::token& t) {
+    static ring_position_view starting_at(dht::token t) {
         return ring_position_view(t, token_bound::start);
     }
 
-    static ring_position_view ending_at(const dht::token& t) {
+    static ring_position_view ending_at(dht::token t) {
         return ring_position_view(t, token_bound::end);
     }
 
     ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
-        : _token(&pos.token())
+        : _token(pos.token())
         , _key(pos.has_key() ? &*pos.key() : nullptr)
         , _weight(pos.has_key() ? bool(after) : pos.relation_to_keys())
     { }
@@ -408,24 +408,24 @@ public:
     { }
 
     ring_position_view(const dht::decorated_key& key, after_key after_key = after_key::no)
-        : _token(&key.token())
+        : _token(key.token())
         , _key(&key.key())
         , _weight(bool(after_key))
     { }
 
-    ring_position_view(const dht::token& token, const partition_key* key, int8_t weight)
-        : _token(&token)
+    ring_position_view(dht::token token, const partition_key* key, int8_t weight)
+        : _token(token)
         , _key(key)
         , _weight(weight)
     { }
 
-    explicit ring_position_view(const dht::token& token, token_bound bound = token_bound::start)
-        : _token(&token)
+    explicit ring_position_view(dht::token token, token_bound bound = token_bound::start)
+        : _token(token)
         , _key(nullptr)
         , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
-    const dht::token& token() const noexcept { return *_token; }
+    dht::token token() const noexcept { return _token; }
     const partition_key* key() const { return _key; }
 
     // Only when key() == nullptr
@@ -501,11 +501,11 @@ public:
         return ring_position_ext(after_key_tag(), view);
     }
 
-    static ring_position_ext starting_at(const dht::token& t) {
+    static ring_position_ext starting_at(dht::token t) {
         return ring_position_ext(t, token_bound::start);
     }
 
-    static ring_position_ext ending_at(const dht::token& t) {
+    static ring_position_ext ending_at(dht::token t) {
         return ring_position_ext(t, token_bound::end);
     }
 
@@ -519,7 +519,7 @@ public:
     ring_position_ext& operator=(const ring_position_ext& other) = default;
 
     ring_position_ext(ring_position_view v)
-        : _token(*v._token)
+        : _token(v._token)
         , _key(v._key ? std::make_optional(*v._key) : std::nullopt)
         , _weight(v._weight)
     { }
@@ -548,13 +548,13 @@ public:
         , _weight(pos.relation_to_keys())
     { }
 
-    explicit ring_position_ext(const dht::token& token, token_bound bound = token_bound::start)
+    explicit ring_position_ext(dht::token token, token_bound bound = token_bound::start)
         : _token(token)
         , _key(std::nullopt)
         , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
-    const dht::token& token() const noexcept { return _token; }
+    dht::token token() const noexcept { return _token; }
     const std::optional<partition_key>& key() const { return _key; }
 
     // Only when key() == std::nullopt
@@ -622,12 +622,12 @@ struct ring_position_less_comparator {
 
 struct token_comparator {
     // Return values are those of a trichotomic comparison.
-    std::strong_ordering operator()(const token& t1, const token& t2) const {
+    std::strong_ordering operator()(token t1, token t2) const {
         return t1 <=> t2;
     }
 };
 
-std::ostream& operator<<(std::ostream& out, const token& t);
+std::ostream& operator<<(std::ostream& out, token t);
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& t);
 
@@ -650,7 +650,7 @@ public:
 };
 std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
 
-unsigned shard_of(const schema&, const token&);
+unsigned shard_of(const schema&, token);
 inline decorated_key decorate_key(const schema& s, const partition_key& key) {
     return s.get_partitioner().decorate_key(s, key);
 }
@@ -679,7 +679,7 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 namespace std {
 template<>
 struct hash<dht::token> {
-    size_t operator()(const dht::token& t) const {
+    size_t operator()(dht::token t) const {
         // We have to reverse the bytes here to keep compatibility with
         // the behaviour that was here when tokens were represented as
         // sequence of bytes.

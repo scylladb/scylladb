@@ -1575,7 +1575,7 @@ void seal_statistics(sstable_version_types v, statistics& s, metadata_collector&
     populate_statistics_offsets(v, s);
 }
 
-void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
+void maybe_add_summary_entry(summary& s, dht::token token, bytes_view key, uint64_t data_offset,
         uint64_t index_offset, index_sampling_state& state) {
     state.partition_count++;
     // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
@@ -2522,7 +2522,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
  */
 std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const dht::token_range& range) {
     auto entries_size = _components->summary.entries.size();
-    auto search = [this](bool before, const dht::token& token) {
+    auto search = [this](bool before, dht::token token) {
         auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
         key k(kind);
         // Binary search will never returns positive values.

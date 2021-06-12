@@ -32,19 +32,7 @@ namespace dht {
 
 using uint128_t = unsigned __int128;
 
-static const token min_token{ token::kind::before_all_keys, 0 };
-static const token greatest_token_static{ token::kind::key, std::numeric_limits<int64_t>::max() };
-
-const token&
-minimum_token() noexcept {
-    return min_token;
-}
-
-const token& greatest_token() noexcept {
-    return greatest_token_static;
-}
-
-std::ostream& operator<<(std::ostream& out, const token& t) {
+std::ostream& operator<<(std::ostream& out, token t) {
     if (t.is_minimum()) {
         return out << "minimum token";
     } else {
@@ -56,7 +44,7 @@ sstring token::to_sstring() const {
     return seastar::to_sstring<sstring>(to_int64());
 }
 
-token token::midpoint(const token& t1, const token& t2) {
+token token::midpoint(token t1, token t2) {
     uint64_t l1 = t1.to_int64();
     uint64_t l2 = t2.to_int64();
     int64_t mid = l1 + (l2 - l1)/2;
@@ -114,7 +102,7 @@ token::describe_ownership(const std::vector<token>& sorted_tokens) {
         ownerships[sorted_tokens[0]] = 1.0;
     // n-case
     } else {
-        const token& start = sorted_tokens[0];
+        token start = sorted_tokens[0];
 
         int64_t ti = start.to_int64();  // The first token and its value
         int64_t start_long = ti;
@@ -137,7 +125,7 @@ token::get_token_validator() {
     return long_type;
 }
 
-static uint64_t unbias(const token& t) {
+static uint64_t unbias(token t) {
     return uint64_t(t.to_int64()) + uint64_t(std::numeric_limits<int64_t>::min());
 }
 
@@ -176,12 +164,12 @@ init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) 
 }
 
 unsigned
-shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t) {
+shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, token t) {
     return zero_based_shard_of(unbias(t), shard_count, sharding_ignore_msb_bits);
 }
 
 std::optional<token>
-token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans) {
+token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, token t, shard_id shard, unsigned spans) {
     uint64_t n = unbias(t);
     auto s = zero_based_shard_of(n, shard_count, sharding_ignore_msb_bits);
 

@@ -760,7 +760,7 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
     dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
 
     auto r = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), first_token,
-            [] (const range<dht::token>& a, const dht::token& b) {
+            [] (const range<dht::token>& a, dht::token b) {
         // check that range a is before token b.
         return a.after(b, dht::token_comparator());
     });
