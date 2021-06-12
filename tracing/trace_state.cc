@@ -55,7 +55,7 @@ namespace tracing {
 logging::logger trace_state_logger("trace_state");
 
 struct trace_state::params_values {
-    std::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
+    std::optional<inet_address_vector_replica_set> batchlog_endpoints;
     std::optional<api::timestamp_type> user_timestamp;
     std::vector<sstring> queries;
     std::optional<db::consistency_level> cl;
@@ -103,7 +103,7 @@ void trace_state::init_session_records(
 }
 
 
-void trace_state::set_batchlog_endpoints(const std::unordered_set<gms::inet_address>& val) {
+void trace_state::set_batchlog_endpoints(const inet_address_vector_replica_set& val) {
     _params_ptr->batchlog_endpoints.emplace(val);
 }
 

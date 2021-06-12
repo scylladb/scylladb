@@ -49,6 +49,7 @@
 #include <seastar/core/metrics_registration.hh>
 
 #include "gms/inet_address.hh"
+#include "inet_address_vectors.hh"
 #include "db_clock.hh"
 #include "mutation.hh"
 #include "utils/UUID.hh"
@@ -117,7 +118,7 @@ public:
     mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t, db_clock::time_point);
     db_clock::duration get_batch_log_timeout() const;
 
-    std::unordered_set<gms::inet_address> endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
+    inet_address_vector_replica_set endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
 };
 
 extern distributed<batchlog_manager> _the_batchlog_manager;

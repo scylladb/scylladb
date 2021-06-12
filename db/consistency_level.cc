@@ -268,7 +268,7 @@ void assure_sufficient_live_nodes(
 }
 
 template void assure_sufficient_live_nodes(consistency_level, keyspace&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
-template void assure_sufficient_live_nodes(db::consistency_level, keyspace&, const std::unordered_set<gms::inet_address>&, const utils::small_vector<gms::inet_address, 1ul>&);
+template void assure_sufficient_live_nodes(db::consistency_level, keyspace&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
 
 inet_address_vector_replica_set
 filter_for_query(consistency_level cl,

@@ -341,10 +341,10 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
     });
 }
 
-std::unordered_set<gms::inet_address> db::batchlog_manager::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
+inet_address_vector_replica_set db::batchlog_manager::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
     // special case for single-node data centers
     if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
-        return endpoints.begin()->second;
+        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
     }
 
     // strip out dead endpoints and localhost
@@ -364,7 +364,7 @@ std::unordered_set<gms::inet_address> db::batchlog_manager::endpoint_filter(cons
         }
     }
 
-    typedef std::unordered_set<gms::inet_address> return_type;
+    typedef inet_address_vector_replica_set return_type;
 
     if (validated.size() <= 2) {
         return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
@@ -395,13 +395,13 @@ std::unordered_set<gms::inet_address> db::batchlog_manager::endpoint_filter(cons
         racks.resize(2);
     }
 
-    std::unordered_set<gms::inet_address> result;
+    inet_address_vector_replica_set result;
 
     // grab a random member of up to two racks
     for (auto& rack : racks) {
         auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
         std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
-        result.emplace(cpy[rdist(_e1)]);
+        result.emplace_back(cpy[rdist(_e1)]);
     }
 
     return result;
