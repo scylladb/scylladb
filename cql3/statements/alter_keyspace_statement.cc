@@ -47,6 +47,7 @@
 #include "database.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "create_keyspace_statement.hh"
 
 bool is_system_keyspace(std::string_view keyspace);
 
@@ -112,3 +113,16 @@ cql3::statements::alter_keyspace_statement::prepare(database& db, cql_stats& sta
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
 }
 
+static logging::logger mylogger("alter_keyspace");
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    std::optional<sstring> warning = check_restricted_replication_strategy(qp.proxy(), keyspace(), *_attrs);
+    return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+        if (warning) {
+            msg->add_warning(*warning);
+            mylogger.warn("{}", *warning);
+        }
+        return msg;
+    });
+}

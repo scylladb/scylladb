@@ -47,6 +47,7 @@
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 
 #include <regex>
 
@@ -56,7 +57,7 @@ namespace cql3 {
 
 namespace statements {
 
-logging::logger create_keyspace_statement::_logger("create_keyspace");
+static logging::logger mylogger("create_keyspace");
 
 create_keyspace_statement::create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists)
     : _name{name}
@@ -147,20 +148,69 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
     });
 }
 
+using strategy_class_registry = class_registry<
+    locator::abstract_replication_strategy,
+    const sstring&,
+    const locator::shared_token_metadata&,
+    locator::snitch_ptr&,
+    const std::map<sstring, sstring>&>;
+
+// Check for replication strategy choices which are restricted by the
+// configuration. This check can throw a configuration_exception immediately
+// if the strategy is forbidden by the configuration, or return a warning
+// string if the restriction was set to "warn".
+// This function is only supposed to check for replication strategies
+// restricted by the configuration. Checks for other types of strategy
+// errors (such as unknown replication strategy name or unknown options
+// to a known replication strategy) are done elsewhere.
+std::optional<sstring> check_restricted_replication_strategy(
+    service::storage_proxy& proxy,
+    const sstring& keyspace,
+    const ks_prop_defs& attrs)
+{
+    if (!attrs.get_replication_strategy_class()) {
+        return std::nullopt;
+    }
+    sstring replication_strategy = strategy_class_registry::to_qualified_class_name(
+        *attrs.get_replication_strategy_class());
+    // SimpleStrategy is not recommended in any setup which already has - or
+    // may have in the future - multiple racks or DCs. So depending on how
+    // protective we are configured, let's prevent it or allow with a warning:
+    if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
+        switch(proxy.local_db().get_config().restrict_replication_simplestrategy()) {
+        case db::tri_mode_restriction_t::mode::TRUE:
+            throw exceptions::configuration_exception(
+                "SimpleStrategy replication class is not recommended, and "
+                "forbidden by the current configuration. Please use "
+                "NetworkToplogyStrategy instead. You may also override this "
+                "restriction with the restrict_replication_simplestrategy=false "
+                "configuration option.");
+        case db::tri_mode_restriction_t::mode::WARN:
+            return format("SimpleStrategy replication class is not "
+                "recommended, but was used for keyspace {}. The "
+                "restrict_replication_simplestrategy configuration option "
+                "can be changed to silence this warning or make it into an error.",
+                keyspace);
+        case db::tri_mode_restriction_t::mode::FALSE:
+            // Scylla was configured to allow SimpleStrategy, but let's warn
+            // if it's used on a cluster which *already* has multiple DCs:
+            if (proxy.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
+                return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
+            }
+            break;
+        }
+    }
+    return std::nullopt;
+}
+
 future<::shared_ptr<messages::result_message>>
 create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    service::storage_proxy& proxy = qp.proxy();
-    return schema_altering_statement::execute(qp, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
-        bool multidc = p->get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1;
-        bool simple = _attrs->get_replication_strategy_class() == "SimpleStrategy";
-
-        if (multidc && simple) {
-            static const auto warning = "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
-
-            msg->add_warning(warning);
-            _logger.warn(warning);
+    std::optional<sstring> warning = check_restricted_replication_strategy(qp.proxy(), keyspace(), *_attrs);
+    return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+        if (warning) {
+            msg->add_warning(*warning);
+            mylogger.warn("{}", *warning);
         }
-
         return msg;
     });
 }

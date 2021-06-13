@@ -121,6 +121,10 @@ const config_type config_type_for<std::vector<enum_option<db::experimental_featu
         "experimental features", value_to_json<std::vector<sstring>>);
 
 template <>
+const config_type config_type_for<enum_option<db::tri_mode_restriction_t>> = config_type(
+        "restriction mode", value_to_json<sstring>);
+
+template <>
 const config_type config_type_for<db::config::hinted_handoff_enabled_type> = config_type("hinted handoff enabled", hinted_handoff_enabled_to_json);
 
 }
@@ -184,6 +188,23 @@ template <>
 class convert<enum_option<db::experimental_features_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::experimental_features_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::tri_mode_restriction_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::tri_mode_restriction_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -802,7 +823,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\t'datacenter_name':N [,...], (Default: 'dc1:1') IFF the class is NetworkTopologyStrategy, assign replication factors to each data center in a comma separated list.\n"
         "\n"
         "Related information: About replication strategy.")
-
+    , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
@@ -964,6 +985,14 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
     return {UDF, ALTERNATOR_STREAMS};
+}
+
+std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restriction_t::map() {
+    return {{"true", db::tri_mode_restriction_t::mode::TRUE},
+            {"1", db::tri_mode_restriction_t::mode::TRUE},
+            {"false", db::tri_mode_restriction_t::mode::FALSE},
+            {"0", db::tri_mode_restriction_t::mode::FALSE},
+            {"warn", db::tri_mode_restriction_t::mode::WARN}};
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
