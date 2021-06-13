@@ -111,9 +111,8 @@ public:
             }
         }
         return close_reader().then([this, snapshot, phase] () mutable {
-        // FIXME: indentation
-        _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
-        _reader_creation_phase = phase;
+            _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
+            _reader_creation_phase = phase;
         });
     }
     future<> close() noexcept {
