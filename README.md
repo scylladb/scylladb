@@ -42,7 +42,7 @@ For further information, please see:
 * [Docker image build documentation] for information on how to build Docker images.
 
 [developer documentation]: HACKING.md
-[build documentation]: docs/guides/building.md
+[build documentation]: docs/dev-docs/guides/building.md
 [docker image build documentation]: dist/docker/redhat/README.md
 
 ## Running Scylla
@@ -65,7 +65,7 @@ $ ./tools/toolchain/dbuild ./build/release/scylla --help
 
 ## Testing
 
-See [test.py manual](docs/guides/testing.md).
+See [test.py manual](docs/dev-docs/guides/testing.md).
 
 ## Scylla APIs and compatibility
 By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and
@@ -73,8 +73,8 @@ Thrift. There is also support for the API of Amazon DynamoDB™,
 which needs to be enabled and configured in order to be used. For more
 information on how to enable the DynamoDB™ API in Scylla,
 and the current compatibility of this feature as well as Scylla-specific extensions, see
-[Alternator](docs/alternator/alternator.md) and
-[Getting started with Alternator](docs/alternator/getting-started.md).
+[Alternator](docs/dev-docs/alternator/alternator.md) and
+[Getting started with Alternator](docs/dev-docs/alternator/getting-started.md).
 
 ## Documentation
 

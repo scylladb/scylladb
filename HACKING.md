@@ -389,4 +389,4 @@ For more details see `./scripts/coverage.py --help`.
 
 ### Core dump debugging
 
-See [debugging.md](docs/guides/debugging.md).
+See [debugging.md](docs/dev-docs/guides/debugging.md).
