@@ -126,8 +126,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
     const auto initial_resources = reader_concurrency_semaphore::resources{10, 1024 * 1024};
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
 
-    auto permit = semaphore.make_permit(s.schema().get(), get_name());
     auto stop_sem = deferred_stop(semaphore);
+    auto permit = semaphore.make_permit(s.schema().get(), get_name());
 
     std::optional<reader_permit::resource_units> residue_units;
 
@@ -551,4 +551,29 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
 
     testlog.info("With max-lines=4: {}", semaphore.dump_diagnostics(4));
     testlog.info("With no max-lines: {}", semaphore.dump_diagnostics(0));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits) {
+    BOOST_TEST_MESSAGE("0 permits");
+    {
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+        // Test will fail by timing out.
+        semaphore.stop().get();
+    }
+
+    BOOST_TEST_MESSAGE("1 permit");
+    {
+        auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, get_name());
+        auto permit = std::make_unique<reader_permit>(semaphore->make_permit(nullptr, "permit1"));
+
+        // Test will fail via use-after-free
+        auto f = semaphore->stop().then([semaphore = std::move(semaphore)] { });
+
+        later().get();
+        BOOST_REQUIRE(!f.available());
+        permit.reset();
+
+        // Test will fail by timing out.
+        f.get();
+    }
 }

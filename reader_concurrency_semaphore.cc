@@ -87,13 +87,17 @@ public:
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name_view(op_name)
-    { }
+    {
+        _semaphore.on_permit_created(*this);
+    }
     impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
-    { }
+    {
+        _semaphore.on_permit_created(*this);
+    }
     ~impl() {
         if (_resources) {
             on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
@@ -102,6 +106,8 @@ public:
                         _resources.memory));
             signal(_resources);
         }
+
+        _semaphore.on_permit_destroyed(*this);
     }
 
     reader_concurrency_semaphore& semaphore() {
@@ -167,13 +173,11 @@ struct reader_concurrency_semaphore::permit_list {
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name)
     : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name))
 {
-    semaphore._permit_list->permits.push_back(*_impl);
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
     : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name)))
 {
-    semaphore._permit_list->permits.push_back(*_impl);
 }
 
 void reader_permit::on_waiting() {
@@ -504,6 +508,7 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     _stopped = true;
     clear_inactive_reads();
     co_await _close_readers_gate.close();
+    co_await _permit_gate.close();
     broken(std::make_exception_ptr(stopped_exception()));
     co_return;
 }
@@ -598,6 +603,16 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     }
 
     return fut;
+}
+
+void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) noexcept {
+    _permit_list->permits.push_back(permit);
+    _permit_gate.enter();
+}
+
+void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& permit) noexcept {
+    permit.unlink();
+    _permit_gate.leave();
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {

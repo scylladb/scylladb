@@ -2057,12 +2057,12 @@ database::stop() {
     }).then([this] {
         return _system_sstables_manager->close();
     }).finally([this] {
-        return when_all_succeed(
-                _read_concurrency_sem.stop(),
-                _streaming_concurrency_sem.stop(),
-                _compaction_concurrency_sem.stop(),
-                _system_read_concurrency_sem.stop()).discard_result().finally([this] {
-            return _querier_cache.stop();
+        return _querier_cache.stop().finally([this] {
+            return when_all_succeed(
+                    _read_concurrency_sem.stop(),
+                    _streaming_concurrency_sem.stop(),
+                    _compaction_concurrency_sem.stop(),
+                    _system_read_concurrency_sem.stop()).discard_result();
         });
     });
 }

@@ -173,6 +173,7 @@ private:
     std::unique_ptr<permit_list> _permit_list;
     bool _stopped = false;
     gate _close_readers_gate;
+    gate _permit_gate;
 
 private:
     [[nodiscard]] flat_mutation_reader detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
@@ -185,6 +186,9 @@ private:
     future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
     void evict_readers_in_background();
     future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
+
+    void on_permit_created(reader_permit::impl&) noexcept;
+    void on_permit_destroyed(reader_permit::impl&) noexcept;
 
     std::runtime_error stopped_exception();
 
