@@ -356,10 +356,17 @@ future<> read_context::stop() {
     auto gate_fut = _dismantling_gate.is_closed() ? make_ready_future<>() : _dismantling_gate.close();
     return gate_fut.then([this] {
         return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
-            if (_readers[shard].handle && *_readers[shard].handle) {
+            if (_readers[shard].rparts) {
                 return _db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
-                    auto reader_opt = rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
-                    return reader_opt ? reader_opt->close() : make_ready_future<>();
+                    auto rparts = rm.rparts.release();
+                    auto irh = rm.handle.release();
+                    if (*irh) {
+                        auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+                        if (reader_opt) {
+                            return reader_opt->close().then([rparts = std::move(rparts)] { });
+                        }
+                    }
+                    return make_ready_future<>();
                 });
             }
             return make_ready_future<>();
@@ -458,7 +465,8 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
             auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
-            flat_mutation_reader_opt reader = rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+            auto irh = rm.handle.release();
+            flat_mutation_reader_opt reader = rparts->permit.semaphore().unregister_inactive_read(std::move(*irh));
 
             if (!reader) {
                 return make_ready_future<>();
