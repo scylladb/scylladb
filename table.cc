@@ -2208,7 +2208,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
-    auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views, now);
+    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views, now);
     if (cr_ranges.empty()) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
         co_await generate_and_propagate_view_updates(base, sem.make_permit(s.get(), "push-view-updates-1"), std::move(views), std::move(m), { }, std::move(tr_state), now);
