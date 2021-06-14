@@ -26,6 +26,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/weak_ptr.hh>
 #include <seastar/util/defer.hh>
 
 #include "raft/server.hh"
@@ -1068,7 +1069,7 @@ static raft::server_id to_raft_id(size_t id) {
 // Needs to be periodically `tick()`ed which ticks the network
 // and underlying servers.
 template <PureStateMachine M>
-class environment {
+class environment : public seastar::weakly_referencable<environment<M>> {
     using input_t = typename M::output_t;
     using state_t = typename M::state_t;
     using output_t = typename M::output_t;
@@ -1115,9 +1116,12 @@ public:
     environment(const environment&) = delete;
     environment(environment&&) = delete;
 
-    // TODO: adjustable/randomizable ticking ratios
-    void tick() {
+    void tick_network() {
         _network.tick();
+    }
+
+    // TODO: adjustable/randomizable ticking ratios
+    void tick_servers() {
         for (auto& [_, r] : _routes) {
             r._server->tick();
             r._fd->tick();
@@ -1183,10 +1187,23 @@ public:
     }
 };
 
-// Calls the given function (``tick''s) as fast as the Seastar reactor allows and yields between each call.
-// May be provided a limit for the number of calls; crashes if the limit is reached before the ticker
-// is `abort()`ed.
-// Call `start()` to start the ticking.
+// Given a set of functions and associated positive natural numbers,
+// calls the functions with periods defined by their corresponding numbers,
+// yielding in between.
+//
+// Define a "tick" to be a (possibly empty) set of calls to some of the given functions
+// followed by a yield. The ticker executes a sequence of ticks. Given {n, f}, where n
+// is a number and f is a function, f will be called each nth tick.
+//
+// For example, suppose the ticker was started with the set {{2, f}, {4, g}, {4, h}}.
+// Then the functions called in each tick are:
+// tick 1: f, g, h tick 2: none, tick 3: f, tick 4: none, tick 5: f, g, h tick 2: none, and so on.
+//
+// The order of calls within a single tick is unspecified.
+//
+// The number of ticks can be limited. We crash if the ticker reaches the limit before it's `abort()`ed.
+//
+// Call `start` to provide the distribution and start the ticking.
 class ticker {
     bool _stop = false;
     std::optional<future<>> _ticker;
@@ -1201,36 +1218,40 @@ public:
         assert(!_ticker);
     }
 
-    void start(noncopyable_function<void()> on_tick, uint64_t limit = std::numeric_limits<uint64_t>::max()) {
+    using on_tick_t = noncopyable_function<void()>;
+
+    template <size_t N>
+    void start(std::pair<size_t, on_tick_t> (&&tick_funs)[N], uint64_t limit = std::numeric_limits<uint64_t>::max()) {
         assert(!_ticker);
-        _ticker = tick(std::move(on_tick), limit);
-        engine().set_idle_cpu_handler([this] (reactor::work_waiting_on_reactor check_for_work) {
-            if (_promise) {
-                std::exchange(_promise, std::nullopt)->set_value();
-            }
-            return idle_cpu_handler_result::no_more_work;
-        });
+        _ticker = tick(std::move(tick_funs), limit);
     }
 
     future<> abort() {
         if (_ticker) {
             _stop = true;
             co_await *std::exchange(_ticker, std::nullopt);
-            engine().set_idle_cpu_handler([] (work_waiting_on_reactor) {return idle_cpu_handler_result::no_more_work;});
         }
     }
 
 private:
-    future<> tick(noncopyable_function<void()> on_tick, uint64_t limit) {
-        for (uint64_t i = 0; i < limit; ++i) {
+    template <size_t N>
+    future<> tick(std::pair<size_t, on_tick_t> (&&tick_funs)[N], uint64_t limit) {
+        static_assert(N > 0);
+
+        auto funs = std::to_array(std::move(tick_funs));
+        for (uint64_t tick = 0; tick < limit; ++tick) {
             if (_stop) {
-                tlogger.debug("ticker: finishing after {} ticks", i);
+                tlogger.debug("ticker: finishing after {} ticks", tick);
                 co_return;
             }
-            on_tick();
-            assert(!bool(_promise));
-            _promise = promise<>();
-            co_await _promise->get_future();
+
+            for (auto& [n, f] : funs) {
+                if (tick % n == 0) {
+                    f();
+                }
+            }
+
+            co_await seastar::later();
         }
 
         tlogger.error("ticker: limit reached");
@@ -1314,22 +1335,27 @@ SEASTAR_TEST_CASE(basic_test) {
     co_await with_env_and_ticker<ExReg>([&timer] (environment<ExReg>& env, ticker& t) -> future<> {
         using output_t = typename ExReg::output_t;
 
-        t.start([&] {
-            env.tick();
-            timer.tick();
+        t.start({
+            {1, [&] {
+                env.tick_network();
+                timer.tick();
+            }},
+            {10, [&] {
+                env.tick_servers();
+            }}
         }, 10'000);
 
         auto leader_id = co_await env.new_server(true);
 
-        // Wait at most 100 ticks for the server to elect itself as a leader.
-        co_await timer.with_timeout(timer.now() + 100_t, ([&] () -> future<> {
+        // Wait at most 1000 ticks for the server to elect itself as a leader.
+        co_await timer.with_timeout(timer.now() + 1000_t, ([] (weak_ptr<environment<ExReg>> env, raft::server_id leader_id) -> future<> {
             while (true) {
-                if (env.get_server(leader_id).is_leader()) {
+                if (!env || env->get_server(leader_id).is_leader()) {
                     co_return;
                 }
-                co_await timer.sleep(1_t);
+                co_await seastar::later();
             }
-        })());
+        })(env.weak_from_this(), leader_id));
 
         assert(env.get_server(leader_id).is_leader());
 
