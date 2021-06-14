@@ -32,7 +32,6 @@
 namespace service {
 class storage_proxy;
 class migration_manager;
-class storage_service;
 }
 namespace cql3 {
 class query_processor;
@@ -51,7 +50,6 @@ class query_processor;
 class alternator_test_env {
     sharded<service::storage_proxy>& _proxy;
     sharded<service::migration_manager>& _mm;
-    sharded<service::storage_service>& _storage_service;
     sharded<cql3::query_processor>& _qp;
 
     // Dummy service, only needed for alternator streams
@@ -63,11 +61,9 @@ class alternator_test_env {
 public:
     alternator_test_env(sharded<service::storage_proxy>& proxy,
             sharded<service::migration_manager>& mm,
-            sharded<service::storage_service>& ss,
             sharded<cql3::query_processor>& qp)
         : _proxy(proxy)
         , _mm(mm)
-        , _storage_service(ss)
         , _qp(qp)
     {}
 

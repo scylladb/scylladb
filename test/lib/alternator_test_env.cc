@@ -38,7 +38,6 @@ future<> alternator_test_env::start(std::string_view isolation_level) {
             // parameters below are only touched by alternator streams;
             //  not really interesting for this use case
             std::ref(_sdks),
-            std::ref(_storage_service),
             std::ref(_cdc_metadata),
             // end-of-streams-parameters
             ssg);

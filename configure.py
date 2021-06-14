@@ -1039,6 +1039,7 @@ api = ['api/api.cc',
        ]
 
 alternator = [
+       'alternator/controller.cc',
        'alternator/server.cc',
        'alternator/executor.cc',
        'alternator/stats.cc',

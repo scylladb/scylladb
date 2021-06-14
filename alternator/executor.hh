@@ -50,7 +50,6 @@ namespace cql3::selection {
 }
 
 namespace service {
-    class storage_service;
     class storage_proxy;
 }
 
@@ -144,7 +143,6 @@ class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
-    service::storage_service& _ss;
     cdc::metadata& _cdc_metadata;
     // An smp_service_group to be used for limiting the concurrency when
     // forwarding Alternator request between shards - if necessary for LWT.
@@ -158,8 +156,8 @@ public:
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
-    executor(service::storage_proxy& proxy, service::migration_manager& mm, db::system_distributed_keyspace& sdks, service::storage_service& ss, cdc::metadata& cdc_metadata, smp_service_group ssg)
-        : _proxy(proxy), _mm(mm), _sdks(sdks), _ss(ss), _cdc_metadata(cdc_metadata), _ssg(ssg) {}
+    executor(service::storage_proxy& proxy, service::migration_manager& mm, db::system_distributed_keyspace& sdks, cdc::metadata& cdc_metadata, smp_service_group ssg)
+        : _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata), _ssg(ssg) {}
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
