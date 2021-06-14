@@ -86,6 +86,7 @@ class reconcilable_result;
 
 namespace service {
 class storage_proxy;
+class storage_service;
 class migration_notifier;
 class migration_manager;
 }
@@ -123,7 +124,7 @@ class data_listeners;
 class large_data_handler;
 
 namespace system_keyspace {
-future<> make(database& db);
+future<> make(database& db, service::storage_service& ss);
 }
 }
 
@@ -1366,7 +1367,7 @@ public:
 private:
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
-    friend future<> db::system_keyspace::make(database& db);
+    friend future<> db::system_keyspace::make(database& db, service::storage_service& ss);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 

@@ -53,6 +53,7 @@ class sstable_directory;
 namespace service {
 
 class storage_proxy;
+class storage_service;
 class migration_manager;
 
 }
@@ -80,7 +81,7 @@ public:
             get_sstables_from_upload_dir(distributed<database>& db, sstring ks, sstring cf);
     static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
-    static future<> init_system_keyspace(distributed<database>& db);
+    static future<> init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss);
     static future<> ensure_system_table_directories(distributed<database>& db);
     static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm);
 private:

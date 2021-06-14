@@ -491,6 +491,7 @@ int main(int ac, char** av) {
     service::load_meter load_meter;
     debug::db = &db;
     auto& proxy = service::get_storage_proxy();
+    auto& storage_service = service::get_storage_service();
     sharded<service::migration_manager> mm;
     api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
@@ -529,7 +530,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &storage_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair] {
@@ -931,7 +932,7 @@ int main(int ac, char** av) {
             // Iteration through column family directory for sstable loading is
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
-            distributed_loader::init_system_keyspace(db).get();
+            distributed_loader::init_system_keyspace(db, storage_service).get();
 
             supervisor::notify("starting gossip");
             // Moved local parameters here, esp since with the
