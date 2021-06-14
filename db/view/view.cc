@@ -343,7 +343,7 @@ public:
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
-    void move_to(std::vector<frozen_mutation_and_schema>& mutations) && {
+    void move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) && {
         std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
             auto mut = mutation(_view, dht::decorate_key(*_view, std::move(m.first)), std::move(m.second));
             return frozen_mutation_and_schema{freeze(mut), std::move(_view)};
@@ -858,7 +858,7 @@ public:
             , _now(now) {
     }
 
-    future<std::vector<frozen_mutation_and_schema>> build();
+    future<utils::chunked_vector<frozen_mutation_and_schema>> build();
 
     future<> close() noexcept {
         return when_all_succeed(_updates.close(), _existings->close()).discard_result();
@@ -899,7 +899,7 @@ private:
     }
 };
 
-future<std::vector<frozen_mutation_and_schema>> view_update_builder::build() {
+future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build() {
     return advance_all().then([this] (auto&& ignored) {
         assert(_update && _update->is_partition_start());
         _key = std::move(std::move(_update)->as_partition_start().key().key());
@@ -914,7 +914,7 @@ future<std::vector<frozen_mutation_and_schema>> view_update_builder::build() {
             });
         });
     }).then([this] {
-        std::vector<frozen_mutation_and_schema> mutations;
+        utils::chunked_vector<frozen_mutation_and_schema> mutations;
         for (auto&& update : _view_updates) {
             std::move(update).move_to(mutations);
         }
@@ -1033,7 +1033,7 @@ future<stop_iteration> view_update_builder::on_results() {
     return stop();
 }
 
-future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
+future<utils::chunked_vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader&& updates,
@@ -1199,7 +1199,7 @@ static future<> apply_to_remote_endpoints(gms::inet_address target, inet_address
 // for the writes to complete.
 future<> mutate_MV(
         dht::token base_token,
-        std::vector<frozen_mutation_and_schema> view_updates,
+        utils::chunked_vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
         cf_stats& cf_stats,
         tracing::trace_state_ptr tr_state,
