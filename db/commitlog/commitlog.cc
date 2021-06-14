@@ -420,6 +420,8 @@ public:
     void flush_segments(uint64_t size_to_remove);
 
 private:
+    class shutdown_marker{};
+
     future<> clear_reserve_segments();
     void abort_recycled_list(std::exception_ptr);
     void abort_deletion_promise(std::exception_ptr);
@@ -1206,6 +1208,12 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
                     return make_ready_future<>();
                 });
             }).handle_exception([](std::exception_ptr ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (shutdown_marker&) {
+                    return make_ready_future<>();
+                } catch (...) {
+                }
                 clogger.warn("Exception in segment reservation: {}", ep);
                 return sleep(100ms);
             });
@@ -1542,6 +1550,12 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             flush_segments(0); // force memtable flush already
         }
         return f.handle_exception([this](auto ep) {
+            try {
+                std::rethrow_exception(ep);
+            } catch (shutdown_marker&) {
+                throw;
+            } catch (...) {
+            }
             clogger.warn("Exception while waiting for segments {}. Will retry allocation...", ep);
         }).then([this] {
             return allocate_segment();
@@ -1738,7 +1752,14 @@ future<> db::commitlog::segment_manager::shutdown() {
                 // do a discard + delete sweep to force 
                 // gate holder (i.e. replenish) to wake up
                 discard_unused_segments();
-                auto f = do_pending_deletes();
+                auto f = do_pending_deletes().then([this] {
+                    auto ep = std::make_exception_ptr(shutdown_marker{});
+                    if (_recycled_segments.empty()) {
+                        abort_recycled_list(ep);
+                    }
+                    abort_deletion_promise(ep);
+                });
+
 
                 // Now first wait for periodic task to finish, then sync and close all
                 // segments, flushing out any remaining data.
