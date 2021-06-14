@@ -421,6 +421,8 @@ public:
 
 private:
     future<> clear_reserve_segments();
+    void abort_recycled_list(std::exception_ptr);
+    void abort_deletion_promise(std::exception_ptr);
 
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
@@ -1856,10 +1858,20 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     // for new allocs at least. Or more likely, everything is broken, but
     // we will at least make more noise.
     if (recycle_error && _recycled_segments.empty()) {
-        _recycled_segments.abort(recycle_error);
-        // and ensure next lap(s) still has a queue
-        _recycled_segments = queue<sstring>(std::numeric_limits<size_t>::max());
+        abort_recycled_list(recycle_error);
     }
+}
+
+void db::commitlog::segment_manager::abort_recycled_list(std::exception_ptr ep) {
+    // may not call here with elements in list. that would leak files.
+    assert(_recycled_segments.empty());
+    _recycled_segments.abort(ep);
+    // and ensure next lap(s) still has a queue
+    _recycled_segments = queue<sstring>(std::numeric_limits<size_t>::max());
+}
+
+void db::commitlog::segment_manager::abort_deletion_promise(std::exception_ptr ep) {
+    std::exchange(_disk_deletions, {}).set_exception(ep);
 }
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
