@@ -146,8 +146,9 @@ public:
         auto ctx = &*_contexts[this_shard_id()];
         auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(reader.handle));
         auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
-        ctx->semaphore->broken();
-        return std::move(ret);
+        return ret.finally([&ctx] {
+            return ctx->semaphore->stop();
+        });
     }
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
