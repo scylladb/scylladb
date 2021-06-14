@@ -1785,8 +1785,12 @@ future<> set_bootstrap_state(bootstrap_state state) {
 }
 
 class nodetool_status_table : public memtable_filling_virtual_table {
+private:
+    service::storage_service& _ss;
 public:
-    nodetool_status_table() : memtable_filling_virtual_table(build_schema()) {}
+    nodetool_status_table(service::storage_service& ss)
+            : memtable_filling_virtual_table(build_schema())
+            , _ss(ss) {}
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(NAME, "status");
@@ -1804,9 +1808,8 @@ public:
     }
 
     future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) override {
-        auto& ss = service::get_local_storage_service();
-        return ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
-            const locator::token_metadata& tm = ss.get_token_metadata();
+        return _ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
+            const locator::token_metadata& tm = _ss.get_token_metadata();
             gms::gossiper& gs = gms::get_local_gossiper();
 
             for (auto&& e : gs.endpoint_state_map) {
@@ -1844,13 +1847,13 @@ public:
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
-void register_virtual_tables() {
+void register_virtual_tables(service::storage_service& ss) {
     auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
         virtual_tables[tbl->schema()->id()] = std::move(tbl);
     };
 
     // Add built-in virtual tables here.
-    add_table(std::make_unique<nodetool_status_table>());
+    add_table(std::make_unique<nodetool_status_table>(ss));
 }
 
 std::vector<schema_ptr> all_tables() {
@@ -1900,8 +1903,8 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
             || s == v3::scylla_views_builds_in_progress();
 }
 
-future<> make(database& db) {
-    register_virtual_tables();
+future<> make(database& db, service::storage_service& ss) {
+    register_virtual_tables(ss);
 
     auto enable_cache = db.get_config().enable_cache();
     bool durable = db.get_config().data_file_directories().size() > 0;
