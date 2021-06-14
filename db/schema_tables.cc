@@ -855,7 +855,7 @@ read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring
     return query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 
-static semaphore the_merge_lock {1};
+static thread_local semaphore the_merge_lock {1};
 
 future<> merge_lock() {
     return smp::submit_to(0, [] { return the_merge_lock.wait(); });
