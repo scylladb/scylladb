@@ -1170,7 +1170,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 }
 
 static future<> apply_to_remote_endpoints(gms::inet_address target, std::vector<gms::inet_address>&& pending_endpoints,
-        frozen_mutation_and_schema& mut, const dht::token& base_token, const dht::token& view_token,
+        frozen_mutation_and_schema&& mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
 
     tracing::trace(tr_state, "Sending view update for {}.{} to {}, with pending endpoints = {}; base token = {}; view token = {}",
@@ -1288,7 +1288,7 @@ future<> mutate_MV(
             size_t updates_pushed_remote = remote_endpoints.size() + 1;
             stats.view_updates_pushed_remote += updates_pushed_remote;
             cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
-            future<> view_update = apply_to_remote_endpoints(*target_endpoint, std::move(remote_endpoints), mut, base_token, view_token, allow_hints, tr_state).then_wrapped(
+            future<> view_update = apply_to_remote_endpoints(*target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                     [target_endpoint,
                      updates_pushed_remote,
                      maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) mutable {
