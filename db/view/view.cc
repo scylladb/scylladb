@@ -1189,7 +1189,7 @@ static future<> apply_to_remote_endpoints(gms::inet_address target, std::vector<
 // appropriate paired replicas. This is done asynchronously - we do not wait
 // for the writes to complete.
 future<> mutate_MV(
-        const dht::token& base_token,
+        dht::token base_token,
         std::vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
         cf_stats& cf_stats,
