@@ -544,11 +544,14 @@ private:
     // The last time we sent a heartbeat.
     raft::logical_clock::time_point _last_beat;
 
+    // How long from the last received heartbeat does it take to convict a node as dead.
+    const raft::logical_clock::duration _convict_threshold;
+
     send_heartbeat_t _send_heartbeat;
 
 public:
-    failure_detector(send_heartbeat_t f)
-        : _send_heartbeat(std::move(f))
+    failure_detector(raft::logical_clock::duration convict_threshold, send_heartbeat_t f)
+        : _convict_threshold(convict_threshold), _send_heartbeat(std::move(f))
     {
         send_heartbeats();
         assert(_last_beat == _clock.now());
@@ -588,9 +591,6 @@ public:
     }
 
     bool is_alive(raft::server_id id) override {
-        // TODO: make it adjustable
-        static const raft::logical_clock::duration _convict_threshold = 50_t;
-
         return _clock.now() < _last_heard[id] + _convict_threshold;
     }
 };
@@ -640,17 +640,19 @@ private:
 
     raft::logical_clock _clock;
 
+    // How long does it take to deliver a message?
+    // TODO: use a random distribution or let the user change this dynamically
+    raft::logical_clock::duration _delivery_delay;
+
 public:
-    network(deliver_t f)
-        : _deliver(std::move(f)) {}
+    network(raft::logical_clock::duration delivery_delay, deliver_t f)
+        : _deliver(std::move(f)), _delivery_delay(delivery_delay) {}
 
     void send(raft::server_id src, raft::server_id dst, Payload payload) {
         // Predict the delivery time in advance.
         // Our prediction may be wrong if a grudge exists at this expected moment of delivery.
         // Messages may also be reordered.
-        // TODO: scale with number of msgs already in transit and payload size?
-        // TODO: randomize the delivery time
-        auto delivery_time = _clock.now() + 5_t;
+        auto delivery_time = _clock.now() + _delivery_delay;
 
         _events.push_back(event{delivery_time, message{src, dst, make_lw_shared<Payload>(std::move(payload))}});
         std::push_heap(_events.begin(), _events.end(), cmp);
@@ -932,6 +934,11 @@ static raft::server_id to_raft_id(size_t id) {
     return raft::server_id{utils::UUID{0, id}};
 }
 
+struct environment_config {
+    raft::logical_clock::duration network_delay;
+    raft::logical_clock::duration fd_convict_threshold;
+};
+
 // A set of `raft_server`s connected by a `network`.
 //
 // The `network` is initialized with a message delivery function
@@ -952,6 +959,9 @@ class environment : public seastar::weakly_referencable<environment<M>> {
         shared_ptr<failure_detector> _fd;
     };
 
+    // Passed to newly created failure detectors.
+    const raft::logical_clock::duration _fd_convict_threshold;
+
     // Used to deliver messages coming from the network to appropriate servers and their failure detectors.
     // Also keeps the servers and the failure detectors alive (owns them).
     // Before we show a Raft server to others we must add it to this map.
@@ -971,8 +981,8 @@ class environment : public seastar::weakly_referencable<environment<M>> {
     seastar::gate _gate;
 
 public:
-    environment()
-            : _network(
+    environment(environment_config cfg)
+            : _fd_convict_threshold(cfg.fd_convict_threshold), _network(cfg.network_delay,
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
             auto& [s, fd] = _routes.at(dst);
             fd->receive_heartbeat(src);
@@ -1018,7 +1028,7 @@ public:
             // the first creating the failure detector for a node and wiring it up, the second creating a server on a given node.
             // We will also possibly need to introduce some kind of ``node IDs'' which `failure_detector` (and `network`)
             // will operate on (currently they operate on `raft::server_id`s, assuming a 1-1 mapping of server-to-node).
-            auto fd = seastar::make_shared<failure_detector>([id, this] (raft::server_id dst) {
+            auto fd = seastar::make_shared<failure_detector>(_fd_convict_threshold, [id, this] (raft::server_id dst) {
                 _network.send(id, dst, std::nullopt);
             });
 
@@ -1061,8 +1071,8 @@ public:
 };
 
 template <PureStateMachine M, std::invocable<environment<M>&, ticker&> F>
-auto with_env_and_ticker(F f) {
-    return do_with(std::move(f), std::make_unique<environment<M>>(), std::make_unique<ticker>(tlogger),
+auto with_env_and_ticker(environment_config cfg, F f) {
+    return do_with(std::move(f), std::make_unique<environment<M>>(std::move(cfg)), std::make_unique<ticker>(tlogger),
             [] (F& f, std::unique_ptr<environment<M>>& env, std::unique_ptr<ticker>& t) {
         return f(*env, *t).finally([&env_ = env, &t_ = t] () mutable -> future<> {
             // move into coroutine body so they don't get destroyed with the lambda (on first co_await)
@@ -1135,7 +1145,11 @@ bool operator==(ExReg::ret a, ExReg::ret b) { return a.x == b.x; }
 
 SEASTAR_TEST_CASE(basic_test) {
     logical_timer timer;
-    co_await with_env_and_ticker<ExReg>([&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+    environment_config cfg {
+        .network_delay = 5_t,
+        .fd_convict_threshold = 50_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
         using output_t = typename ExReg::output_t;
 
         t.start({
