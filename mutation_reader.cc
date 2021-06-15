@@ -1017,7 +1017,7 @@ future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::t
 future<> foreign_reader::close() noexcept {
     if (!_reader) {
         if (_read_ahead_future) {
-            on_internal_error(mrlog, "foreign_reader::close can't wait on read_ahead future with disengaged reader");
+            on_internal_error_noexcept(mrlog, "foreign_reader::close can't wait on read_ahead future with disengaged reader");
         }
         return make_ready_future<>();
     }
