@@ -240,7 +240,6 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
 }
 
 future<> server_impl::start() {
-    register_metrics();
     auto [term, vote] = co_await _persistence->load_term_and_vote();
     auto snapshot  = co_await _persistence->load_snapshot();
     auto snp_id = snapshot.id;
@@ -278,6 +277,8 @@ future<> server_impl::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
+    // Metrics access _fsm, so create them only after the pointer is populated
+    register_metrics();
     co_return;
 }
 
