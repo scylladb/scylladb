@@ -166,5 +166,28 @@ public:
 
         return f;
     }
+
+    // Schedule `f` to be called at logical time point `tp` (according to this timer's clock).
+    template <typename F>
+    void schedule(raft::logical_clock::time_point tp, F f) {
+        if (tp <= now()) {
+            f();
+            return;
+        }
+
+        struct sched : public scheduled_impl {
+            sched(F f) : _f(std::move(f)) {}
+            virtual ~sched() override {}
+            virtual void do_resolve() override { _f(); }
+
+            F _f;
+        };
+
+        _scheduled.push_back(scheduled {
+            ._at = tp,
+            ._impl = make_shared<sched>(std::move(f))
+        });
+        std::push_heap(_scheduled.begin(), _scheduled.end(), cmp);
+    }
 };
 
