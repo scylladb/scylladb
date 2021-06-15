@@ -1060,16 +1060,18 @@ public:
     }
 };
 
-template <PureStateMachine M>
-future<> with_env_and_ticker(noncopyable_function<future<>(environment<M>&, ticker&)> f) {
-    auto env = std::make_unique<environment<M>>();
-    auto t = std::make_unique<ticker>(tlogger);
-    return f(*env, *t).finally([env_ = std::move(env), t_ = std::move(t)] () mutable -> future<> {
-        // move into coroutine body so they don't get destroyed with the lambda (on first co_await)
-        auto env = std::move(env_);
-        auto t = std::move(t_);
-        co_await t->abort();
-        co_await env->abort();
+template <PureStateMachine M, std::invocable<environment<M>&, ticker&> F>
+auto with_env_and_ticker(F f) {
+    return do_with(std::move(f), std::make_unique<environment<M>>(), std::make_unique<ticker>(tlogger),
+            [] (F& f, std::unique_ptr<environment<M>>& env, std::unique_ptr<ticker>& t) {
+        return f(*env, *t).finally([&env_ = env, &t_ = t] () mutable -> future<> {
+            // move into coroutine body so they don't get destroyed with the lambda (on first co_await)
+            auto& env = env_;
+            auto& t = t_;
+
+            co_await t->abort();
+            co_await env->abort();
+        });
     });
 }
 
