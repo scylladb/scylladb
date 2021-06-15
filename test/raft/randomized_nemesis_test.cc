@@ -1059,6 +1059,10 @@ public:
         return *_routes.at(id)._server;
     }
 
+    network<message_t>& get_network() {
+        return _network;
+    }
+
     // Must be called before we are destroyed unless `new_server` was never called.
     future<> abort() {
         // Close the gate before iterating over _routes to prevent concurrent modification by other methods.
