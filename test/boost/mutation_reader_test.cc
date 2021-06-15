@@ -2744,7 +2744,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         BOOST_REQUIRE_THROW(handle.push(mutation_fragment(*gen.schema(), tests::make_permit(), partition_end{})).get(), std::runtime_error);
         BOOST_REQUIRE_THROW(handle.push_end_of_stream(), std::runtime_error);
-        BOOST_REQUIRE_THROW(fill_buffer_fut.get(), broken_promise);
+        BOOST_REQUIRE_NO_THROW(fill_buffer_fut.get());
     }
 
     // Abandoned handle aborts, move-assignment
