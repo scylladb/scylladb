@@ -34,6 +34,20 @@ bucket_writer::bucket_writer(schema_ptr schema, reader_permit permit, reader_con
 { }
 
 future<> bucket_writer::consume(mutation_fragment mf) {
+    if (_handle.is_terminated()) {
+        // When the handle is terminated, it was aborted
+        // or associated reader was closed prematurely.
+        // In this case return _consume_fut that will propagate
+        // the root-cause error.
+        auto ex = _handle.get_exception();
+        if (!ex) {
+            // shouldn't really happen
+            ex = make_exception_ptr(std::runtime_error("queue_reader_handle is terminated"));
+        }
+        return std::exchange(_consume_fut, make_exception_future<>(ex)).then([ex = std::move(ex)] () mutable {
+            return make_exception_future<>(std::move(ex));
+        });
+    }
     return _handle.push(std::move(mf));
 }
 
