@@ -1561,7 +1561,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
 
     // Do not mark a node with status shutdown as UP.
-    auto status = get_gossip_status(local_state);
+    auto status = sstring(get_gossip_status(local_state));
     if (status == sstring(versioned_value::SHUTDOWN)) {
         logger.warn("Skip marking node {} with status = {} as UP", addr, status);
         return;
@@ -1580,6 +1580,8 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         return;
     }
 
+    // Make a copy for endpoint_state because the code below can yield
+    endpoint_state state = local_state;
     _live_endpoints.push_back(addr);
     update_live_endpoints_version().get();
     if (_endpoints_to_talk_with.empty()) {
@@ -1592,8 +1594,8 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
-    _subscribers.for_each([addr, local_state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_alive(addr, local_state);
+    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        subscriber->on_alive(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
     });
 }
@@ -1602,12 +1604,13 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
 void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
+    endpoint_state state = local_state;
     _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr)));
     update_live_endpoints_version().get();
     _unreachable_endpoints[addr] = now();
-    logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(local_state));
-    _subscribers.for_each([addr, local_state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        subscriber->on_dead(addr, local_state);
+    logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
+    _subscribers.for_each([addr, state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        subscriber->on_dead(addr, state);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
     });
 }
