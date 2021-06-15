@@ -74,11 +74,13 @@ public:
         return _factory_function(std::move(schema), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
     virtual future<> destroy_reader(stopped_reader reader) noexcept override {
-        auto ctx = &*_contexts[this_shard_id()];
+        auto& ctx = _contexts[this_shard_id()];
         auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(reader.handle));
         auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
         return ret.finally([&ctx] {
-            return ctx->semaphore->stop();
+            return ctx->semaphore->stop().finally([&ctx] {
+                ctx.release();
+            });
         });
     }
     virtual reader_concurrency_semaphore& semaphore() override {
