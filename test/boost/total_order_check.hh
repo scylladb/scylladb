@@ -28,6 +28,7 @@
 #include <variant>
 #include "test/lib/log.hh"
 #include "utils/collection-concepts.hh"
+#include "to_string.hh"
 
 template<typename Comparator, typename... T>
 class total_order_check {
@@ -35,23 +36,17 @@ class total_order_check {
     std::vector<std::vector<element>> _data;
     Comparator _cmp;
 private:
-    static int sgn(std::strong_ordering x) {
-        return (x > 0) - (x < 0);
-    }
-    static int sgn(int x) {
-        return sgn(x <=> 0);
-    }
     // All in left are expect to compare with all in right with expected_order result
-    void check_order(const std::vector<element>& left, const std::vector<element>& right, int_or_strong_ordering auto order) {
+    void check_order(const std::vector<element>& left, const std::vector<element>& right, std::strong_ordering order) {
         for (const element& left_e : left) {
             for (const element& right_e : right) {
                 seastar::visit(left_e, [&] (auto&& a) {
                     seastar::visit(right_e, [&] (auto&& b) {
-                        testlog.trace("cmp({}, {}) == {:d}", a, b, order);
+                        testlog.trace("cmp({}, {}) == {}", a, b, order);
                         auto r = _cmp(a, b);
-                        auto actual = this->sgn(r);
+                        auto actual = r <=> 0;
                         if (actual != order) {
-                            BOOST_FAIL(format("Expected cmp({}, {}) == {:d}, but got {:d}", a, b, order, actual));
+                            BOOST_FAIL(format("Expected cmp({}, {}) == {}, but got {}", a, b, order, actual));
                         }
                     });
                 });
@@ -74,7 +69,7 @@ public:
     void check() {
         for (unsigned i = 0; i < _data.size(); ++i) {
             for (unsigned j = 0; j < _data.size(); ++j) {
-                check_order(_data[i], _data[j], sgn(int(i) - int(j)));
+                check_order(_data[i], _data[j], i <=> j);
             }
         }
     }

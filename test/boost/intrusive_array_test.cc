@@ -203,7 +203,7 @@ SEASTAR_THREAD_TEST_CASE(test_erase) {
 SEASTAR_THREAD_TEST_CASE(test_lower_bound) {
     test_array a1(12);
     struct compare {
-        int operator()(const element& a, const element& b) const { return *a - *b; }
+        std::strong_ordering operator()(const element& a, const element& b) const { return *a <=> *b; }
     };
 
     test_array *a2 = grow(a1, 2, 1, 14);
