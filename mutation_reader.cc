@@ -2157,6 +2157,10 @@ void queue_reader_handle::abort(std::exception_ptr ep) {
     }
 }
 
+std::exception_ptr queue_reader_handle::get_exception() const noexcept {
+    return _ex;
+}
+
 std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit) {
     auto impl = std::make_unique<queue_reader>(std::move(s), std::move(permit));
     auto handle = queue_reader_handle(*impl);
