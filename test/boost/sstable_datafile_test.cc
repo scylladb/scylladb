@@ -2820,7 +2820,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
 SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         return seastar::async([&env, tmpdir_path] {
-            for (const auto version : all_sstable_versions) {
+            for (const auto version : writable_sstable_versions) {
                 schema_builder builder(some_keyspace, some_column_family);
                 builder.with_column("p1", utf8_type, column_kind::partition_key);
                 builder.with_column("c1", utf8_type, column_kind::clustering_key);
@@ -2852,7 +2852,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
     // Compact them and expect that maximum deletion time is that of column with TTL 100.
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         return seastar::async([&env, tmpdir_path] {
-            for (auto version : all_sstable_versions) {
+            for (auto version : writable_sstable_versions) {
                 schema_builder builder(some_keyspace, some_column_family);
                 builder.with_column("p1", utf8_type, column_kind::partition_key);
                 builder.with_column("c1", utf8_type, column_kind::clustering_key);
@@ -3442,7 +3442,7 @@ static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::vector
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test) {
     return test_env::do_with_async([] (test_env& env) {
-        for (auto version : all_sstable_versions) {
+        for (auto version : writable_sstable_versions) {
             {
                 auto s = schema_builder("ks", "cf")
                         .with_column("pk", utf8_type, column_kind::partition_key)
@@ -3549,7 +3549,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : all_sstable_versions) {
+        for (const auto version : writable_sstable_versions) {
             auto s = schema_builder("ks", "cf")
                       .with_column("pk", utf8_type, column_kind::partition_key)
                       .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -3597,7 +3597,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
 
 SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : all_sstable_versions) {
+        for (const auto version : writable_sstable_versions) {
             auto s = schema_builder("ks", "cf")
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -3814,7 +3814,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
 SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : all_sstable_versions) {
+        for (const auto version : writable_sstable_versions) {
             auto s = schema_builder("ks", "cf")
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -4020,7 +4020,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
 
 SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : all_sstable_versions) {
+        for (const auto version : writable_sstable_versions) {
             auto s = schema_builder("ks", "cf")
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -4299,7 +4299,7 @@ shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutat
 
 SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
     return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : all_sstable_versions) {
+      for (const auto version : writable_sstable_versions) {
         simple_schema table;
 
         std::vector<mutation_fragment> fragments;
@@ -4357,7 +4357,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
 
 SEASTAR_TEST_CASE(test_skipping_using_index) {
     return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : all_sstable_versions) {
+      for (const auto version : writable_sstable_versions) {
         simple_schema table;
 
         const unsigned rows_per_part = 10;
@@ -4652,7 +4652,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
 SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
     return test_env::do_with_async([] (test_env& env) {
-        for (auto version : all_sstable_versions) {
+        for (auto version : writable_sstable_versions) {
             auto builder = schema_builder("tests", "tombstone_histogram_test")
                     .with_column("id", utf8_type, column_kind::partition_key)
                     .with_column("value", int32_type);
@@ -5911,7 +5911,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
 SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
-        for (auto version : all_sstable_versions) {
+        for (auto version : writable_sstable_versions) {
             cell_locker_stats cl_stats;
 
             auto s = schema_builder("tests", "ts_correcness_test")
@@ -6982,7 +6982,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
 
-        for (const auto version : all_sstable_versions) {
+        for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", sstables::to_string(version));
 
             auto mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
@@ -7189,7 +7189,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
         set_abort_on_internal_error(false);
         auto enable_aborts = defer([] { set_abort_on_internal_error(true); }); // FIXME: restore to previous value
 
-        for (const auto version : all_sstable_versions) {
+        for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", sstables::to_string(version));
 
             std::deque<mutation_fragment> frags;
