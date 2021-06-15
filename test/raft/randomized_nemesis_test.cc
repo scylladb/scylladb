@@ -1071,10 +1071,10 @@ public:
 class ticker {
     bool _stop = false;
     std::optional<future<>> _ticker;
-    std::optional<promise<>> _promise;
+    seastar::logger& _logger;
 
 public:
-    ticker() = default;
+    ticker(seastar::logger& l) : _logger(l) {}
     ticker(const ticker&) = delete;
     ticker(ticker&&) = delete;
 
@@ -1105,7 +1105,7 @@ private:
         auto funs = std::to_array(std::move(tick_funs));
         for (uint64_t tick = 0; tick < limit; ++tick) {
             if (_stop) {
-                tlogger.debug("ticker: finishing after {} ticks", tick);
+                _logger.debug("ticker: finishing after {} ticks", tick);
                 co_return;
             }
 
@@ -1118,7 +1118,7 @@ private:
             co_await seastar::later();
         }
 
-        tlogger.error("ticker: limit reached");
+        _logger.error("ticker: limit reached");
         assert(false);
     }
 };
@@ -1126,7 +1126,7 @@ private:
 template <PureStateMachine M>
 future<> with_env_and_ticker(noncopyable_function<future<>(environment<M>&, ticker&)> f) {
     auto env = std::make_unique<environment<M>>();
-    auto t = std::make_unique<ticker>();
+    auto t = std::make_unique<ticker>(tlogger);
     return f(*env, *t).finally([env_ = std::move(env), t_ = std::move(t)] () mutable -> future<> {
         // move into coroutine body so they don't get destroyed with the lambda (on first co_await)
         auto env = std::move(env_);
