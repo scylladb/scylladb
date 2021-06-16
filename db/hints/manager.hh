@@ -149,7 +149,6 @@ public:
             seastar::scheduling_group _hints_cpu_sched_group;
             gms::gossiper& _gossiper;
             seastar::shared_mutex& _file_update_mutex;
-            uint64_t _total_replayed_segments_count = 0;
 
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;

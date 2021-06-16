@@ -885,7 +885,6 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
             }
             _segments_to_replay.pop_front();
             ++replayed_segments_count;
-            ++_total_replayed_segments_count;
         }
 
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
