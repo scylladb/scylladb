@@ -174,6 +174,7 @@ public:
     const std::string& create_table_statement() const { return _create_table_statement; }
 
     virtual generator_fn make_generator(schema_ptr, const table_config&) = 0;
+    virtual bool enabled_by_default() const { return true; }
 };
 
 // Adapts a function which accepts DataSet& as its argument to a dataset_acceptor
@@ -1008,6 +1009,10 @@ public:
 
     clustering_key make_ck(const schema &s, int ck) override {
         return clustering_key::from_single_value(s, serialized<int64_t>(ck));
+    }
+
+    bool enabled_by_default() const override {
+        return false;
     }
 };
 
@@ -1875,7 +1880,11 @@ int main(int argc, char** argv) {
                 ),
             "Test groups to run")
         ("datasets", bpo::value<std::vector<std::string>>()->default_value(
-                boost::copy_range<std::vector<std::string>>(datasets | boost::adaptors::map_keys)),
+                boost::copy_range<std::vector<std::string>>(datasets
+                    | boost::adaptors::filtered([] (auto&& e) {
+                        return e.second->enabled_by_default();
+                    })
+                    | boost::adaptors::map_keys)),
             "Use only the following datasets")
         ("list-tests", "Show available test groups")
         ("list-datasets", "Show available datasets")
