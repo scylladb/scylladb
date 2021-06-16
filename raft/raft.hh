@@ -200,7 +200,7 @@ struct error : public std::runtime_error {
 
 struct not_a_leader : public error {
     server_id leader;
-    explicit not_a_leader(server_id l) : error("Not a leader"), leader(l) {}
+    explicit not_a_leader(server_id l) : error(format("Not a leader, leader: {}", l)), leader(l) {}
 };
 
 struct dropped_entry : public error {
