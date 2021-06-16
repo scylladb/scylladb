@@ -32,7 +32,6 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
-#include <seastar/core/expiring_fifo.hh>
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
@@ -54,7 +53,6 @@ using node_to_hint_store_factory_type = utils::loading_shared_values<gms::inet_a
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
 using timer_clock_type = seastar::lowres_clock;
-using time_point_type = timer_clock_type::time_point;
 
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.
@@ -153,22 +151,6 @@ public:
             seastar::shared_mutex& _file_update_mutex;
             uint64_t _total_replayed_segments_count = 0;
 
-            struct segment_waiter {
-                const uint64_t target_segment_count;
-                promise<> pr;
-
-                segment_waiter(uint64_t segment_count) : target_segment_count(segment_count) {}
-
-                struct expirer {
-                    inline void operator()(segment_waiter& sw) const {
-                        sw.pr.set_exception(seastar::timed_out_error{});
-                    }
-                };
-            };
-
-            // A queue of promises which wait until a particular number of segments is replayed
-            seastar::expiring_fifo<segment_waiter, segment_waiter::expirer, timer_clock_type> _segment_waiters;
-
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;
 
@@ -206,9 +188,6 @@ public:
             /// \brief Check if there are still unsent segments.
             /// \return TRUE if there are still unsent segments.
             bool have_segments() const noexcept { return !_segments_to_replay.empty(); };
-
-            /// \brief Waits until all current hints on disk for this endpoints are replayed or the timeout is reached.
-            future<> wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter);
 
         private:
             /// \brief Send hints collected so far.
@@ -316,9 +295,6 @@ public:
             /// \brief Return the amount of time we want to sleep after the current iteration.
             /// \return The time till the soonest event: flushing or re-sending.
             clock::duration next_sleep_duration() const;
-
-            /// Notifies waiters from the _segment_waiters list.
-            void notify_segment_waiters();
         };
 
     private:
@@ -446,11 +422,6 @@ public:
 
         const fs::path& hints_dir() const noexcept {
             return _hints_dir;
-        }
-
-        /// \brief Waits until all current hints on disk for this endpoints are replayed or the timeout is reached.
-        future<> wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter) {
-            return _sender.wait_until_hints_are_replayed(timeout, flush_limiter);
         }
 
     private:
@@ -652,11 +623,6 @@ public:
     /// \param hints_directory A hints directory to rebalance
     /// \return A future that resolves when the operation is complete.
     static future<> rebalance(sstring hints_directory);
-
-    /// \brief Waits until all current hints on disk for given endpoints are replayed or the timeout is reached.
-    /// \param endpoints list of endpoints whose hints need to be waited on
-    /// \param timeout if hints are not replayed until the timeout, the function will return with an exception
-    future<> wait_until_hints_are_replayed(const std::vector<gms::inet_address>& endpoints, time_point_type timeout = time_point_type::max());
 
 private:
     future<> compute_hints_dir_device_id();

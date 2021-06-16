@@ -25,7 +25,6 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/div_ceil.hh"
 #include "db/extensions.hh"
@@ -680,14 +679,6 @@ future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noex
             send_hints_maybe();
             manager_logger.trace("Draining for {}: end", end_point_key());
         }
-
-        // Dismiss all segment waiters with an error
-        while (!_segment_waiters.empty()) {
-            seastar::thread::maybe_yield();
-            _segment_waiters.front().pr.set_exception(std::runtime_error("hints manager is stopped"));
-            _segment_waiters.pop_front();
-        }
-
         manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
     });
 }
@@ -716,43 +707,6 @@ void manager::end_point_hints_manager::sender::update_segment_list(std::vector<s
     }
 }
 
-future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter) {
-    if (stopping()) {
-        throw std::runtime_error("hints manager is stopped");
-    }
-
-    // Flush current hints in order to update the segment list and synchronize
-    co_await with_semaphore(flush_limiter, 1, [&] {
-        return _ep_manager.flush_current_hints(force_segment_list_update::yes);
-    });
-
-    const uint64_t segments_to_replay_count = _segments_to_replay.size();
-
-    if (segments_to_replay_count == 0) {
-        manager_logger.debug("There are no hints towards {} on disk, no need to wait", end_point_key());
-        co_return;
-    }
-
-    const uint64_t replayed_segment_count_target = _total_replayed_segments_count + segments_to_replay_count;
-    segment_waiter sw{replayed_segment_count_target};
-    future<> f = sw.pr.get_future();
-    _segment_waiters.push_back(std::move(sw), timeout);
-
-    manager_logger.debug("Waiting for hints towards {}: {} segments were replayed so far, waiting until we replay up to segment #{}",
-            end_point_key(), _total_replayed_segments_count, replayed_segment_count_target);
-
-    try {
-        co_await std::move(f);
-        manager_logger.debug("Successfully replayed hints towards {} up to segment #{}",
-            end_point_key(), replayed_segment_count_target);
-    } catch (...) {
-        manager_logger.debug("Failed to replay hints towards {} up to segment #{}: {}",
-            end_point_key(), replayed_segment_count_target, std::current_exception());
-        throw;
-    }
-    co_return;
-}
-
 manager::end_point_hints_manager::sender::clock::duration manager::end_point_hints_manager::sender::next_sleep_duration() const {
     clock::time_point current_time = clock::now();
     clock::time_point next_flush_tp = std::max(_next_flush_tp, current_time);
@@ -762,13 +716,6 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
 
     // Don't sleep for less than 10 ticks of the "clock" if we are planning to sleep at all - the sleep() function is not perfect.
     return clock::duration(10 * div_ceil(d.count(), 10));
-}
-
-void manager::end_point_hints_manager::sender::notify_segment_waiters() {
-    while (!_segment_waiters.empty() && _segment_waiters.front().target_segment_count <= _total_replayed_segments_count) {
-        _segment_waiters.front().pr.set_value();
-        _segment_waiters.pop_front();
-    }
 }
 
 void manager::end_point_hints_manager::sender::start() {
@@ -939,10 +886,6 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
             _segments_to_replay.pop_front();
             ++replayed_segments_count;
             ++_total_replayed_segments_count;
-
-            manager_logger.debug("send_hints(): replayed {} segments towards {} so far", _total_replayed_segments_count, end_point_key());
-
-            notify_segment_waiters();
         }
 
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
@@ -1120,17 +1063,6 @@ future<> manager::rebalance(sstring hints_directory) {
 
         // Remove the directories of shards that are not present anymore - they should not have any segments by now
         remove_irrelevant_shards_directories(hints_directory);
-    });
-}
-
-future<> manager::wait_until_hints_are_replayed(const std::vector<gms::inet_address>& endpoints, time_point_type timeout) {
-    const std::unordered_set<gms::inet_address> endpoints_set(endpoints.begin(), endpoints.end());
-    seastar::semaphore flush_limiter{1};
-    co_return co_await parallel_for_each(_ep_managers, [&] (auto& pair) {
-        if (endpoints_set.contains(pair.first)) {
-            return pair.second.wait_until_hints_are_replayed(timeout, flush_limiter);
-        }
-        return make_ready_future<>();
     });
 }
 
