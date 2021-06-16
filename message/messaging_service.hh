@@ -41,7 +41,6 @@
 #include "cache_temperature.hh"
 #include "service/paxos/prepare_response.hh"
 #include "raft/raft.hh"
-#include "db/hints/messages.hh"
 
 #include <list>
 #include <vector>
@@ -71,13 +70,6 @@ class seed_provider_type;
 
 namespace db::view {
 class update_backlog;
-}
-
-namespace db::hints {
-    struct sync_point_create_request;
-    struct sync_point_create_response;
-    struct sync_point_check_request;
-    struct sync_point_check_response;
 }
 
 class frozen_mutation;
@@ -160,9 +152,7 @@ enum class messaging_verb : int32_t {
     RAFT_VOTE_REQUEST = 49,
     RAFT_VOTE_REPLY = 50,
     RAFT_TIMEOUT_NOW = 51,
-    HINT_SYNC_POINT_CREATE = 52,
-    HINT_SYNC_POINT_CHECK = 53,
-    LAST = 54,
+    LAST = 52,
 };
 
 } // namespace netw
@@ -559,14 +549,6 @@ public:
     future<> unregister_hint_mutation();
     future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
-
-    void register_hint_sync_point_create(std::function<future<db::hints::sync_point_create_response> (db::hints::sync_point_create_request request)>&& func);
-    future<> unregister_hint_sync_point_create();
-    future<db::hints::sync_point_create_response> send_hint_sync_point_create(msg_addr id, clock_type::time_point timeout, db::hints::sync_point_create_request request);
-
-    void register_hint_sync_point_check(std::function<future<db::hints::sync_point_check_response> (db::hints::sync_point_check_request request)>&& func);
-    future<> unregister_hint_sync_point_check();
-    future<db::hints::sync_point_check_response> send_hint_sync_point_check(msg_addr id, clock_type::time_point timeout, db::hints::sync_point_check_request request);
 
     // RAFT verbs
     void register_raft_send_snapshot(std::function<future<raft::snapshot_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func);
