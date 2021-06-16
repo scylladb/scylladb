@@ -135,6 +135,7 @@ public:
                     // We are on the leader server where the client submitted the command
                     // and waits for the output. Send it to them.
                     it->second.set_value(std::move(output));
+                    _output_channels.erase(it);
                 } else {
                     // This is not the leader on which the command was submitted,
                     // or it is but the client already gave up on us and deallocated the channel.
@@ -167,6 +168,10 @@ public:
         return _gate.close();
     }
 
+    struct output_channel_dropped : public raft::error {
+        output_channel_dropped() : error("output channel dropped") {}
+    };
+
     // Before sending a command to Raft, the client must obtain a command ID
     // and an output channel using this function.
     template <typename F>
@@ -177,7 +182,13 @@ public:
             auto cmd_id = utils::make_random_uuid();
             assert(_output_channels.emplace(cmd_id, std::move(p)).second);
 
-            auto guard = defer([this, cmd_id] { _output_channels.erase(cmd_id); });
+            auto guard = defer([this, cmd_id] {
+                auto it = _output_channels.find(cmd_id);
+                if (it != _output_channels.end()) {
+                    it->second.set_exception(output_channel_dropped{});
+                    _output_channels.erase(it);
+                }
+            });
             return f(cmd_id, std::move(fut)).finally([guard = std::move(guard)] {});
         });
     }
@@ -213,13 +224,20 @@ future<call_result_t<M>> call(
         logical_timer& timer,
         raft::server& server,
         impure_state_machine<M>& sm) {
+    using output_channel_dropped = typename impure_state_machine<M>::output_channel_dropped;
     return sm.with_output_channel([&, input = std::move(input), timeout] (cmd_id_t cmd_id, future<typename M::output_t> f) {
         return timer.with_timeout(timeout, [&] (typename M::input_t input, future<typename M::output_t> f) {
             return server.add_entry(
                     make_command(std::move(cmd_id), std::move(input)),
                     raft::wait_type::applied
-            ).then([f = std::move(f)] () mutable {
-                return std::move(f);
+            ).then_wrapped([output_f = std::move(f)] (future<> add_entry_f) mutable {
+                if (add_entry_f.failed()) {
+                    // We need to discard `output_f`; the only expected exception is:
+                    (void)output_f.discard_result().handle_exception_type([] (const output_channel_dropped&) {});
+                    std::rethrow_exception(add_entry_f.get_exception());
+                }
+
+                return std::move(output_f);
             });
         }(std::move(input), std::move(f)));
     }).then([] (typename M::output_t output) {
@@ -230,7 +248,8 @@ future<call_result_t<M>> call(
         } catch (raft::not_a_leader e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (logical_timer::timed_out<typename M::output_t> e) {
-            (void)e.get_future().discard_result();
+            (void)e.get_future().discard_result()
+                .handle_exception_type([] (const output_channel_dropped&) {});
             return make_ready_future<call_result_t<M>>(timed_out_error{});
         }
     });
