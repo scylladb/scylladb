@@ -21,18 +21,16 @@
 
 #include "sstables.hh"
 #include "writer.hh"
-#include "kl/writer.hh"
 #include "mx/writer.hh"
 
 namespace sstables {
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard) {
-    if (sst.get_version() >= sstable_version_types::mc) {
-        _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
-    } else {
-        _impl = std::make_unique<sstable_writer_k_l>(sst, s, estimated_partitions, cfg, pc, shard);
+    if (sst.get_version() < oldest_writable_sstable_format) {
+        on_internal_error(sstlog, format("writing sstables with too old format: {}", sst.get_version()));
     }
+    _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     if (cfg.replay_position) {
         get_metadata_collector().set_replay_position(cfg.replay_position.value());
     }
