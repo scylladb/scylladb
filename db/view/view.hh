@@ -153,7 +153,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 future<> mutate_MV(
-        const dht::token& base_token,
+        dht::token base_token,
         std::vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
         cf_stats& cf_stats,
