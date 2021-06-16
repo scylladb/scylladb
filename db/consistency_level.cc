@@ -328,7 +328,19 @@ filter_for_query(consistency_level cl,
 
     if (cf) {
         auto get_hit_rate = [cf] (gms::inet_address ep) -> float {
-            constexpr float max_hit_rate = 0.999;
+            // We limit each nodes' cache-hit ratio to max_hit_rate = 0.95
+            // for two reasons:
+            // 1. If two nodes have hit rate 0.99 and 0.98, the miss rates
+            //    are 0.01 and 0.02, so equalizing the miss numbers will send
+            //    the first node twice the requests. But unless the disk is
+            //    extremely slow, at such high hit ratios the disk work is
+            //    negligable and we want these two nodes to get equal work.
+            // 2. Even if one node has perfect cache hit ratio (near 1.0),
+            //    and the other near 0, we want the near-0 node to get some
+            //    of the work to warm up its cache. When max_hit_rate=0.95
+            //    its miss rate is 0.05, 1/20th of the worst miss rate 1.0,
+            //    so the cold node will get 1/20th the work of the hot.
+            constexpr float max_hit_rate = 0.95;
             auto ht = cf->get_hit_rate(ep);
             if (float(ht.rate) < 0) {
                 return float(ht.rate);
