@@ -432,7 +432,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto sst = env.make_sstable(s,
                 dir.path().string(),
                 1 /* generation */,
-                sstables::sstable::version_types::la,
+                sstables::get_highest_sstable_version(),
                 sstables::sstable::format_types::big);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
@@ -1454,7 +1454,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
     auto sst = env.make_sstable(s,
                                       dir.path().string(),
                                       1 /* generation */,
-                                      sstable_version_types::ka,
+                                      sstables::get_highest_sstable_version(),
                                       sstables::sstable::format_types::big);
     sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     sst->load().get();
