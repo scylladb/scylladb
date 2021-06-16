@@ -1311,10 +1311,16 @@ def find_single_sstable_readers():
         # FIXME: this only finds range readers
         types = [_lookup_type(['sstable_range_wrapping_reader'])]
     except gdb.error:
-        types = [_lookup_type(['sstables::sstable_mutation_reader<sstables::data_consume_rows_context_m, sstables::mp_row_consumer_m>',
-                               'sstables::sstable_mutation_reader<sstables::mx::data_consume_rows_context_m, sstables::mx::mp_row_consumer_m>']),
-                 _lookup_type(['sstables::sstable_mutation_reader<sstables::data_consume_rows_context, sstables::mp_row_consumer_k_l>',
-                               'sstables::sstable_mutation_reader<sstables::kl::data_consume_rows_context, sstables::kl::mp_row_consumer_k_l>'])]
+        try:
+            # for Scylla <= 4.5
+            types = [_lookup_type(['sstables::sstable_mutation_reader<sstables::data_consume_rows_context_m, sstables::mp_row_consumer_m>',
+                                   'sstables::sstable_mutation_reader<sstables::mx::data_consume_rows_context_m, sstables::mx::mp_row_consumer_m>']),
+                     _lookup_type(['sstables::sstable_mutation_reader<sstables::data_consume_rows_context, sstables::mp_row_consumer_k_l>',
+                                   'sstables::sstable_mutation_reader<sstables::kl::data_consume_rows_context, sstables::kl::mp_row_consumer_k_l>'])]
+        except gdb.error:
+            types = [_lookup_type(['sstables::mx::mx_sstable_mutation_reader']),
+                     _lookup_type(['sstables::kl::sstable_mutation_reader'])]
+
 
     def _lookup_obj(obj_addr, vtable_addr):
         vtable_pfx = 'vtable for '

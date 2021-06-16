@@ -587,12 +587,16 @@ public:
         , _end(std::move(end))
     { }
 
+    void set_start(position_in_partition pos) { _start = std::move(pos); }
+    void set_end(position_in_partition pos) { _end = std::move(pos); }
     const position_in_partition& start() const& { return _start; }
     position_in_partition&& start() && { return std::move(_start); }
     const position_in_partition& end() const& { return _end; }
     position_in_partition&& end() && { return std::move(_end); }
     bool contains(const schema& s, position_in_partition_view pos) const;
     bool overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
+    // Returns true iff this range contains all keys contained by position_range(start, end).
+    bool contains(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
     bool is_all_clustered_rows(const schema&) const;
 
     friend std::ostream& operator<<(std::ostream&, const position_range&);
@@ -604,6 +608,12 @@ inline
 bool position_range::contains(const schema& s, position_in_partition_view pos) const {
     position_in_partition::less_compare less(s);
     return !less(pos, _start) && less(pos, _end);
+}
+
+inline
+bool position_range::contains(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
+    position_in_partition::less_compare less(s);
+    return !less(start, _start) && !less(_end, end);
 }
 
 inline

@@ -1040,7 +1040,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
             assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
-                    .produces(m)
+                    .produces(m, slice.get_all_ranges())
                     .produces_end_of_stream();
         }
       }
@@ -1151,7 +1151,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             {
                 auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
                 assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
-                        .produces(m)
+                        .produces(m, slice.get_all_ranges())
                         .produces_end_of_stream();
             }
         }

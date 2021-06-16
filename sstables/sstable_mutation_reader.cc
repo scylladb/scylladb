@@ -162,7 +162,7 @@ position_in_partition_view get_slice_upper_bound(const schema& s, const query::p
     return position_in_partition_view::for_range_end(ranges.back());
 }
 
-void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone tomb) {
+void mp_row_consumer_reader_k_l::on_next_partition(dht::decorated_key key, tombstone tomb) {
     _partition_finished = false;
     _before_partition = false;
     _end_of_stream = false;

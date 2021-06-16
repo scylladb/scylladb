@@ -25,6 +25,7 @@
 
 #include "mutation.hh"
 #include "mutation_fragment.hh"
+#include "mutation_fragment_v2.hh"
 #include "clustering_interval_set.hh"
 
 std::ostream&
@@ -145,11 +146,68 @@ void mutation_fragment::destroy_data() noexcept
     }
 }
 
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, static_row&& r)
+    : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
+{
+    new (&_data->_static_row) static_row(std::move(r));
+    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+}
+
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, clustering_row&& r)
+    : _kind(kind::clustering_row), _data(std::make_unique<data>(std::move(permit)))
+{
+    new (&_data->_clustering_row) clustering_row(std::move(r));
+    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+}
+
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, range_tombstone_change&& r)
+    : _kind(kind::range_tombstone_change), _data(std::make_unique<data>(std::move(permit)))
+{
+    new (&_data->_range_tombstone_chg) range_tombstone_change(std::move(r));
+    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+}
+
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, partition_start&& r)
+        : _kind(kind::partition_start), _data(std::make_unique<data>(std::move(permit)))
+{
+    new (&_data->_partition_start) partition_start(std::move(r));
+    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+}
+
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, partition_end&& r)
+        : _kind(kind::partition_end), _data(std::make_unique<data>(std::move(permit)))
+{
+    new (&_data->_partition_end) partition_end(std::move(r));
+    _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+}
+
+void mutation_fragment_v2::destroy_data() noexcept
+{
+    switch (_kind) {
+    case kind::static_row:
+        _data->_static_row.~static_row();
+        break;
+    case kind::clustering_row:
+        _data->_clustering_row.~clustering_row();
+        break;
+    case kind::range_tombstone_change:
+        _data->_range_tombstone_chg.~range_tombstone_change();
+        break;
+    case kind::partition_start:
+        _data->_partition_start.~partition_start();
+        break;
+    case kind::partition_end:
+        _data->_partition_end.~partition_end();
+        break;
+    }
+}
+
 namespace {
 
 struct get_key_visitor {
     const clustering_key_prefix& operator()(const clustering_row& cr) { return cr.key(); }
     const clustering_key_prefix& operator()(const range_tombstone& rt) { return rt.start; }
+    const clustering_key_prefix& operator()(const range_tombstone_change& rt) { return rt.position().key(); }
     template <typename T>
     const clustering_key_prefix& operator()(const T&) { abort(); }
 };
@@ -224,6 +282,68 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) {
+    auto& mf = p._mutation_fragment;
+    os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
+    mf.visit(make_visitor(
+        [&] (const clustering_row& cr) { os << clustering_row::printer(p._schema, cr); },
+        [&] (const static_row& sr) { os << static_row::printer(p._schema, sr); },
+        [&] (const auto& what) -> void { os << what; }
+    ));
+    os << "}";
+    return os;
+}
+
+const clustering_key_prefix& mutation_fragment_v2::key() const
+{
+    assert(has_key());
+    return visit(get_key_visitor());
+}
+
+void mutation_fragment_v2::apply(const schema& s, mutation_fragment_v2&& mf)
+{
+    assert(mergeable_with(mf));
+    switch (_kind) {
+    case mutation_fragment_v2::kind::partition_start:
+        _data->_partition_start.partition_tombstone().apply(mf._data->_partition_start.partition_tombstone());
+        mf._data->_partition_start.~partition_start();
+        break;
+    case kind::static_row:
+        _data->_static_row.apply(s, std::move(mf._data->_static_row));
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        mf._data->_static_row.~static_row();
+        break;
+    case kind::clustering_row:
+        _data->_clustering_row.apply(s, std::move(mf._data->_clustering_row));
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
+        mf._data->_clustering_row.~clustering_row();
+        break;
+    case mutation_fragment_v2::kind::partition_end:
+        // Nothing to do for this guy.
+        mf._data->_partition_end.~partition_end();
+        break;
+    default: abort();
+    }
+    mf._data.reset();
+}
+
+position_in_partition_view mutation_fragment_v2::position() const
+{
+    return visit([] (auto& mf) -> position_in_partition_view { return mf.position(); });
+}
+
+std::ostream& operator<<(std::ostream& os, mutation_fragment_v2::kind k)
+{
+    switch (k) {
+    case mutation_fragment_v2::kind::static_row: return os << "static row";
+    case mutation_fragment_v2::kind::clustering_row: return os << "clustering row";
+    case mutation_fragment_v2::kind::range_tombstone_change: return os << "range tombstone change";
+    case mutation_fragment_v2::kind::partition_start: return os << "partition start";
+    case mutation_fragment_v2::kind::partition_end: return os << "partition end";
+    }
+    abort();
+}
+
+std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& p) {
     auto& mf = p._mutation_fragment;
     os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
     mf.visit(make_visitor(
@@ -314,6 +434,14 @@ bool mutation_fragment::relevant_for_range_assuming_after(const schema& s, posit
     position_in_partition::less_compare cmp(s);
     // Range tombstones overlapping with the new range are let in
     return is_range_tombstone() && cmp(pos, as_range_tombstone().end_position());
+}
+
+bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_partition_view pos) const {
+    position_in_partition::less_compare less(s);
+    if (!less(position(), pos)) {
+        return true;
+    }
+    return false;
 }
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {

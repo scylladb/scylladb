@@ -25,6 +25,7 @@
 #include "schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "counters.hh"
+#include "mutation_rebuilder.hh"
 #include "test/lib/simple_schema.hh"
 #include "flat_mutation_reader.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -990,8 +991,12 @@ void test_mutation_reader_fragments_have_monotonic_positions(populate_fn_ex popu
 
     for_each_mutation([&populate] (const mutation& m) {
         auto ms = populate(m.schema(), {m}, gc_clock::now());
+
         auto rd = ms.make_reader(m.schema(), tests::make_permit());
         assert_that(std::move(rd)).has_monotonic_positions();
+
+        auto rd2 = ms.make_reader_v2(m.schema(), tests::make_permit());
+        assert_that(std::move(rd2)).has_monotonic_positions();
     });
 }
 
@@ -1355,6 +1360,28 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
 
         assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
     }
+    {
+        auto slice = partition_slice_builder(*s).with_range(range).build();
+        auto rd = ds.make_reader_v2(s, tests::make_permit(), query::full_partition_range, slice);
+        auto close_rd = deferred_close(rd);
+
+        auto prange = position_range(range);
+
+        mutation_rebuilder_v2 rebuilder(s);
+        rd.consume_pausable([&] (mutation_fragment_v2&& mf) {
+            testlog.trace("mf: {}", mutation_fragment_v2::printer(*s, mf));
+            if (mf.position().is_clustering_row() && !prange.contains(*s, mf.position())) {
+                testlog.trace("m1: {}", m1);
+                testlog.trace("m2: {}", m2);
+                BOOST_FAIL(format("Received row which is not relevant for the slice: {}, slice: {}",
+                                  mutation_fragment_v2::printer(*s, mf), prange));
+            }
+            return rebuilder.consume(std::move(mf));
+        }, db::no_timeout).get();
+        auto result = *rebuilder.consume_end_of_stream();
+
+        assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
+    }
 
     // Check fast_forward_to()
     {
@@ -1392,7 +1419,226 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
     }
 }
 
+void test_range_tombstones_v2(populate_fn_ex populate) {
+    simple_schema s;
+    auto pkey = s.make_pkey();
+
+    std::vector<mutation> mutations;
+
+    mutation m(s.schema(), pkey);
+    s.add_row(m, s.make_ckey(0), "v1");
+    auto t1 = s.new_tombstone();
+    s.delete_range(m, s.make_ckey_range(1, 10), t1);
+    s.add_row(m, s.make_ckey(5), "v2");
+    auto t2 = s.new_tombstone();
+    s.delete_range(m, s.make_ckey_range(7, 12), t2);
+    s.add_row(m, s.make_ckey(15), "v2");
+    auto t3 = s.new_tombstone();
+    s.delete_range(m, s.make_ckey_range(17, 19), t3);
+
+    mutations.push_back(std::move(m));
+
+    auto ms = populate(s.schema(), mutations, gc_clock::now());
+    auto pr = dht::partition_range::make_singular(pkey);
+
+    assert_that(ms.make_reader_v2(s.schema(), tests::make_permit()))
+            .next_partition() // Does nothing before first partition
+            .produces_partition_start(pkey)
+            .produces_row_with_key(s.make_ckey(0))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
+            .produces_row_with_key(s.make_ckey(5))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(7)), t2))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(12)), tombstone()))
+            .produces_row_with_key(s.make_ckey(15))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(17)), t3))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(19)), tombstone()))
+            .produces_partition_end()
+            .produces_end_of_stream();
+
+    assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::after_key(s.make_ckey(0)),
+                    position_in_partition::before_key(s.make_ckey(2))))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(2)), {}))
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(5)),
+                    position_in_partition::after_key(s.make_ckey(5))))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(5)), t1))
+            .produces_row_with_key(s.make_ckey(5))
+            .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(5)), {}))
+            .produces_end_of_stream();
+
+    assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(0)),
+                    position_in_partition::before_key(s.make_ckey(1))))
+            .produces_row_with_key(s.make_ckey(0))
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(1)),
+                    position_in_partition::before_key(s.make_ckey(2))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(1)), t1})
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(2)), {}})
+            .produces_end_of_stream();
+
+
+    assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(1)),
+                    position_in_partition::before_key(s.make_ckey(6))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(1)), t1})
+            .produces_row_with_key(s.make_ckey(5))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(6)), {}})
+            .produces_end_of_stream();
+
+    assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(6)),
+                    position_in_partition::before_key(s.make_ckey(7))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(6)), t1})
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(7)), {}})
+            .produces_end_of_stream();
+
+    assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr,
+                                  s.schema()->full_slice(),
+                                  default_priority_class(),
+                                  nullptr,
+                                  streamed_mutation::forwarding::yes,
+                                  mutation_reader::forwarding::no))
+            .produces_partition_start(pkey)
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(6)),
+                    position_in_partition::before_key(s.make_ckey(8))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(6)), t1})
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(7)), t2})
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(8)), {}})
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(9)),
+                    position_in_partition::before_key(s.make_ckey(10))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(9)), t2})
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(10)), {}})
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(10)),
+                    position_in_partition::before_key(s.make_ckey(13))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(10)), t2})
+            .produces_range_tombstone_change({position_in_partition_view::after_key(s.make_ckey(12)), {}})
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(16)),
+                    position_in_partition::after_key(s.make_ckey(16))))
+            .produces_end_of_stream()
+
+            .fast_forward_to(position_range(
+                    position_in_partition::before_key(s.make_ckey(17)),
+                    position_in_partition::after_key(s.make_ckey(18))))
+            .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(17)), t3})
+            .produces_range_tombstone_change({position_in_partition_view::after_key(s.make_ckey(18)), {}})
+            .produces_end_of_stream();
+
+    // Slicing using query restrictions
+
+    {
+        auto slice = partition_slice_builder(*s.schema())
+                .with_range(s.make_ckey_range(16, 18))
+                .build();
+        assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr, slice))
+                .produces_partition_start(pkey)
+                .produces_range_tombstone_change({position_in_partition_view::before_key(s.make_ckey(17)), t3})
+                .produces_range_tombstone_change({position_in_partition_view::after_key(s.make_ckey(18)), {}})
+                .produces_partition_end()
+                .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s.schema())
+                .with_range(s.make_ckey_range(0, 3))
+                .with_range(s.make_ckey_range(8, 11))
+                .build();
+        assert_that(ms.make_reader_v2(s.schema(), tests::make_permit(), pr, slice))
+                .produces_partition_start(pkey)
+                .produces_row_with_key(s.make_ckey(0))
+                .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(1)), t1))
+                .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(3)), {}))
+                .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::before_key(s.make_ckey(8)), t2))
+                .produces_range_tombstone_change(range_tombstone_change(position_in_partition_view::after_key(s.make_ckey(11)), {}))
+                .produces_partition_end()
+                .produces_end_of_stream();
+    }
+}
+
+void test_reader_conversions(populate_fn_ex populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    for_each_mutation([&] (const mutation& m) mutable {
+        const auto query_time = gc_clock::now();
+
+        std::vector<mutation> mutations = { m };
+        auto ms = populate(m.schema(), mutations, gc_clock::now());
+
+        mutation m_compacted(m);
+        m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, query_time);
+
+        {
+            auto rd = ms.make_reader_v2(m.schema(), tests::make_permit());
+            assert_that(downgrade_to_v1(std::move(rd)))
+                    .produces_compacted(m_compacted, query_time);
+        }
+
+        {
+            auto rd = ms.make_reader(m.schema(), tests::make_permit());
+            assert_that(upgrade_to_v2(std::move(rd)))
+                    .produces_compacted(m_compacted, query_time);
+        }
+    });
+}
+
+void test_next_partition(populate_fn_ex);
+
 void run_mutation_reader_tests(populate_fn_ex populate) {
+    test_range_tombstones_v2(populate);
+    test_reader_conversions(populate);
     test_slicing_and_fast_forwarding(populate);
     test_date_tiered_clustering_slicing(populate);
     test_fast_forwarding_across_partitions_to_empty_range(populate);
@@ -1406,6 +1652,9 @@ void run_mutation_reader_tests(populate_fn_ex populate) {
     test_range_queries(populate);
     test_query_only_static_row(populate);
     test_query_no_clustering_ranges_no_static_columns(populate);
+    test_next_partition(populate);
+    test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
+    test_slicing_with_overlapping_range_tombstones(populate);
 }
 
 void test_next_partition(populate_fn_ex populate) {
@@ -1441,12 +1690,6 @@ void test_next_partition(populate_fn_ex populate) {
         .produces_end_of_stream();
 }
 
-void run_flat_mutation_reader_tests(populate_fn_ex populate) {
-    test_next_partition(populate);
-    test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
-    test_slicing_with_overlapping_range_tombstones(populate);
-}
-
 void run_mutation_source_tests(populate_fn populate) {
     auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
         return populate(std::move(s), muts);
@@ -1456,7 +1699,36 @@ void run_mutation_source_tests(populate_fn populate) {
 
 void run_mutation_source_tests(populate_fn_ex populate) {
     run_mutation_reader_tests(populate);
-    run_flat_mutation_reader_tests(populate);
+
+    // ? -> v2 -> v1 -> *
+    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+        return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
+                                              reader_permit permit,
+                                              const dht::partition_range& pr,
+                                              const query::partition_slice& slice,
+                                              const io_priority_class& pc,
+                                              tracing::trace_state_ptr tr,
+                                              streamed_mutation::forwarding fwd,
+                                              mutation_reader::forwarding mr_fwd) {
+            return downgrade_to_v1(
+                    ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
+        });
+    });
+
+    // ? -> v1 -> v2 -> *
+    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+        return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
+                                              reader_permit permit,
+                                              const dht::partition_range& pr,
+                                              const query::partition_slice& slice,
+                                              const io_priority_class& pc,
+                                              tracing::trace_state_ptr tr,
+                                              streamed_mutation::forwarding fwd,
+                                              mutation_reader::forwarding mr_fwd) {
+            return upgrade_to_v2(
+                    ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
+        });
+    });
 }
 
 struct mutation_sets {

@@ -71,6 +71,11 @@ public:
         store_and_finish
     };
 
+    struct clustering_result {
+        result action;
+        clustering_ranges_walker::range_tombstones rts;
+    };
+
     result apply(const static_row& sr) {
         bool inside_requested_ranges = _walker.advance_to(sr.position());
         _out_of_range |= _walker.out_of_range();
@@ -81,33 +86,40 @@ public:
         }
     }
 
-    result apply(position_in_partition_view pos) {
+    clustering_result apply(position_in_partition_view pos, tombstone t) {
         if (is_after_fwd_window(pos)) {
             // This happens only when fwd is set
             _out_of_range = true;
-            return result::store_and_finish;
+            clustering_ranges_walker::progress pr = _walker.advance_to(_fwd_end, _walker.current_tombstone());
+            if (_walker.current_tombstone()) {
+                // Close range tombstone before EOS
+                pr.rts.push_back(range_tombstone_change(_fwd_end, {}));
+            }
+            return clustering_result{
+                .action = result::store_and_finish,
+                .rts = std::move(pr.rts)
+            };
         }
-        bool inside_requested_ranges = _walker.advance_to(pos);
-        if (!inside_requested_ranges) {
+        clustering_ranges_walker::progress pr = _walker.advance_to(pos, t);
+        if (!pr.contained) {
             _out_of_range |= _walker.out_of_range();
-            return result::ignore;
+            return clustering_result{
+                .action = result::ignore,
+                .rts = std::move(pr.rts)
+            };
         }
-        return result::emit;
+        return clustering_result{
+            .action = result::emit,
+            .rts = std::move(pr.rts)
+        };
     }
 
-    result apply(const range_tombstone& rt) {
-        bool inside_requested_ranges = _walker.advance_to(rt.position(), rt.end_position());
-        if (!inside_requested_ranges) {
-            _out_of_range |= _walker.out_of_range();
-            return result::ignore;
-        }
-        if (is_after_fwd_window(rt.position())) {
-            // This happens only when fwd is set
-            _out_of_range = true;
-            return result::store_and_finish;
-        } else {
-            return result::emit;
-        }
+    clustering_result apply(position_in_partition_view pos) {
+        return apply(pos, _walker.current_tombstone());
+    }
+
+    void set_tombstone(tombstone t) {
+        _walker.set_tombstone(t);
     }
 
     bool out_of_range() const {
@@ -130,9 +142,12 @@ public:
      */
     std::optional<position_in_partition_view> fast_forward_to(position_range r) {
         assert(_fwd);
-        _walker.trim_front(r.start());
         _fwd_end = std::move(r).end();
         _out_of_range = !_walker.advance_to(r.start(), _fwd_end);
+
+        // Must be after advance_to() so that advance_to() doesn't enter the range.
+        // Doing so would cause us to not emit a range_tombstone_change for the beginning of the range.
+        _walker.trim_front(r.start());
 
         if (_out_of_range) {
             return {};
@@ -149,6 +164,9 @@ public:
         return (_last_lower_bound_counter != _walker.lower_bound_change_counter());
     }
 
+    tombstone current_tombstone() const {
+        return _walker.current_tombstone();
+    }
 
     position_in_partition_view lower_bound() const {
         return _walker.lower_bound();

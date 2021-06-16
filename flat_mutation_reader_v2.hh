@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-present ScyllaDB
+ * Copyright (C) 2021-present ScyllaDB
  */
 
 /*
@@ -25,9 +25,12 @@
 #include <seastar/core/future.hh>
 
 #include "dht/i_partitioner.hh"
-#include "mutation_fragment.hh"
+#include "position_in_partition.hh"
+#include "flat_mutation_reader.hh"
+#include "mutation_fragment_v2.hh"
 #include "tracing/trace_state.hh"
 #include "mutation.hh"
+#include "query_class_config.hh"
 #include "mutation_consumer_concepts.hh"
 
 #include <seastar/core/thread.hh>
@@ -39,8 +42,35 @@
 
 using seastar::future;
 
-class mutation_source;
-class position_in_partition;
+template<typename T>
+concept StreamedMutationConsumerV2 =
+FragmentConsumerV2<T> && requires(T t, tombstone tomb) {
+    t.consume(tomb);
+    t.consume_end_of_stream();
+};
+
+template<typename Consumer>
+concept FlatMutationReaderConsumerV2 =
+    requires(Consumer c, mutation_fragment_v2 mf) {
+        { c(std::move(mf)) } -> std::same_as<stop_iteration>;
+    } || requires(Consumer c, mutation_fragment_v2 mf) {
+        { c(std::move(mf)) } -> std::same_as<future<stop_iteration>>;
+    };
+
+template<typename T>
+concept FlattenedConsumerV2 =
+    StreamedMutationConsumerV2<T> && requires(T obj, const dht::decorated_key& dk) {
+        { obj.consume_new_partition(dk) };
+        { obj.consume_end_of_partition() };
+    };
+
+template<typename T>
+concept FlattenedConsumerFilterV2 =
+    requires(T filter, const dht::decorated_key& dk, const mutation_fragment_v2& mf) {
+        { filter(dk) } -> std::same_as<bool>;
+        { filter(mf) } -> std::same_as<bool>;
+        { filter.on_end_of_stream() } -> std::same_as<void>;
+    };
 
 /// \brief Represents a stream of mutation fragments.
 ///
@@ -61,14 +91,23 @@ class position_in_partition;
 ///
 ///   stream ::= partition*
 ///   partition ::= partition_start static_row? clustered* partition_end
-///   clustered ::= clustering_row | range_tombstone
+///   clustered ::= clustering_row | range_tombstone_change
 ///
-/// The range_tombstone fragments can have ranges which overlap with other
-/// clustered fragments.
+/// Deletions of ranges of rows within a given partition are represented with range_tombstone_change fragments.
+/// At any point in the stream there is a single active clustered tombstone.
+/// It is initially equal to the neutral tombstone when the stream of each partition starts.
+/// range_tombstone_change fragments signify changes of the active clustered tombstone.
+/// All fragments emitted while a given clustered tombstone is active are affected by that tombstone.
+/// The clustered tombstone is independent from the partition tombstone carried in partition_start.
+/// The partition tombstone takes effect for all fragments within the partition.
 ///
-/// Consecutive range_tombstone fragments can have the same position(), so they
-/// are weakly ordered. This makes merging two streams easier, and is
-/// relied upon by combined_mutation_reader.
+/// The stream guarantees that each partition ends with a neutral active clustered tombstone
+/// by closing active tombstones with a range_tombstone_change.
+/// In fast-forwarding mode, each sub-stream ends with a neutral active clustered tombstone.
+///
+/// All fragments within a partition have weakly monotonically increasing position().
+/// Consecutive range_tombstone_change fragments may share the position.
+/// All clustering row fragments within a partition have strictly monotonically increasing position().
 ///
 /// \section Clustering restrictions
 ///
@@ -83,20 +122,20 @@ class position_in_partition;
 ///   0) The stream must contain fragments corresponding to all writes
 ///      which are relevant to the requested ranges.
 ///
-///   1) The stream _may_ contain fragments with information
-///      about _some_ of the writes which are relevant to clustering ranges
-///      outside of the requested ranges.
+///   1) The ranges of non-neutral clustered tombstones must be enclosed in requested
+///      ranges. In other words, range tombstones don't extend beyond boundaries of requested ranges.
 ///
-///   2) The stream will not contain writes which are absent in the unrestricted stream,
+///   2) The stream will not return writes which are absent in the unrestricted stream,
 ///      both for the requested clustering ranges and not requested ranges.
 ///      This means that it's safe to populate cache with all the returned information.
 ///      Even though it may be incomplete for non-requested ranges, it won't contain
 ///      incorrect information.
 ///
 ///   3) All clustered fragments have position() which is within the requested
-///      ranges.
+///      ranges or, in case of range_tombstone_change fragments, equal to the end bound.
 ///
-///   4) range_tombstone ranges are trimmed to the boundaries of requested ranges.
+///   4) Streams may produce redundant range_tombstone_change fragments
+///      which do not change the current clustered tombstone, or have the same position.
 ///
 /// \section Intra-partition fast-forwarding mode
 ///
@@ -118,12 +157,9 @@ class position_in_partition;
 ///       the position_range passed to fast_forward_to().
 ///
 ///    3) The position_range passed to fast_forward_to() is a clustering key restriction.
-///       Same rules apply as with clustering restrictions described above except for point (4) above:
-///       range tombstones can extend the range passed to fast_forward_to().
+///       Same rules apply as with clustering restrictions described above.
 ///
-///    4) range_tombstones produced in earlier sub-stream which are also relevant
-///       for next sub-streams do not have to be repeated. They _may_ be repeated
-///       with a starting position trimmed.
+///    4) The sub-stream will not end with a non-neutral active clustered tombstone. All range tombstones are closed.
 ///
 ///    5) partition_end is never emitted, the user needs to call next_partition()
 ///       to move to the next partition in the original stream, which will open
@@ -134,10 +170,9 @@ class position_in_partition;
 ///
 /// The best way to consume those mutation_fragments is to call
 /// flat_mutation_reader::consume with a consumer that receives the fragments.
-///
-class flat_mutation_reader final {
+class flat_mutation_reader_v2 final {
 public:
-    using tracked_buffer = circular_buffer<mutation_fragment, tracking_allocator<mutation_fragment>>;
+    using tracked_buffer = circular_buffer<mutation_fragment_v2, tracking_allocator<mutation_fragment_v2>>;
 
     class impl {
     private:
@@ -148,7 +183,7 @@ public:
         bool _end_of_stream = false;
         schema_ptr _schema;
         reader_permit _permit;
-        friend class flat_mutation_reader;
+        friend class flat_mutation_reader_v2;
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
@@ -183,33 +218,33 @@ public:
         bool is_buffer_empty() const { return _buffer.empty(); }
         bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
 
-        mutation_fragment pop_mutation_fragment() {
+        mutation_fragment_v2 pop_mutation_fragment() {
             auto mf = std::move(_buffer.front());
             _buffer.pop_front();
             _buffer_size -= mf.memory_usage();
             return mf;
         }
 
-        void unpop_mutation_fragment(mutation_fragment mf) {
+        void unpop_mutation_fragment(mutation_fragment_v2 mf) {
             const auto memory_usage = mf.memory_usage();
             _buffer.emplace_front(std::move(mf));
             _buffer_size += memory_usage;
         }
 
-        future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout) {
+        future<mutation_fragment_v2_opt> operator()(db::timeout_clock::time_point timeout) {
             if (is_buffer_empty()) {
                 if (is_end_of_stream()) {
-                    return make_ready_future<mutation_fragment_opt>();
+                    return make_ready_future<mutation_fragment_v2_opt>();
                 }
                 return fill_buffer(timeout).then([this, timeout] { return operator()(timeout); });
             }
-            return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
+            return make_ready_future<mutation_fragment_v2_opt>(pop_mutation_fragment());
         }
 
         template<typename Consumer>
-        requires FlatMutationReaderConsumer<Consumer>
+        requires FlatMutationReaderConsumerV2<Consumer>
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
-        // Next call will start from the next mutation_fragment in the stream.
+        // Next call will start from the next mutation_fragment_v2 in the stream.
         future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
             return repeat([this, consumer = std::move(consumer), timeout] () mutable {
                 if (is_buffer_empty()) {
@@ -232,7 +267,7 @@ public:
         }
 
         template<typename Consumer, typename Filter>
-        requires FlatMutationReaderConsumer<Consumer> && FlattenedConsumerFilter<Filter>
+        requires FlatMutationReaderConsumerV2<Consumer> && FlattenedConsumerFilterV2<Filter>
         // A variant of consume_pausable() that expects to be run in
         // a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
@@ -269,14 +304,14 @@ public:
     private:
         template<typename Consumer>
         struct consumer_adapter {
-            flat_mutation_reader::impl& _reader;
+            flat_mutation_reader_v2::impl& _reader;
             std::optional<dht::decorated_key> _decorated_key;
             Consumer _consumer;
-            consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
+            consumer_adapter(flat_mutation_reader_v2::impl& reader, Consumer c)
                     : _reader(reader)
-                      , _consumer(std::move(c))
+                    , _consumer(std::move(c))
             { }
-            future<stop_iteration> operator()(mutation_fragment&& mf) {
+            future<stop_iteration> operator()(mutation_fragment_v2&& mf) {
                 return std::move(mf).consume(*this);
             }
             future<stop_iteration> consume(static_row&& sr) {
@@ -285,7 +320,7 @@ public:
             future<stop_iteration> consume(clustering_row&& cr) {
                 return handle_result(_consumer.consume(std::move(cr)));
             }
-            future<stop_iteration> consume(range_tombstone&& rt) {
+            future<stop_iteration> consume(range_tombstone_change&& rt) {
                 return handle_result(_consumer.consume(std::move(rt)));
             }
             future<stop_iteration> consume(partition_start&& ps) {
@@ -297,9 +332,9 @@ public:
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             }
             future<stop_iteration> consume(partition_end&& pe) {
-              return futurize_invoke([this] {
-                return _consumer.consume_end_of_partition();
-              });
+                return futurize_invoke([this] {
+                    return _consumer.consume_end_of_partition();
+                });
             }
         private:
             future<stop_iteration> handle_result(stop_iteration si) {
@@ -316,7 +351,7 @@ public:
         };
     public:
         template<typename Consumer>
-        requires FlattenedConsumer<Consumer>
+        requires FlattenedConsumerV2<Consumer>
         // Stops when consumer returns stop_iteration::yes from consume_end_of_partition or end of stream is reached.
         // Next call will receive fragments from the next partition.
         // When consumer returns stop_iteration::yes from methods other than consume_end_of_partition then the read
@@ -338,7 +373,7 @@ public:
         }
 
         template<typename Consumer, typename Filter>
-        requires FlattenedConsumer<Consumer> && FlattenedConsumerFilter<Filter>
+        requires FlattenedConsumerV2<Consumer> && FlattenedConsumerFilterV2<Filter>
         // A variant of consumee() that expects to be run in a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
         // entirely and never reach the consumer.
@@ -350,7 +385,7 @@ public:
         };
 
         /*
-         * fast_forward_to is forbidden on flat_mutation_reader created for a single partition.
+         * fast_forward_to is forbidden on flat_mutation_reader_v2 created for a single partition.
          */
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
@@ -390,9 +425,9 @@ public:
 private:
     std::unique_ptr<impl> _impl;
 
-    flat_mutation_reader() = default;
+    flat_mutation_reader_v2() = default;
     explicit operator bool() const noexcept { return bool(_impl); }
-    friend class optimized_optional<flat_mutation_reader>;
+    friend class optimized_optional<flat_mutation_reader_v2>;
     void do_upgrade_schema(const schema_ptr&);
     static void on_close_error(std::unique_ptr<impl>, std::exception_ptr ep) noexcept;
 public:
@@ -400,27 +435,27 @@ public:
     class partition_range_forwarding_tag;
     using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
 
-    flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
-    flat_mutation_reader(const flat_mutation_reader&) = delete;
-    flat_mutation_reader(flat_mutation_reader&&) = default;
+    flat_mutation_reader_v2(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
+    flat_mutation_reader_v2(const flat_mutation_reader_v2&) = delete;
+    flat_mutation_reader_v2(flat_mutation_reader_v2&&) = default;
 
-    flat_mutation_reader& operator=(const flat_mutation_reader&) = delete;
-    flat_mutation_reader& operator=(flat_mutation_reader&& o) noexcept;
+    flat_mutation_reader_v2& operator=(const flat_mutation_reader_v2&) = delete;
+    flat_mutation_reader_v2& operator=(flat_mutation_reader_v2&& o) noexcept;
 
-    ~flat_mutation_reader();
+    ~flat_mutation_reader_v2();
 
-    future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout) {
+    future<mutation_fragment_v2_opt> operator()(db::timeout_clock::time_point timeout) {
         return _impl->operator()(timeout);
     }
 
     template <typename Consumer>
-    requires FlatMutationReaderConsumer<Consumer>
+    requires FlatMutationReaderConsumerV2<Consumer>
     auto consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
         return _impl->consume_pausable(std::move(consumer), timeout);
     }
 
     template <typename Consumer>
-    requires FlattenedConsumer<Consumer>
+    requires FlattenedConsumerV2<Consumer>
     auto consume(Consumer consumer, db::timeout_clock::time_point timeout) {
         return _impl->consume(std::move(consumer), timeout);
     }
@@ -428,30 +463,30 @@ public:
     class filter {
     private:
         std::function<bool (const dht::decorated_key&)> _partition_filter = [] (const dht::decorated_key&) { return true; };
-        std::function<bool (const mutation_fragment&)> _mutation_fragment_filter = [] (const mutation_fragment&) { return true; };
+        std::function<bool (const mutation_fragment_v2&)> _mutation_fragment_filter = [] (const mutation_fragment_v2&) { return true; };
     public:
         filter() = default;
 
         filter(std::function<bool (const dht::decorated_key&)>&& pf)
-            : _partition_filter(std::move(pf))
+                : _partition_filter(std::move(pf))
         { }
 
         filter(std::function<bool (const dht::decorated_key&)>&& pf,
-               std::function<bool (const mutation_fragment&)>&& mf)
-            : _partition_filter(std::move(pf))
-            , _mutation_fragment_filter(std::move(mf))
+               std::function<bool (const mutation_fragment_v2&)>&& mf)
+                : _partition_filter(std::move(pf))
+                , _mutation_fragment_filter(std::move(mf))
         { }
 
         template <typename Functor>
         filter(Functor&& f)
-            : _partition_filter(std::forward<Functor>(f))
+                : _partition_filter(std::forward<Functor>(f))
         { }
 
         bool operator()(const dht::decorated_key& dk) const {
             return _partition_filter(dk);
         }
 
-        bool operator()(const mutation_fragment& mf) const {
+        bool operator()(const mutation_fragment_v2& mf) const {
             return _mutation_fragment_filter(mf);
         }
 
@@ -463,7 +498,7 @@ public:
             return true;
         }
 
-        bool operator()(const mutation_fragment& mf) const {
+        bool operator()(const mutation_fragment_v2& mf) const {
             return true;
         }
 
@@ -471,13 +506,13 @@ public:
     };
 
     template<typename Consumer, typename Filter>
-    requires FlattenedConsumer<Consumer> && FlattenedConsumerFilter<Filter>
+    requires FlattenedConsumerV2<Consumer> && FlattenedConsumerFilterV2<Filter>
     auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
         return _impl->consume_in_thread(std::move(consumer), std::move(filter), timeout);
     }
 
     template<typename Consumer>
-    requires FlattenedConsumer<Consumer>
+    requires FlattenedConsumerV2<Consumer>
     auto consume_in_thread(Consumer consumer, db::timeout_clock::time_point timeout) {
         return consume_in_thread(std::move(consumer), no_filter{}, timeout);
     }
@@ -563,8 +598,8 @@ public:
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
-    mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
-    void unpop_mutation_fragment(mutation_fragment mf) { _impl->unpop_mutation_fragment(std::move(mf)); }
+    mutation_fragment_v2 pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
+    void unpop_mutation_fragment(mutation_fragment_v2 mf) { _impl->unpop_mutation_fragment(std::move(mf)); }
     const schema_ptr& schema() const { return _impl->_schema; }
     const reader_permit& permit() const { return _impl->_permit; }
     void set_max_buffer_size(size_t size) {
@@ -573,12 +608,12 @@ public:
     // Resolves with a pointer to the next fragment in the stream without consuming it from the stream,
     // or nullptr if there are no more fragments.
     // The returned pointer is invalidated by any other non-const call to this object.
-    future<mutation_fragment*> peek(db::timeout_clock::time_point timeout) {
+    future<mutation_fragment_v2*> peek(db::timeout_clock::time_point timeout) {
         if (!is_buffer_empty()) {
-            return make_ready_future<mutation_fragment*>(&_impl->_buffer.front());
+            return make_ready_future<mutation_fragment_v2*>(&_impl->_buffer.front());
         }
         if (is_end_of_stream()) {
-            return make_ready_future<mutation_fragment*>(nullptr);
+            return make_ready_future<mutation_fragment_v2*>(nullptr);
         }
         return fill_buffer(timeout).then([this, timeout] {
             return peek(timeout);
@@ -586,7 +621,7 @@ public:
     }
     // A peek at the next fragment in the buffer.
     // Cannot be called if is_buffer_empty() returns true.
-    const mutation_fragment& peek_buffer() const { return _impl->_buffer.front(); }
+    const mutation_fragment_v2& peek_buffer() const { return _impl->_buffer.front(); }
     // The actual buffer size of the reader.
     // Altough we consistently refer to this as buffer size throught the code
     // we really use "buffer size" as the size of the collective memory
@@ -625,39 +660,24 @@ public:
     }
 };
 
-using flat_mutation_reader_opt = optimized_optional<flat_mutation_reader>;
+using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
 
 template<typename Impl, typename... Args>
-flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
-    return flat_mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
-}
-
-namespace mutation_reader {
-    // mutation_reader::forwarding determines whether fast_forward_to() may
-    // be used on the mutation reader to change the partition range being
-    // read. Enabling forwarding also changes read policy: forwarding::no
-    // means we will stop reading from disk at the end of the given range,
-    // but with forwarding::yes we may read ahead, anticipating the user to
-    // make a small skip with fast_forward_to() and continuing to read.
-    //
-    // Note that mutation_reader::forwarding is similarly name but different
-    // from streamed_mutation::forwarding - the former is about skipping to
-    // a different partition range, while the latter is about skipping
-    // inside a large partition.
-    using forwarding = flat_mutation_reader::partition_range_forwarding;
+flat_mutation_reader_v2 make_flat_mutation_reader_v2(Args &&... args) {
+    return flat_mutation_reader_v2(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
 // Consumes mutation fragments until StopCondition is true.
 // The consumer will stop iff StopCondition returns true, in particular
 // reaching the end of stream alone won't stop the reader.
 template<typename StopCondition, typename ConsumeMutationFragment, typename ConsumeEndOfStream>
-requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment mf) {
+requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment_v2 mf) {
     { stop() } -> std::same_as<bool>;
     { consume_mf(std::move(mf)) } -> std::same_as<void>;
     { consume_eos() } -> std::same_as<future<>>;
 }
 future<> consume_mutation_fragments_until(
-        flat_mutation_reader& r,
+        flat_mutation_reader_v2& r,
         StopCondition&& stop,
         ConsumeMutationFragment&& consume_mf,
         ConsumeEndOfStream&& consume_eos,
@@ -678,23 +698,23 @@ future<> consume_mutation_fragments_until(
 
 // Creates a stream which is like r but with transformation applied to the elements.
 template<typename T>
-requires StreamedMutationTranformer<T>
-flat_mutation_reader transform(flat_mutation_reader r, T t) {
-    class transforming_reader : public flat_mutation_reader::impl {
-        flat_mutation_reader _reader;
+requires StreamedMutationTranformerV2<T>
+flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
+    class transforming_reader : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader_v2 _reader;
         T _t;
         struct consumer {
             transforming_reader* _owner;
-            stop_iteration operator()(mutation_fragment&& mf) {
+            stop_iteration operator()(mutation_fragment_v2&& mf) {
                 _owner->push_mutation_fragment(_owner->_t(std::move(mf)));
                 return stop_iteration(_owner->is_buffer_full());
             }
         };
     public:
-        transforming_reader(flat_mutation_reader&& r, T&& t)
-            : impl(t(r.schema()), r.permit())
-            , _reader(std::move(r))
-            , _t(std::move(t))
+        transforming_reader(flat_mutation_reader_v2&& r, T&& t)
+                : impl(t(r.schema()), r.permit())
+                , _reader(std::move(r))
+                , _t(std::move(t))
         {}
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
             if (_end_of_stream) {
@@ -727,174 +747,14 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
             return _reader.close();
         }
     };
-    return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
+    return make_flat_mutation_reader_v2<transforming_reader>(std::move(r), std::move(t));
 }
 
-class delegating_reader : public flat_mutation_reader::impl {
-    flat_mutation_reader_opt _underlying_holder;
-    flat_mutation_reader* _underlying;
-public:
-    // when passed a lvalue reference to the reader
-    // we don't own it and the caller is responsible
-    // for evenetually closing the reader.
-    delegating_reader(flat_mutation_reader& r)
-        : impl(r.schema(), r.permit())
-        , _underlying_holder()
-        , _underlying(&r)
-    { }
-    // when passed a rvalue reference to the reader
-    // we assume ownership of it and will close it
-    // in close().
-    delegating_reader(flat_mutation_reader&& r)
-        : impl(r.schema(), r.permit())
-        , _underlying_holder(std::move(r))
-        , _underlying(&*_underlying_holder)
-    { }
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-        if (is_buffer_full()) {
-            return make_ready_future<>();
-        }
-        return _underlying->fill_buffer(timeout).then([this] {
-            _end_of_stream = _underlying->is_end_of_stream();
-            _underlying->move_buffer_content_to(*this);
-        });
-    }
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        _end_of_stream = false;
-        forward_buffer_to(pr.start());
-        return _underlying->fast_forward_to(std::move(pr), timeout);
-    }
-    virtual future<> next_partition() override {
-        clear_buffer_to_next_partition();
-        auto maybe_next_partition = make_ready_future<>();
-        if (is_buffer_empty()) {
-            maybe_next_partition = _underlying->next_partition();
-        }
-      return maybe_next_partition.then([this] {
-        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
-      });
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-        _end_of_stream = false;
-        clear_buffer();
-        return _underlying->fast_forward_to(pr, timeout);
-    }
-    virtual future<> close() noexcept override {
-        return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
-    }
-};
-flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
+// Adapts a v2 reader to v1 reader
+flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
 
-flat_mutation_reader make_forwardable(flat_mutation_reader m);
+// Adapts a v1 reader to v2 reader
+flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 
-flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);
-
-flat_mutation_reader make_empty_flat_reader(schema_ptr s, reader_permit permit);
-
-flat_mutation_reader flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation>,
-        const dht::partition_range& pr = query::full_partition_range, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-inline flat_mutation_reader flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
-    return flat_mutation_reader_from_mutations(std::move(permit), std::move(ms), query::full_partition_range, fwd);
-}
-flat_mutation_reader
-flat_mutation_reader_from_mutations(reader_permit permit,
-                                    std::vector<mutation> ms,
-                                    const query::partition_slice& slice,
-                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-flat_mutation_reader
-flat_mutation_reader_from_mutations(reader_permit permit,
-                                    std::vector<mutation> ms,
-                                    const dht::partition_range& pr,
-                                    const query::partition_slice& slice,
-                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-/// Make a reader that enables the wrapped reader to work with multiple ranges.
-///
-/// \param ranges An range vector that has to contain strictly monotonic
-///     partition ranges, such that successively calling
-///     `flat_mutation_reader::fast_forward_to()` with each one is valid.
-///     An range vector range with 0 or 1 elements is also valid.
-/// \param fwd_mr It is only respected when `ranges` contains 0 or 1 partition
-///     ranges. Otherwise the reader is created with
-///     mutation_reader::forwarding::yes.
-flat_mutation_reader
-make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
-                             const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
-                             tracing::trace_state_ptr trace_state = nullptr,
-                             flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
-
-/// Make a reader that enables the wrapped reader to work with multiple ranges.
-///
-/// Generator overload. The ranges returned by the generator have to satisfy the
-/// same requirements as the `ranges` param of the vector overload.
-flat_mutation_reader
-make_flat_multi_range_reader(
-        schema_ptr s,
-        reader_permit permit,
-        mutation_source source,
-        std::function<std::optional<dht::partition_range>()> generator,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = nullptr,
-        flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
-
-flat_mutation_reader
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment>);
-
-flat_mutation_reader
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment>, const dht::partition_range& pr);
-
-flat_mutation_reader
-make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment>, const dht::partition_range& pr, const query::partition_slice& slice);
-
-// Calls the consumer for each element of the reader's stream until end of stream
-// is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
-// The consumer should accept mutation as the argument and return stop_iteration.
-// The returned future<> resolves when consumption ends.
-template <typename Consumer>
-inline
-future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer, db::timeout_clock::time_point timeout) {
-    static_assert(std::is_same<future<stop_iteration>, futurize_t<std::result_of_t<Consumer(mutation&&)>>>::value, "bad Consumer signature");
-
-    return do_with(std::move(consumer), [&reader, timeout] (Consumer& c) -> future<> {
-        return repeat([&reader, &c, timeout] () {
-            return read_mutation_from_flat_mutation_reader(reader, timeout).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
-                if (!mo) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return futurize_invoke(c, std::move(*mo));
-            });
-        });
-    });
-}
-
-flat_mutation_reader
-make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
-
-/// A reader that emits partitions in reverse.
-///
-/// 1. Static row is still emitted first.
-/// 2. Range tombstones are ordered by their end position.
-/// 3. Clustered rows and range tombstones are emitted in descending order.
-/// Because of 2 and 3 the guarantee that a range tombstone is emitted before
-/// any mutation fragment affected by it still holds.
-/// Ordering of partitions themselves remains unchanged.
-///
-/// \param original the reader to be reversed, has to be kept alive while the
-///     reversing reader is in use.
-/// \param max_size the maximum amount of memory the reader is allowed to use
-///     for reversing and conversely the maximum size of the results. The
-///     reverse reader reads entire partitions into memory, before reversing
-///     them. Since partitions can be larger than the available memory, we need
-///     to enforce a limit on memory consumption. When reaching the soft limit
-///     a warning will be logged. When reaching the hard limit the read will be
-///     aborted.
-///
-/// FIXME: reversing should be done in the sstable layer, see #1413.
-flat_mutation_reader
-make_reversing_reader(flat_mutation_reader& original, query::max_result_size max_size);
-
-/// A cosumer function that is passed a flat_mutation_reader to be consumed from
-/// and returns a future<> resolved when the reader is fully consumed, and closed.
-/// Note: the function assumes ownership of the reader and must close it in all cases.
-using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
+// Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&, db::timeout_clock::time_point timeout);

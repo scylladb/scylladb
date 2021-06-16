@@ -20,6 +20,9 @@
  */
 
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
+#include "range_tombstone_assembler.hh"
+#include "range_tombstone_change_generator.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "mutation_reader.hh"
 #include "seastar/util/reference_wrapper.hh"
@@ -31,6 +34,8 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>
 #include "utils/exceptions.hh"
+#include "mutation_rebuilder.hh"
+#include "range_tombstone_splitter.hh"
 #include <seastar/core/on_internal_error.hh>
 
 #include "clustering_key_filter.hh"
@@ -930,31 +935,40 @@ flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment> fragments,
         const dht::partition_range& pr, const query::partition_slice& slice) {
     std::optional<clustering_ranges_walker> ranges_walker;
-    for (auto it = fragments.begin(); it != fragments.end();) {
-        switch (it->mutation_fragment_kind()) {
+    std::optional<range_tombstone_splitter> splitter;
+    std::deque<mutation_fragment> filtered;
+    for (auto&& mf : fragments) {
+        switch (mf.mutation_fragment_kind()) {
             case mutation_fragment::kind::partition_start:
-                ranges_walker.emplace(*schema, slice.row_ranges(*schema, it->as_partition_start().key().key()), false);
-            case mutation_fragment::kind::static_row: // fall-through
-            case mutation_fragment::kind::partition_end: // fall-through
-                ++it;
+                ranges_walker.emplace(*schema, slice.row_ranges(*schema, mf.as_partition_start().key().key()), false);
+                splitter.emplace(*schema, permit, *ranges_walker);
+                filtered.emplace_back(std::move(mf));
+                break;
+            case mutation_fragment::kind::static_row:
+                filtered.push_back(std::move(mf));
+                break;
+            case mutation_fragment::kind::partition_end:
+                splitter->flush(position_in_partition::after_all_clustered_rows(), [&] (mutation_fragment mf) {
+                    filtered.emplace_back(std::move(mf));
+                });
+                filtered.push_back(std::move(mf));
                 break;
             case mutation_fragment::kind::clustering_row:
-                if (ranges_walker->advance_to(it->position())) {
-                    ++it;
-                } else {
-                    it = fragments.erase(it);
+                splitter->flush(mf.position(), [&] (mutation_fragment mf) {
+                    filtered.emplace_back(std::move(mf));
+                });
+                if (ranges_walker->advance_to(mf.position())) {
+                    filtered.push_back(std::move(mf));
                 }
                 break;
             case mutation_fragment::kind::range_tombstone:
-                if (ranges_walker->advance_to(it->as_range_tombstone().position(), it->as_range_tombstone().end_position())) {
-                    ++it;
-                } else {
-                    it = fragments.erase(it);
-                }
+                splitter->consume(std::move(mf).as_range_tombstone(), [&] (mutation_fragment mf) {
+                    filtered.emplace_back(std::move(mf));
+                });
                 break;
         }
     }
-    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(fragments), pr);
+    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
 }
 
 /*
@@ -1194,4 +1208,271 @@ void mutation_fragment_stream_validating_filter::on_end_of_stream() {
         on_validation_error(fmr_logger, format("[validator {} for {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _name,
                 _validator.previous_mutation_fragment_kind()));
     }
+}
+
+flat_mutation_reader_v2& flat_mutation_reader_v2::operator=(flat_mutation_reader_v2&& o) noexcept {
+    if (_impl) {
+        impl* ip = _impl.get();
+        // Abort to enforce calling close() before readers are closed
+        // to prevent leaks and potential use-after-free due to background
+        // tasks left behind.
+        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before overwritten by move-assign", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        abort();
+    }
+    _impl = std::move(o._impl);
+    return *this;
+}
+
+flat_mutation_reader_v2::~flat_mutation_reader_v2() {
+    if (_impl) {
+        impl* ip = _impl.get();
+        // Abort to enforce calling close() before readers are closed
+        // to prevent leaks and potential use-after-free due to background
+        // tasks left behind.
+        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before destruction", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        abort();
+    }
+}
+
+static size_t compute_buffer_size(const schema& s, const flat_mutation_reader_v2::tracked_buffer& buffer)
+{
+    return boost::accumulate(
+        buffer
+        | boost::adaptors::transformed([&s] (const mutation_fragment_v2& mf) {
+            return mf.memory_usage();
+        }), size_t(0)
+    );
+}
+
+void flat_mutation_reader_v2::impl::forward_buffer_to(const position_in_partition& pos) {
+    clear_buffer();
+    _buffer_size = compute_buffer_size(*_schema, _buffer);
+}
+
+void flat_mutation_reader_v2::impl::clear_buffer_to_next_partition() {
+    auto next_partition_start = std::find_if(_buffer.begin(), _buffer.end(), [] (const mutation_fragment_v2& mf) {
+        return mf.is_partition_start();
+    });
+    _buffer.erase(_buffer.begin(), next_partition_start);
+
+    _buffer_size = compute_buffer_size(*_schema, _buffer);
+}
+
+template<typename Source>
+future<bool> flat_mutation_reader_v2::impl::fill_buffer_from(Source& source, db::timeout_clock::time_point timeout) {
+    if (source.is_buffer_empty()) {
+        if (source.is_end_of_stream()) {
+            return make_ready_future<bool>(true);
+        }
+        return source.fill_buffer(timeout).then([this, &source, timeout] {
+            return fill_buffer_from(source, timeout);
+        });
+    } else {
+        while (!source.is_buffer_empty() && !is_buffer_full()) {
+            push_mutation_fragment(source.pop_mutation_fragment());
+        }
+        return make_ready_future<bool>(source.is_end_of_stream() && source.is_buffer_empty());
+    }
+}
+
+template future<bool> flat_mutation_reader_v2::impl::fill_buffer_from<flat_mutation_reader_v2>(flat_mutation_reader_v2&, db::timeout_clock::time_point);
+
+void flat_mutation_reader_v2::do_upgrade_schema(const schema_ptr& s) {
+    *this = transform(std::move(*this), schema_upgrader_v2(s));
+}
+
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2& r, db::timeout_clock::time_point timeout) {
+    return r.consume(mutation_rebuilder_v2(r.schema()), timeout);
+}
+
+void flat_mutation_reader_v2::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
+    impl* ip = i.get();
+    on_internal_error_noexcept(fmr_logger,
+            format("Failed to close {} [{}]: permit {}: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), ep));
+}
+
+flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
+    class transforming_reader : public flat_mutation_reader::impl {
+        flat_mutation_reader_v2 _reader;
+        struct consumer {
+            transforming_reader* _owner;
+            stop_iteration operator()(mutation_fragment_v2&& mf) {
+                std::move(mf).consume(*_owner);
+                return stop_iteration(_owner->is_buffer_full());
+            }
+        };
+        range_tombstone_assembler _rt_assembler;
+    public:
+        void consume(static_row mf) {
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        void consume(clustering_row mf) {
+            if (_rt_assembler.needs_flush()) {
+                if (auto rt_opt = _rt_assembler.flush(*_schema, position_in_partition::after_key(mf.position()))) {
+                    push_mutation_fragment(*_schema, _permit, std::move(*rt_opt));
+                }
+            }
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        void consume(range_tombstone_change mf) {
+            if (auto rt_opt = _rt_assembler.consume(*_schema, std::move(mf))) {
+                push_mutation_fragment(*_schema, _permit, std::move(*rt_opt));
+            }
+        }
+        void consume(partition_start mf) {
+            _rt_assembler.reset();
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        void consume(partition_end mf) {
+            _rt_assembler.on_end_of_stream();
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        transforming_reader(flat_mutation_reader_v2&& r)
+                : impl(r.schema(), r.permit())
+                , _reader(std::move(r))
+        {}
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            if (_end_of_stream) {
+                return make_ready_future<>();
+            }
+            return _reader.consume_pausable(consumer{this}, timeout).then([this] {
+                if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
+                    _rt_assembler.on_end_of_stream();
+                    _end_of_stream = true;
+                }
+            });
+        }
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _end_of_stream = false;
+                return _reader.next_partition();
+            }
+            return make_ready_future<>();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _reader.fast_forward_to(pr, timeout);
+        }
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _reader.fast_forward_to(std::move(pr), timeout);
+        }
+        virtual future<> close() noexcept override {
+            return _reader.close();
+        }
+    };
+    return make_flat_mutation_reader<transforming_reader>(std::move(r));
+}
+
+flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader r) {
+    class transforming_reader : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader _reader;
+        struct consumer {
+            transforming_reader* _owner;
+            stop_iteration operator()(mutation_fragment&& mf) {
+                std::move(mf).consume(*_owner);
+                return stop_iteration(_owner->is_buffer_full());
+            }
+        };
+        range_tombstone_change_generator _rt_gen;
+        tombstone _current_rt;
+        std::optional<position_range> _pr;
+    public:
+        void flush_tombstones(position_in_partition_view pos) {
+            _rt_gen.flush(pos, [&] (range_tombstone_change rt) {
+                _current_rt = rt.tombstone();
+                push_mutation_fragment(*_schema, _permit, std::move(rt));
+            });
+        }
+        void consume(static_row mf) {
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        void consume(clustering_row mf) {
+            flush_tombstones(mf.position());
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        void consume(range_tombstone rt) {
+            if (_pr) {
+                if (!rt.trim_front(*_schema, _pr->start())) {
+                    return;
+                }
+            }
+            flush_tombstones(rt.position());
+            _rt_gen.consume(std::move(rt));
+        }
+        void consume(partition_start mf) {
+            _rt_gen.reset();
+            _current_rt = {};
+            _pr = std::nullopt;
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        void consume(partition_end mf) {
+            flush_tombstones(position_in_partition::after_all_clustered_rows());
+            if (_current_rt) {
+                assert(!_pr);
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(
+                        position_in_partition::after_all_clustered_rows(), {}));
+            }
+            push_mutation_fragment(*_schema, _permit, std::move(mf));
+        }
+        transforming_reader(flat_mutation_reader&& r)
+                : impl(r.schema(), r.permit())
+                , _reader(std::move(r))
+                , _rt_gen(*_schema)
+        {}
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            if (_end_of_stream) {
+                return make_ready_future<>();
+            }
+            return _reader.consume_pausable(consumer{this}, timeout).then([this] {
+                if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
+                    if (_pr) {
+                        // If !_pr we should flush on partition_end
+                        flush_tombstones(_pr->end());
+                        if (_current_rt) {
+                            push_mutation_fragment(*_schema, _permit, range_tombstone_change(_pr->end(), {}));
+                        }
+                    }
+                    _end_of_stream = true;
+                }
+            });
+        }
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _end_of_stream = false;
+                return _reader.next_partition();
+            }
+            return make_ready_future<>();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _reader.fast_forward_to(pr, timeout);
+        }
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            // r is used to trim range tombstones and range_tombstone:s can be trimmed only to positions
+            // which are !is_clustering_row(). Replace with equivalent ranges.
+            // Long-term we should guarantee this on position_range.
+            if (pr.start().is_clustering_row()) {
+                pr.set_start(position_in_partition::before_key(pr.start().key()));
+            }
+            if (pr.end().is_clustering_row()) {
+                pr.set_end(position_in_partition::before_key(pr.end().key()));
+            }
+            _rt_gen.trim(pr.start());
+            _current_rt = {};
+            _pr = pr;
+            _end_of_stream = false;
+            return _reader.fast_forward_to(std::move(pr), timeout);
+        }
+        virtual future<> close() noexcept override {
+            return _reader.close();
+        }
+    };
+    return make_flat_mutation_reader_v2<transforming_reader>(std::move(r));
 }

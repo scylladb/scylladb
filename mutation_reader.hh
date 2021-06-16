@@ -28,6 +28,7 @@
 #include <seastar/core/do_with.hh>
 #include "tracing/trace_state.hh"
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "reader_concurrency_semaphore.hh"
 
 class reader_selector {
@@ -164,10 +165,20 @@ class mutation_source {
                                                                         tracing::trace_state_ptr,
                                                                         streamed_mutation::forwarding,
                                                                         mutation_reader::forwarding)>;
+    using flat_reader_v2_factory_type = std::function<flat_mutation_reader_v2(schema_ptr,
+                                                                        reader_permit,
+                                                                        partition_range,
+                                                                        const query::partition_slice&,
+                                                                        io_priority,
+                                                                        tracing::trace_state_ptr,
+                                                                        streamed_mutation::forwarding,
+                                                                        mutation_reader::forwarding)>;
     // We could have our own version of std::function<> that is nothrow
     // move constructible and save some indirection and allocation.
     // Probably not worth the effort though.
+    // Either _fn or _fn_v2 is engaged.
     lw_shared_ptr<flat_reader_factory_type> _fn;
+    lw_shared_ptr<flat_reader_v2_factory_type> _fn_v2;
     lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
     mutation_source() = default;
@@ -176,6 +187,11 @@ private:
 public:
     mutation_source(flat_reader_factory_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
         : _fn(make_lw_shared<flat_reader_factory_type>(std::move(fn)))
+        , _presence_checker_factory(make_lw_shared<std::function<partition_presence_checker()>>(std::move(pcf)))
+    { }
+
+    mutation_source(flat_reader_v2_factory_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
+        : _fn_v2(make_lw_shared<flat_reader_v2_factory_type>(std::move(fn)))
         , _presence_checker_factory(make_lw_shared<std::function<partition_presence_checker()>>(std::move(pcf)))
     { }
 
@@ -249,6 +265,10 @@ public:
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
     {
+        if (_fn_v2) {
+            return downgrade_to_v1(
+                    (*_fn_v2)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        }
         return (*_fn)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     }
 
@@ -260,6 +280,38 @@ public:
     {
         auto& full_slice = s->full_slice();
         return this->make_reader(std::move(s), std::move(permit), range, full_slice);
+    }
+
+    // Creates a new reader.
+    //
+    // All parameters captured by reference must remain live as long as returned
+    // mutation_reader or streamed_mutation obtained through it are alive.
+    flat_mutation_reader_v2
+    make_reader_v2(
+            schema_ptr s,
+            reader_permit permit,
+            partition_range range,
+            const query::partition_slice& slice,
+            io_priority pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = nullptr,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
+    {
+        if (_fn_v2) {
+            return (*_fn_v2)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        }
+        return upgrade_to_v2(
+                (*_fn)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+    }
+
+    flat_mutation_reader_v2
+    make_reader_v2(
+            schema_ptr s,
+            reader_permit permit,
+            partition_range range = query::full_partition_range) const
+    {
+        auto& full_slice = s->full_slice();
+        return make_reader_v2(std::move(s), std::move(permit), range, full_slice);
     }
 
     partition_presence_checker make_partition_presence_checker() {
