@@ -272,10 +272,10 @@ manager::end_point_hints_manager::~end_point_hints_manager() {
     assert(stopped());
 }
 
-future<hints_store_ptr> manager::end_point_hints_manager::get_or_load(manager::force_segment_list_update force_update) {
+future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
-        return _shard_manager.store_factory().get_or_load(_key, [this, force_update] (const key_type&) noexcept {
-            return add_store(force_update);
+        return _shard_manager.store_factory().get_or_load(_key, [this] (const key_type&) noexcept {
+            return add_store();
         }).then([this] (hints_store_ptr log_ptr) {
             _hints_store_anchor = log_ptr;
             return make_ready_future<hints_store_ptr>(std::move(log_ptr));
@@ -321,11 +321,11 @@ bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const froze
     }
 }
 
-future<db::commitlog> manager::end_point_hints_manager::add_store(manager::force_segment_list_update force_update) noexcept {
+future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
-    return futurize_invoke([this, force_update] {
-        return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this, force_update] () {
+    return futurize_invoke([this] {
+        return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
             commitlog::config cfg;
 
             cfg.commit_log_location = _hints_dir.c_str();
@@ -349,37 +349,41 @@ future<db::commitlog> manager::end_point_hints_manager::add_store(manager::force
             // a hard limit.
             cfg.allow_going_over_size_limit = true;
 
-            return commitlog::create_commitlog(std::move(cfg)).then([this, force_update] (commitlog l) {
+            return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
                 // When this happens we want to refill _sender's segments only if it has finished with the segments he had before.
-                // However, if segment list update is explicitly requested, then we refill it anyway.
-                if (!force_update && _sender.have_segments()) {
+                if (_sender.have_segments()) {
                     return make_ready_future<commitlog>(std::move(l));
                 }
 
-                _sender.update_segment_list(l.get_segments_to_replay());
+                std::vector<sstring> segs_vec = l.get_segments_to_replay();
+
+                std::for_each(segs_vec.begin(), segs_vec.end(), [this] (sstring& seg) {
+                    _sender.add_segment(std::move(seg));
+                });
+
                 return make_ready_future<commitlog>(std::move(l));
             });
         });
     });
 }
 
-future<> manager::end_point_hints_manager::flush_current_hints(manager::force_segment_list_update force_update) noexcept {
+future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hints_store_anchor) {
-        return futurize_invoke([this, force_update] {
-            return with_lock(file_update_mutex(), [this, force_update]() -> future<> {
+        return futurize_invoke([this] {
+            return with_lock(file_update_mutex(), [this]() -> future<> {
                 return get_or_load().then([] (hints_store_ptr cptr) {
                     return cptr->shutdown().finally([cptr] {
                         return cptr->release();
                     }).finally([cptr] {});
-                }).then([this, force_update] {
+                }).then([this] {
                     // Un-hold the commitlog object. Since we are under the exclusive _file_update_mutex lock there are no
                     // other hints_store_ptr copies and this would destroy the commitlog shared value.
                     _hints_store_anchor = nullptr;
 
                     // Re-create the commitlog instance - this will re-populate the _segments_to_replay if needed.
-                    return get_or_load(force_update).discard_result();
+                    return get_or_load().discard_result();
                 });
             });
         });
@@ -685,26 +689,6 @@ future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noex
 
 void manager::end_point_hints_manager::sender::add_segment(sstring seg_name) {
     _segments_to_replay.emplace_back(std::move(seg_name));
-}
-
-void manager::end_point_hints_manager::sender::update_segment_list(std::vector<sstring> seg_names) {
-    if (!have_segments()) {
-        for (auto seg_name : seg_names) {
-            add_segment(std::move(seg_name));
-        }
-        return;
-    }
-
-    // We can't safely remove the first segment from the list because we might be sending it at the moment.
-    // Remove the rest, and append any segments which are not equal to the first one.
-    const sstring& first_seg_name = _segments_to_replay.front();
-    _segments_to_replay.erase(std::next(_segments_to_replay.begin()), _segments_to_replay.end());
-
-    for (auto seg_name : seg_names) {
-        if (seg_name != first_seg_name) {
-            add_segment(std::move(seg_name));
-        }
-    }
 }
 
 manager::end_point_hints_manager::sender::clock::duration manager::end_point_hints_manager::sender::next_sleep_duration() const {
