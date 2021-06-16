@@ -141,7 +141,7 @@ future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         flat_mutation_reader_opt&& existings,
         gc_clock::time_point now);
 
-query::clustering_row_ranges calculate_affected_clustering_ranges(
+future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,

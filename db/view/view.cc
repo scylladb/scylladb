@@ -54,6 +54,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 
 #include <seastar/core/future-util.hh>
+#include <seastar/core/coroutine.hh>
 
 #include "database.hh"
 #include "clustering_bounds_comparator.hh"
@@ -1053,13 +1054,13 @@ future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
     });
 }
 
-query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& base,
+future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
         const std::vector<view_and_base>& views,
         gc_clock::time_point now) {
-    std::vector<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
-    std::vector<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
+    utils::chunked_vector<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
+    utils::chunked_vector<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
     clustering_key_prefix_view::tri_compare cmp(base);
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
@@ -1070,6 +1071,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
             }
             for (auto&& r : v.view->view_info()->partition_slice().default_row_ranges()) {
                 view_row_ranges.push_back(r.transform(std::mem_fn(&clustering_key_prefix::view)));
+                co_await make_ready_future<>(); // yield if needed
             }
         }
     }
@@ -1086,6 +1088,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
                 if (overlap) {
                     row_ranges.push_back(std::move(overlap).value());
                 }
+                co_await make_ready_future<>(); // yield if needed
             }
         }
     }
@@ -1094,6 +1097,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
         if (update_requires_read_before_write(base, views, key, row, now)) {
             row_ranges.emplace_back(row.key());
         }
+        co_await make_ready_future<>(); // yield if needed
     }
 
     // Note that the views could have restrictions on regular columns,
@@ -1104,7 +1108,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
     // this mutation.
 
     //FIXME: Unfortunate copy.
-    return boost::copy_range<query::clustering_row_ranges>(
+    co_return boost::copy_range<query::clustering_row_ranges>(
             nonwrapping_range<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp)
             | boost::adaptors::transformed([] (auto&& v) {
                 return std::move(v).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); });
