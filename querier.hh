@@ -372,6 +372,16 @@ private:
     stats _stats;
     gate _closing_gate;
 
+private:
+    template <typename Querier>
+    void insert_querier(
+            utils::UUID key,
+            querier_cache::index& index,
+            querier_cache::stats& stats,
+            Querier&& q,
+            std::chrono::seconds ttl,
+            tracing::trace_state_ptr trace_state);
+
     template <typename Querier>
     std::optional<Querier> lookup_querier(
         querier_cache::index& index,

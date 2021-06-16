@@ -231,7 +231,7 @@ struct querier_utils {
 };
 
 template <typename Querier>
-static void insert_querier(
+void querier_cache::insert_querier(
         utils::UUID key,
         querier_cache::index& index,
         querier_cache::stats& stats,
@@ -243,6 +243,9 @@ static void insert_querier(
     // current partition when the page ends so it cannot be reused across
     // pages.
     if (q.is_reversed()) {
+        (void)with_gate(_closing_gate, [this, q = std::move(q)] () mutable {
+            return q.close().finally([q = std::move(q)] {});
+        });
         return;
     }
 
