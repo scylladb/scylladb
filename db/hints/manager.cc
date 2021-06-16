@@ -683,8 +683,11 @@ future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noex
         }
 
         // Dismiss all segment waiters with an error
-        auto ep = std::make_exception_ptr(std::runtime_error("hints manager is stopped"));
-        dismiss_all_segment_waiters(std::move(ep));
+        while (!_segment_waiters.empty()) {
+            seastar::thread::maybe_yield();
+            _segment_waiters.front().pr.set_exception(std::runtime_error("hints manager is stopped"));
+            _segment_waiters.pop_front();
+        }
 
         manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
     });
@@ -765,13 +768,6 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
 void manager::end_point_hints_manager::sender::notify_segment_waiters() {
     while (!_segment_waiters.empty() && _segment_waiters.front().target_segment_count <= _total_replayed_segments_count) {
         _segment_waiters.front().pr.set_value();
-        _segment_waiters.pop_front();
-    }
-}
-
-void manager::end_point_hints_manager::sender::dismiss_all_segment_waiters(std::exception_ptr ep) {
-    while (!_segment_waiters.empty()) {
-        _segment_waiters.front().pr.set_exception(ep);
         _segment_waiters.pop_front();
     }
 }
@@ -935,12 +931,10 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size());
 
     int replayed_segments_count = 0;
-    bool sending_succeeded = true;
 
     try {
         while (replay_allowed() && have_segments() && can_send()) {
             if (!send_one_file(*_segments_to_replay.begin())) {
-                sending_succeeded = false;
                 break;
             }
             _segments_to_replay.pop_front();
@@ -955,17 +949,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
     // Exceptions are not expected here during the regular operation, so just log them.
     } catch (...) {
-        sending_succeeded = false;
         manager_logger.trace("send_hints(): got the exception: {}", std::current_exception());
-    }
-
-    // If something blocks us and we cannot send hints now (e.g. destination is DOWN),
-    // then it's better to dismiss anybody who waits for hints to be replayed,
-    // because we don't know how much time it will take until we get unblocked.
-    // In such case, dismiss any segment waiters.
-    if ((!sending_succeeded || !can_send()) && !_segment_waiters.empty()) {
-        auto ep = std::runtime_error(format("hint replay failed: cannot currently send to destination {}", end_point_key()));
-        dismiss_all_segment_waiters(std::make_exception_ptr(std::move(ep)));
     }
 
     if (have_segments()) {
