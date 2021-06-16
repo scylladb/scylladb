@@ -21,19 +21,19 @@
 #include "service/raft/schema_raft_state_machine.hh"
 
 future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> command) {
-    throw std::runtime_error("Not implemented");
+    return make_ready_future<>();
 }
 
 future<raft::snapshot_id> schema_raft_state_machine::take_snapshot() {
-    throw std::runtime_error("Not implemented");
+    return make_ready_future<raft::snapshot_id>(raft::snapshot_id::create_random_id());
 }
 
 void schema_raft_state_machine::drop_snapshot(raft::snapshot_id id) {
-    throw std::runtime_error("Not implemented");
+    (void) id;
 }
 
 future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
-    throw std::runtime_error("Not implemented");
+    return make_ready_future<>();
 }
 
 future<> schema_raft_state_machine::abort() {

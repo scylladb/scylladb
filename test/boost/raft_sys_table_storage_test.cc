@@ -22,7 +22,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
 
-#include "utils/UUID.hh"
+#include "utils/UUID_gen.hh"
 
 #include "service/raft/raft_sys_table_storage.hh"
 
@@ -56,7 +56,7 @@ static bool operator==(const log_entry& lhs, const log_entry& rhs) {
 
 } // namespace raft
 
-static constexpr raft::group_id gid;
+static raft::group_id gid{utils::UUID_gen::min_time_UUID()};
 
 // Create a test log with entries of each kind to test that these get
 // serialized/deserialized properly
