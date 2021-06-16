@@ -2249,13 +2249,6 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst->generation() == 1);
 
-        // check that sstable will auto correct potentially bad max_deletion_time and thus sstable will not be fully expired
-        sstables::test(sst).rewrite_toc_without_scylla_component();
-        sst = env.reusable_sst(s, tmp.path().string(), 1).get0();
-        ssts = std::vector<shared_sstable>{ sst };
-        expired = get_fully_expired_sstables(*cf, ssts, gc_clock::now());
-        BOOST_REQUIRE(expired.size() == 0);
-
         auto ret = compact_sstables(sstables::compaction_descriptor(ssts, cf->get_sstable_set(), default_priority_class()), *cf, sst_gen).get0();
         BOOST_REQUIRE(ret.start_size == sst->bytes_on_disk());
         BOOST_REQUIRE(ret.total_keys_written == 0);
