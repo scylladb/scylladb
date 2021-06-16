@@ -190,8 +190,8 @@ def assert_rows_ignoring_order(result, *expected):
 def assert_column_names(result, *expected):
     assert result.one()._fields == expected
 
-# FIXME: implement flush() - differently for Cassandra (need to run nodetool)
-# and Scylla (use REST API). For now, flush() does nothing... The tests will
+# FIXME: implement flush() using ../nodetool.py.
+# For now, flush() does nothing... The tests will
 # work and test CQL, but not test for flush-specific bugs which apparently
 # some specific tests were written to check (e.g., testCollectionFlush).
 # I'm worried, though, that some tests (e.g., in collections_test.py)
@@ -200,6 +200,9 @@ def assert_column_names(result, *expected):
 def flush(cql, table):
     # FIXME! Currently this doesn't flush at all!
     print("NOTE: flush() stubbed, and doesn't really flush")
+def compact(cql, table):
+    # FIXME! Currently this doesn't compact at all!
+    print("NOTE: compact() stubbed, and doesn't really compact")
 
 # Looping "for _ in before_and_after_flush(cql, table)" runs code twice -
 # once immediately, then a flush, and then a second time.
