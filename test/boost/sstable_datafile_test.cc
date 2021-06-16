@@ -674,7 +674,7 @@ static future<> compact_sstables(test_env& env, sstring tmpdir_path, std::vector
 
 static future<> check_compacted_sstables(test_env& env, sstring tmpdir_path, unsigned long generation, std::vector<unsigned long> compacted_generations) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
     auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(compacted_generations));
 
