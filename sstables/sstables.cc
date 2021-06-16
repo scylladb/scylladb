@@ -2995,7 +2995,13 @@ void sstable::unused() {
 
 future<> sstable::destroy() {
     return close_files().finally([this] {
-        return _index_cache->evict_gently();
+        return _index_cache->evict_gently().then([this] {
+            if (_cached_index_file) {
+                return _cached_index_file->evict_gently();
+            } else {
+                return make_ready_future<>();
+            }
+        });
     });
 }
 

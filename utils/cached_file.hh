@@ -28,6 +28,7 @@
 #include "tracing/trace_state.hh"
 
 #include <seastar/core/file.hh>
+#include <seastar/core/coroutine.hh>
 
 #include <map>
 
@@ -416,6 +417,25 @@ public:
 
     logalloc::region& region() {
         return _region;
+    }
+
+    // Evicts all unused pages.
+    // Pages which are used are not removed.
+    future<> evict_gently() {
+        auto i = _cache.begin();
+        while (i != _cache.end()) {
+            if (i->is_linked()) {
+                on_evicted(*i);
+                i = i.erase(page_idx_less_comparator());
+            } else {
+                ++i;
+            }
+            if (need_preempt() && i != _cache.end()) {
+                auto key = i->idx;
+                co_await make_ready_future<>();
+                i = _cache.lower_bound(key);
+            }
+        }
     }
 };
 
