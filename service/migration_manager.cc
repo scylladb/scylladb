@@ -647,12 +647,15 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm)
 
 future<> migration_manager::include_keyspace_and_announce(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
+    co_return co_await announce(co_await include_keyspace(keyspace, std::move(mutations)));
+}
+
+future<std::vector<mutation>> migration_manager::include_keyspace(
+        const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-    return db::schema_tables::read_keyspace_mutation(service::get_storage_proxy(), keyspace.name())
-            .then([this, mutations = std::move(mutations)] (mutation m) mutable {
-                mutations.push_back(std::move(m));
-                return announce(std::move(mutations));
-            });
+    mutation m = co_await db::schema_tables::read_keyspace_mutation(service::get_storage_proxy(), keyspace.name());
+    mutations.push_back(std::move(m));
+    co_return std::move(mutations);
 }
 
 future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp) {
