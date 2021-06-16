@@ -110,6 +110,8 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
 
     BOOST_REQUIRE_EQUAL(tf.contents.substr(0, cf.size()),
         read_to_string(f, 0, cf.size()));
+
+    BOOST_CHECK_THROW(read_to_string(f, 0, cf.size() + 1), seastar::file::eof_error);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
