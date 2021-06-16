@@ -470,29 +470,4 @@ public:
     }
 };
 
-class querier_cache_context {
-    querier_cache* _cache{};
-    utils::UUID _key;
-    query::is_first_page _is_first_page;
-
-public:
-    querier_cache_context() = default;
-    querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page);
-    void insert(data_querier&& q, tracing::trace_state_ptr trace_state);
-    void insert(mutation_querier&& q, tracing::trace_state_ptr trace_state);
-    void insert(shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
-    std::optional<data_querier> lookup_data_querier(const schema& s,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
-    std::optional<mutation_querier> lookup_mutation_querier(const schema& s,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
-    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(const schema& s,
-            const dht::partition_range_vector& ranges,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
-};
-
 } // namespace query
