@@ -50,7 +50,9 @@ void do_require(bool condition, std::experimental::source_location sl, std::stri
     if (condition) {
         testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
     } else {
-        throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, condition, sl, msg));
+        auto formatted_msg = format_msg(__FUNCTION__, condition, sl, msg);
+        testlog.error("{}", formatted_msg);
+        throw_with_backtrace<std::runtime_error>(std::move(formatted_msg));
     }
 
 }
