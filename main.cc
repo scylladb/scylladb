@@ -314,7 +314,7 @@ verify_seastar_io_scheduler(const boost::program_options::variables_map& opts, b
     if (!opts.contains("max-io-requests") && !(opts.contains("io-properties") || opts.contains("io-properties-file"))) {
         note_bad_conf("none of --max-io-requests, --io-properties and --io-properties-file are set.");
     }
-    if (opts.contains("max-io-requests") && opts["max_io_requests"].as<unsigned>() < 4) {
+    if (opts.contains("max-io-requests") && opts["max-io-requests"].as<unsigned>() < 4) {
         auto cause = format("I/O Queue capacity for this shard is too low ({:d}, minimum 4 expected).", opts["max_io_requests"].as<unsigned>());
         note_bad_conf(cause);
     }
