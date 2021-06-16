@@ -130,6 +130,10 @@ public:
             return f;
         }
 
+        if (tp <= now()) {
+            return make_exception_future<T...>(timed_out<T...>{std::move(f)});
+        }
+
         struct sched : public scheduled_impl {
             // The original future (the `f` argument), when it resolves, will set value on `_p`.
             // Before timeout, `_p` is connected to the future returned to the user (`res` below).
