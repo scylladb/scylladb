@@ -1571,7 +1571,7 @@ namespace {
 // Although it implements the flat_mutation_reader:impl interface it cannot be
 // wrapped into a flat_mutation_reader, as it needs to be managed by a shared
 // pointer.
-class shard_reader : public enable_lw_shared_from_this<shard_reader>, public flat_mutation_reader::impl {
+class shard_reader : public flat_mutation_reader::impl {
 private:
     shared_ptr<reader_lifecycle_policy> _lifecycle_policy;
     const unsigned _shard;
@@ -1634,29 +1634,35 @@ future<> shard_reader::close() noexcept {
     // Nothing to do if there was no reader created, nor is there a background
     // read ahead in progress which will create one.
     if (!_reader && !_read_ahead) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
+    try {
+        if (_read_ahead) {
+            co_await *std::exchange(_read_ahead, std::nullopt);
+        }
 
-    // TODO: return future upstream as part of close()
-    return _lifecycle_policy->destroy_reader(_shard, f.then([this] {
-        return smp::submit_to(_shard, [this] {
-            auto ret = std::tuple(
-                    make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(*_reader).inactive_read_handle())),
-                    make_foreign(std::make_unique<const flat_mutation_reader::tracked_buffer>(_reader->detach_buffer())));
-            _reader.reset();
-            return ret;
-        }).then([this] (std::tuple<foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>>,
-                foreign_ptr<std::unique_ptr<const flat_mutation_reader::tracked_buffer>>> remains) {
-            auto&& [irh, remote_buffer] = remains;
-            auto buffer = detach_buffer();
-            for (const auto& mf : *remote_buffer) {
-                buffer.emplace_back(*_schema, _permit, mf); // we are copying from the remote shard.
-            }
-            return reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer)};
+        co_await smp::submit_to(_shard, [this] {
+            auto irh = std::move(*_reader).inactive_read_handle();
+            return with_closeable(flat_mutation_reader(_reader.release()), [this] (flat_mutation_reader& reader) mutable {
+                auto permit = reader.permit();
+                const auto& schema = *reader.schema();
+
+                auto unconsumed_fragments = reader.detach_buffer();
+                auto rit = std::reverse_iterator(buffer().cend());
+                auto rend = std::reverse_iterator(buffer().cbegin());
+                for (; rit != rend; ++rit) {
+                    unconsumed_fragments.emplace_front(schema, permit, *rit); // we are copying from the remote shard.
+                }
+
+                return unconsumed_fragments;
+            }).then([this, irh = std::move(irh)] (flat_mutation_reader::tracked_buffer&& buf) mutable {
+                return _lifecycle_policy->destroy_reader({std::move(irh), std::move(buf)});
+            });
         });
-    }).finally([zis = shared_from_this()] {}));
+    } catch (...) {
+        mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {}", _shard, std::current_exception());
+    }
 }
 
 future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
@@ -1701,7 +1707,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
         });
     }
 
-    return fill_buf_fut.then([this, zis = shared_from_this()] (remote_fill_buffer_result res) mutable {
+    return fill_buf_fut.then([this] (remote_fill_buffer_result res) mutable {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
             push_mutation_fragment(mutation_fragment(*_schema, _permit, mf));
@@ -1782,7 +1788,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     };
 
     const dht::sharder& _sharder;
-    std::vector<lw_shared_ptr<shard_reader>> _shard_readers;
+    std::vector<std::unique_ptr<shard_reader>> _shard_readers;
     // Contains the position of each shard with token granularity, organized
     // into a min-heap. Used to select the shard with the smallest token each
     // time a shard reader produces a new partition.
@@ -1911,7 +1917,7 @@ multishard_combining_reader::multishard_combining_reader(
 
     _shard_readers.reserve(_sharder.shard_count());
     for (unsigned i = 0; i < _sharder.shard_count(); ++i) {
-        _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
+        _shard_readers.emplace_back(std::make_unique<shard_reader>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
     }
 }
 
@@ -1946,7 +1952,7 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
     clear_buffer();
     _end_of_stream = false;
     on_partition_range_change(pr);
-    return parallel_for_each(_shard_readers, [&pr, timeout] (lw_shared_ptr<shard_reader>& sr) {
+    return parallel_for_each(_shard_readers, [&pr, timeout] (std::unique_ptr<shard_reader>& sr) {
         return sr->fast_forward_to(pr, timeout);
     });
 }
@@ -1956,25 +1962,9 @@ future<> multishard_combining_reader::fast_forward_to(position_range pr, db::tim
 }
 
 future<> multishard_combining_reader::close() noexcept {
-    auto shard_readers = std::move(_shard_readers);
-    return parallel_for_each(shard_readers, [] (lw_shared_ptr<shard_reader>& sr) {
+    return parallel_for_each(_shard_readers, [] (std::unique_ptr<shard_reader>& sr) {
         return sr->close();
     });
-}
-
-reader_concurrency_semaphore::inactive_read_handle
-reader_lifecycle_policy::pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader) {
-    return sem.register_inactive_read(std::move(reader));
-}
-
-reader_concurrency_semaphore::inactive_read_handle
-reader_lifecycle_policy::pause(flat_mutation_reader reader) {
-    return pause(semaphore(), std::move(reader));
-}
-
-flat_mutation_reader_opt
-reader_lifecycle_policy::try_resume(reader_concurrency_semaphore::inactive_read_handle irh) {
-    return semaphore().unregister_inactive_read(std::move(irh));
 }
 
 flat_mutation_reader make_multishard_combining_reader(

@@ -490,14 +490,9 @@ std::pair<flat_mutation_reader, evictable_reader_handle> make_manually_paused_ev
 class reader_lifecycle_policy {
 public:
     struct stopped_reader {
-        foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> handle;
+        reader_concurrency_semaphore::inactive_read_handle handle;
         flat_mutation_reader::tracked_buffer unconsumed_fragments;
     };
-
-protected:
-    // Helpers for implementations, who might wish to provide the semaphore in
-    // other ways than through the official `semaphore()` override.
-    static reader_concurrency_semaphore::inactive_read_handle pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader);
 
 public:
     /// Create an appropriate reader on the shard it is called on.
@@ -516,21 +511,16 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) = 0;
 
-    /// Wait on the shard reader to stop then destroy it.
+    /// Destroy the shard reader.
     ///
     /// Will be called when the multishard reader is being destroyed. It will be
-    /// called for each of the shard readers. The future resolves when the
-    /// reader is stopped, that is it, finishes all background and/or pending
-    /// work.
+    /// called for each of the shard readers.
     /// This method is expected to do a proper cleanup, that is, leave any gates,
     /// release any locks or whatever is appropriate for the shard reader.
     ///
-    /// The multishard reader couldn't wait on any future returned from this
-    /// method (as it will be called from the destructor) so waiting on
-    /// all the readers being cleaned up is up to the implementation.
-    ///
+    /// This method has to be called on the shard the reader lives on.
     /// This method will be called from a destructor so it cannot throw.
-    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+    virtual future<> destroy_reader(stopped_reader reader) noexcept = 0;
 
     /// Get the relevant semaphore for this read.
     ///
@@ -543,26 +533,6 @@ public:
     ///
     /// This method will be called on the shard where the relevant reader lives.
     virtual reader_concurrency_semaphore& semaphore() = 0;
-
-    /// Pause the reader.
-    ///
-    /// The purpose of pausing a reader is making it evictable while it is
-    /// otherwise inactive. This allows freeing up resources that are in-demand
-    /// by evicting these paused readers. Most notably, this allows freeing up
-    /// reader permits when the node is overloaded with reads.
-    /// This is just a helper method, it uses the semaphore returned by
-    /// `semaphore()` for the actual pausing.
-    /// \see semaphore()
-    reader_concurrency_semaphore::inactive_read_handle pause(flat_mutation_reader reader);
-
-    /// Try to resume the reader.
-    ///
-    /// The optional returned will be disengaged when resuming fails. This can
-    /// happen if the reader was evicted while paused.
-    /// This is just a helper method, it uses the semaphore returned by
-    /// `semaphore()` for the actual pausing.
-    /// \see semaphore()
-    flat_mutation_reader_opt try_resume(reader_concurrency_semaphore::inactive_read_handle irh);
 };
 
 /// Make a multishard_combining_reader.
