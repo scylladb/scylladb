@@ -228,8 +228,9 @@ future<call_result_t<M>> call(
             std::rethrow_exception(eptr);
         } catch (raft::not_a_leader e) {
             return make_ready_future<call_result_t<M>>(e);
-        } catch (timed_out_error e) {
-            return make_ready_future<call_result_t<M>>(e);
+        } catch (logical_timer::timed_out<typename M::output_t> e) {
+            (void)e.get_future().discard_result();
+            return make_ready_future<call_result_t<M>>(timed_out_error{});
         }
     });
 }
