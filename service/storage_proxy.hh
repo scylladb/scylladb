@@ -67,6 +67,7 @@
 #include "locator/token_metadata.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;

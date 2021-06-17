@@ -36,7 +36,6 @@
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
-#include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
 #include "db/hints/resource_manager.hh"
@@ -80,7 +79,7 @@ public:
     future<> ensure_rebalanced();
 };
 
-class manager : public service::endpoint_lifecycle_subscriber {
+class manager {
 private:
     struct stats {
         uint64_t size_of_hints_in_progress = 0;
@@ -662,13 +661,6 @@ public:
     /// \return A future that resolves when the operation is complete.
     static future<> rebalance(sstring hints_directory);
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) override {}
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) override {
-        drain_for(endpoint);
-    };
-    virtual void on_up(const gms::inet_address& endpoint) override {}
-    virtual void on_down(const gms::inet_address& endpoint) override {}
-
     /// \brief Waits until all current hints on disk for given endpoints are replayed or the timeout is reached.
     /// \param endpoints list of endpoints whose hints need to be waited on
     /// \param timeout if hints are not replayed until the timeout, the function will return with an exception
@@ -754,6 +746,7 @@ private:
     end_point_hints_manager& get_ep_manager(ep_key_type ep);
     bool have_ep_manager(ep_key_type ep) const noexcept;
 
+public:
     /// \brief Initiate the draining when we detect that the node has left the cluster.
     ///
     /// If the node that has left is the current node - drains all pending hints to all nodes.
@@ -765,6 +758,7 @@ private:
     /// \param endpoint node that left the cluster
     void drain_for(gms::inet_address endpoint);
 
+private:
     void update_backlog(size_t backlog, size_t max_backlog);
 
     bool stopping() const noexcept {
