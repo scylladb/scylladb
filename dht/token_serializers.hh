@@ -21,6 +21,64 @@
 
 #pragma once
 
+namespace dht {
+
+// Once upon a time, we had special before_all_keys and after_all_keys tokens,
+// which were used to represent unbounded intervals. But our interval types
+// have their own ways to do that, so those special tokens were removed as
+// redundant.
+//
+// However, dht::token is a type used in IDL, so we need to handle token_kind
+// in RPC for backward compatibility. token_kind should only be used on the
+// RPC boundary.
+enum class token_kind {
+    before_all_keys,
+    key,
+    after_all_keys,
+};
+
+struct legacy_token {
+    token_kind _kind;
+    int64_t _data;
+
+    legacy_token(token_kind k, int64_t d) : _kind(k), _data(d) {}
+
+    // IDL constructor.
+    legacy_token(token_kind k, const bytes& b) : _kind(k) {
+        switch (k) {
+        case token_kind::before_all_keys:
+            _data = std::numeric_limits<int64_t>::min();
+            break;
+        case token_kind::after_all_keys:
+            _data = std::numeric_limits<int64_t>::max();
+            break;
+        default:
+            if (b.size() != sizeof(_data)) {
+                throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
+            }
+            _data = net::ntoh(read_unaligned<int64_t>(b.begin()));
+        }
+    }
+
+    bytes data() const {
+        bytes b(bytes::initialized_later(), sizeof(_data));
+        write_unaligned<int64_t>(b.begin(), net::hton(_data));
+        return b;
+    }
+
+    operator token() const {
+        return token::from_int64(_data);
+    }
+
+    legacy_token(token t)
+        : _kind(t.is_minimum() ? token_kind::before_all_keys : token_kind::key)
+        , _data(t.to_int64())
+    { }
+};
+
+} // namespace dht
+
+// The IDL generated code has to be included after relevant definitions.
 #include "idl/token.dist.hh"
 #include "idl/ring_position.dist.hh"
 #include "idl/range.dist.hh"
@@ -76,7 +134,7 @@ struct serializer<dht::token> {
     }
     template<typename Output>
     static void write(Output& out, dht::token obj) {
-        return serializer<dht::legacy_token>::write(out, obj.legacy());
+        return serializer<dht::legacy_token>::write(out, obj);
     }
     template<typename Input>
     static void skip(Input& in) {
