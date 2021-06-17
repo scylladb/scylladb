@@ -1637,7 +1637,7 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
     }));
 }
 
-static size_t memory_usage_of(const std::vector<frozen_mutation_and_schema>& ms) {
+static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_schema>& ms) {
     // Overhead of sending a view mutation, in terms of data structures used by the storage_proxy.
     constexpr size_t base_overhead_bytes = 256;
     return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
@@ -1671,7 +1671,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             std::move(views),
             flat_mutation_reader_from_mutations(std::move(permit), {std::move(m)}),
             std::move(existings),
-            now).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            now).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (utils::chunked_vector<frozen_mutation_and_schema>&& updates) mutable {
             tracing::trace(tr_state, "Generated {} view update mutations", updates.size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
         return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(tr_state),
@@ -1782,7 +1782,7 @@ future<> table::populate_views(
             std::move(views),
             std::move(reader),
             { },
-            now).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            now).then([base_token = std::move(base_token), this] (utils::chunked_vector<frozen_mutation_and_schema>&& updates) mutable {
         size_t update_size = memory_usage_of(updates);
         size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
         return seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for).then(

@@ -134,7 +134,7 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
 
 bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck, gc_clock::time_point now);
 
-future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
+future<utils::chunked_vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader&& updates,
@@ -152,7 +152,7 @@ struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 future<> mutate_MV(
         dht::token base_token,
-        std::vector<frozen_mutation_and_schema> view_updates,
+        utils::chunked_vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
         cf_stats& cf_stats,
         tracing::trace_state_ptr tr_state,
