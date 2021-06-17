@@ -303,6 +303,9 @@ public:
     }
 };
 
+static_assert(std::is_nothrow_copy_constructible_v<reader_permit>);
+static_assert(std::is_nothrow_move_constructible_v<reader_permit>);
+
 reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
 {
 }

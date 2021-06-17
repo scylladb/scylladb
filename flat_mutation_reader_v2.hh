@@ -411,7 +411,7 @@ public:
             return _buffer_size;
         }
 
-        tracked_buffer detach_buffer() {
+        tracked_buffer detach_buffer() noexcept {
             _buffer_size = 0;
             return std::exchange(_buffer, tracked_buffer(tracking_allocator<mutation_fragment_v2>(_permit)));
         }
@@ -656,7 +656,7 @@ public:
     // until is_buffer_empty() returns true.
     // The reader will need to allocate a new buffer on the next fill_buffer()
     // call.
-    tracked_buffer detach_buffer() {
+    tracked_buffer detach_buffer() noexcept {
         return _impl->detach_buffer();
     }
     // Moves the buffer content to `other`.
