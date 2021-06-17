@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/sleep.hh>
 #include "partition_range_compat.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
@@ -52,7 +53,6 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
-#include "storage_service.hh"
 #include <seastar/core/future-util.hh>
 #include "db/read_repair_decision.hh"
 #include "db/config.hh"
@@ -106,6 +106,7 @@
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
 #include "service/paxos/paxos_state.hh"
+#include "gms/feature_service.hh"
 
 namespace bi = boost::intrusive;
 
@@ -5273,15 +5274,15 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
     co_return ret;
 }
 
-future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
+future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
     future<> f = make_ready_future<>();
     if (!_hints_manager.is_disabled_for_all()) {
         f = _hints_resource_manager.register_manager(_hints_manager);
     }
     return f.then([this] {
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
-    }).then([this, gossiper_ptr, ss_ptr] {
-        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr, ss_ptr);
+    }).then([this, gossiper_ptr] {
+        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr);
     });
 }
 

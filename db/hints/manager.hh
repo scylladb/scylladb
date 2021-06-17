@@ -43,10 +43,6 @@
 
 class fragmented_temporary_buffer;
 
-namespace service {
-class storage_service;
-}
-
 namespace utils {
 class directories;
 }
@@ -521,7 +517,6 @@ private:
     host_filter _host_filter;
     shared_ptr<service::storage_proxy> _proxy_anchor;
     shared_ptr<gms::gossiper> _gossiper_anchor;
-    shared_ptr<service::storage_service> _strorage_service_anchor;
     locator::snitch_ptr& _local_snitch_ptr;
     int64_t _max_hint_window_us = 0;
     database& _local_db;
@@ -542,7 +537,7 @@ public:
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
     void register_metrics(const sstring& group_name);
-    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
+    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
