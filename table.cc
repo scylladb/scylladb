@@ -1363,11 +1363,13 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 
 }
 
-future<> table::snapshot(database& db, sstring name) {
-    return flush().then([this, &db, name = std::move(name)]() {
-       return with_semaphore(_sstable_deletion_sem, 1, [this, &db, name = std::move(name)]() {
+future<> table::snapshot(database& db, sstring name, bool skip_flush) {
+    auto jsondir = _config.datadir + "/snapshots/" + name;
+    tlogger.debug("snapshot {}: skip_flush={}", jsondir, skip_flush);
+    auto f = skip_flush ? make_ready_future<>() : flush();
+    return f.then([this, &db, jsondir = std::move(jsondir)]() {
+       return with_semaphore(_sstable_deletion_sem, 1, [this, &db, jsondir = std::move(jsondir)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
-        auto jsondir = _config.datadir + "/snapshots/" + name;
         return do_with(std::move(tables), std::move(jsondir), [this, &db] (std::vector<sstables::shared_sstable>& tables, const sstring& jsondir) {
             return io_check([&jsondir] { return recursive_touch_directory(jsondir); }).then([this, &db, &jsondir, &tables] {
                 return max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
