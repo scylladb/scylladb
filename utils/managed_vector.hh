@@ -77,10 +77,14 @@ private:
         auto new_capacity = std::max({ _capacity + std::min(_capacity, size_type(1024)), new_size, size_type(InternalSize + 8) });
         reserve(new_capacity);
     }
+public:
+    // Clears the vector and ensures that the destructor will not have to free any memory so
+    // that the object can be destroyed under any allocator.
     void clear_and_release() noexcept {
         clear();
         if (is_external()) {
             current_allocator().free(get_external(), get_external()->storage_size());
+            _data = reinterpret_cast<T*>(_internal.data());
         }
     }
 public:
