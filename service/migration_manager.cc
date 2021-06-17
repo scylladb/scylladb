@@ -645,6 +645,11 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm)
     return announce_new_column_family(std::move(cfm), api::new_timestamp());
 }
 
+future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm)
+{
+    return prepare_new_column_family_announcement(std::move(cfm), api::new_timestamp());
+}
+
 future<> migration_manager::include_keyspace_and_announce(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     co_return co_await announce(co_await include_keyspace(keyspace, std::move(mutations)));
@@ -659,6 +664,10 @@ future<std::vector<mutation>> migration_manager::include_keyspace(
 }
 
 future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp) {
+    co_await announce(co_await prepare_new_column_family_announcement(std::move(cfm), timestamp));
+}
+
+future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp) {
 #if 0
     cfm.validate();
 #endif
@@ -680,7 +689,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
             get_notifier().before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
         }).then([this, ksm](std::vector<mutation> mutations) {
-            return include_keyspace_and_announce(*ksm, std::move(mutations));
+            return include_keyspace(*ksm, std::move(mutations));
         });
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(format("Cannot add table '{}' to non existing keyspace '{}'.", cfm->cf_name(), cfm->ks_name()));

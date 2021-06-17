@@ -135,8 +135,10 @@ public:
     future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> timestamp);
 
     future<> announce_new_column_family(schema_ptr cfm);
+    future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm);
 
     future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp);
+    future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp);
 
     future<> announce_new_type(user_type new_type);
 
