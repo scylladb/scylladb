@@ -36,17 +36,12 @@
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
-#include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
 
 class fragmented_temporary_buffer;
-
-namespace service {
-class storage_service;
-}
 
 namespace utils {
 class directories;
@@ -80,7 +75,7 @@ public:
     future<> ensure_rebalanced();
 };
 
-class manager : public service::endpoint_lifecycle_subscriber {
+class manager {
 private:
     struct stats {
         uint64_t size_of_hints_in_progress = 0;
@@ -522,7 +517,6 @@ private:
     host_filter _host_filter;
     shared_ptr<service::storage_proxy> _proxy_anchor;
     shared_ptr<gms::gossiper> _gossiper_anchor;
-    shared_ptr<service::storage_service> _strorage_service_anchor;
     locator::snitch_ptr& _local_snitch_ptr;
     int64_t _max_hint_window_us = 0;
     database& _local_db;
@@ -543,7 +537,7 @@ public:
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
     void register_metrics(const sstring& group_name);
-    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
+    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
@@ -662,13 +656,6 @@ public:
     /// \return A future that resolves when the operation is complete.
     static future<> rebalance(sstring hints_directory);
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) override {}
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) override {
-        drain_for(endpoint);
-    };
-    virtual void on_up(const gms::inet_address& endpoint) override {}
-    virtual void on_down(const gms::inet_address& endpoint) override {}
-
     /// \brief Waits until all current hints on disk for given endpoints are replayed or the timeout is reached.
     /// \param endpoints list of endpoints whose hints need to be waited on
     /// \param timeout if hints are not replayed until the timeout, the function will return with an exception
@@ -754,6 +741,7 @@ private:
     end_point_hints_manager& get_ep_manager(ep_key_type ep);
     bool have_ep_manager(ep_key_type ep) const noexcept;
 
+public:
     /// \brief Initiate the draining when we detect that the node has left the cluster.
     ///
     /// If the node that has left is the current node - drains all pending hints to all nodes.
@@ -765,6 +753,7 @@ private:
     /// \param endpoint node that left the cluster
     void drain_for(gms::inet_address endpoint);
 
+private:
     void update_backlog(size_t backlog, size_t max_backlog);
 
     bool stopping() const noexcept {

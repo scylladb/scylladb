@@ -67,6 +67,7 @@
 #include "locator/token_metadata.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -614,7 +615,7 @@ public:
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
     future<> stop();
-    future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
+    future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr);
     void allow_replaying_hints() noexcept;
     future<> drain_on_shutdown();
 

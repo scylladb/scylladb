@@ -35,7 +35,6 @@
 
 namespace service {
 class storage_proxy;
-class storage_service;
 }
 
 namespace gms {
@@ -136,7 +135,6 @@ class resource_manager {
 
     shared_ptr<service::storage_proxy> _proxy_ptr;
     shared_ptr<gms::gossiper> _gossiper_ptr;
-    shared_ptr<service::storage_service> _ss_ptr;
 
     enum class state {
         running,
@@ -190,7 +188,7 @@ public:
     future<semaphore_units<named_semaphore::exception_factory>> get_send_units_for(size_t buf_size);
     size_t sending_queue_length() const;
 
-    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
+    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop() noexcept;
 
     /// \brief Allows replaying hints for managers which are registered now or will be in the future.
