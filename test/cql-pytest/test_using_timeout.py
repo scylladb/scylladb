@@ -44,6 +44,10 @@ def test_per_query_timeout_effective(scylla_only, cql, table1):
         cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 0ms")
     with pytest.raises(WriteTimeout):
         cql.execute(f"UPDATE {table} USING TIMEOUT 0ms SET v = 5 WHERE p = {key} AND c = 1")
+    with pytest.raises(WriteTimeout):
+        cql.execute(f"DELETE FROM {table} USING TIMEOUT 0ms WHERE p = {key}")
+    with pytest.raises(WriteTimeout):
+        cql.execute(f"DELETE FROM {table} USING TIMEOUT 0ms AND timestamp 42 WHERE p = {key}")
 
 # Performing operations with large enough timeout should succeed
 def test_per_query_timeout_large_enough(scylla_only, cql, table1):
@@ -159,3 +163,4 @@ def test_invalid_timeout(scylla_only, cql, table1):
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TIMESTAMP 42")
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 10000")
     invalid(f"SELECT * FROM {table} USING TIMEOUT 60s AND TTL 123 AND TIMESTAMP 911")
+    invalid (f"DELETE FROM {table} USING TIMEOUT 60s AND TTL 42 WHERE p = 42")

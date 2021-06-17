@@ -225,7 +225,11 @@ delete_statement::delete_statement(cf_name name,
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _deletions(std::move(deletions))
     , _where_clause(std::move(where_clause))
-{ }
+{
+    if (_attrs->time_to_live) {
+        throw exceptions::invalid_request_exception("TTL attribute is not allowed for deletes");
+    }
+}
 
 }
 
