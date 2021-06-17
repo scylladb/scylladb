@@ -588,7 +588,7 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
-      ( usingClauseDelete[attrs] )?
+      ( usingClause[attrs] )?
       K_WHERE wclause=whereClause
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
       {
@@ -610,10 +610,6 @@ deleteOp returns [std::unique_ptr<cql3::operation::raw_deletion> op]
     : c=cident                { $op = std::make_unique<cql3::operation::column_deletion>(std::move(c)); }
     | c=cident '[' t=term ']' { $op = std::make_unique<cql3::operation::element_deletion>(std::move(c), std::move(t)); }
     | c=cident '.' field=ident { $op = std::make_unique<cql3::operation::field_deletion>(std::move(c), std::move(field)); }
-    ;
-
-usingClauseDelete[std::unique_ptr<cql3::attributes::raw>& attrs]
-    : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     ;
 
 /**
