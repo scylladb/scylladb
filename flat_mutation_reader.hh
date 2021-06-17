@@ -372,7 +372,7 @@ public:
 
         tracked_buffer detach_buffer() {
             _buffer_size = 0;
-            return std::exchange(_buffer, tracked_buffer(_permit));
+            return std::exchange(_buffer, tracked_buffer(tracking_allocator<mutation_fragment>(_permit)));
         }
 
         void move_buffer_content_to(impl& other) {
