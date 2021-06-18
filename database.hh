@@ -101,10 +101,8 @@ class feature_service;
 namespace sstables {
 
 class sstable;
-class entry_descriptor;
 class compaction_descriptor;
 class compaction_completion_desc;
-class foreign_sstable_open_info;
 class sstables_manager;
 
 }
