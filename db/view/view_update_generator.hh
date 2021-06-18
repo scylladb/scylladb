@@ -40,11 +40,6 @@ private:
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
     named_semaphore _registration_sem{registration_queue_size, named_semaphore_exception_factory{"view update generator"}};
-    struct sstable_with_table {
-        sstables::shared_sstable sst;
-        lw_shared_ptr<table> t;
-        sstable_with_table(sstables::shared_sstable sst, lw_shared_ptr<table> t) : sst(std::move(sst)), t(std::move(t)) { }
-    };
     std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
     metrics::metric_groups _metrics;
