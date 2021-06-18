@@ -1086,15 +1086,8 @@ sstable_set::make_local_shard_sstable_reader(
 {
     auto reader_factory_fn = [s, permit, &slice, &pc, trace_state, fwd, fwd_mr, &monitor_generator]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        flat_mutation_reader reader = sst->make_reader(s, permit, pr, slice, pc,
-                trace_state, fwd, fwd_mr, monitor_generator(sst));
-        if (sst->is_shared()) {
-            auto filter = [&s = *s](const dht::decorated_key& dk) -> bool {
-                return dht::shard_of(s, dk.token()) == this_shard_id();
-            };
-            reader = make_filtering_reader(std::move(reader), std::move(filter));
-        }
-        return reader;
+        assert(!sst->is_shared());
+        return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
     return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
