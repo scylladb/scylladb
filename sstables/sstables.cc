@@ -1812,6 +1812,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         ex = std::current_exception();
     }
 
+    co_await sem.stop();
+
     try {
         co_await index_file.close();
     } catch (...) {
@@ -2696,10 +2698,17 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
         co_return false;
     }
     bool present;
+    std::exception_ptr ex;
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
-    {
+    try {
         auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
         present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await sem.stop();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
     }
     co_return present;
 }
