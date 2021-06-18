@@ -1779,35 +1779,35 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     std::exception_ptr ex;
 
     try {
-                auto index_size = co_await index_file.size();
-                // an upper bound. Surely to be less than this.
-                auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
-                prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
+        auto index_size = co_await index_file.size();
+        // an upper bound. Surely to be less than this.
+        auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
+        prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
 
-                file_input_stream_options options;
-                options.buffer_size = sstable_buffer_size;
-                options.io_priority_class = pc;
+        file_input_stream_options options;
+        options.buffer_size = sstable_buffer_size;
+        options.io_priority_class = pc;
 
-                auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.config().sstable_summary_ratio());
-                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            sem.make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
-                            (_version >= sstable_version_types::mc
-                                ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                                : std::optional<column_values_fixed_lengths>{}));
+        auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.config().sstable_summary_ratio());
+            auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
+                    sem.make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
+                    (_version >= sstable_version_types::mc
+                        ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
+                        : std::optional<column_values_fixed_lengths>{}));
 
-                try {
-                    co_await ctx->consume_input();
-                } catch (...) {
-                    ex = std::current_exception();
-                }
+        try {
+            co_await ctx->consume_input();
+        } catch (...) {
+            ex = std::current_exception();
+        }
 
-                co_await ctx->close();
+        co_await ctx->close();
 
-                if (ex) {
-                    std::rethrow_exception(std::exchange(ex, {}));
-                }
+        if (ex) {
+            std::rethrow_exception(std::exchange(ex, {}));
+        }
 
-                co_await seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
+        co_await seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
     } catch (...) {
         ex = std::current_exception();
     }
