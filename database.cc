@@ -776,7 +776,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm, true /* bootstrap. do not mark populated yet */, system_keyspace::no);
     }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this] (schema_result_value_type &v) {
             auto& ks = this->find_keyspace(v.first);
             auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
             for (auto&& type : user_types) {
@@ -785,7 +785,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return make_ready_future<>();
         });
     }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [this, &proxy] (schema_result_value_type& v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [this] (schema_result_value_type& v) {
             auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
             for (auto&& func : user_functions) {
                 cql3::functions::functions::add_function(func);
