@@ -46,15 +46,6 @@ static const std::unordered_set<std::string_view> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
 };
 
-// Not super nice. Adding statefulness to the file. 
-static std::unordered_set<sstring> load_prio_keyspaces;
-static bool population_started = false;
-
-void distributed_loader::mark_keyspace_as_load_prio(const sstring& ks) {
-    assert(!population_started);
-    load_prio_keyspaces.insert(ks);
-}
-
 bool is_system_keyspace(std::string_view name) {
     return system_keyspaces.contains(name);
 }
@@ -633,8 +624,6 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
 }
 
 future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
-    population_started = true;
-
     return seastar::async([&db] {
         // We need to init commitlog on shard0 before it is inited on other shards
         // because it obtains the list of pre-existing segments for replay, which must
