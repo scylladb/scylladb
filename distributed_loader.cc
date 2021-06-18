@@ -325,25 +325,26 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 
     auto& table = db.local().find_column_family(ks, cf);
 
-    return do_with(dht::ring_position::max(), dht::ring_position::min(), [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (dht::ring_position& min, dht::ring_position& max) {
-        return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &min, &max] (sstables::shared_sstable sst) {
+    return do_with(dht::ring_position::max(), dht::ring_position::min(), std::vector<sstables::shared_sstable>(),
+            [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (dht::ring_position& min, dht::ring_position& max, std::vector<sstables::shared_sstable>& new_sstables) {
+        return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &min, &max, &new_sstables] (sstables::shared_sstable sst) {
             min = std::min(dht::ring_position(sst->get_first_decorated_key()), min, dht::ring_position_less_comparator(*table.schema()));
             max = std::max(dht::ring_position(sst->get_last_decorated_key()) , max, dht::ring_position_less_comparator(*table.schema()));
 
             auto gen = table.calculate_generation_for_new_table();
             dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
-            return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, sst] {
-                table._sstables_opened_but_not_loaded.push_back(std::move(sst));
+            return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, &new_sstables, sst] {
+                new_sstables.push_back(std::move(sst));
                 return make_ready_future<>();
             });
-        }).then([&table, &min, &max] {
+        }).then([&table, &min, &max, &new_sstables] {
             // nothing loaded
             if (min.is_max() && max.is_min()) {
                 return make_ready_future<>();
             }
 
-            return table.get_row_cache().invalidate(row_cache::external_updater([&table] () noexcept {
-                for (auto& sst : table._sstables_opened_but_not_loaded) {
+            return table.get_row_cache().invalidate(row_cache::external_updater([&table, &new_sstables] () noexcept {
+                for (auto& sst : new_sstables) {
                     try {
                         table.load_sstable(sst, true);
                     } catch (...) {
@@ -352,17 +353,16 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
                     }
                 }
             }), dht::partition_range::make({min, true}, {max, true}));
-        }).then([&view_update_generator, &table] {
-            return parallel_for_each(table._sstables_opened_but_not_loaded, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
+        }).then([&view_update_generator, &table, &new_sstables] {
+            return parallel_for_each(new_sstables, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
                 if (sst->requires_view_building()) {
                     return view_update_generator.local().register_staging_sstable(sst, table.shared_from_this());
                 }
                 return make_ready_future<>();
             });
-        }).then_wrapped([&table] (future<> f) {
-            auto opened = std::exchange(table._sstables_opened_but_not_loaded, {});
+        }).then_wrapped([&new_sstables] (future<> f) {
             if (!f.failed()) {
-                return make_ready_future<size_t>(opened.size());
+                return make_ready_future<size_t>(new_sstables.size());
             } else {
                 return make_exception_future<size_t>(f.get_exception());
             }

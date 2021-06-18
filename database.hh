@@ -414,11 +414,6 @@ private:
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
-    // sstables that have been opened but not loaded yet, that's because refresh
-    // needs to load all opened sstables atomically, and now, we open a sstable
-    // in all shards at the same time, which makes it hard to store all sstables
-    // we need to load later on for all shards.
-    std::vector<sstables::shared_sstable> _sstables_opened_but_not_loaded;
     // sstables that should not be compacted (e.g. because they need to be used
     // to generate view updates later)
     std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_staging;
