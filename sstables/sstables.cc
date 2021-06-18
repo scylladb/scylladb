@@ -2693,15 +2693,15 @@ sstable::compute_shards_for_this_sstable() const {
 future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::decorated_key& dk) {
     shared_sstable s = shared_from_this();
     if (!filter_has_key(hk)) {
-        return make_ready_future<bool>(false);
+        co_return false;
     }
-    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
-    auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem->make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
-    auto& lh_index = *lh_index_ptr;
-    return lh_index.advance_lower_and_check_if_present(dk).then([lh_index_ptr = std::move(lh_index_ptr), s, sem = std::move(sem)] (bool present) mutable {
-        lh_index_ptr.reset(); // destroy before the semaphore
-        return make_ready_future<bool>(present);
-    });
+    bool present;
+    auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
+    {
+        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
+        present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
+    }
+    co_return present;
 }
 
 utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key& key) {
