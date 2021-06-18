@@ -1636,25 +1636,28 @@ void test_reader_conversions(populate_fn_ex populate) {
 
 void test_next_partition(populate_fn_ex);
 
-void run_mutation_reader_tests(populate_fn_ex populate) {
-    test_range_tombstones_v2(populate);
+void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
     test_reader_conversions(populate);
-    test_slicing_and_fast_forwarding(populate);
     test_date_tiered_clustering_slicing(populate);
-    test_fast_forwarding_across_partitions_to_empty_range(populate);
-    test_clustering_slices(populate);
     test_mutation_reader_fragments_have_monotonic_positions(populate);
-    test_streamed_mutation_forwarding_across_range_tombstones(populate);
-    test_streamed_mutation_forwarding_guarantees(populate);
     test_all_data_is_read_back(populate);
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
-    test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
-    test_range_queries(populate);
     test_query_only_static_row(populate);
     test_query_no_clustering_ranges_no_static_columns(populate);
     test_next_partition(populate);
     test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
     test_slicing_with_overlapping_range_tombstones(populate);
+
+    if (with_partition_range_forwarding) {
+        test_range_tombstones_v2(populate);
+        test_range_queries(populate);
+        test_streamed_mutation_forwarding_across_range_tombstones(populate);
+        test_slicing_and_fast_forwarding(populate);
+        test_clustering_slices(populate);
+        test_fast_forwarding_across_partitions_to_empty_range(populate);
+        test_streamed_mutation_forwarding_guarantees(populate);
+        test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
+    }
 }
 
 void test_next_partition(populate_fn_ex populate) {
@@ -1690,15 +1693,15 @@ void test_next_partition(populate_fn_ex populate) {
         .produces_end_of_stream();
 }
 
-void run_mutation_source_tests(populate_fn populate) {
+void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding) {
     auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
         return populate(std::move(s), muts);
     };
-    run_mutation_source_tests(std::move(populate_ex));
+    run_mutation_source_tests(std::move(populate_ex), with_partition_range_forwarding);
 }
 
-void run_mutation_source_tests(populate_fn_ex populate) {
-    run_mutation_reader_tests(populate);
+void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    run_mutation_reader_tests(populate, with_partition_range_forwarding);
 
     // ? -> v2 -> v1 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
@@ -1713,7 +1716,7 @@ void run_mutation_source_tests(populate_fn_ex populate) {
             return downgrade_to_v1(
                     ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
-    });
+    }, with_partition_range_forwarding);
 
     // ? -> v1 -> v2 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
@@ -1728,7 +1731,7 @@ void run_mutation_source_tests(populate_fn_ex populate) {
             return upgrade_to_v2(
                     ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
-    });
+    }, with_partition_range_forwarding);
 }
 
 struct mutation_sets {
