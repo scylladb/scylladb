@@ -50,7 +50,6 @@ class feature final {
     sstring _name;
     bool _enabled = false;
     mutable signal_type _s;
-    friend class gossiper;
 public:
     using listener_registration = std::any;
     class listener {
