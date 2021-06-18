@@ -146,7 +146,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 testlog.info("Simple read");
                 auto mt = make_memtable(mgr, tbl_stats, muts);
 
-                assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
+                assert_that(mt->make_flush_reader(gen.schema(), tests::make_permit(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_compacted(compacted_muts[1], now)
                     .produces_compacted(compacted_muts[2], now)
@@ -155,7 +155,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
+                assert_that(mt->make_flush_reader(gen.schema(), tests::make_permit(), default_priority_class()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
                     .next_partition()
@@ -169,7 +169,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
+                assert_that(mt->make_flush_reader(gen.schema(), tests::make_permit(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
                     .next_partition()
@@ -276,7 +276,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         std::vector<size_t> virtual_dirty_values;
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
-        auto flush_reader_check = assert_that(mt->make_flush_reader(s, service::get_local_priority_manager().memtable_flush_priority()));
+        auto flush_reader_check = assert_that(mt->make_flush_reader(s, tests::make_permit(), service::get_local_priority_manager().memtable_flush_priority()));
         flush_reader_check.produces_partition(current_ring[0]);
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
@@ -394,7 +394,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         std::vector<size_t> virtual_dirty_values;
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
-        auto rd = mt->make_flush_reader(s, service::get_local_priority_manager().memtable_flush_priority());
+        auto rd = mt->make_flush_reader(s, tests::make_permit(), service::get_local_priority_manager().memtable_flush_priority());
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
@@ -476,7 +476,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
             auto revert = defer([&] {
                 mt->revert_flushed_memory();
             });
-            assert_that(mt->make_flush_reader(s, default_priority_class()))
+            assert_that(mt->make_flush_reader(s, tests::make_permit(), default_priority_class()))
                 .produces(ms);
         });
     });

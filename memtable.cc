@@ -28,12 +28,6 @@
 #include "partition_builder.hh"
 #include "mutation_partition_view.hh"
 
-namespace {
-
-thread_local reader_concurrency_semaphore _flush_semaphore(reader_concurrency_semaphore::no_limits{}, "memtable_flush_semaphore"); // only for accounting
-
-}
-
 void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
     if (ts != api::missing_timestamp) {
         encoding_stats_collector::update_timestamp(ts);
@@ -702,8 +696,7 @@ memtable::make_flat_reader(schema_ptr s,
 }
 
 flat_mutation_reader
-memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
-    auto permit = _flush_semaphore.make_permit(s.get(), "memtable-flush");
+memtable::make_flush_reader(schema_ptr s, reader_permit permit, const io_priority_class& pc) {
     if (group()) {
         return make_flat_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
     } else {

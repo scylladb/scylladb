@@ -645,7 +645,10 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             });
         });
 
-        auto f = consumer(old->make_flush_reader(old->schema(), service::get_local_memtable_flush_priority()));
+        auto f = consumer(old->make_flush_reader(
+                    old->schema(),
+                    compaction_concurrency_semaphore().make_permit(old->schema().get(), "try_flush_memtable_to_sstable()"),
+                    service::get_local_memtable_flush_priority()));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
@@ -1896,17 +1899,24 @@ write_memtable_to_sstable(flat_mutation_reader reader,
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
+write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_sstable sst,
                           sstables::write_monitor& monitor,
                           sstables::sstable_writer_config& cfg,
                           const io_priority_class& pc) {
-    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), pc), mt, std::move(sst), monitor, cfg, pc);
+    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), std::move(permit), pc), mt, std::move(sst), monitor, cfg, pc);
 }
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::sstable_writer_config cfg) {
-    return do_with(permit_monitor(make_lw_shared(sstable_write_permit::unconditional())), cfg, [&mt, sst] (auto& monitor, auto& cfg) {
-        return write_memtable_to_sstable(mt, std::move(sst), monitor, cfg);
+    return do_with(
+            permit_monitor(make_lw_shared(sstable_write_permit::unconditional())),
+            std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable"),
+            cfg,
+            [&mt, sst] (auto& monitor, auto& semaphore, auto& cfg) {
+        return write_memtable_to_sstable(semaphore->make_permit(mt.schema().get(), "mt_to_sst"), mt, std::move(sst), monitor, cfg)
+        .finally([&semaphore] {
+                return semaphore->stop();
+        });
     });
 }
 
