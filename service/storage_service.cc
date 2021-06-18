@@ -3633,10 +3633,7 @@ future<> storage_service::force_remove_completion() {
                 // This flag will make removenode stop waiting for the confirmation,
                 // wait it to complete
                 slogger.info("Operation removenode is in progress, wait for it to complete");
-
-                ss._force_remove_completion = true;
                 sleep_abortable(std::chrono::seconds(1), ss._abort_source).get();
-                ss._force_remove_completion = false;
             }
             ss._operation_in_progress = sstring("removenode_force");
 

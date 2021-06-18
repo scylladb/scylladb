@@ -188,7 +188,6 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     sstring _operation_in_progress;
-    bool _force_remove_completion = false;
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
