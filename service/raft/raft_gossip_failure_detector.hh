@@ -27,6 +27,8 @@ namespace gms {
 class gossiper;
 }
 
+namespace service {
+
 class raft_services;
 
 // Scylla-specific implementation of raft failure detector module.
@@ -42,3 +44,5 @@ public:
 
     bool is_alive(raft::server_id server) override;
 };
+
+} // end of namespace service

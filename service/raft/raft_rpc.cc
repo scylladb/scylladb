@@ -27,6 +27,8 @@
 #include "message/messaging_service.hh"
 #include "db/timeout_clock.hh"
 
+namespace service {
+
 static seastar::logger rlogger("raft_rpc");
 
 raft_rpc::raft_rpc(netw::messaging_service& ms, raft_services& raft_svcs, raft::group_id gid, raft::server_id srv_id)
@@ -138,3 +140,5 @@ void raft_rpc::timeout_now_request(raft::server_id from, raft::timeout_now timeo
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
     return _client->apply_snapshot(from, std::move(snp));
 }
+
+} // end of namespace service

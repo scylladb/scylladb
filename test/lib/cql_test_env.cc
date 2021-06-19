@@ -533,7 +533,7 @@ public:
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<repair_service> repair;
             sharded<cql3::query_processor> qp;
-            sharded<raft_services> raft_svcs;
+            sharded<service::raft_services> raft_svcs;
             raft_svcs.start(std::ref(ms), std::ref(gms::get_gossiper()), std::ref(qp)).get();
             auto stop_raft = defer([&raft_svcs] { raft_svcs.stop().get(); });
 
@@ -662,9 +662,9 @@ public:
 
             // We need to have a system keyspace started and
             // initialized to initialize Raft service.
-            raft_svcs.invoke_on_all(&raft_services::init).get();
+            raft_svcs.invoke_on_all(&service::raft_services::init).get();
             auto stop_raft_rpc = defer([&raft_svcs] {
-                raft_svcs.invoke_on_all(&raft_services::uninit).get();
+                raft_svcs.invoke_on_all(&service::raft_services::uninit).get();
             });
 
             cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();

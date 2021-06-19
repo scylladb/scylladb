@@ -3786,7 +3786,7 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
         sharded<netw::messaging_service>& ms,
         sharded<cdc::generation_service>& cdc_gen_service,
         sharded<repair_service>& repair,
-        sharded<raft_services>& raft_svcs) {
+        sharded<service::raft_services>& raft_svcs) {
     return
         service::get_storage_service().start(std::ref(abort_source),
             std::ref(db), std::ref(gossiper),

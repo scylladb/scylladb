@@ -41,6 +41,8 @@ class gossiper;
 
 } // namespace gms
 
+namespace service {
+
 class raft_rpc;
 class raft_gossip_failure_detector;
 
@@ -124,3 +126,5 @@ public:
     // Remove inet_address mapping for a raft server
     void remove_address_mapping(raft::server_id);
 };
+
+} // end of namespace service

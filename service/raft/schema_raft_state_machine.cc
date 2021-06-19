@@ -20,6 +20,8 @@
  */
 #include "service/raft/schema_raft_state_machine.hh"
 
+namespace service {
+
 future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> command) {
     return make_ready_future<>();
 }
@@ -39,3 +41,5 @@ future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
 future<> schema_raft_state_machine::abort() {
     return make_ready_future<>();
 }
+
+} // end of namespace service

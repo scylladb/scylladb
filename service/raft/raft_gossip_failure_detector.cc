@@ -23,6 +23,8 @@
 #include "service/raft/raft_services.hh"
 #include "gms/gossiper.hh"
 
+namespace service {
+
 raft_gossip_failure_detector::raft_gossip_failure_detector(gms::gossiper& gs, raft_services& raft_svcs)
     : _gossip(gs), _raft_services(raft_svcs)
 {}
@@ -30,3 +32,5 @@ raft_gossip_failure_detector::raft_gossip_failure_detector(gms::gossiper& gs, ra
 bool raft_gossip_failure_detector::is_alive(raft::server_id server) {
     return _gossip.is_alive(_raft_services.get_inet_address(server));
 }
+
+} // end of namespace service

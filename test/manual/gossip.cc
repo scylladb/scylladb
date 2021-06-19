@@ -82,7 +82,7 @@ int main(int ac, char ** av) {
             sharded<locator::shared_token_metadata> token_metadata;
             sharded<netw::messaging_service> messaging;
             sharded<cql3::query_processor> qp;
-            sharded<raft_services> raft_svcs;
+            sharded<service::raft_services> raft_svcs;
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<service::migration_manager> migration_manager;
             sharded<repair_service> repair;

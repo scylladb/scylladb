@@ -36,6 +36,8 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
 
+namespace service {
+
 raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid)
     : _group_id(std::move(gid))
     , _qp(qp)
@@ -249,3 +251,5 @@ future<> raft_sys_table_storage::execute_with_linearization_point(std::function<
         throw;
     }
 }
+
+} // end of namespace service

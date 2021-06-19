@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<repair_service> repair;
         sharded<service::migration_manager> migration_manager;
         sharded<cql3::query_processor> qp;
-        sharded<raft_services> raft_svcs;
+        sharded<service::raft_services> raft_svcs;
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });

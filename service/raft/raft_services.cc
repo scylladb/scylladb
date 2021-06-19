@@ -34,6 +34,8 @@
 #include <seastar/util/log.hh>
 #include <seastar/util/defer.hh>
 
+namespace service {
+
 logging::logger rslog("raft_services");
 
 raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp)
@@ -220,3 +222,4 @@ void raft_services::remove_address_mapping(raft::server_id id) {
     _srv_address_mappings.erase(id);
 }
 
+} // end of namespace service

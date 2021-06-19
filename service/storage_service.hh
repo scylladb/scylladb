@@ -74,7 +74,9 @@ class node_ops_cmd_response;
 class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
+namespace service {
 class raft_services;
+}
 
 namespace cql_transport { class controller; }
 

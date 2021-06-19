@@ -34,6 +34,8 @@
 
 namespace bi = boost::intrusive;
 
+namespace service {
+
 extern seastar::logger rslog;
 
 // This class provides an abstraction of expirable server address mappings
@@ -333,3 +335,5 @@ public:
         unlink_and_dispose(set_it);
     }
 };
+
+} // end of namespace service

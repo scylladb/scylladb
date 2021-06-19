@@ -43,6 +43,8 @@ class modification_statement;
 
 } // namespace cql3
 
+namespace service {
+
 // Scylla-specific implementation of raft persistence module.
 //
 // Uses "raft" system table as a backend storage to persist raft state.
@@ -86,3 +88,5 @@ private:
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
 };
+
+} // end of namespace service

@@ -500,7 +500,7 @@ int main(int ac, char** av) {
     sharded<netw::messaging_service> messaging;
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
-    sharded<raft_services> raft_svcs;
+    sharded<service::raft_services> raft_svcs;
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
 
@@ -1099,9 +1099,9 @@ int main(int ac, char** av) {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
             supervisor::notify("starting Raft RPC");
-            raft_svcs.invoke_on_all(&raft_services::init).get();
+            raft_svcs.invoke_on_all(&service::raft_services::init).get();
             auto stop_raft_rpc = defer_verbose_shutdown("Raft RPC", [&raft_svcs] {
-                raft_svcs.invoke_on_all(&raft_services::uninit).get();
+                raft_svcs.invoke_on_all(&service::raft_services::uninit).get();
             });
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();

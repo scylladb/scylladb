@@ -26,6 +26,8 @@
 #include "utils/UUID.hh"
 #include "service/raft/raft_services.hh"
 
+namespace service {
+
 // Scylla-specific implementation of raft RPC module.
 //
 // Uses `netw::messaging_service` as an underlying implementation for
@@ -62,3 +64,5 @@ public:
     void timeout_now_request(raft::server_id from, raft::timeout_now timeout_now);
     future<raft::snapshot_reply> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
 };
+
+} // end of namespace service
