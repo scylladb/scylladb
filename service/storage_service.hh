@@ -75,7 +75,7 @@ class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
 namespace service {
-class raft_services;
+class raft_group_registry;
 }
 
 namespace cql_transport { class controller; }
@@ -178,7 +178,7 @@ private:
     distributed<database>& _db;
     gms::gossiper& _gossiper;
     // Container for all Raft instances running on this shard.
-    raft_services& _raft_svcs;
+    raft_group_registry& _raft_gr;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
@@ -228,7 +228,7 @@ public:
         sharded<netw::messaging_service>& ms,
         sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
-        raft_services& raft_svcs,
+        raft_group_registry& raft_gr,
         /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
@@ -925,7 +925,7 @@ future<> init_storage_service(sharded<abort_source>& abort_sources,
     sharded<netw::messaging_service>& ms,
     sharded<cdc::generation_service>&,
     sharded<repair_service>& repair,
-    sharded<raft_services>& raft_svcs);
+    sharded<raft_group_registry>& raft_gr);
 future<> deinit_storage_service();
 
 }

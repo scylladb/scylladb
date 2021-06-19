@@ -24,7 +24,7 @@
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
-#include "service/raft/raft_services.hh"
+#include "service/raft/raft_group_registry.hh"
 
 namespace service {
 
@@ -36,15 +36,15 @@ class raft_rpc : public raft::rpc {
     raft::group_id _group_id;
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
-    raft_services& _raft_services;
+    raft_group_registry& _raft_gr;
     seastar::gate _shutdown_gate;
 
-    raft_services::ticker_type::time_point timeout() {
-        return raft_services::ticker_type::clock::now() + raft_services::tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
+    raft_group_registry::ticker_type::time_point timeout() {
+        return raft_group_registry::ticker_type::clock::now() + raft_group_registry::tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
     }
 
 public:
-    explicit raft_rpc(netw::messaging_service& ms, raft_services& raft_svcs, raft::group_id gid, raft::server_id srv_id);
+    explicit raft_rpc(netw::messaging_service& ms, raft_group_registry& raft_gr, raft::group_id gid, raft::server_id srv_id);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;

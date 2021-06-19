@@ -29,7 +29,7 @@ class gossiper;
 
 namespace service {
 
-class raft_services;
+class raft_group_registry;
 
 // Scylla-specific implementation of raft failure detector module.
 //
@@ -37,10 +37,10 @@ class raft_services;
 // Gets the mapping from server id to gms::inet_address from RPC module.
 class raft_gossip_failure_detector : public raft::failure_detector {
     gms::gossiper& _gossip;
-    raft_services& _raft_services;
+    raft_group_registry& _raft_gr;
 
 public:
-    raft_gossip_failure_detector(gms::gossiper& gs, raft_services& raft_svcs);
+    raft_gossip_failure_detector(gms::gossiper& gs, raft_group_registry& raft_gr);
 
     bool is_alive(raft::server_id server) override;
 };

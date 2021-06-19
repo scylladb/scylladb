@@ -114,13 +114,13 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<netw::messaging_service>& ms,
     sharded<cdc::generation_service>& cdc_gen_service,
     sharded<repair_service>& repair,
-    raft_services& raft_svcs,
+    raft_group_registry& raft_gr,
     bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
-        , _raft_svcs(raft_svcs)
+        , _raft_gr(raft_gr)
         , _messaging(ms)
         , _migration_manager(mm)
         , _repair(repair)
@@ -142,7 +142,7 @@ storage_service::storage_service(abort_source& abort_source,
     if (snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
-    (void) _raft_svcs;
+    (void) _raft_gr;
 }
 
 void storage_service::enable_all_features() {
@@ -3786,7 +3786,7 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
         sharded<netw::messaging_service>& ms,
         sharded<cdc::generation_service>& cdc_gen_service,
         sharded<repair_service>& repair,
-        sharded<service::raft_services>& raft_svcs) {
+        sharded<service::raft_group_registry>& raft_gr) {
     return
         service::get_storage_service().start(std::ref(abort_source),
             std::ref(db), std::ref(gossiper),
@@ -3796,7 +3796,7 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
             std::ref(stm), std::ref(ms),
             std::ref(cdc_gen_service),
             std::ref(repair),
-            std::ref(raft_svcs));
+            std::ref(raft_gr));
 }
 
 future<> deinit_storage_service() {
