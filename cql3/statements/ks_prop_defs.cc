@@ -42,6 +42,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "database.hh"
 #include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace cql3 {
 
@@ -79,6 +80,10 @@ static std::map<sstring, sstring> prepare_options(
     }
 
     if (!rf.empty()) {
+        // The code below may end up not using "rf" at all (if all the DCs
+        // already have rf settings), so let's validate it once (#8880).
+        locator::abstract_replication_strategy::validate_replication_factor(rf);
+
         // We keep previously specified DC factors for safety.
         for (const auto& opt : old_options) {
             if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY) {

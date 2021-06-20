@@ -118,7 +118,7 @@ inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpo
     return natural_endpoints;
 }
 
-void abstract_replication_strategy::validate_replication_factor(sstring rf) const
+void abstract_replication_strategy::validate_replication_factor(sstring rf)
 {
     if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
         throw exceptions::configuration_exception(
