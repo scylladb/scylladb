@@ -1369,8 +1369,7 @@ struct row_diff {
 // Compute which rows have been created, dropped or altered.
 // A row is identified by its primary key.
 // In the output, all entries of a given keyspace are together.
-static row_diff diff_rows(
-        distributed<service::storage_proxy>& proxy, const schema_result& before, const schema_result& after) {
+static row_diff diff_rows(const schema_result& before, const schema_result& after) {
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     // For new or empty keyspaces, just record each row.
@@ -1454,7 +1453,7 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
 // see the comments for merge_keyspaces()
 [[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after)
 {
-    auto diff = diff_rows(proxy, before, after);
+    auto diff = diff_rows(before, after);
 
     // Create and update user types before any tables/views are created that potentially
     // use those types. Similarly, defer dropping until after tables/views that may use
@@ -1574,7 +1573,7 @@ static shared_ptr<cql3::functions::user_function> create_func(database& db, cons
 
 static void merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
         std::function<shared_ptr<cql3::functions::function>(database& db, const query::result_set_row& row)> create) {
-    auto diff = diff_rows(proxy, before, after);
+    auto diff = diff_rows(before, after);
 
     proxy.local().get_db().invoke_on_all([&diff, create] (database& db) {
         for (const auto& val : diff.created) {
