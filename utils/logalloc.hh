@@ -237,18 +237,6 @@ class region_group {
 
     uint64_t _blocked_requests_counter = 0;
 
-    // All requests waiting for execution are kept in _blocked_requests (explained above) in the
-    // region_group they were executed against. However, it could be that they are blocked not due
-    // to their region group but to an ancestor. To handle these cases we will keep a list of
-    // descendant region_groups that have requests that are waiting on us.
-    //
-    // Please note that what we keep here are not requests, and can be thought as just messages. The
-    // requests themselves are kept in the region_group in which they originated. When we see that
-    // there are region_groups waiting on us, we broadcast these messages to the waiters and they
-    // will then decide whether they can now run or if they have to wait on us again (or potentially
-    // a different ancestor)
-    std::optional<shared_promise<>> _descendant_blocked_requests = {};
-
     condition_variable _relief;
     future<> _releaser;
     bool _shutdown_requested = false;
