@@ -24,25 +24,25 @@ from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, C
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
 def test_create_and_drop_keyspace(cql):
-    cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
 # Trying to create the same keyspace - even if with identical parameters -
 # should result in an AlreadyExists error.
 def test_create_keyspace_twice(cql):
-    cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     with pytest.raises(AlreadyExists):
-        cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+        cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_twice")
 
 # "IF NOT EXISTS" on CREATE KEYSPACE:
 def test_create_keyspace_if_not_exists(cql):
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     # A second invocation with IF NOT EXISTS is fine:
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     # It doesn't matter if the second invocation has different parameters,
     # they are ignored.
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
 # The "WITH REPLICATION" part of CREATE KEYSPACE may not be ommitted - trying
@@ -56,7 +56,7 @@ def test_create_keyspace_missing_with(cql):
 # supported as the first character.". This is not accurate. Test what is actually
 # enforced:
 def test_create_keyspace_invalid_name(cql):
-    rep = " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }"
+    rep = " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"
     with pytest.raises(InvalidRequest, match='48'):
         cql.execute('CREATE KEYSPACE ' + 'x'*49 + rep)
     # The name xyz!123, unquoted, is a syntax error. With quotes it's valid
@@ -110,23 +110,25 @@ def test_drop_keyspace_nonexistent(cql):
 
 # Test trying to ALTER a keyspace.
 def test_alter_keyspace(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }} AND DURABLE_WRITES = false")
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }} AND DURABLE_WRITES = false")
 
 # Test trying to ALTER a keyspace with invalid options.
 def test_alter_keyspace_invalid(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NoSuchStrategy' }}")
+        # SimpleStrategy, if not outright forbidden, requires a
+        # replication_factor option.
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy' }}")
         with pytest.raises(ConfigurationException):
-            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 'foo' }}")
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 'foo' }}")
 
 # Test trying to ALTER a keyspace with invalid options.
 # Reproduces #7595.
 def test_alter_keyspace_nonexistent_dc(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{ 'class' : 'NetworkTopologyStrategy', 'nonexistentdc' : 1 }}")
 
@@ -134,7 +136,7 @@ def test_alter_keyspace_nonexistent_dc(cql):
 def test_alter_keyspace_nonexisting(cql):
     cql.execute('DROP KEYSPACE IF EXISTS nonexistent_keyspace')
     with pytest.raises(InvalidRequest):
-        cql.execute("ALTER KEYSPACE nonexistent_keyspace WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+        cql.execute("ALTER KEYSPACE nonexistent_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
 
 # Test that attempts to reproduce an issue with double WITH keyword in ALTER
 # KEYSPACE statement -- CASSANDRA-9565.

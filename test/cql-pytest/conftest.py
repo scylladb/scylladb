@@ -97,7 +97,7 @@ def cql_test_connection(cql, request):
 @pytest.fixture(scope="session")
 def test_keyspace(cql):
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
