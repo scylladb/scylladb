@@ -252,7 +252,7 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
                     }).then([&log] {
                         return log.shutdown().then([&log] {
                             return log.list_existing_segments().then([] (auto descs) {
-                                BOOST_REQUIRE(descs.empty());
+                                BOOST_CHECK_EQUAL(descs, decltype(descs){});
                             });
                         });
                     });
