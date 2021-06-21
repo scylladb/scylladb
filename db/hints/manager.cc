@@ -690,7 +690,7 @@ void manager::end_point_hints_manager::sender::update_segment_list(std::vector<s
     }
 }
 
-future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter) {
+future<> manager::end_point_hints_manager::sender::wait_until_current_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter) {
     if (stopping()) {
         throw std::runtime_error("hints manager is stopped");
     }
@@ -1126,12 +1126,12 @@ future<> manager::rebalance(sstring hints_directory) {
     });
 }
 
-future<> manager::wait_until_hints_are_replayed(abort_source& as, const std::vector<gms::inet_address>& endpoints) {
+future<> manager::wait_until_current_hints_are_replayed(abort_source& as, const std::vector<gms::inet_address>& endpoints) {
     const std::unordered_set<gms::inet_address> endpoints_set(endpoints.begin(), endpoints.end());
     seastar::semaphore flush_limiter{1};
     co_return co_await parallel_for_each(_ep_managers, [&] (auto& pair) {
         if (endpoints_set.contains(pair.first)) {
-            return pair.second.wait_until_hints_are_replayed(as, flush_limiter);
+            return pair.second.wait_until_current_hints_are_replayed(as, flush_limiter);
         }
         return make_ready_future<>();
     });

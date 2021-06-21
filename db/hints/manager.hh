@@ -230,7 +230,7 @@ public:
             /// \brief Waits until all current hints on disk for this endpoints are replayed, timeout is reached or hint replay becomes stuck.
             ///
             /// Waiting can be aborted through provided abort_source.
-            future<> wait_until_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter);
+            future<> wait_until_current_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter);
 
         private:
             /// \brief Send hints collected so far.
@@ -474,8 +474,8 @@ public:
         }
 
         /// \brief Waits until all current hints on disk for this endpoints are replayed or the timeout is reached.
-        future<> wait_until_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter) {
-            return _sender.wait_until_hints_are_replayed(as, flush_limiter);
+        future<> wait_until_current_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter) {
+            return _sender.wait_until_current_hints_are_replayed(as, flush_limiter);
         }
 
     private:
@@ -681,7 +681,7 @@ public:
     /// \brief Waits until all current hints on disk for given endpoints are replayed or the timeout is reached.
     /// \param endpoints list of endpoints whose hints need to be waited on
     /// \param timeout if hints are not replayed until the timeout, the function will return with an exception
-    future<> wait_until_hints_are_replayed(abort_source& as, const std::vector<gms::inet_address>& endpoints);
+    future<> wait_until_current_hints_are_replayed(abort_source& as, const std::vector<gms::inet_address>& endpoints);
 
 private:
     future<> compute_hints_dir_device_id();
