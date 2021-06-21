@@ -435,6 +435,7 @@ static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
         size_t num_replicas,
         size_t concurrency,
         const cdc::topology_description& desc) {
+    assert(num_replicas);
     auto s = db.find_schema(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
 
     // To insert the data quickly and efficiently we send it in batches of multiple rows

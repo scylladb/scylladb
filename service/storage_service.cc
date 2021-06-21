@@ -676,6 +676,18 @@ void storage_service::bootstrap() {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
 
+        if (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
+            // We're joining an existing cluster, so there are normal nodes in the cluster.
+            // We've waited for tokens to arrive.
+            // But we didn't see any normal token owners. Something's wrong, we cannot proceed.
+            throw std::runtime_error{
+                    "Failed to learn about other nodes' tokens during bootstrap. Make sure that:\n"
+                    " - the node can contact other nodes in the cluster,\n"
+                    " - the `ring_delay` parameter is large enough (the 30s default should be enough for small-to-middle-sized clusters),\n"
+                    " - a node with this IP didn't recently leave the cluster. If it did, wait for some time first (the IP is quarantined),\n"
+                    "and retry the bootstrap."};
+        }
+
         // Even if we reached this point before but crashed, we will make a new CDC generation.
         // It doesn't hurt: other nodes will (potentially) just do more generation switches.
         // We do this because with this new attempt at bootstrapping we picked a different set of tokens.

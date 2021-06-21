@@ -356,11 +356,15 @@ future<cdc::generation_id> make_new_cdc_generation(
         return ts;
     };
 
+    // Our caller should ensure that there are normal tokens in the token ring.
+    auto normal_token_owners = tmptr->count_normal_token_owners();
+    assert(normal_token_owners);
+
     if (cluster_supports_generations_v2) {
         auto uuid = utils::make_random_uuid();
         cdc_log.info("Inserting new generation data at UUID {}", uuid);
         // This may take a while.
-        co_await sys_dist_ks.insert_cdc_generation(uuid, gen, { tmptr->count_normal_token_owners() });
+        co_await sys_dist_ks.insert_cdc_generation(uuid, gen, { normal_token_owners });
 
         // Begin the race.
         cdc::generation_id_v2 gen_id{new_generation_timestamp(), uuid};
@@ -394,7 +398,7 @@ future<cdc::generation_id> make_new_cdc_generation(
     // Begin the race.
     cdc::generation_id_v1 gen_id{new_generation_timestamp()};
 
-    co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { tmptr->count_normal_token_owners() });
+    co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { normal_token_owners });
 
     cdc_log.info("New CDC generation: {}", gen_id);
     co_return gen_id;
