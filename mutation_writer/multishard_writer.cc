@@ -30,15 +30,15 @@
 
 namespace mutation_writer {
 
-thread_local reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, "multishard_writer");
-
 class shard_writer {
 private:
     schema_ptr _s;
+    std::unique_ptr<reader_concurrency_semaphore> _semaphore;
     flat_mutation_reader _reader;
     std::function<future<> (flat_mutation_reader reader)> _consumer;
 public:
     shard_writer(schema_ptr s,
+        std::unique_ptr<reader_concurrency_semaphore> semaphore,
         flat_mutation_reader reader,
         std::function<future<> (flat_mutation_reader reader)> consumer);
     future<> consume();
@@ -81,9 +81,11 @@ public:
 };
 
 shard_writer::shard_writer(schema_ptr s,
+    std::unique_ptr<reader_concurrency_semaphore> semaphore,
     flat_mutation_reader reader,
     std::function<future<> (flat_mutation_reader reader)> consumer)
     : _s(s)
+    , _semaphore(std::move(semaphore))
     , _reader(std::move(reader))
     , _consumer(std::move(consumer)) {
 }
@@ -98,7 +100,9 @@ future<> shard_writer::consume() {
 }
 
 future<> shard_writer::close() noexcept {
-    return _reader.close();
+    return _reader.close().finally([this] {
+        return _semaphore->stop();
+    });
 }
 
 multishard_writer::multishard_writer(
@@ -119,8 +123,10 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
             consumer = _consumer,
             reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
         auto s = gs.get();
-        auto this_shard_reader = make_foreign_reader(s, semaphore.make_permit(s.get(), "multishard-writer"), std::move(reader));
-        return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(this_shard_reader), consumer));
+        auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer");
+        auto permit = semaphore->make_permit(s.get(), "multishard-writer");
+        auto this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
+        return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(semaphore), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
         _shard_writers[shard] = std::move(writer);
         _pending_consumers.push_back(consume(shard));
