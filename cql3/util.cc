@@ -126,7 +126,7 @@ void validate_timestamp(const query_options& options, const std::unique_ptr<attr
 
         auto timestamp = attrs->get_timestamp(now, options);
 
-        if (timestamp - now > MAX_DIFFERENCE) {
+        if (timestamp > now && timestamp - now > MAX_DIFFERENCE) {
             throw exceptions::invalid_request_exception("Cannot provide a timestamp more than 3 days into the future. If this was not intended, "
             "make sure the timestamp is in microseconds");
         }
