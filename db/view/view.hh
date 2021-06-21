@@ -134,6 +134,82 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
 
 bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck, gc_clock::time_point now);
 
+class view_updates final {
+    view_ptr _view;
+    const view_info& _view_info;
+    schema_ptr _base;
+    base_info_ptr _base_info;
+    std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
+public:
+    explicit view_updates(view_and_base vab)
+            : _view(std::move(vab.view))
+            , _view_info(*_view->view_info())
+            , _base(vab.base->base_schema())
+            , _base_info(vab.base)
+            , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
+    }
+
+    void move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) &&;
+
+    void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
+private:
+    mutation_partition& partition_for(partition_key&& key);
+    row_marker compute_row_marker(const clustering_row& base_row) const;
+    deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
+    bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
+    void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
+    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
+    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
+    void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
+    void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
+        create_entry(base_key, update, now);
+        delete_old_entry(base_key, existing, update, now);
+    }
+};
+
+class view_update_builder {
+    schema_ptr _schema; // The base schema
+    std::vector<view_updates> _view_updates;
+    flat_mutation_reader _updates;
+    flat_mutation_reader_opt _existings;
+    range_tombstone_accumulator _update_tombstone_tracker;
+    range_tombstone_accumulator _existing_tombstone_tracker;
+    mutation_fragment_opt _update;
+    mutation_fragment_opt _existing;
+    gc_clock::time_point _now;
+    partition_key _key = partition_key::make_empty();
+public:
+
+    view_update_builder(schema_ptr s,
+        std::vector<view_updates>&& views_to_update,
+        flat_mutation_reader&& updates,
+        flat_mutation_reader_opt&& existings,
+        gc_clock::time_point now)
+            : _schema(std::move(s))
+            , _view_updates(std::move(views_to_update))
+            , _updates(std::move(updates))
+            , _existings(std::move(existings))
+            , _update_tombstone_tracker(*_schema, false)
+            , _existing_tombstone_tracker(*_schema, false)
+            , _now(now) {
+    }
+    view_update_builder(view_update_builder&& other) noexcept = default;
+
+    future<utils::chunked_vector<frozen_mutation_and_schema>> build();
+
+    future<> close() noexcept;
+
+private:
+    void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
+    future<stop_iteration> on_results();
+
+    future<stop_iteration> advance_all();
+    future<stop_iteration> advance_updates();
+    future<stop_iteration> advance_existings();
+
+    future<stop_iteration> stop() const;
+};
+
 future<utils::chunked_vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
