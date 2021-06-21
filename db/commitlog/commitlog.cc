@@ -438,6 +438,7 @@ private:
     timer<clock_type> _timer;
     future<> replenish_reserve();
     future<> _reserve_replenisher;
+    future<> _background_sync;
     seastar::gate _gate;
     uint64_t _new_counter = 0;
 };
@@ -1171,6 +1172,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _reserve_segments(1)
     , _recycled_segments(std::numeric_limits<size_t>::max())
     , _reserve_replenisher(make_ready_future<>())
+    , _background_sync(make_ready_future<>())
 {
     assert(max_size > 0);
     assert(max_mutation_size < segment::multi_entry_size_magic);
@@ -1758,6 +1760,7 @@ future<> db::commitlog::segment_manager::shutdown() {
                         abort_recycled_list(ep);
                     }
                     abort_deletion_promise(ep);
+                    return std::exchange(_background_sync, make_ready_future<>());
                 });
 
 
@@ -1931,9 +1934,12 @@ future<> db::commitlog::segment_manager::clear() {
  * Called by timer in periodic mode.
  */
 void db::commitlog::segment_manager::sync() {
-    for (auto s : _segments) {
-        (void)s->sync(); // we do not care about waiting...
-    }
+    auto f = std::exchange(_background_sync, make_ready_future<>());
+    _background_sync = parallel_for_each(_segments, [](sseg_ptr s) {
+        return s->sync().discard_result();
+    }).then([f = std::move(f)]() mutable {
+        return std::move(f);
+    });
 }
 
 void db::commitlog::segment_manager::on_timer() {
