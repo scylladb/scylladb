@@ -750,7 +750,7 @@ void gossiper::do_status_check() {
     for (auto it = _just_removed_endpoints.begin(); it != _just_removed_endpoints.end();) {
         auto& t= it->second;
         if ((now - t) > quarantine_delay()) {
-            logger.debug("{} ms elapsed, {} gossip quarantine over", quarantine_delay().count(), it->first);
+            logger.info("{} ms elapsed, {} gossip quarantine over", quarantine_delay().count(), it->first);
             it = _just_removed_endpoints.erase(it);
         } else {
             it++;
