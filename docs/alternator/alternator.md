@@ -9,10 +9,10 @@ API Reference](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/).
 Our goal is that any application written to use Amazon DynamoDB could
 be run, unmodified, against Scylla with Alternator enabled. Alternator's
 compatibility with DynamoDB is fairly complete, but users should be aware
-of some differences and some of unimplemented features. The extent of
+of some differences and some unimplemented features. The extent of
 Alternator's compatibility with DynamoDB is described in the
 [Scylla Alternator for DynamoDB users](compatibility.md) document,
-which we updated as the work on Alternator progresses and compatibility
+which is updated as the work on Alternator progresses and compatibility
 continues to improve.
 
 ## Running Alternator
