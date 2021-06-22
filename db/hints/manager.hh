@@ -126,6 +126,8 @@ public:
                 std::optional<db::replay_position> last_attempted_rp;
                 bool segment_replay_failed = false;
 
+                void mark_hint_as_in_progress(db::replay_position rp);
+                void on_hint_send_success(db::replay_position rp) noexcept;
                 void on_hint_send_failure(db::replay_position rp) noexcept;
             };
 
