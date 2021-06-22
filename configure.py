@@ -503,7 +503,6 @@ scylla_tests = set([
     'test/boost/radix_tree_test',
     'test/boost/double_decker_test',
     'test/boost/stall_free_test',
-    'test/boost/raft_address_map_test',
     'test/boost/sstable_set_test',
     'test/boost/reader_concurrency_semaphore_test',
     'test/manual/ec2_snitch_test',
@@ -555,6 +554,7 @@ raft_tests = set([
     'test/raft/fsm_test',
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
+    'test/raft/raft_address_map_test',
 ])
 
 apps = set([
@@ -1259,6 +1259,7 @@ deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/lib/log.cc'] + scy
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/lib/log.cc'] + scylla_minimal_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_raft_dependencies + scylla_tests_generic_dependencies
+deps['test/raft/raft_address_map_test'] = ['test/raft/raft_address_map_test.cc'] + scylla_raft_dependencies
 
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
