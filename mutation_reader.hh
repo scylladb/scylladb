@@ -612,6 +612,9 @@ public:
 
     /// Checks if the queue is already terminated with either a success or failure (abort)
     bool is_terminated() const;
+
+    /// Get the stored exception, if any
+    std::exception_ptr get_exception() const noexcept;
 };
 
 std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit);

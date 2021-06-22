@@ -2017,11 +2017,6 @@ public:
     explicit queue_reader(schema_ptr s, reader_permit permit)
         : impl(std::move(s), std::move(permit)) {
     }
-    ~queue_reader() {
-        if (_handle) {
-            _handle->_reader = nullptr;
-        }
-    }
     virtual future<> fill_buffer(db::timeout_clock::time_point) override {
         if (_ex) {
             return make_exception_future<>(_ex);
@@ -2046,6 +2041,20 @@ public:
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual future<> close() noexcept override {
+        // wake up any waiters to prevent broken_promise errors
+        if (_full) {
+            _full->set_value();
+            _full.reset();
+        } else if (_not_full) {
+            _not_full->set_value();
+            _not_full.reset();
+        }
+        // detach from the queue_reader_handle
+        // since it should never access the reader after close.
+        if (_handle) {
+            _handle->_reader = nullptr;
+            _handle = nullptr;
+        }
         return make_ready_future<>();
     }
     future<> push(mutation_fragment&& mf) {
@@ -2136,6 +2145,10 @@ void queue_reader_handle::abort(std::exception_ptr ep) {
         _reader->_handle = nullptr;
         _reader = nullptr;
     }
+}
+
+std::exception_ptr queue_reader_handle::get_exception() const noexcept {
+    return _ex;
 }
 
 std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit) {
