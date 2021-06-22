@@ -3974,17 +3974,61 @@ void storage_proxy::handle_read_error(std::exception_ptr eptr, bool range) {
 }
 
 future<storage_proxy::coordinator_query_result>
-storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
+storage_proxy::query_singular_nonvector(lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range&& pr,
+        db::consistency_level cl,
+        storage_proxy::coordinator_query_options query_options,
+        schema_ptr&& schema,
+        clock_type::time_point timeout,
+        db::read_repair_decision repair_decision) {
+    bool is_read_non_local = false;
+
+    const auto tmptr = get_token_metadata_ptr();
+
+    auto token_range = dht::token_range::make_singular(pr.start()->value().token());
+    auto it = query_options.preferred_replicas.find(token_range);
+    const auto replicas = it == query_options.preferred_replicas.end()
+        ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(*tmptr, it->second);
+
+    auto exec = get_read_executor(cmd, schema, std::move(pr), cl, repair_decision,
+                                            query_options.trace_state, replicas, is_read_non_local,
+                                            query_options.permit);
+
+    if (is_read_non_local) {
+        get_stats().reads_coordinator_outside_replica_set++;
+    }
+
+    return exec->execute(timeout).then_wrapped([p = shared_from_this(), rex = exec, pr = std::move(pr), token_range = std::move(token_range), repair_decision, tmptr] (
+                    future<foreign_ptr<lw_shared_ptr<query::result>>> f) mutable {
+        if (!f.failed()) {
+            auto used_replicas = rex->used_targets();
+
+            auto latency = rex->max_request_latency();
+            if (latency) {
+                rex->get_cf()->add_coordinator_read_latency(*latency);
+            }
+            replicas_per_token_range rptr;
+            rptr.emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr,used_replicas));
+            return make_ready_future<coordinator_query_result>(coordinator_query_result(std::move(f.get0()), std::move(rptr), repair_decision));
+        } else {
+            auto eptr = f.get_exception();
+            // hold onto exec until read is complete
+            p->handle_read_error(eptr, false);
+            return make_exception_future<storage_proxy::coordinator_query_result>(eptr);
+        }
+    });
+}
+
+future<storage_proxy::coordinator_query_result>
+storage_proxy::query_singular_vector(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        storage_proxy::coordinator_query_options query_options) {
+        storage_proxy::coordinator_query_options query_options,
+        schema_ptr&& schema,
+        clock_type::time_point timeout,
+        db::read_repair_decision repair_decision) {
     std::vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>> exec;
     exec.reserve(partition_ranges.size());
-
-    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-
-    db::read_repair_decision repair_decision = query_options.read_repair_decision
-        ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
 
     // Update reads_coordinator_outside_replica_set once per request,
     // not once per partition.
@@ -4047,6 +4091,25 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         }
         return make_ready_future<coordinator_query_result>(coordinator_query_result(std::move(f.get0()), std::move(*used_replicas), repair_decision));
     });
+}
+
+future<storage_proxy::coordinator_query_result>
+storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        storage_proxy::coordinator_query_options query_options) {
+    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+
+    db::read_repair_decision repair_decision = query_options.read_repair_decision
+        ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
+
+    auto timeout = query_options.timeout(*this);
+
+    if (partition_ranges.size() == 1) [[likely]] {
+        return query_singular_nonvector(std::move(cmd), std::move(partition_ranges.front()), cl, query_options, std::move(schema), timeout, repair_decision);
+    } else {
+        return query_singular_vector(std::move(cmd), std::move(partition_ranges), cl, query_options, std::move(schema), timeout, repair_decision);
+    }
 }
 
 future<query_partition_key_range_concurrent_result>

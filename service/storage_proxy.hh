@@ -320,6 +320,20 @@ private:
             dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
+    future<coordinator_query_result> query_singular_nonvector(lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range&& pr,
+            db::consistency_level cl,
+            coordinator_query_options optional_params,
+            schema_ptr&& schema,
+            clock_type::time_point timeout,
+            db::read_repair_decision repair_decision);
+    future<coordinator_query_result> query_singular_vector(lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector&& pr,
+            db::consistency_level cl,
+            coordinator_query_options optional_params,
+            schema_ptr&& schema,
+            clock_type::time_point timeout,
+            db::read_repair_decision repair_decision);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
