@@ -239,9 +239,13 @@ public:
         return _memtables.back();
     }
 
-    // The caller has to make sure the element exist before calling this.
+    // # 8904 - this method is akin to std::set::erase(key_type), not
+    // erase(iterator). Should be tolerant against non-existing.
     void erase(const shared_memtable& element) {
-        _memtables.erase(boost::range::find(_memtables, element));
+        auto i = boost::range::find(_memtables, element);
+        if (i != _memtables.end()) {
+            _memtables.erase(i);
+        }
     }
     void clear() {
         _memtables.clear();
