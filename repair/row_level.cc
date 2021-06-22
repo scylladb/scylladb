@@ -1379,7 +1379,7 @@ private:
         if (rows.empty()) {
             return;
         }
-        auto row_diff = to_repair_rows_list(rows).get0();
+        auto row_diff = to_repair_rows_list(std::move(rows)).get0();
         auto sz = get_repair_rows_size(row_diff).get0();
         stats().rx_row_bytes += sz;
         stats().rx_row_nr += row_diff.size();
