@@ -3,8 +3,8 @@
 ## Introduction
 Alternator is a Scylla feature adding compatibility with Amazon DynamoDB(TM).
 DynamoDB's API uses JSON-encoded requests and responses which are sent over
-an HTTP or HTTPS transport. It is described in detail on Amazon's site:
-  https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/
+an HTTP or HTTPS transport. It is described in detail in Amazon's [DynamoDB
+API Reference](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/).
 
 Our goal is that any application written to use Amazon DynamoDB could
 be run, unmodified, against Scylla with Alternator enabled. Alternator's
@@ -50,8 +50,8 @@ DynamoDB applications specify a single "endpoint" address, e.g.,
 load balancers distribute the connections to many different backend nodes.
 Alternator does not provide such a load-balancing setup, so you should
 either set one up, or set up the client library to do the load balancing
-itself. Instructions, code and examples for doing this can be found in:
-https://github.com/scylladb/alternator-load-balancing/
+itself. Instructions, code and examples for doing this can be found in the
+[Alternator Load Balancing project](https://github.com/scylladb/alternator-load-balancing/).
 
 ## Alternator-specific API
 
