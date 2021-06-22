@@ -185,3 +185,19 @@ def test_paging_with_desc_clustering_order(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table}(p,c) VALUES ({i}, 42)")
         stmt = SimpleStatement(f"SELECT * FROM {table} WHERE c = 42", fetch_size=1)
         assert len([row for row in cql.execute(stmt)]) == 3
+
+# Test that deleting a base partition works fine, even if it produces a large batch
+# of individual view updates. Refs #8852 - view updates used to be applied with
+# per-partition granularity, but after fixing the issue it's no longer the case,
+# so a regression test is necessary. Scylla-only - relies on the underlying
+# representation of the index table.
+def test_partition_deletion(cql, test_keyspace, scylla_only):
+    schema = 'p int, c1 int, c2 int, v int, primary key (p,c1,c2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(c1)")
+        prep = cql.prepare(f"INSERT INTO {table}(p,c1,c2) VALUES (1, ?, 1)")
+        for i in range(1342):
+            cql.execute(prep, [i])
+        cql.execute(f"DELETE FROM {table} WHERE p = 1")
+        res = [row for row in cql.execute(f"SELECT * FROM {table}_c1_idx_index")]
+        assert len(res) == 0
