@@ -741,8 +741,10 @@ private:
     void write_promoted_index();
     void consume(rt_marker&& marker);
 
+    // Must be called in a seastar thread.
     void flush_tmp_bufs(file_writer& writer) {
         for (auto&& buf : _tmp_bufs) {
+            thread::maybe_yield();
             writer.write(buf);
         }
         _tmp_bufs.clear();
