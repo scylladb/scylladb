@@ -26,6 +26,7 @@
 #include "query-request.hh"
 #include "schema_fwd.hh"
 #include "flat_mutation_reader.hh"
+#include "frozen_mutation.hh"
 
 class frozen_mutation_and_schema;
 struct cf_stats;
@@ -140,6 +141,7 @@ class view_updates final {
     schema_ptr _base;
     base_info_ptr _base_info;
     std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
+    mutable size_t _op_count = 0;
 public:
     explicit view_updates(view_and_base vab)
             : _view(std::move(vab.view))
@@ -149,9 +151,12 @@ public:
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
-    void move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) &&;
+    void move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
     void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
+
+    size_t op_count() const;
+
 private:
     mutation_partition& partition_for(partition_key&& key);
     row_marker compute_row_marker(const clustering_row& base_row) const;
@@ -195,7 +200,7 @@ public:
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
 
-    future<utils::chunked_vector<frozen_mutation_and_schema>> build();
+    future<utils::chunked_vector<frozen_mutation_and_schema>> build_some();
 
     future<> close() noexcept;
 
@@ -210,7 +215,7 @@ private:
     future<stop_iteration> stop() const;
 };
 
-future<utils::chunked_vector<frozen_mutation_and_schema>> generate_view_updates(
+future<view_update_builder> make_view_update_builder(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader&& updates,
