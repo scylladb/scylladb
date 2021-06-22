@@ -857,13 +857,15 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_ignore_proposal) {
     /// Test that a leader which has entered leader stepdown mode rejects
     /// new append requests.
 
-    raft::server_id A_id = id();
+    raft::server_id A_id = id(), B_id = id();
     raft::log log(raft::snapshot{.idx = raft::index_t{0},
-        .config = raft::configuration({A_id})});
+        .config = raft::configuration({A_id, B_id})});
     auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
 
     // Elect A leader.
     election_timeout(A);
+    communicate(A, B);
     BOOST_CHECK(A.is_leader());
 
     // Move A to "stepdown" state.
@@ -892,4 +894,73 @@ BOOST_AUTO_TEST_CASE(test_transfer_non_member) {
     // Check that a node outside of configuration doesn't even get a chance
     // to transition to the candidate state.
     BOOST_CHECK(!A.is_candidate());
+}
+
+// TestLeaderTransferTimeout
+BOOST_AUTO_TEST_CASE(test_leader_transfer_timeout) {
+    discrete_failure_detector fd;
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration{A_id, B_id, C_id}});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    // Elect A leader.
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_REQUIRE(A.is_leader());
+    // tick and communicate to propagate commit index
+    A.tick();
+    communicate(A, B, C);
+    // Start leadership transfer
+    A.transfer_leadership(raft::logical_clock::duration(5));
+    BOOST_CHECK(A.leadership_transfer_active());
+    // Wait for election timeout so that A aborts leadership transfer procedure.
+    for (int i = 0; i < 5; i++) {
+        auto output = A.get_output();
+        BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+        BOOST_REQUIRE_NO_THROW(std::get<raft::timeout_now>(output.messages.back().second));
+        BOOST_REQUIRE(!output.abort_leadership_transfer);
+        A.tick();
+    }
+    // By now A should abort leadership transfer procedure.
+    // We can check that leadership abort succeeded by checking that A is still
+    // a leader.
+    auto output = A.get_output();
+    BOOST_REQUIRE(output.abort_leadership_transfer);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK(!A.leadership_transfer_active());
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_transfer_one_node_cluster) {
+    discrete_failure_detector fd;
+    raft::server_id A_id = id();
+
+    raft::log log(raft::snapshot{.idx = raft::index_t{0}, .config = raft::configuration{A_id}});
+    auto A = create_follower(A_id, log, fd);
+    // Elect A leader.
+    election_timeout(A);
+    BOOST_REQUIRE(A.is_leader());
+    // Start leadership transfer
+    BOOST_REQUIRE_THROW(A.transfer_leadership(raft::logical_clock::duration(5)), raft::no_other_voting_member);
+    BOOST_CHECK(!A.leadership_transfer_active());
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_transfer_one_voter) {
+    discrete_failure_detector fd;
+    raft::server_id A_id = id(), B_id = id();
+    raft::server_address_set set{raft::server_address{A_id, true}, raft::server_address{B_id, false}};
+    raft::configuration cfg(set);
+
+
+    raft::log log(raft::snapshot{.idx = raft::index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    // Elect A leader.
+    election_timeout(A);
+    BOOST_REQUIRE(A.is_leader());
+    // Start leadership transfer
+    BOOST_REQUIRE_THROW(A.transfer_leadership(raft::logical_clock::duration(5)), raft::no_other_voting_member);
+    BOOST_CHECK(!A.leadership_transfer_active());
 }

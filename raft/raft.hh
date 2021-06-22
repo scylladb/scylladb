@@ -223,6 +223,15 @@ struct config_error : public error {
     using error::error;
 };
 
+
+struct timeout_error : public error {
+    using error::error;
+};
+
+struct no_other_voting_member : public error {
+    no_other_voting_member() : error("Cannot stepdown because there is no other voting member") {}
+};
+
 // True if a failure to execute a Raft operation can be re-tried,
 // perhaps with a different server.
 inline bool is_transient_error(const std::exception& e) {
