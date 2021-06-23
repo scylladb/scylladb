@@ -624,7 +624,7 @@ public:
         } else {
             node* n = node::from_base(nb);
             assert(n->is_leaf());
-            n->remove_key(0); // FIXME -- this _does_ rebalance
+            n->remove_leftmost_light_rebalance();
         }
         return hook->to_key<Key, Hook>();
     }
@@ -1438,7 +1438,7 @@ private:
         return _base.num_keys <= NodeHalf;
     }
 
-    bool collapse_root() const noexcept {
+    bool need_collapse_root() const noexcept {
         return !is_leaf() && (_base.num_keys == 0);
     }
 
@@ -1857,17 +1857,36 @@ private:
         check_refill();
     }
 
+    void remove_leftmost_light_rebalance() noexcept {
+        shift_left(0);
+        check_light_refill();
+    }
+
     void check_refill() noexcept {
         if (!is_root()) {
             if (need_refill()) {
                 refill();
             }
-        } else if (collapse_root()) {
-            node& nr = *_kids[0];
-            nr._base.flags |= node_base::NODE_ROOT;
-            _parent.t->do_set_root(nr);
-            drop();
+        } else if (need_collapse_root()) {
+            collapse_root();
         }
+    }
+
+    void check_light_refill() noexcept {
+        if (_base.num_keys == 0) {
+            if (!is_root()) {
+                light_refill();
+            } else if (!is_leaf()) {
+                collapse_root();
+            }
+        }
+    }
+
+    void collapse_root() noexcept {
+        node& nr = *_kids[0];
+        nr._base.flags |= node_base::NODE_ROOT;
+        _parent.t->do_set_root(nr);
+        drop();
     }
 
     void grab_from_left(node* left, key_index idx) noexcept {
@@ -1953,7 +1972,10 @@ private:
         }
         shift_left(idx);
         n.drop();
+    }
 
+    void merge_kids_and_refill(node& t, node& n, key_index idx) noexcept {
+        merge_kids(t, n, idx);
         check_refill();
     }
 
@@ -1982,12 +2004,12 @@ private:
         }
 
         if (left != nullptr && can_merge_with(*left)) {
-            _parent.n->merge_kids(*left, *this, idx - 1);
+            _parent.n->merge_kids_and_refill(*left, *this, idx - 1);
             return;
         }
 
         if (right != nullptr && can_merge_with(*right)) {
-            _parent.n->merge_kids(*this, *right, idx);
+            _parent.n->merge_kids_and_refill(*this, *right, idx);
             return;
         }
 
@@ -1998,6 +2020,39 @@ private:
          * it or either of its siblings will probably refill it.
          */
     }
+
+    void light_refill() noexcept {
+        assert(_parent.n->_base.num_keys > 0);
+        node* right = _parent.n->_kids[1];
+
+        /*
+         * The current node is empty and needs to either go away
+         * from the tree or get refilled.
+         *
+         * In case our right sibling can carry one more key (which
+         * is the same as it can be merged with current empty node)
+         * then we just perform regular merge, which will move all
+         * the keys from right node on the current one (plus the
+         * parent's separation key). Note that this is NOT worse
+         * than just updating the parent's 0th key to point to the
+         * right kid -- in the latter case we'd still have to shift
+         * the whole right kid right to make room for the parent
+         * separation key at its 0 position, so it's moving the
+         * whole node anyway.
+         *
+         * In case our right sibling is full there's no choise but
+         * to grab a key from it and continue. Next time we get
+         * here the right node will be int mergeable state.
+         */
+
+        if (can_merge_with(*right)) {
+            _parent.n->merge_kids(*this, *right, 0);
+            _parent.n->check_light_refill();
+        } else {
+            grab_from_right(right, 0);
+        }
+    }
+
 
     void remove_from_inner(kid_index idx) noexcept {
         /*
