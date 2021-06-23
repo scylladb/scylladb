@@ -4014,39 +4014,33 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
     merger.reserve(exec.size());
 
-    auto used_replicas = make_lw_shared<replicas_per_token_range>();
+    replicas_per_token_range used_replicas;
 
-    auto f = ::map_reduce(exec.begin(), exec.end(), [p = shared_from_this(), timeout = query_options.timeout(*this), used_replicas, tmptr] (
-                std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
-        auto& rex = std::get<0>(executor_and_token_range);
-        auto& token_range = std::get<1>(executor_and_token_range);
-        return rex->execute(timeout).then_wrapped([p = std::move(p), rex, used_replicas, token_range = std::move(token_range), tmptr] (
-                    future<foreign_ptr<lw_shared_ptr<query::result>>> f) mutable {
-            if (!f.failed()) {
-                used_replicas->emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr, rex->used_targets()));
+    // keeps sp alive for the co-routine lifetime
+    auto p = shared_from_this();
+
+    foreign_ptr<lw_shared_ptr<query::result>> result;
+
+    try {
+         result = co_await ::map_reduce(exec.begin(), exec.end(), [timeout = query_options.timeout(*this), &used_replicas, tmptr] (
+                    std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
+                auto& [rex, token_range] = executor_and_token_range;
+                auto result = co_await rex->execute(timeout);
+                used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr, rex->used_targets()));
 
                 auto latency = rex->max_request_latency();
                 if (latency) {
                     rex->get_cf()->add_coordinator_read_latency(*latency);
                 }
-            }
 
-            return std::move(f);
-        });
-    }, std::move(merger));
+                co_return std::move(result);
+            }, std::move(merger));
+    } catch(...) {
+        handle_read_error(std::current_exception(), false);
+        throw;
+    }
 
-    return f.then_wrapped([exec = std::move(exec),
-            p = shared_from_this(),
-            used_replicas,
-            repair_decision] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
-        if (f.failed()) {
-            auto eptr = f.get_exception();
-            // hold onto exec until read is complete
-            p->handle_read_error(eptr, false);
-            return make_exception_future<storage_proxy::coordinator_query_result>(eptr);
-        }
-        return make_ready_future<coordinator_query_result>(coordinator_query_result(std::move(f.get0()), std::move(*used_replicas), repair_decision));
-    });
+    co_return coordinator_query_result(std::move(result), std::move(used_replicas), repair_decision);
 }
 
 future<query_partition_key_range_concurrent_result>
