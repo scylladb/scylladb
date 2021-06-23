@@ -38,6 +38,8 @@ Options:
   --housekeeping           enable housekeeping service
   --nonroot                install Scylla without required root priviledge
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
+  --supervisor             enable supervisor to manage scylla processes
+  --supervisor-log-to-stdout logging to stdout on supervisor
   --help                   this helpful message
 EOF
     exit 1
@@ -51,6 +53,8 @@ check_usermode_support() {
 root=/
 housekeeping=false
 nonroot=false
+supervisor=false
+supervisor_log_to_stdout=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -78,6 +82,14 @@ while [ $# -gt 0 ]; do
             sysconfdir="$2"
             shift 2
             ;;
+        "--supervisor")
+            supervisor=true
+            shift 1
+            ;;
+        "--supervisor-log-to-stdout")
+            supervisor_log_to_stdout=true
+            shift 1
+            ;;
         "--help")
             shift 1
             print_usage
@@ -88,7 +100,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ ! -d /run/systemd/system/ ]; then
+if [ ! -d /run/systemd/system/ ] && ! $supervisor; then
     echo "systemd is not detected, unsupported distribution."
     exit 1
 fi
@@ -141,6 +153,13 @@ if $nonroot; then
     scylla_args+=(--nonroot)
     args+=(--nonroot)
 fi
+if $supervisor; then
+    scylla_args+=(--supervisor)
+    args+=(--supervisor)
+fi
+if $supervisor_log_to_stdout; then
+    scylla_args+=(--supervisor-log-to-stdout)
+fi
 
 (cd $(readlink -f scylla); ./install.sh --root "$root" --prefix "$prefix" --python3 "$python3" --sysconfdir "$sysconfdir" ${scylla_args[@]})
 
@@ -152,6 +171,6 @@ fi
 
 install -m755 uninstall.sh -Dt "$rprefix"
 
-if $nonroot && ! check_usermode_support; then
+if ! $supervisor && $nonroot && ! check_usermode_support; then
     echo "WARNING: This distribution does not support systemd user mode, please configure and launch Scylla manually."
 fi
