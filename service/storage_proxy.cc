@@ -4011,9 +4011,6 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         get_stats().reads_coordinator_outside_replica_set++;
     }
 
-    query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
-    merger.reserve(exec.size());
-
     replicas_per_token_range used_replicas;
 
     // keeps sp alive for the co-routine lifetime
@@ -4022,19 +4019,30 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     foreign_ptr<lw_shared_ptr<query::result>> result;
 
     try {
-         result = co_await ::map_reduce(exec.begin(), exec.end(), [timeout = query_options.timeout(*this), &used_replicas, tmptr] (
-                    std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
+        auto timeout = query_options.timeout(*this);
+        auto handle_completion = [&used_replicas, tmptr] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
-                auto result = co_await rex->execute(timeout);
                 used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(*tmptr, rex->used_targets()));
-
                 auto latency = rex->max_request_latency();
                 if (latency) {
                     rex->get_cf()->add_coordinator_read_latency(*latency);
                 }
+        };
 
+        if (exec.size() == 1) [[likely]] {
+            result = co_await exec[0].first->execute(timeout);
+            handle_completion(exec[0]);
+        } else {
+            auto mapper = [timeout, &handle_completion] (
+                    std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
+                auto result = co_await executor_and_token_range.first->execute(timeout);
+                handle_completion(executor_and_token_range);
                 co_return std::move(result);
-            }, std::move(merger));
+            };
+            query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
+            merger.reserve(exec.size());
+            result = co_await ::map_reduce(exec.begin(), exec.end(), std::move(mapper), std::move(merger));
+        }
     } catch(...) {
         handle_read_error(std::current_exception(), false);
         throw;
