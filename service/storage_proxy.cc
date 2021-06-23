@@ -3978,7 +3978,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
-    std::vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>> exec;
+    utils::small_vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>, 1> exec;
     exec.reserve(partition_ranges.size());
 
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
