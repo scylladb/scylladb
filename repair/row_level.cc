@@ -846,6 +846,15 @@ public:
     }
 
 public:
+    future<> clear_gently() noexcept {
+        // FIXME: coroutinize
+        return utils::clear_gently(_peer_row_hash_sets).then([this] {
+            return utils::clear_gently(_working_row_buf);
+        }).then([this] {
+            return utils::clear_gently(_row_buf);
+        });
+    }
+
     future<> stop() {
         // Handle deferred stop
         if (_stop_promise) {
@@ -864,7 +873,9 @@ public:
         // move to background.  waited on via _stop_promise->get_future.
         (void)when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
             return _repair_writer->wait_for_writer_done().finally([this] {
-                return close();
+                return close().then([this] {
+                    return clear_gently();
+                });
             });
         }).then_wrapped([this] (future<> f) {
             if (f.failed()) {
