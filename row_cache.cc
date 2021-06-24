@@ -53,16 +53,18 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
 static thread_local mutation_application_stats dummy_app_stats;
 
 cache_tracker::cache_tracker()
-    : cache_tracker(dummy_app_stats)
+    : cache_tracker(dummy_app_stats, register_metrics::no)
 {}
 
 static thread_local cache_tracker* current_tracker;
 
-cache_tracker::cache_tracker(mutation_application_stats& app_stats)
+cache_tracker::cache_tracker(mutation_application_stats& app_stats, register_metrics with_metrics)
     : _garbage(_region, this, app_stats)
     , _memtable_cleaner(_region, nullptr, app_stats)
 {
-    setup_metrics();
+    if (with_metrics) {
+        setup_metrics();
+    }
 
     _region.make_evictable([this] {
         return with_allocator(_region.allocator(), [this] {

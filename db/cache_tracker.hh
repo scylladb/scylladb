@@ -93,7 +93,8 @@ private:
 private:
     void setup_metrics();
 public:
-    cache_tracker(mutation_application_stats&);
+    using register_metrics = bool_class<class register_metrics_tag>;
+    cache_tracker(mutation_application_stats&, register_metrics = register_metrics::yes);
     cache_tracker();
     ~cache_tracker();
     void clear();
