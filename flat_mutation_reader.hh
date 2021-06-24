@@ -386,6 +386,12 @@ public:
                 other._buffer_size += std::exchange(_buffer_size, 0);
             }
         }
+
+        static void maybe_timed_out(db::timeout_clock::time_point timeout) {
+            if (db::timeout_clock::now() >= timeout) {
+                throw timed_out_error();
+            }
+        }
     };
 private:
     std::unique_ptr<impl> _impl;

@@ -1814,19 +1814,21 @@ public:
                 }
             });
         }
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
             if (_partition_finished) {
+                maybe_timed_out(timeout);
                 if (_before_partition) {
                     return read_partition();
                 } else {
                     return read_next_partition();
                 }
             } else {
-                return do_until([this] { return is_buffer_full() || _partition_finished || _end_of_stream; }, [this] {
+                return do_until([this] { return is_buffer_full() || _partition_finished || _end_of_stream; }, [this, timeout] {
                     _consumer.push_ready_fragments();
                     if (is_buffer_full() || _partition_finished || _end_of_stream) {
                         return make_ready_future<>();
                     }
+                    maybe_timed_out(timeout);
                     return advance_context(_consumer.maybe_skip()).then([this] {
                         return _context->consume_input();
                     });
