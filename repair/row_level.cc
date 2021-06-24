@@ -400,6 +400,16 @@ public:
     is_dirty_on_master dirty_on_master() const {
         return _dirty_on_master;
     }
+    future<> clear_gently() noexcept {
+        auto f = _fm ? _fm->clear_gently() : make_ready_future<>();
+        return f.finally([this] {
+            _fm.reset();
+            _dk_with_hash = {};
+            _boundary.reset();
+            _hash.reset();
+            _mf = {};
+        });
+    }
 };
 
 class repair_reader {
