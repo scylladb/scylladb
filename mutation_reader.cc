@@ -1283,13 +1283,25 @@ void evictable_reader::maybe_validate_partition_start(const flat_mutation_reader
     // is in range.
     if (_last_pkey) {
         const auto cmp_res = tri_cmp(*_last_pkey, ps.key());
-        if (_drop_partition_start) { // should be the same partition
+        if (_drop_partition_start) { // we expect to continue from the same partition
+            // We cannot assume the partition we stopped the read at is still alive
+            // when we recreate the reader. It might have been compacted away in the
+            // meanwhile, so allow for a larger partition too.
             require(
-                    cmp_res == 0,
-                    "{}(): validation failed, expected partition with key equal to _last_pkey {} due to _drop_partition_start being set, but got {}",
+                    cmp_res <= 0,
+                    "{}(): validation failed, expected partition with key larger or equal to _last_pkey {} due to _drop_partition_start being set, but got {}",
                     __FUNCTION__,
                     *_last_pkey,
                     ps.key());
+            // Reset drop flags and next pos if we are not continuing from the same partition
+            if (cmp_res < 0) {
+                // Close previous partition, we are not going to continue it.
+                push_mutation_fragment(*_schema, _permit, partition_end{});
+                _drop_partition_start = false;
+                _drop_static_row = false;
+                _next_position_in_partition = position_in_partition::for_partition_start();
+                _trim_range_tombstones = false;
+            }
         } else { // should be a larger partition
             require(
                     cmp_res < 0,

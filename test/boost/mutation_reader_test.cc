@@ -3419,7 +3419,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
 
     check_evictable_reader_validation_is_triggered(
             "pkey > _last_pkey; pkey ∈ pkrange",
-            partition_error_prefix,
+            "",
             s.schema(),
             permit,
             prange,
