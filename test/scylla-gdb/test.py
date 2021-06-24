@@ -75,7 +75,6 @@ dos('lsa')
 # dos('lsa-segment ???')
 dos('ptr $schema')
 
-# no messaging service yet, but still:
 dos('netw')
 
 # probably empty:
