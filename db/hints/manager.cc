@@ -357,10 +357,28 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
                 }
 
                 std::vector<sstring> segs_vec = l.get_segments_to_replay();
+                std::vector<std::pair<db::segment_id_type, sstring>> local_segs_vec;
+                local_segs_vec.reserve(segs_vec.size());
 
-                std::for_each(segs_vec.begin(), segs_vec.end(), [this] (sstring& seg) {
+                // Divide segments into those that were created on this shard
+                // and those which were moved to it during rebalancing.
+                for (auto& seg : segs_vec) {
+                    db::commitlog::descriptor desc(seg, manager::FILENAME_PREFIX);
+                    unsigned shard_id = db::replay_position(desc).shard_id();
+                    if (shard_id == this_shard_id()) {
+                        local_segs_vec.emplace_back(desc.id, std::move(seg));
+                    } else {
+                        _sender.add_foreign_segment(std::move(seg));
+                    }
+                }
+
+                // Sort local segments by their segment ids, which should
+                // correspond to the chronological order.
+                std::sort(local_segs_vec.begin(), local_segs_vec.end());
+
+                for (auto& [segment_id, seg] : local_segs_vec) {
                     _sender.add_segment(std::move(seg));
-                });
+                }
 
                 return make_ready_future<commitlog>(std::move(l));
             });
@@ -691,6 +709,10 @@ void manager::end_point_hints_manager::sender::add_segment(sstring seg_name) {
     _segments_to_replay.emplace_back(std::move(seg_name));
 }
 
+void manager::end_point_hints_manager::sender::add_foreign_segment(sstring seg_name) {
+    _foreign_segments_to_replay.emplace_back(std::move(seg_name));
+}
+
 manager::end_point_hints_manager::sender::clock::duration manager::end_point_hints_manager::sender::next_sleep_duration() const {
     clock::time_point current_time = clock::now();
     clock::time_point next_flush_tp = std::max(_next_flush_tp, current_time);
@@ -855,19 +877,42 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     return true;
 }
 
+const sstring* manager::end_point_hints_manager::sender::name_of_current_segment() const {
+    // Foreign segments are replayed first
+    if (!_foreign_segments_to_replay.empty()) {
+        return &_foreign_segments_to_replay.front();
+    }
+    if (!_segments_to_replay.empty()) {
+        return &_segments_to_replay.front();
+    }
+    return nullptr;
+}
+
+void manager::end_point_hints_manager::sender::pop_current_segment() {
+    if (!_foreign_segments_to_replay.empty()) {
+        _foreign_segments_to_replay.pop_front();
+    } else if (!_segments_to_replay.empty()) {
+        _segments_to_replay.pop_front();
+    }
+}
+
 // Runs in the seastar::async context
 void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
-    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size());
+    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
     int replayed_segments_count = 0;
 
     try {
-        while (replay_allowed() && have_segments() && can_send()) {
-            if (!send_one_file(*_segments_to_replay.begin())) {
+        while (true) {
+            const sstring* seg_name = name_of_current_segment();
+            if (!seg_name || !replay_allowed() || !can_send()) {
                 break;
             }
-            _segments_to_replay.pop_front();
+            if (!send_one_file(*seg_name)) {
+                break;
+            }
+            pop_current_segment();
             ++replayed_segments_count;
         }
 

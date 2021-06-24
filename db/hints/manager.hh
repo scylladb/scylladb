@@ -131,6 +131,8 @@ public:
 
         private:
             std::list<sstring> _segments_to_replay;
+            // Segments to replay which were not created on this shard but were moved during rebalancing
+            std::list<sstring> _foreign_segments_to_replay;
             replay_position _last_not_complete_rp;
             std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
             state_set _state;
@@ -173,11 +175,22 @@ public:
             /// \brief Add a new segment ready for sending.
             void add_segment(sstring seg_name);
 
+            /// \brief Add a new segment originating from another shard, ready for sending.
+            void add_foreign_segment(sstring seg_name);
+
             /// \brief Check if there are still unsent segments.
             /// \return TRUE if there are still unsent segments.
-            bool have_segments() const noexcept { return !_segments_to_replay.empty(); };
+            bool have_segments() const noexcept { return !_segments_to_replay.empty() || !_foreign_segments_to_replay.empty(); };
 
         private:
+            /// \brief Gets the name of the current segment that should be sent.
+            ///
+            /// If there are no segments to be sent, nullptr will be returned.
+            const sstring* name_of_current_segment() const;
+
+            /// \brief Removes the current segment from the queue.
+            void pop_current_segment();
+
             /// \brief Send hints collected so far.
             ///
             /// Send hints aggregated so far. This function is going to try to deplete
