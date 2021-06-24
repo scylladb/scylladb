@@ -44,8 +44,9 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
         seastar::thread::maybe_yield();
         if (first1 == last1) {
             // Copy remaining items of list2 into list1
-            std::copy_if(first2, last2, std::back_inserter(list1), [] (const auto&) { return true; });
-            return;
+            list1.insert(last1, *first2);
+            ++first2;
+            continue;
         }
         if (comp(*first2, *first1)) {
             first1 = list1.insert(first1, *first2);
