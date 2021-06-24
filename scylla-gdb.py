@@ -3830,9 +3830,9 @@ class scylla_smp_queues(gdb.Command):
                     if ptr in self.queues:
                         q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
                         break
-                known_vptrs[vptr] = offset
                 if q is None:
                     continue
+                known_vptrs[vptr] = offset
             else:
                 ptr = int(gdb.Value(obj + offset).reinterpret_cast(self._ptr_type).dereference())
                 q = gdb.Value(ptr).reinterpret_cast(self._queue_type).dereference()
