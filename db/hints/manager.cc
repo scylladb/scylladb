@@ -41,6 +41,7 @@
 #include "utils/directories.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation_partition_view.hh"
+#include "utils/runtime.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -178,7 +179,11 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
                     return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
                 }).then([this, tr_state] (db::rp_handle rh) {
-                    rh.release();
+                    auto rp = rh.release();
+                    if (_last_written_rp < rp) {
+                        _last_written_rp = rp;
+                        manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+                    }
                     ++shard_stats().written;
 
                     manager_logger.trace("Hint to {} was stored", end_point_key());
@@ -255,6 +260,9 @@ manager::end_point_hints_manager::end_point_hints_manager(const key_type& key, m
     , _file_update_mutex(*_file_update_mutex_ptr)
     , _state(state_set::of<state::stopped>())
     , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
+    // Approximate the position of the last written hint by using the same formula as for segment id calculation in commitlog
+    // TODO: Should this logic be deduplicated with what is in the commitlog?
+    , _last_written_rp(this_shard_id(), std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count())
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
 {}
 

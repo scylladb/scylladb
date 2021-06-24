@@ -322,6 +322,7 @@ public:
         state_set _state;
         const fs::path _hints_dir;
         uint64_t _hints_in_progress = 0;
+        db::replay_position _last_written_rp;
         sender _sender;
 
     public:
@@ -406,6 +407,13 @@ public:
 
         bool stopped() const noexcept {
             return _state.contains(state::stopped);
+        }
+
+        /// \brief Returns replay position of the most recently written hint.
+        ///
+        /// If there weren't any hints written during this endpoint manager's lifetime, a zero replay_position is returned.
+        db::replay_position last_written_replay_position() const {
+            return _last_written_rp;
         }
 
         /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
