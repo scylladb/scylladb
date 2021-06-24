@@ -90,9 +90,12 @@ public:
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
     static constexpr int32_t DEFAULT_MAX_INDEX_INTERVAL = 2048;
+
 private:
     mutable std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
+    std::optional<sstables::compaction_strategy_type> get_compaction_strategy_class() const;
+
     schema::extensions_map make_schema_extensions(const db::extensions& exts) const;
     void validate(const database& db, const schema::extensions_map& schema_extensions) const;
     std::map<sstring, sstring> get_compaction_options() const;

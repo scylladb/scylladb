@@ -58,6 +58,8 @@ namespace cql3 {
 
 namespace statements {
 
+static logging::logger mylogger("alter_table");
+
 alter_table_statement::alter_table_statement(cf_name name,
                                              type t,
                                              std::vector<column_change> column_changes,
@@ -412,6 +414,18 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::alter_table_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_table_statement>(*this));
+}
+
+future<::shared_ptr<messages::result_message>>
+alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    std::optional<sstring> warning = check_restricted_table_properties(qp.proxy(), keyspace(), column_family(), *_properties);
+    return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+        if (warning) {
+            msg->add_warning(*warning);
+            mylogger.warn("{}", *warning);
+        }
+        return msg;
+    });
 }
 
 }

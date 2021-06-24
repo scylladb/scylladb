@@ -58,10 +58,14 @@
 #include "types/user.hh"
 #include "gms/feature_service.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 
 namespace statements {
+
+static logging::logger mylogger("create_table");
 
 create_table_statement::create_table_statement(cf_name name,
                                                ::shared_ptr<cf_prop_defs> properties,
@@ -436,6 +440,57 @@ void create_table_statement::raw_statement::add_key_aliases(const std::vector<::
 
 void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column_identifier> alias) {
     _column_aliases.emplace_back(alias);
+}
+
+// Check for choices of table properties (e.g., the choice of compaction
+// strategy) which are restricted configuration options.
+// This check can throw a configuration_exception immediately if an option
+// is forbidden by the configuration, or return a warning string if the
+// relevant restriction was set to "warn".
+// This function is only supposed to check for options which are usually
+// legal but restricted by the configuration. Checks for other of errors
+// in the table's options are done elsewhere.
+std::optional<sstring> check_restricted_table_properties(
+    service::storage_proxy& proxy,
+    const sstring& keyspace, const sstring& table,
+    const cf_prop_defs& cfprops)
+{
+    // Note: In the current implementation, CREATE TABLE calls this function
+    // after cfprops.validate() was called, but ALTER TABLE calls this
+    // function before cfprops.validate() (there, validate() is only called
+    // in announce_migration(), in the middle of execute).
+    auto strategy = cfprops.get_compaction_strategy_class();
+    if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
+        switch(proxy.local_db().get_config().restrict_dtcs()) {
+        case db::tri_mode_restriction_t::mode::TRUE:
+            throw exceptions::configuration_exception(
+                "DateTieredCompactionStrategy is deprecated, and "
+                "forbidden by the current configuration. Please use "
+                "TimeWindowCompactionStrategy instead. You may also override this "
+                "restriction by setting the restrict_dtcs configuration option "
+                "to false.");
+        case db::tri_mode_restriction_t::mode::WARN:
+            return format("DateTieredCompactionStrategy is deprecated, "
+                "but was used for table {}.{}. The restrict_dtcs "
+                "configuration option can be changed to silence this warning "
+                " or make it into an error.", keyspace, table);
+        case db::tri_mode_restriction_t::mode::FALSE:
+            break;
+        }
+    }
+    return std::nullopt;
+}
+
+future<::shared_ptr<messages::result_message>>
+create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    std::optional<sstring> warning = check_restricted_table_properties(qp.proxy(), keyspace(), column_family(), *_properties);
+    return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+        if (warning) {
+            msg->add_warning(*warning);
+            mylogger.warn("{}", *warning);
+        }
+        return msg;
+    });
 }
 
 }

@@ -340,6 +340,23 @@ void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_va
     }
 }
 
+std::optional<sstables::compaction_strategy_type> cf_prop_defs::get_compaction_strategy_class() const {
+    // Unfortunately, in our implementation, the compaction strategy begins
+    // stored in the compaction strategy options, and then the validate()
+    // functions moves it into _compaction_strategy_class... If we want a
+    // function that works either before or after validate(), we need to
+    // check both places.
+    if (_compaction_strategy_class) {
+        return _compaction_strategy_class;
+    }
+    auto compaction_options = get_compaction_options();
+    auto strategy = compaction_options.find(COMPACTION_STRATEGY_CLASS_KEY);
+    if (strategy != compaction_options.end()) {
+        return sstables::compaction_strategy::type(strategy->second);
+    }
+    return std::nullopt;
+}
+
 }
 
 }

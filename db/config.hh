@@ -358,6 +358,7 @@ public:
     // or options which non-expert users are more likely to regret than to
     // enjoy:
     named_value<tri_mode_restriction> restrict_replication_simplestrategy;
+    named_value<tri_mode_restriction> restrict_dtcs;
 
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
