@@ -49,7 +49,7 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
             continue;
         }
         if (comp(*first2, *first1)) {
-            first1 = list1.insert(first1, *first2);
+            list1.insert(first1, *first2);
             ++first2;
         } else {
             ++first1;
