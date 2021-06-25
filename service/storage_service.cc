@@ -2009,18 +2009,14 @@ future<> storage_service::decommission() {
                 throw;
             }
 
-            ss.shutdown_client_servers();
-            slogger.info("DECOMMISSIONING: shutdown rpc and cql server done");
+            ss.stop_transport().get();
+            slogger.info("DECOMMISSIONING: stopped transport");
 
             db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
                 return bm.stop();
             }).get();
             slogger.info("DECOMMISSIONING: stop batchlog_manager done");
 
-            gms::stop_gossiping().get();
-            slogger.info("DECOMMISSIONING: stop_gossiping done");
-            ss.do_stop_ms().get();
-            slogger.info("DECOMMISSIONING: stop messaging_service done");
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             slogger.info("DECOMMISSIONING: set_bootstrap_state done");
