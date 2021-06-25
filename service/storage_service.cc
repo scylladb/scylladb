@@ -1349,31 +1349,31 @@ future<> storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* s
 
 future<> storage_service::stop_transport() {
     if (!_transport_stopped.has_value()) {
-    _transport_stopped.emplace();
+        _transport_stopped.emplace();
 
-    (void) seastar::async([this] {
-        slogger.info("Stop transport: starts");
+        (void) seastar::async([this] {
+            slogger.info("Stop transport: starts");
 
-        shutdown_client_servers();
-        slogger.info("Stop transport: shutdown rpc and cql server done");
+            shutdown_client_servers();
+            slogger.info("Stop transport: shutdown rpc and cql server done");
 
-        gms::stop_gossiping().get();
-        slogger.info("Stop transport: stop_gossiping done");
+            gms::stop_gossiping().get();
+            slogger.info("Stop transport: stop_gossiping done");
 
-        do_stop_ms().get();
-        slogger.info("Stop transport: shutdown messaging_service done");
+            do_stop_ms().get();
+            slogger.info("Stop transport: shutdown messaging_service done");
 
-        do_stop_stream_manager().get();
-        slogger.info("Stop transport: shutdown stream_manager done");
-    }).then_wrapped([this] (future<> f) {
-        if (f.failed()) {
-            _transport_stopped->set_exception(f.get_exception());
-        } else {
-            _transport_stopped->set_value();
-        }
+            do_stop_stream_manager().get();
+            slogger.info("Stop transport: shutdown stream_manager done");
+        }).then_wrapped([this] (future<> f) {
+            if (f.failed()) {
+                _transport_stopped->set_exception(f.get_exception());
+            } else {
+                _transport_stopped->set_value();
+            }
 
-        slogger.info("Stop transport: done");
-    });
+            slogger.info("Stop transport: done");
+        });
     }
 
     return _transport_stopped->get_shared_future();
