@@ -133,10 +133,11 @@ storage_service::storage_service(abort_source& abort_source,
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
         , _schema_version_publisher([this] { return publish_schema_version(); }) {
     register_metrics();
-    sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); });
-    sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); });
-    general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); });
-    commit_error.connect([this] { do_isolate_on_error(disk_error::commit); });
+
+    _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
+    _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
+    _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
+    _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(commit_error.connect([this] { do_isolate_on_error(disk_error::commit); }))));
 
     auto& snitch = locator::i_endpoint_snitch::snitch_instance();
     if (snitch.local_is_initialized()) {
