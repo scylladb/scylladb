@@ -543,6 +543,12 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
             auto type = column.type;
+            if (type->get_kind() == abstract_type::kind::empty) {
+                if (!(s.is_dense() && s.regular_columns_count() == 1)) {
+                    on_internal_error(cdc_log, "Unexpected column with EMPTY type");
+                }
+                continue;
+            }
             if (is_data_col && type->is_multi_cell()) {
                 type = visit(*type, make_visitor(
                     // non-frozen lists are represented as map<timeuuid, value_type>. Otherwise we cannot express delta
@@ -1049,6 +1055,11 @@ struct process_row_visitor {
 
     void live_atomic_cell(const column_definition& cdef, const atomic_cell_view& cell) {
         _ttl_column = get_ttl(cell);
+
+        if (cdef.type->get_kind() == abstract_type::kind::empty) {
+            return;
+        }
+
         managed_bytes value = get_managed_bytes(cell);
 
         // delta

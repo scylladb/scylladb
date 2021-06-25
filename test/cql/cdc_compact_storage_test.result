@@ -1,0 +1,28 @@
+create table tb2 (pk int, ck int, PRIMARY KEY (pk, ck)) with compact storage and cdc = {'enabled': true, 'preimage': true, 'postimage': true};
+{
+	"status" : "ok"
+}
+-- Should add 3 rows (preimage + postimage + delta). Delta has only key columns and "pk" + "ck"
+insert into tb2 (pk, ck) VALUES (2, 22) USING TTL 2222;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck from tb2_scylla_cdc_log;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "1",
+			"cdc$ttl" : "2222",
+			"ck" : "22",
+			"pk" : "2"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "9",
+			"ck" : "22",
+			"pk" : "2"
+		}
+	]
+}
