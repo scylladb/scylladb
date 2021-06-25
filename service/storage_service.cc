@@ -1348,7 +1348,10 @@ future<> storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* s
 }
 
 future<> storage_service::stop_transport() {
-    return seastar::async([this] {
+    if (!_transport_stopped.has_value()) {
+    _transport_stopped.emplace();
+
+    (void) seastar::async([this] {
         slogger.info("Stop transport: starts");
 
         shutdown_client_servers();
@@ -1362,9 +1365,18 @@ future<> storage_service::stop_transport() {
 
         do_stop_stream_manager().get();
         slogger.info("Stop transport: shutdown stream_manager done");
+    }).then_wrapped([this] (future<> f) {
+        if (f.failed()) {
+            _transport_stopped->set_exception(f.get_exception());
+        } else {
+            _transport_stopped->set_value();
+        }
 
         slogger.info("Stop transport: done");
     });
+    }
+
+    return _transport_stopped->get_shared_future();
 }
 
 future<> storage_service::drain_on_shutdown() {
