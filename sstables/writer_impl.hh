@@ -22,6 +22,7 @@
 #pragma once
 
 #include "sstables.hh"
+#include "sstable_writer.hh"
 #include "schema_fwd.hh"
 #include "mutation_fragment.hh"
 #include "metadata_collector.hh"

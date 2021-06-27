@@ -45,7 +45,6 @@ sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms
     : _gossiper(g)
     , _features(f)
     , _db(db)
-    , _mc_feature_listener(*this, sstables::sstable_version_types::mc)
     , _md_feature_listener(*this, sstables::sstable_version_types::md)
 { }
 
@@ -75,7 +74,6 @@ future<> sstables_format_selector::do_maybe_select_format(sstables::sstable_vers
 future<> sstables_format_selector::start() {
     assert(this_shard_id() == 0);
     return read_sstables_format().then([this] {
-        _features.local().cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
         _features.local().cluster_supports_md_sstable().when_enabled(_md_feature_listener);
         return make_ready_future<>();
     });
@@ -100,9 +98,6 @@ future<> sstables_format_selector::select_format(sstables::sstable_version_types
     _selected_format = format;
     return _db.invoke_on_all([this] (database& db) {
         db.set_format(_selected_format);
-        if (_selected_format >= sstables::sstable_version_types::mc) {
-            _features.local().support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-        }
     });
 }
 

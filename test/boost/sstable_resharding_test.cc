@@ -43,7 +43,7 @@ void run_sstable_resharding_test() {
     test_env env;
     auto close_env = defer([&] { env.stop().get(); });
     cache_tracker tracker;
-  for (const auto version : all_sstable_versions) {
+  for (const auto version : writable_sstable_versions) {
     auto tmp = tmpdir();
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
@@ -134,7 +134,7 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
 
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
     return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : all_sstable_versions) {
+      for (const auto version : writable_sstable_versions) {
         cell_locker_stats cl_stats;
 
         auto tmp = tmpdir();

@@ -43,7 +43,6 @@
 #include "schema_fwd.hh"
 #include "utils/i_filter.hh"
 #include <seastar/core/stream.hh>
-#include "metadata_collector.hh"
 #include "encoding_stats.hh"
 #include "filter.hh"
 #include "exceptions.hh"
@@ -81,8 +80,8 @@ namespace fs = std::filesystem;
 extern logging::logger sstlog;
 class key;
 class sstable_writer;
-class sstable_writer_k_l;
 class sstables_manager;
+class metadata_collector;
 
 template<typename T>
 concept ConsumeRowsContext =
@@ -814,10 +813,8 @@ public:
 
     friend class components_writer;
     friend class sstable_writer;
-    friend class sstable_writer_k_l;
     friend class mc::writer;
     friend class index_reader;
-    friend class sstable_writer;
     friend class compaction;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
@@ -854,32 +851,6 @@ struct index_sampling_state {
     uint64_t partition_count = 0;
     // Enforces ratio of summary to data of 1 to N.
     size_t summary_byte_cost = default_summary_byte_cost;
-};
-
-class sstable_writer {
-public:
-    class writer_impl;
-private:
-    std::unique_ptr<writer_impl> _impl;
-public:
-    sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-            const sstable_writer_config&, encoding_stats enc_stats,
-            const io_priority_class& pc, shard_id shard = this_shard_id());
-
-    sstable_writer(sstable_writer&& o);
-    sstable_writer& operator=(sstable_writer&& o);
-
-    ~sstable_writer();
-
-    void consume_new_partition(const dht::decorated_key& dk);
-    void consume(tombstone t);
-    stop_iteration consume(static_row&& sr);
-    stop_iteration consume(clustering_row&& cr);
-    stop_iteration consume(range_tombstone&& rt);
-    stop_iteration consume_end_of_partition();
-    void consume_end_of_stream();
-
-    metadata_collector& get_metadata_collector();
 };
 
 future<> init_metrics();

@@ -1144,57 +1144,6 @@ SEASTAR_TEST_CASE(sub_partitions_read) {
   });
 }
 
-// A silly, inefficient but effective, way to compare two files by reading
-// them entirely into memory.
-static future<> compare_files(sstring file1, sstring file2) {
-    return read_file(file1).then([file2] (auto in1) {
-        return read_file(file2).then([in1 = std::move(in1)] (auto in2) {
-            // assert that both files have the same size.
-            BOOST_REQUIRE(in1.second == in2.second);
-            // assert that both files have the same content.
-            BOOST_REQUIRE(::memcmp(in1.first.get(), in2.first.get(), in1.second) == 0);
-        });
-    });
-
-}
-
-// This test creates the same data as we previously created with Cassandra
-// in the test/resource/sstables/large_partition directory (which we read in the
-// promoted_index_read test above). The index file in both sstables - which
-// includes the promoted index - should be bit-for-bit identical, otherwise
-// we have a problem in our promoted index writing code (or in the data
-// writing code, because the promoted index points to offsets in the data).
-SEASTAR_TEST_CASE(promoted_index_write) {
-    auto s = large_partition_schema();
-    return test_setup::do_with_tmp_directory([s] (test_env& env, auto dirname) {
-        auto mtp = make_lw_shared<memtable>(s);
-        auto key = partition_key::from_exploded(*s, {to_bytes("v1")});
-        mutation m(s, key);
-        auto col = s->get_column_definition("t3");
-        BOOST_REQUIRE(col && !col->is_static());
-        for (char i = 'a'; i <= 'z'; i++) {
-            for (char j = 'A'; j <= 'Z'; j++) {
-                for (int k = 0; k < 20; k++) {
-                    auto& row = m.partition().clustered_row(*s,
-                            clustering_key::from_exploded(
-                                    *s, {to_bytes(format("{:d}{:c}{:c}", k, i, j))}));
-                    row.cells().apply(*col,
-                            atomic_cell::make_live(*col->type, 2345,
-                                    col->type->decompose(sstring(format("z{:c}",i)))));
-                    row.apply(row_marker(1234));
-                }
-            }
-        }
-        mtp->apply(std::move(m));
-        auto sst = env.make_sstable(s, dirname, 100,
-                sstables::sstable::version_types::la, big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([s, dirname] {
-            auto large_partition_file = seastar::format("{}/la-3-big-Index.db", get_test_dir("large_partition", s));
-            return compare_files(large_partition_file, dirname + "/la-100-big-Index.db");
-        }).then([sst, mtp] {});
-    });
-}
-
 SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
     return seastar::async([] {
         tmpdir tmp;
@@ -1212,7 +1161,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         sstables::compression c;
         // this initializes "c"
         auto os = make_file_output_stream(f, file_output_stream_options()).get0();
-        auto out = make_compressed_file_k_l_format_output_stream(std::move(os), &c, cp);
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp);
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());
@@ -1232,7 +1181,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         auto make_is = [&] {
             f = open_file_dma(file_path, open_flags::ro).get0();
-            return make_compressed_file_k_l_format_input_stream(f, &c, 0, uncompressed_size, opts);
+            return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts);
         };
 
         auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {

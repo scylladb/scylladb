@@ -30,12 +30,38 @@ namespace sstables {
 enum class sstable_version_types { ka, la, mc, md };
 enum class sstable_format_types { big };
 
-inline std::array<sstable_version_types, 4> all_sstable_versions = {
+constexpr std::array<sstable_version_types, 4> all_sstable_versions = {
     sstable_version_types::ka,
     sstable_version_types::la,
     sstable_version_types::mc,
     sstable_version_types::md,
 };
+
+constexpr std::array<sstable_version_types, 2> writable_sstable_versions = {
+    sstable_version_types::mc,
+    sstable_version_types::md,
+};
+
+constexpr sstable_version_types oldest_writable_sstable_format = sstable_version_types::mc;
+
+template <size_t S1, size_t S2>
+constexpr bool check_sstable_versions(const std::array<sstable_version_types, S1>& all_sstable_versions,
+        const std::array<sstable_version_types, S2>& writable_sstable_versions, sstable_version_types oldest_writable_sstable_format) {
+    for (auto v : writable_sstable_versions) {
+        if (v < oldest_writable_sstable_format) {
+            return false;
+        }
+    }
+    size_t expected = 0;
+    for (auto v : all_sstable_versions) {
+        if (v >= oldest_writable_sstable_format) {
+            ++expected;
+        }
+    }
+    return expected == S2;
+}
+
+static_assert(check_sstable_versions(all_sstable_versions, writable_sstable_versions, oldest_writable_sstable_format));
 
 inline auto get_highest_sstable_version() {
     return all_sstable_versions[all_sstable_versions.size() - 1];

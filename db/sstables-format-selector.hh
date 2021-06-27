@@ -61,10 +61,9 @@ class sstables_format_selector {
     seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
     seastar::gate _sel;
 
-    feature_enabled_listener _mc_feature_listener;
     feature_enabled_listener _md_feature_listener;
 
-    sstables::sstable_version_types _selected_format = sstables::sstable_version_types::la;
+    sstables::sstable_version_types _selected_format = sstables::sstable_version_types::mc;
     future<> select_format(sstables::sstable_version_types new_format);
     future<> read_sstables_format();
 

@@ -585,13 +585,6 @@ input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(file f
     return make_compressed_file_input_stream<adler32_utils>(std::move(f), cm, offset, len, std::move(options));
 }
 
-output_stream<char> sstables::make_compressed_file_k_l_format_output_stream(output_stream<char> out,
-        sstables::compression* cm,
-        const compression_parameters& cp) {
-    return make_compressed_file_output_stream<adler32_utils, compressed_checksum_mode::checksum_chunks_only>(
-            std::move(out), cm, cp);
-}
-
 input_stream<char> sstables::make_compressed_file_m_format_input_stream(file f,
         sstables::compression *cm, uint64_t offset, size_t len,
         class file_input_stream_options options) {

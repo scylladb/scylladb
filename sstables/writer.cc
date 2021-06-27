@@ -20,24 +20,23 @@
  */
 
 #include "sstables.hh"
+#include "sstable_writer.hh"
 #include "writer.hh"
-#include "kl/writer.hh"
 #include "mx/writer.hh"
 
 namespace sstables {
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard) {
-    if (sst.get_version() >= sstable_version_types::mc) {
-        _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
-    } else {
-        _impl = std::make_unique<sstable_writer_k_l>(sst, s, estimated_partitions, cfg, pc, shard);
+    if (sst.get_version() < oldest_writable_sstable_format) {
+        on_internal_error(sstlog, format("writing sstables with too old format: {}", sst.get_version()));
     }
+    _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     if (cfg.replay_position) {
-        get_metadata_collector().set_replay_position(cfg.replay_position.value());
+        _impl->_collector.set_replay_position(cfg.replay_position.value());
     }
     if (cfg.sstable_level) {
-        get_metadata_collector().set_sstable_level(cfg.sstable_level.value());
+        _impl->_collector.set_sstable_level(cfg.sstable_level.value());
     }
 }
 
@@ -84,10 +83,6 @@ void sstable_writer::consume_end_of_stream() {
         _impl->_sst.get_stats().on_capped_local_deletion_time();
     }
     return _impl->consume_end_of_stream();
-}
-
-metadata_collector& sstable_writer::get_metadata_collector() {
-    return _impl->_collector;
 }
 
 sstable_writer::sstable_writer(sstable_writer&& o) = default;

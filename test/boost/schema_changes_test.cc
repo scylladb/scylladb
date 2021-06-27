@@ -44,7 +44,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
     std::map<std::tuple<sstables::sstable::version_types, schema_ptr>, std::tuple<shared_sstable, int>> cache;
     for_each_schema_change([&] (schema_ptr base, const std::vector<mutation>& base_mutations,
                                 schema_ptr changed, const std::vector<mutation>& changed_mutations) {
-        for (auto version : all_sstable_versions) {
+        for (auto version : writable_sstable_versions) {
             auto it = cache.find(std::tuple { version, base });
 
             shared_sstable created_with_base_schema;

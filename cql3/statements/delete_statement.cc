@@ -84,98 +84,6 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
 
 namespace raw {
 
-namespace {
-
-using namespace expr;
-
-/// If oper.lhs is a single column, returns it; otherwise, returns null.
-const column_definition* single_column(const binary_operator& oper) {
-    if (auto c = std::get_if<column_value>(oper.lhs.get())) {
-        return c->col;
-    }
-    return nullptr;
-}
-
-/// True iff expr bounds clustering key from both above and below OR it has no clustering-key bounds at all.
-/// See #6493.
-bool bounds_ck_symmetrically(const expression& expr) {
-    /// A visitor to find out if CK boundedness is symmetric.
-    class boundedness_tracker {
-        using boundedness_bitvector = int; // Combined using binary OR.
-        const boundedness_bitvector UPPER=1, LOWER=2;
-        /// Individual bounds collected from the visiting expression.  May have a nullptr entry, which
-        /// represents multi-column bounds encountered.
-        std::unordered_map<const column_definition*, boundedness_bitvector> _found_bounds;
-
-        bool _shortcircuit = false; ///< When true, cease all further visiting and declare boundedness symmetric.
-
-      public:
-        /// True iff the nodes visited so far do bound the CK symmetrically.
-        bool result() const {
-            return _shortcircuit ||
-                    // Since multi-column comparisons can't be mixed with single-column ones, _found_bounds will
-                    // either have a single entry with key nullptr or one entry per restricted column.
-                    boost::algorithm::all_of_equal(_found_bounds | boost::adaptors::map_values, UPPER | LOWER);
-        }
-
-        /// Updates state for a boolean expression.
-        void operator()(bool b) {
-            // b==true doesn't change the current state; b==false shortcircuits the entire expression to empty set.
-            if (!b) {
-                _shortcircuit = true;
-            }
-        }
-
-        /// Updates state for a binary-operator expression.
-        void operator()(const binary_operator& oper) {
-            if (std::holds_alternative<token>(*oper.lhs)) {
-                return;
-            }
-            // The rules of multi-column comparison imply that any multi-column expression sets a bound for the
-            // entire clustering key.  Therefore, we represent any such expression with special pointer value
-            // nullptr.
-            auto col = single_column(oper);
-            if (col && !col->is_clustering_key()) {
-                return;
-            }
-            if (oper.op == oper_t::EQ) {
-                _found_bounds[col] = UPPER | LOWER;
-            } else if (oper.op == oper_t::LT || oper.op == oper_t::LTE) {
-                _found_bounds[col] |= UPPER;
-            } else if (oper.op == oper_t::GTE || oper.op == oper_t::GT) {
-                _found_bounds[col] |= LOWER;
-            }
-        }
-
-        /// Updates state for a conjunction.
-        void operator()(const conjunction& conj) {
-            for (const auto& child : conj.children) {
-                std::visit(*this, child);
-                if (_shortcircuit) {
-                    break;
-                }
-            }
-        }
-
-        void operator()(const column_value&) {
-            throw std::logic_error("Column encountered outside binary_operator");
-        }
-
-        void operator()(const column_value_tuple&) {
-            throw std::logic_error("Column tuple encountered outside binary_operator");
-        }
-
-        void operator()(const token&) {
-            throw std::logic_error("Token function encountered outside binary_operator");
-        }
-    } tracker;
-
-    std::visit(tracker, expr);
-    return tracker.result();
-}
-
-} // anonymous namespace
-
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(database& db, schema_ptr schema, variable_specifications& bound_names,
         std::unique_ptr<attributes> attrs, cql_stats& stats) const {
@@ -200,11 +108,6 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, variable_spe
     }
     prepare_conditions(db, *schema, bound_names, *stmt);
     stmt->process_where_clause(db, _where_clause, bound_names);
-    if (!db.supports_infinite_bound_range_deletions() &&
-        !bounds_ck_symmetrically(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
-        throw exceptions::invalid_request_exception(
-                "A range deletion operation needs to specify both bounds for clusters without sstable mc format support");
-    }
     if (has_slice(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
