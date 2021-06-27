@@ -33,14 +33,14 @@ import random
 import json
 from decimal import Decimal
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def type1(cql, test_keyspace):
     type_name = test_keyspace + "." + unique_name()
     cql.execute("CREATE TYPE " + type_name + " (t text, b boolean)")
     yield type_name
     cql.execute("DROP TYPE " + type_name)
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace, type1):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>)")
