@@ -27,7 +27,7 @@ import random
 
 from cassandra.util import Duration
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, d duration)")

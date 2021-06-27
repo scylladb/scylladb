@@ -29,7 +29,7 @@ from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, C
 from util import unique_name, random_string
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (k text, c text, primary key (k, c))")

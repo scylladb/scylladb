@@ -26,7 +26,7 @@ from cassandra.util import Duration
 def r(regex):
     return re.compile(regex, re.IGNORECASE)
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +

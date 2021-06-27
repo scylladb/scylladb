@@ -87,7 +87,7 @@ def check_af_mandatory(cql, table_and_everything, where, filt):
         expected_results = list(filter(filt, everything))
         assert results == expected_results
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +
@@ -180,7 +180,7 @@ def wait_for_index(cql, table, column, everything):
         time.sleep(0.1)
     pytest.fail('Timeout waiting for index to become up to date.')
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table2(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +
@@ -218,7 +218,7 @@ def test_allow_filtering_indexed_a_and_k(cql, table2):
 # table3 is an even more elaborate table with several partition key columns,
 # clustering key columns, and indexed columns of different types, to allow
 # us to check even more esoteric cases.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table3(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +

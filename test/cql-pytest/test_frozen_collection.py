@@ -30,7 +30,7 @@ from util import unique_name, new_test_table
 
 
 # A test table with a (frozen) nested collection as its primary key.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (k frozen<map<set<int>, int>> PRIMARY KEY)")
@@ -114,7 +114,7 @@ def test_wrong_set_order_in_nested_2(cql, table1):
 # setup described there, it does not happen with just a frozen<set>.
 # With just a frozen<set>, we can insert it or look it up in a wrong
 # order, and everything is fine.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table_fsi(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (k frozen<set<int>> PRIMARY KEY)")
