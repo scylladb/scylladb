@@ -847,6 +847,7 @@ public:
 
 private:
     promise<> _drain_finished;
+    std::optional<shared_promise<>> _transport_stopped;
     future<> do_drain(bool on_shutdown);
     /**
      * Seed data to the endpoints that will be responsible for it at the future
