@@ -3023,39 +3023,30 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
         reader_permit permit,
         const dht::partition_range& prange,
         const query::partition_slice& slice,
-        std::deque<mutation_fragment> first_buffer,
-        position_in_partition_view last_fragment_position,
-        std::deque<mutation_fragment> second_buffer,
-        size_t max_buffer_size) {
+        std::list<std::deque<mutation_fragment>> buffers,
+        position_in_partition_view first_buf_last_fragment_position,
+        size_t max_buffer_size,
+        bool detach_buffer = true) {
     class factory {
         schema_ptr _schema;
         reader_permit _permit;
-        std::optional<std::deque<mutation_fragment>> _first_buffer;
-        std::optional<std::deque<mutation_fragment>> _second_buffer;
+        std::list<std::deque<mutation_fragment>> _buffers;
         size_t _max_buffer_size;
 
-    private:
-        std::optional<std::deque<mutation_fragment>> copy_buffer(const std::optional<std::deque<mutation_fragment>>& o) {
-            if (!o) {
-                return {};
-            }
-            return copy_fragments(*_schema, _permit, *o);
-        }
-
     public:
-        factory(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment> first_buffer, std::deque<mutation_fragment> second_buffer, size_t max_buffer_size)
+        factory(schema_ptr schema, reader_permit permit, std::list<std::deque<mutation_fragment>> buffers, size_t max_buffer_size)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
-            , _first_buffer(std::move(first_buffer))
-            , _second_buffer(std::move(second_buffer))
+            , _buffers(std::move(buffers))
             , _max_buffer_size(max_buffer_size) {
         }
 
         factory(const factory& o)
             : _schema(o._schema)
-            , _permit(o._permit)
-            , _first_buffer(copy_buffer(o._first_buffer))
-            , _second_buffer(copy_buffer(o._second_buffer)) {
+            , _permit(o._permit) {
+            for (const auto& buf : o._buffers) {
+                _buffers.emplace_back(copy_fragments(*_schema, _permit, buf));
+            }
         }
         factory(factory&& o) = default;
 
@@ -3069,14 +3060,9 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             BOOST_REQUIRE(s == _schema);
-            if (_first_buffer) {
-                auto buf = *std::exchange(_first_buffer, {});
-                auto rd = make_flat_mutation_reader_from_fragments(_schema, std::move(permit), std::move(buf));
-                rd.set_max_buffer_size(_max_buffer_size);
-                return rd;
-            }
-            if (_second_buffer) {
-                auto buf = *std::exchange(_second_buffer, {});
+            if (!_buffers.empty()) {
+                auto buf = std::move(_buffers.front());
+                _buffers.pop_front();
                 auto rd = make_flat_mutation_reader_from_fragments(_schema, std::move(permit), std::move(buf));
                 rd.set_max_buffer_size(_max_buffer_size);
                 return rd;
@@ -3084,9 +3070,9 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
             return make_empty_flat_reader(_schema, std::move(permit));
         }
     };
-    auto ms = mutation_source(factory(schema, permit, std::move(first_buffer), std::move(second_buffer), max_buffer_size));
+    auto ms = mutation_source(factory(schema, permit, std::move(buffers), max_buffer_size));
 
-    auto [rd, handle] = make_manually_paused_evictable_reader(
+    auto rd = make_auto_paused_evictable_reader(
             std::move(ms),
             schema,
             permit,
@@ -3102,16 +3088,40 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
 
     const auto eq_cmp = position_in_partition::equal_compare(*schema);
     BOOST_REQUIRE(rd.is_buffer_full());
-    BOOST_REQUIRE(eq_cmp(rd.buffer().back().position(), last_fragment_position));
+    BOOST_REQUIRE(eq_cmp(rd.buffer().back().position(), first_buf_last_fragment_position));
     BOOST_REQUIRE(!rd.is_end_of_stream());
 
-    rd.detach_buffer();
-
-    handle.pause();
+    if (detach_buffer) {
+        rd.detach_buffer();
+    }
 
     while(permit.semaphore().try_evict_one_inactive_read());
 
     return std::move(rd);
+}
+
+flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& prange,
+        const query::partition_slice& slice,
+        std::deque<mutation_fragment> first_buffer,
+        position_in_partition_view last_fragment_position,
+        std::deque<mutation_fragment> last_buffer,
+        size_t max_buffer_size,
+        bool detach_buffer = true) {
+    std::list<std::deque<mutation_fragment>> list;
+    list.emplace_back(std::move(first_buffer));
+    list.emplace_back(std::move(last_buffer));
+    return create_evictable_reader_and_evict_after_first_buffer(
+            std::move(schema),
+            std::move(permit),
+            prange,
+            slice,
+            std::move(list),
+            last_fragment_position,
+            max_buffer_size,
+            detach_buffer);
 }
 
 }
@@ -3617,6 +3627,212 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
 
     // Failure will happen in the form of `on_internal_error()`.
     reader_assert.produces(pkeys[4]);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_evictable_reader_drop_flags) {
+    reader_concurrency_semaphore semaphore(1, 0, get_name());
+    auto stop_sem = deferred_stop(semaphore);
+    simple_schema s;
+    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+
+    auto pkeys = s.make_pkeys(2);
+    std::sort(pkeys.begin(), pkeys.end(), [&s] (const auto& pk1, const auto& pk2) {
+        return pk1.less_compare(*s.schema(), pk2);
+    });
+    const auto& pkey1 = pkeys[0];
+    const auto& pkey2 = pkeys[1];
+    const int second_buffer_ck = 10;
+
+    struct buffer {
+        simple_schema& s;
+        reader_permit permit;
+        std::deque<mutation_fragment> frags;
+        std::vector<mutation> muts;
+        size_t size = 0;
+        std::optional<position_in_partition_view> last_pos;
+
+        buffer(simple_schema& s_, reader_permit permit_, dht::decorated_key key)
+            : s(s_), permit(std::move(permit_)) {
+            add_partition(key);
+        }
+        size_t add_partition(dht::decorated_key key) {
+            size += frags.emplace_back(*s.schema(), permit, partition_start{key, {}}).memory_usage();
+            muts.emplace_back(s.schema(), key);
+            return size;
+        }
+        size_t add_mutation_fragment(mutation_fragment&& mf, bool only_to_frags = false) {
+            if (!only_to_frags) {
+                muts.back().apply(mf);
+            }
+            size += frags.emplace_back(*s.schema(), permit, std::move(mf)).memory_usage();
+            return size;
+        }
+        size_t add_static_row(std::optional<mutation_fragment> sr = {}) {
+            auto srow = sr ? std::move(*sr) : s.make_static_row("s");
+            return add_mutation_fragment(std::move(srow));
+        }
+        size_t add_clustering_row(int i, bool only_to_frags = false) {
+            return add_mutation_fragment(mutation_fragment(*s.schema(), permit, s.make_row(s.make_ckey(i), "v")), only_to_frags);
+        }
+        size_t add_clustering_rows(int start, int end) {
+            for (int i = start; i < end; ++i) {
+                add_clustering_row(i);
+            }
+            return size;
+        }
+        size_t add_partition_end() {
+            size += frags.emplace_back(*s.schema(), permit, partition_end{}).memory_usage();
+            return size;
+        }
+        void save_position() { last_pos = frags.back().position(); }
+        void find_position(size_t buf_size) {
+            size_t s = 0;
+            for (const auto& frag : frags) {
+                s += frag.memory_usage();
+                if (s >= buf_size) {
+                    last_pos = frag.position();
+                    break;
+                }
+            }
+            BOOST_REQUIRE(last_pos);
+        }
+    };
+
+    auto make_reader = [&] (const buffer& first_buffer, const buffer& second_buffer, const buffer* const third_buffer, size_t max_buffer_size) {
+        std::list<std::deque<mutation_fragment>> buffers;
+        buffers.emplace_back(copy_fragments(*s.schema(), permit, first_buffer.frags));
+        buffers.emplace_back(copy_fragments(*s.schema(), permit, second_buffer.frags));
+        if (third_buffer) {
+            buffers.emplace_back(copy_fragments(*s.schema(), permit, third_buffer->frags));
+        }
+        return create_evictable_reader_and_evict_after_first_buffer(
+                s.schema(),
+                permit,
+                query::full_partition_range,
+                s.schema()->full_slice(),
+                std::move(buffers),
+                *first_buffer.last_pos,
+                max_buffer_size,
+                false);
+    };
+
+    testlog.info("Same partition, with static row");
+    {
+        buffer first_buffer(s, permit, pkey1);
+        first_buffer.add_static_row();
+        auto srow = mutation_fragment(*s.schema(), permit, first_buffer.frags.back());
+        const auto buf_size = first_buffer.add_clustering_rows(0, second_buffer_ck);
+        first_buffer.save_position();
+        first_buffer.add_clustering_row(second_buffer_ck);
+
+        buffer second_buffer(s, permit, pkey1);
+        second_buffer.add_static_row(std::move(srow));
+        second_buffer.add_clustering_row(second_buffer_ck);
+        second_buffer.add_clustering_row(second_buffer_ck + 1);
+        second_buffer.add_partition_end();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .has_monotonic_positions();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .produces(first_buffer.muts[0] + second_buffer.muts[0])
+            .produces_end_of_stream();
+    }
+
+    testlog.info("Same partition, no static row");
+    {
+        buffer first_buffer(s, permit, pkey1);
+        const auto buf_size = first_buffer.add_clustering_rows(0, second_buffer_ck);
+        first_buffer.save_position();
+        first_buffer.add_clustering_row(second_buffer_ck);
+
+        buffer second_buffer(s, permit, pkey1);
+        second_buffer.add_clustering_row(second_buffer_ck);
+        second_buffer.add_clustering_row(second_buffer_ck + 1);
+        second_buffer.add_partition_end();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .has_monotonic_positions();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .produces(first_buffer.muts[0] + second_buffer.muts[0])
+            .produces_end_of_stream();
+    }
+
+    testlog.info("Same partition as expected, no static row, next partition has static row (#8923)");
+    {
+        buffer second_buffer(s, permit, pkey1);
+        second_buffer.add_clustering_rows(second_buffer_ck, second_buffer_ck + second_buffer_ck / 2);
+        // We want to end the buffer on the partition-start below, but since a
+        // partition start will be dropped from it, we have to use the size
+        // without it.
+        const auto buf_size = second_buffer.add_partition_end();
+        second_buffer.add_partition(pkey2);
+        second_buffer.add_static_row();
+        auto srow = mutation_fragment(*s.schema(), permit, second_buffer.frags.back());
+        second_buffer.add_clustering_rows(0, 2);
+
+        buffer first_buffer(s, permit, pkey1);
+        for (int i = 0; first_buffer.add_clustering_row(i) < buf_size; ++i);
+        first_buffer.save_position();
+        first_buffer.add_mutation_fragment(mutation_fragment(*s.schema(), permit, second_buffer.frags[1]));
+
+        buffer third_buffer(s, permit, pkey2);
+        third_buffer.add_static_row(std::move(srow));
+        third_buffer.add_clustering_rows(0, 2);
+        third_buffer.add_partition_end();
+
+        first_buffer.find_position(buf_size);
+
+        assert_that(make_reader(first_buffer, second_buffer, &third_buffer, buf_size))
+            .has_monotonic_positions();
+
+        assert_that(make_reader(first_buffer, second_buffer, &third_buffer, buf_size))
+            .produces(first_buffer.muts[0] + second_buffer.muts[0])
+            .produces(second_buffer.muts[1] + third_buffer.muts[0])
+            .produces_end_of_stream();
+    }
+
+    testlog.info("Next partition, with no static row");
+    {
+        buffer first_buffer(s, permit, pkey1);
+        const auto buf_size = first_buffer.add_clustering_rows(0, second_buffer_ck);
+        first_buffer.save_position();
+        first_buffer.add_clustering_row(second_buffer_ck + 1, true);
+
+        buffer second_buffer(s, permit, pkey2);
+        second_buffer.add_clustering_rows(0, second_buffer_ck / 2);
+        second_buffer.add_partition_end();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .has_monotonic_positions();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .produces(first_buffer.muts[0])
+            .produces(second_buffer.muts[0])
+            .produces_end_of_stream();
+    }
+
+    testlog.info("Next partition, with static row");
+    {
+        buffer first_buffer(s, permit, pkey1);
+        const auto buf_size = first_buffer.add_clustering_rows(0, second_buffer_ck);
+        first_buffer.save_position();
+        first_buffer.add_clustering_row(second_buffer_ck + 1, true);
+
+        buffer second_buffer(s, permit, pkey2);
+        second_buffer.add_static_row();
+        second_buffer.add_clustering_rows(0, second_buffer_ck / 2);
+        second_buffer.add_partition_end();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .has_monotonic_positions();
+
+        assert_that(make_reader(first_buffer, second_buffer, nullptr, buf_size))
+            .produces(first_buffer.muts[0])
+            .produces(second_buffer.muts[0])
+            .produces_end_of_stream();
+    }
 }
 
 struct mutation_bounds {
