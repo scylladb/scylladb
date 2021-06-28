@@ -773,8 +773,13 @@ public:
      */
     // See class comment for info
     future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
+        auto me = shared_from_this();
+
         if (_buffer.empty() && !termination) {
-            return flush_after ? flush() : make_ready_future<sseg_ptr>(shared_from_this());
+            if (flush_after) {
+                co_await flush();
+            }
+            co_return me;
         }
 
         auto size = clear_buffer_slack();
@@ -787,7 +792,6 @@ public:
         _buffer_ostream = { };
         _num_allocs = 0;
 
-        auto me = shared_from_this();
         assert(me.use_count() > 1);
 
         auto out = buf.get_ostream();
@@ -831,43 +835,18 @@ public:
 
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
-        return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable {
+        co_await _pending_ops.run_with_ordered_post_op(rp, [&]() -> future<> {
             auto view = fragmented_temporary_buffer::view(buf);
             view.remove_suffix(buf.size_bytes() - size);
             assert(size == view.size_bytes());
-            return do_with(off, view, [&] (uint64_t& off, fragmented_temporary_buffer::view& view) {
-                if (view.empty()) {
-                    return make_ready_future<>();
-                }
-                return repeat([this, size, &off, &view] {
-                    auto&& priority_class = service::get_local_commitlog_priority();
-                    auto current = *view.begin();
-                    return _file.dma_write(off, current.data(), current.size(), priority_class).then_wrapped([this, size, &off, &view](future<size_t>&& f) {
-                        try {
-                            auto bytes = f.get0();
-                            _segment_manager->totals.bytes_written += bytes;
-                            _segment_manager->totals.active_size_on_disk += bytes;
-                            ++_segment_manager->totals.cycle_count;
-                            if (bytes == view.size_bytes()) {
-                                clogger.trace("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
-                                return make_ready_future<stop_iteration>(stop_iteration::yes);
-                            }
-                            // gah, partial write. should always get here with dma chunk sized
-                            // "bytes", but lets make sure...
-                            bytes = align_down(bytes, _alignment);
-                            off += bytes;
-                            view.remove_prefix(bytes);
-                            clogger.trace("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                            // TODO: retry/ignore/fail/stop - optional behaviour in origin.
-                            // we fast-fail the whole commit.
-                        } catch (...) {
-                            clogger.error("Failed to persist commits to disk for {}: {}", *this, std::current_exception());
-                            throw;
-                        }
-                    });
-                });
-            }).finally([this, buf = std::move(buf), size] {
+
+            if (view.empty()) {
+                co_return;
+            }
+
+            auto&& priority_class = service::get_local_commitlog_priority();
+
+            auto finally = defer([&] {
                 _segment_manager->notify_memory_written(size);
                 _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
                 if (_size_on_disk < _file_pos) {
@@ -875,10 +854,39 @@ public:
                     _size_on_disk = _file_pos;
                 }
             });
-        }, [me, flush_after, top, rp] { // lambda instead of bind, so we keep "me" alive.
-            assert(me->_pending_ops.has_operation(rp));
-            return flush_after ? me->do_flush(top) : make_ready_future<sseg_ptr>(me);
+
+            for (;;) {
+                auto current = *view.begin();
+                try {
+                    auto bytes = co_await _file.dma_write(off, current.data(), current.size(), priority_class);
+                    _segment_manager->totals.bytes_written += bytes;
+                    _segment_manager->totals.active_size_on_disk += bytes;
+                    ++_segment_manager->totals.cycle_count;
+                    if (bytes == view.size_bytes()) {
+                        clogger.trace("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
+                        break;
+                    }
+                    // gah, partial write. should always get here with dma chunk sized
+                    // "bytes", but lets make sure...
+                    bytes = align_down(bytes, _alignment);
+                    off += bytes;
+                    view.remove_prefix(bytes);
+                    clogger.trace("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
+                    continue;
+                    // TODO: retry/ignore/fail/stop - optional behaviour in origin.
+                    // we fast-fail the whole commit.
+                } catch (...) {
+                    clogger.error("Failed to persist commits to disk for {}: {}", *this, std::current_exception());
+                    throw;
+                }
+            }
+        }, [&]() -> future<> {
+            assert(_pending_ops.has_operation(rp));
+            if (flush_after) {
+                co_await do_flush(top);
+            }
         });
+        co_return me;
     }
 
     future<sseg_ptr> batch_cycle(timeout_clock::time_point timeout) {
