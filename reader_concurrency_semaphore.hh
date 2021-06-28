@@ -187,7 +187,7 @@ private:
     void evict_readers_in_background();
     future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
 
-    void on_permit_created(reader_permit::impl&) noexcept;
+    void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
 
     std::runtime_error stopped_exception();

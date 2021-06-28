@@ -605,9 +605,9 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     return fut;
 }
 
-void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) noexcept {
-    _permit_list->permits.push_back(permit);
+void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
     _permit_gate.enter();
+    _permit_list->permits.push_back(permit);
 }
 
 void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& permit) noexcept {
