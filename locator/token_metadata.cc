@@ -93,9 +93,9 @@ public:
     future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
     void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
-    const token& first_token(const token& start) const;
-    size_t first_token_index(const token& start) const;
-    std::optional<inet_address> get_endpoint(const token& token) const;
+    token first_token(token start) const;
+    size_t first_token_index(token start) const;
+    std::optional<inet_address> get_endpoint(token token) const;
     std::vector<token> get_tokens(const inet_address& addr) const;
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
@@ -121,7 +121,7 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<token_metadata::tokens_iterator> ring_range(const token& start) const;
+    boost::iterator_range<token_metadata::tokens_iterator> ring_range(token start) const;
 
     boost::iterator_range<token_metadata::tokens_iterator> ring_range(
         const std::optional<dht::partition_range::bound>& start) const;
@@ -729,7 +729,7 @@ public:
 #endif
 public:
     // returns empty vector if keyspace_name not found.
-    inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
+    inet_address_vector_topology_change pending_endpoints_for(token token, const sstring& keyspace_name) const;
 #if 0
     /**
      * @deprecated retained for benefit of old tests
@@ -879,7 +879,7 @@ public:
     friend class token_metadata;
 };
 
-token_metadata::tokens_iterator::tokens_iterator(const token& start, const token_metadata_impl* token_metadata)
+token_metadata::tokens_iterator::tokens_iterator(token start, const token_metadata_impl* token_metadata)
     : _token_metadata(token_metadata) {
     _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
     _remaining = _token_metadata->sorted_tokens().size();
@@ -889,7 +889,7 @@ bool token_metadata::tokens_iterator::operator==(const tokens_iterator& it) cons
     return _remaining == it._remaining;
 }
 
-const token& token_metadata::tokens_iterator::operator*() const {
+token token_metadata::tokens_iterator::operator*() const {
     return *_cur_it;
 }
 
@@ -904,7 +904,7 @@ token_metadata::tokens_iterator& token_metadata::tokens_iterator::operator++() {
 
 inline
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata_impl::ring_range(const token& start) const {
+token_metadata_impl::ring_range(token start) const {
     auto begin = token_metadata::tokens_iterator(start, this);
     auto end = token_metadata::tokens_iterator();
     return boost::make_iterator_range(begin, end);
@@ -1074,7 +1074,7 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
         remove_by_value(_bootstrap_tokens, endpoint);
         _leaving_endpoints.erase(endpoint);
         invalidate_cached_rings();
-        for (const token& t : tokens)
+        for (token t : tokens)
         {
             co_await make_ready_future<>(); // maybe yield
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
@@ -1134,7 +1134,7 @@ void token_metadata_impl::update_normal_tokens_sync(const std::unordered_map<ine
         remove_by_value(_bootstrap_tokens, endpoint);
         _leaving_endpoints.erase(endpoint);
         invalidate_cached_rings();
-        for (const token& t : tokens)
+        for (token t : tokens)
         {
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
@@ -1150,7 +1150,7 @@ void token_metadata_impl::update_normal_tokens_sync(const std::unordered_map<ine
     }
 }
 
-size_t token_metadata_impl::first_token_index(const token& start) const {
+size_t token_metadata_impl::first_token_index(token start) const {
     if (_sorted_tokens.empty()) {
         auto msg = format("sorted_tokens is empty in first_token_index!");
         tlogger.error("{}", msg);
@@ -1164,11 +1164,11 @@ size_t token_metadata_impl::first_token_index(const token& start) const {
     }
 }
 
-const token& token_metadata_impl::first_token(const token& start) const {
+token token_metadata_impl::first_token(token start) const {
     return _sorted_tokens[first_token_index(start)];
 }
 
-std::optional<inet_address> token_metadata_impl::get_endpoint(const token& token) const {
+std::optional<inet_address> token_metadata_impl::get_endpoint(token token) const {
     auto it = _token_to_endpoint_map.find(token);
     if (it == _token_to_endpoint_map.end()) {
         return std::nullopt;
@@ -1373,19 +1373,25 @@ dht::token_range_vector token_metadata_impl::get_primary_ranges_for(token right)
 
 boost::icl::interval<token>::interval_type
 token_metadata_impl::range_to_interval(range<dht::token> r) {
-    bool start_inclusive = false;
-    bool end_inclusive = false;
-    token start = dht::minimum_token();
-    token end = dht::maximum_token();
+    bool start_inclusive;
+    bool end_inclusive;
+    token start;
+    token end;
 
     if (r.start()) {
         start = r.start()->value();
         start_inclusive = r.start()->is_inclusive();
+    } else {
+        start = dht::minimum_token();
+        start_inclusive = false;
     }
 
     if (r.end()) {
         end = r.end()->value();
         end_inclusive = r.end()->is_inclusive();
+    } else {
+        end = dht::greatest_token();
+        end_inclusive = true;
     }
 
     if (start_inclusive == false && end_inclusive == false) {
@@ -1486,7 +1492,7 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
     auto affected_ranges_size = affected_ranges.size();
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
     for (const auto& r : affected_ranges) {
-        auto t = r.end() ? r.end()->value() : dht::maximum_token();
+        auto t = r.end() ? r.end()->value() : dht::minimum_token();
         auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata, can_yield::yes);
         auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata, can_yield::yes);
         std::vector<inet_address> diff;
@@ -1613,7 +1619,7 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     _replacing_endpoints.erase(existing_node);
 }
 
-inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
+inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(token token, const sstring& keyspace_name) const {
     // Fast path 0: pending ranges not found for this keyspace_name
     const auto pr_it = _pending_ranges_interval_map.find(keyspace_name);
     if (pr_it == _pending_ranges_interval_map.end()) {
@@ -1710,18 +1716,18 @@ token_metadata::update_normal_tokens_sync(const std::unordered_map<inet_address,
     _impl->update_normal_tokens_sync(endpoint_tokens);
 }
 
-const token&
-token_metadata::first_token(const token& start) const {
+token
+token_metadata::first_token(token start) const {
     return _impl->first_token(start);
 }
 
 size_t
-token_metadata::first_token_index(const token& start) const {
+token_metadata::first_token_index(token start) const {
     return _impl->first_token_index(start);
 }
 
 std::optional<inet_address>
-token_metadata::get_endpoint(const token& token) const {
+token_metadata::get_endpoint(token token) const {
     return _impl->get_endpoint(token);
 }
 
@@ -1751,7 +1757,7 @@ token_metadata::update_topology(inet_address ep) {
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata::ring_range(const token& start) const {
+token_metadata::ring_range(token start) const {
     return _impl->ring_range(start);
 }
 
@@ -1934,7 +1940,7 @@ token_metadata::count_normal_token_owners() const {
 }
 
 inet_address_vector_topology_change
-token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
+token_metadata::pending_endpoints_for(token token, const sstring& keyspace_name) const {
     return _impl->pending_endpoints_for(token, keyspace_name);
 }
 

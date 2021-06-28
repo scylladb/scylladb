@@ -846,7 +846,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [&]{
             dht::token_range_vector ranges;
             auto tstart = start_token.empty() ? dht::minimum_token() : dht::token::from_sstring(sstring(start_token));
-            auto tend = end_token.empty() ? dht::maximum_token() : dht::token::from_sstring(sstring(end_token));
+            auto tend = end_token.empty() ? dht::greatest_token() : dht::token::from_sstring(sstring(end_token));
             range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
             auto cf = sstring(cfName);
             auto splits = service::get_local_storage_service().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
@@ -1764,7 +1764,7 @@ private:
                        ? dht::ring_position::starting_at(dht::minimum_token())
                        : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.start_key)));
             auto end = range.end_key.empty()
-                     ? dht::ring_position::ending_at(dht::maximum_token())
+                     ? dht::ring_position::ending_at(dht::greatest_token())
                      : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.end_key)));
             if (end.less_compare(s, start)) {
                 throw make_exception<InvalidRequestException>(
@@ -1781,7 +1781,7 @@ private:
                        : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.start_key)));
             auto end = dht::ring_position::ending_at(dht::token::from_sstring(sstring(range.end_token)));
             if (end.token().is_minimum()) {
-                end = dht::ring_position::ending_at(dht::maximum_token());
+                end = dht::ring_position::ending_at(dht::greatest_token());
             } else if (end.less_compare(s, start)) {
                 throw make_exception<InvalidRequestException>("Start key's token sorts after end token");
             }
@@ -1793,7 +1793,7 @@ private:
         auto start = dht::ring_position::ending_at(dht::token::from_sstring(sstring(range.start_token)));
         auto end = dht::ring_position::ending_at(dht::token::from_sstring(sstring(range.end_token)));
         if (end.token().is_minimum()) {
-            end = dht::ring_position::ending_at(dht::maximum_token());
+            end = dht::ring_position::ending_at(dht::greatest_token());
         }
         // Special case of start == end also generates wrap-around range
         if (start.token() >= end.token()) {

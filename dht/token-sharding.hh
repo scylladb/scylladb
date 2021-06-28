@@ -31,9 +31,9 @@ inline sstring cpu_sharding_algorithm_name() {
 
 std::vector<uint64_t> init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits);
 
-unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t);
+unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, token t);
 
-token token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans);
+std::optional<token> token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, token t, shard_id shard, unsigned spans);
 
 class sharder {
 protected:
@@ -46,7 +46,7 @@ public:
     /**
      * Calculates the shard that handles a particular token.
      */
-    virtual unsigned shard_of(const token& t) const;
+    virtual unsigned shard_of(token t) const;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
@@ -57,9 +57,9 @@ public:
      *
      *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_next_shard(t, shard, 1), spans - 1)
      *
-     * On overflow, maximum_token() is returned.
+     * On overflow, empty optional is returned.
      */
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+    virtual std::optional<token> token_for_next_shard(token t, shard_id shard, unsigned spans = 1) const;
 
     /**
      * @return number of shards configured for this partitioner
@@ -92,7 +92,7 @@ inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
  * Finds the first token in token range (`start`, `end`] that belongs to shard shard_idx.
  *
  * If there is no token that belongs to shard shard_idx in this range,
- * `end` is returned.
+ * empty optional is returned.
  *
  * The first token means the one that appears first on the ring when going
  * from `start` to `end`.
@@ -101,7 +101,7 @@ inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
  * shard shard_idx then token 110 is the first because it appears first
  * when going from 100 to 10 on the ring.
  */
-dht::token find_first_token_for_shard(
+std::optional<dht::token> find_first_token_for_shard(
         const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
 
 } //namespace dht

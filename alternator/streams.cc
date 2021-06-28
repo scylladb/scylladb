@@ -583,7 +583,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
                 if (prev != e) {
                     auto& pids = prev->second.streams;
-                    auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](const dht::token& t, const cdc::stream_id& id) {
+                    auto pid = std::upper_bound(pids.begin(), pids.end(), id.token(), [](dht::token t, const cdc::stream_id& id) {
                         return t < id.token();
                     });
                     if (pid != pids.begin()) {

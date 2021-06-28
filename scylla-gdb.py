@@ -914,15 +914,10 @@ class ring_position_printer(gdb.printing.PrettyPrinter):
     def to_string(self):
         pkey = std_optional(self.val['_key'])
         if pkey:
-            # we can assume token_kind == token_kind::key
             return '{{{}, {}}}'.format(str(self.val['_token']['_data']), str(pkey.get()['_bytes']))
 
         token_bound = int(self.val['_token_bound'])
-        token_kind = str(self.val['_token']['_kind'])[17:] # ignore the dht::token_kind:: prefix
-        if token_kind == 'key':
-            token = str(self.val['_token']['_data'])
-        else:
-            token = token_kind
+        token = str(self.val['_token']['_data'])
 
         return '{{{}, {}}}'.format(token, token_bound)
 

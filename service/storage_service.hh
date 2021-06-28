@@ -758,7 +758,7 @@ public:
      * @param pos position for which we need to find the endpoint
      * @return the endpoint responsible for this token
      */
-    inet_address_vector_replica_set  get_natural_endpoints(const sstring& keyspace, const token& pos) const;
+    inet_address_vector_replica_set  get_natural_endpoints(const sstring& keyspace, token pos) const;
 
     /**
      * @return Vector of Token ranges (_not_ keys!) together with estimated key count,

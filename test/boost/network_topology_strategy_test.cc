@@ -156,7 +156,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
-        token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
+        auto t1 = token::from_int64(d2t(cur_point1 / ring_points.size()));
         uint64_t cache_hit_count = ars_ptr->get_cache_hits_count();
         auto endpoints1 = ars_ptr->get_natural_endpoints(t1);
 
@@ -173,7 +173,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         //
         cache_hit_count = ars_ptr->get_cache_hits_count();
         double cur_point2 = rp.point - 0.2;
-        token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
+        auto t2 = token::from_int64(d2t(cur_point2 / ring_points.size()));
         auto endpoints2 = ars_ptr->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, endpoints2);
@@ -213,7 +213,7 @@ void simple_test() {
   stm.mutate_token_metadata([&ring_points] (token_metadata& tm) -> future<> {
     for (unsigned i = 0; i < ring_points.size(); i++) {
         co_await tm.update_normal_token(
-            {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
+            token::from_int64(d2t(ring_points[i].point / ring_points.size())),
             ring_points[i].host);
     }
   }).get();
@@ -309,7 +309,7 @@ void heavy_origin_test() {
                 ring_point rp = {token_point, address};
 
                 ring_points.emplace_back(rp);
-                tokens[address].emplace(token{dht::token::kind::key, d2t(token_point / total_eps)});
+                tokens[address].emplace(token::from_int64(d2t(token_point / total_eps)));
 
                 testlog.debug("adding node {} at {}", address, token_point);
 
@@ -382,7 +382,7 @@ static bool has_sufficient_replicas(
 }
 
 static std::vector<inet_address> calculate_natural_endpoints(
-                const token& search_token, const token_metadata& tm,
+                token search_token, const token_metadata& tm,
                 snitch_ptr& snitch,
                 const std::unordered_map<sstring, size_t>& datacenters) {
     //
@@ -435,7 +435,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     // not aware of any cluster members
     assert(!all_endpoints.empty() && !racks.empty());
 
-    for (auto& next : tm.ring_range(search_token)) {
+    for (auto next : tm.ring_range(search_token)) {
 
         if (has_sufficient_replicas(dc_replicas, all_endpoints, datacenters)) {
             break;

@@ -618,8 +618,8 @@ future<> set_bootstrap_state(bootstrap_state state);
  */
 mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
 
-future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
-future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
+future<> register_view_for_building(sstring ks_name, sstring view_name, dht::token token);
+future<> update_view_build_progress(sstring ks_name, sstring view_name, dht::token token);
 future<> remove_view_build_progress(sstring ks_name, sstring view_name);
 future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
 future<> mark_view_as_built(sstring ks_name, sstring view_name);

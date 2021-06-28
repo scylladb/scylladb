@@ -44,14 +44,6 @@ debug(Args&&... args) {
     }
 }
 
-static dht::token token_from_long(uint64_t value) {
-    return dht::token(dht::token::kind::key, value);
-}
-
-static int64_t long_from_token(dht::token token) {
-    return token._data;
-}
-
 SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
@@ -64,13 +56,13 @@ SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto dk = partitioner.decorate_key(*s, key);
 
     // Expected value was taken from Origin
-    BOOST_REQUIRE_EQUAL(dk._token, token_from_long(4958784316840156970));
+    BOOST_REQUIRE_EQUAL(dk._token, dht::token::from_int64(4958784316840156970));
     BOOST_REQUIRE(dk._key.equal(*s, key));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
-    auto t1 = token_from_long(0x7000'0000'0000'0000);
-    auto t2 = token_from_long(0xa000'0000'0000'0000);
+    auto t1 = dht::token::from_int64(0x7000'0000'0000'0000);
+    auto t2 = dht::token::from_int64(0xa000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
     // Even without knowing what the midpoint is, it needs to be inside the
@@ -78,17 +70,17 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
     auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
     // We can also calculate the actual value the midpoint should have:
-    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x8800'0000'0000'0000));
+    BOOST_REQUIRE_EQUAL(midpoint, dht::token::from_int64(0x8800'0000'0000'0000));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_wraparound_2) {
-    auto t1 = token_from_long(0x6000'0000'0000'0000);
-    auto t2 = token_from_long(0x9000'0000'0000'0000);
+    auto t1 = dht::token::from_int64(0x6000'0000'0000'0000);
+    auto t2 = dht::token::from_int64(0x9000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
     auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x7800'0000'0000'0000));
+    BOOST_REQUIRE_EQUAL(midpoint, dht::token::from_int64(0x7800'0000'0000'0000));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
@@ -219,17 +211,17 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
-    auto t1 = token_from_long(0x5000'0000'0000'0000);
-    auto t2 = token_from_long(0x7000'0000'0000'0000);
+    auto t1 = dht::token::from_int64(0x5000'0000'0000'0000);
+    auto t2 = dht::token::from_int64(0x7000'0000'0000'0000);
     BOOST_REQUIRE(t1 < t2);
     auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
+    BOOST_REQUIRE_EQUAL(midpoint, dht::token::from_int64(0x6000'0000'0000'0000));
 }
 
 void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht::token> shard_limits, unsigned ignorebits = 0) {
     auto prev_token = [] (dht::token token) {
-        return token_from_long(long_from_token(token) - 1);
+        return dht::token::from_int64(token.to_int64() - 1);
     };
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
@@ -241,11 +233,11 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
         BOOST_REQUIRE_EQUAL(sharder.shard_of(lim), i % shards);
         if (i != 0) {
             BOOST_REQUIRE_EQUAL(sharder.shard_of(prev_token(lim)), (i - 1) % shards);
-            BOOST_REQUIRE_EQUAL(lim, sharder.token_for_next_shard(prev_token(lim), i % shards));
+            BOOST_REQUIRE_EQUAL(lim, *sharder.token_for_next_shard(prev_token(lim), i % shards));
         }
         if (i != (shards << ignorebits) - 1) {
             auto next_shard = (i + 1) % shards;
-            BOOST_REQUIRE_EQUAL(sharder.shard_of(sharder.token_for_next_shard(lim, next_shard)), next_shard);
+            BOOST_REQUIRE_EQUAL(sharder.shard_of(*sharder.token_for_next_shard(lim, next_shard)), next_shard);
         }
     }
 }
@@ -253,7 +245,7 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
     auto make_token_vector = [] (std::vector<int64_t> v) {
         return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(token_from_long));
+                v | boost::adaptors::transformed(dht::token::from_int64));
     };
     dht::sharder mm3p7s(7);
     auto mm3p7s_shard_limits = make_token_vector({
@@ -277,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
     auto make_token_vector = [] (std::vector<int64_t> v) {
         return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(token_from_long));
+                v | boost::adaptors::transformed(dht::token::from_int64));
     };
     dht::sharder mm3p7s2i(7, 2);
     auto mm3p7s2i_shard_limits = make_token_vector({
@@ -310,12 +302,18 @@ static
 dht::partition_range
 normalize(dht::partition_range pr) {
     auto start = pr.start();
-    if (start && start->value().token() == dht::minimum_token()) {
+    if (start && start->value().is_min()) {
         start = std::nullopt;
     }
+    if (start) {
+        start = dht::partition_range::bound(start->value(), false);
+    }
     auto end = pr.end();
-    if (end && end->value().token() == dht::maximum_token()) {
+    if (end && end->value().is_max()) {
         end = std::nullopt;
+    }
+    if (end) {
+        end = dht::partition_range::bound(end->value(), false);
     }
     return dht::partition_range(start, end);
 };
@@ -334,10 +332,10 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
             dht::sharder(4, 0),
             dht::sharder(32, 8),  // More, and we OOM since memory isn't configured
     };
-    auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
-    auto t2 = token_from_long(int64_t(-1));
-    auto t3 = token_from_long(int64_t(1));
-    auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto t1 = dht::token::from_int64(int64_t(-0x7fff'ffff'ffff'fffe));
+    auto t2 = dht::token::from_int64(int64_t(-1));
+    auto t3 = dht::token::from_int64(int64_t(1));
+    auto t4 = dht::token::from_int64(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::ring_position rp) {
         return std::make_optional(range_bound<dht::ring_position>(std::move(rp)));
     };
@@ -406,10 +404,10 @@ test_something_with_some_interesting_ranges_and_sharder_with_token_range(std::fu
             dht::sharder(4, 0),
             dht::sharder(32, 8),  // More, and we OOM since memory isn't configured
     };
-    auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
-    auto t2 = token_from_long(int64_t(-1));
-    auto t3 = token_from_long(int64_t(1));
-    auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto t1 = dht::token::from_int64(int64_t(-0x7fff'ffff'ffff'fffe));
+    auto t2 = dht::token::from_int64(int64_t(-1));
+    auto t3 = dht::token::from_int64(int64_t(1));
+    auto t4 = dht::token::from_int64(int64_t(0x7fff'ffff'ffff'fffe));
     auto make_bound = [] (dht::token t) {
         return range_bound<dht::token>(std::move(t));
     };
@@ -477,24 +475,24 @@ SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
     const unsigned cpu_count = 3;
     const unsigned ignore_msb_bits = 10;
     dht::sharder sharder(cpu_count, ignore_msb_bits);
-    auto first_boundary = sharder.token_for_next_shard(dht::minimum_token(), 1);
-    auto second_boundary = sharder.token_for_next_shard(dht::minimum_token(), 2);
-    auto third_boundary = sharder.token_for_next_shard(dht::minimum_token(), 0);
+    dht::token first_boundary = sharder.token_for_next_shard(dht::minimum_token(), 1).value();
+    dht::token second_boundary = sharder.token_for_next_shard(dht::minimum_token(), 2).value();
+    dht::token third_boundary = sharder.token_for_next_shard(dht::minimum_token(), 0).value();
     auto next_token = [] (dht::token t) {
-        assert(dht::token::to_int64(t) < std::numeric_limits<int64_t>::max());
-        return dht::token::from_int64(dht::token::to_int64(t) + 1);
+        assert(t.to_int64() < std::numeric_limits<int64_t>::max());
+        return dht::token::from_int64(t.to_int64() + 1);
     };
     auto prev_token = [] (dht::token t) {
-        assert(dht::token::to_int64(t) > std::numeric_limits<int64_t>::min() + 1);
-        return dht::token::from_int64(dht::token::to_int64(t) - 1);
+        assert(t.to_int64() > std::numeric_limits<int64_t>::min() + 1);
+        return dht::token::from_int64(t.to_int64() - 1);
     };
 
     BOOST_REQUIRE_EQUAL(dht::token::from_int64(std::numeric_limits<int64_t>::min() + 1),
-            dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::maximum_token(), 0));
+            dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::greatest_token(), 0));
     BOOST_REQUIRE_EQUAL(first_boundary,
-            dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::maximum_token(), 1));
+            dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::greatest_token(), 1));
     BOOST_REQUIRE_EQUAL(second_boundary,
-            dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::maximum_token(), 2));
+            dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::greatest_token(), 2));
 
     BOOST_REQUIRE_EQUAL(dht::token::from_int64(std::numeric_limits<int64_t>::min() + 1),
             dht::find_first_token_for_shard(sharder, dht::minimum_token(), dht::token::from_int64(std::numeric_limits<int64_t>::min() + 1), 0));
@@ -504,48 +502,48 @@ SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
             dht::find_first_token_for_shard(sharder, dht::minimum_token(), second_boundary, 2));
 
     BOOST_REQUIRE_EQUAL(third_boundary,
-            dht::find_first_token_for_shard(sharder, prev_token(first_boundary), dht::maximum_token(), 0));
+            dht::find_first_token_for_shard(sharder, prev_token(first_boundary), dht::greatest_token(), 0));
     BOOST_REQUIRE_EQUAL(third_boundary,
-            dht::find_first_token_for_shard(sharder, first_boundary, dht::maximum_token(), 0));
+            dht::find_first_token_for_shard(sharder, first_boundary, dht::greatest_token(), 0));
     BOOST_REQUIRE_EQUAL(third_boundary,
-            dht::find_first_token_for_shard(sharder, second_boundary, dht::maximum_token(), 0));
+            dht::find_first_token_for_shard(sharder, second_boundary, dht::greatest_token(), 0));
 
     BOOST_REQUIRE_EQUAL(next_token(first_boundary),
-            dht::find_first_token_for_shard(sharder, first_boundary, dht::maximum_token(), 1));
+            dht::find_first_token_for_shard(sharder, first_boundary, dht::greatest_token(), 1));
     BOOST_REQUIRE_EQUAL(next_token(second_boundary),
-            dht::find_first_token_for_shard(sharder, second_boundary, dht::maximum_token(), 2));
+            dht::find_first_token_for_shard(sharder, second_boundary, dht::greatest_token(), 2));
     BOOST_REQUIRE_EQUAL(next_token(third_boundary),
-            dht::find_first_token_for_shard(sharder, third_boundary, dht::maximum_token(), 0));
+            dht::find_first_token_for_shard(sharder, third_boundary, dht::greatest_token(), 0));
 
     BOOST_REQUIRE_EQUAL(first_boundary,
-            dht::find_first_token_for_shard(sharder, prev_token(first_boundary), dht::maximum_token(), 1));
+            dht::find_first_token_for_shard(sharder, prev_token(first_boundary), dht::greatest_token(), 1));
     BOOST_REQUIRE_EQUAL(second_boundary,
-            dht::find_first_token_for_shard(sharder, prev_token(second_boundary), dht::maximum_token(), 2));
+            dht::find_first_token_for_shard(sharder, prev_token(second_boundary), dht::greatest_token(), 2));
     BOOST_REQUIRE_EQUAL(third_boundary,
-            dht::find_first_token_for_shard(sharder, prev_token(third_boundary), dht::maximum_token(), 0));
+            dht::find_first_token_for_shard(sharder, prev_token(third_boundary), dht::greatest_token(), 0));
 
 
-    BOOST_REQUIRE_EQUAL(prev_token(first_boundary),
+    BOOST_REQUIRE_EQUAL(std::optional<dht::token>(),
             dht::find_first_token_for_shard(sharder, dht::minimum_token(), prev_token(first_boundary), 1));
-    BOOST_REQUIRE_EQUAL(prev_token(second_boundary),
+    BOOST_REQUIRE_EQUAL(std::optional<dht::token>(),
             dht::find_first_token_for_shard(sharder, dht::minimum_token(), prev_token(second_boundary), 2));
-    BOOST_REQUIRE_EQUAL(prev_token(third_boundary),
+    BOOST_REQUIRE_EQUAL(std::optional<dht::token>(),
             dht::find_first_token_for_shard(sharder, prev_token(first_boundary), prev_token(third_boundary), 0));
 
     auto last_token = dht::token::from_int64(std::numeric_limits<int64_t>::max());
     auto last_shard = sharder.shard_of(last_token);
 
     BOOST_REQUIRE_EQUAL(last_token,
-            dht::find_first_token_for_shard(sharder, prev_token(last_token), dht::maximum_token(), last_shard));
-    BOOST_REQUIRE_EQUAL(dht::maximum_token(),
-            dht::find_first_token_for_shard(sharder, prev_token(last_token), dht::maximum_token(), (last_shard + 1) % cpu_count));
-    BOOST_REQUIRE_EQUAL(dht::maximum_token(),
-            dht::find_first_token_for_shard(sharder, prev_token(last_token), dht::maximum_token(), (last_shard + 2) % cpu_count));
+            dht::find_first_token_for_shard(sharder, prev_token(last_token), dht::greatest_token(), last_shard));
+    BOOST_REQUIRE_EQUAL(std::optional<dht::token>(),
+            dht::find_first_token_for_shard(sharder, prev_token(last_token), dht::greatest_token(), (last_shard + 1) % cpu_count));
+    BOOST_REQUIRE_EQUAL(std::optional<dht::token>(),
+            dht::find_first_token_for_shard(sharder, prev_token(last_token), dht::greatest_token(), (last_shard + 2) % cpu_count));
 
     BOOST_REQUIRE_EQUAL(dht::token::from_int64(std::numeric_limits<int64_t>::min() + 1),
             dht::find_first_token_for_shard(sharder, prev_token(last_token), third_boundary, (last_shard + 1) % cpu_count));
     BOOST_REQUIRE_EQUAL(first_boundary,
             dht::find_first_token_for_shard(sharder, prev_token(last_token), third_boundary, (last_shard + 2) % cpu_count));
-    BOOST_REQUIRE_EQUAL(prev_token(first_boundary),
+    BOOST_REQUIRE_EQUAL(std::optional<dht::token>(),
             dht::find_first_token_for_shard(sharder, prev_token(last_token), prev_token(first_boundary), (last_shard + 2) % cpu_count));
 }

@@ -157,9 +157,9 @@ private:
         using reference = token&;
     public:
         tokens_iterator() = default;
-        tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
+        tokens_iterator(token start, const token_metadata_impl* token_metadata);
         bool operator==(const tokens_iterator& it) const;
-        const token& operator*() const;
+        token operator*() const;
         tokens_iterator& operator++();
     private:
         std::vector<token>::const_iterator _cur_it;
@@ -183,9 +183,9 @@ public:
     future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
     void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
-    const token& first_token(const token& start) const;
-    size_t first_token_index(const token& start) const;
-    std::optional<inet_address> get_endpoint(const token& token) const;
+    token first_token(token start) const;
+    size_t first_token_index(token start) const;
+    std::optional<inet_address> get_endpoint(token token) const;
     std::vector<token> get_tokens(const inet_address& addr) const;
     const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
@@ -199,7 +199,7 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
+    boost::iterator_range<tokens_iterator> ring_range(token start) const;
     boost::iterator_range<tokens_iterator> ring_range(
         const std::optional<dht::partition_range::bound>& start) const;
 
@@ -336,7 +336,7 @@ public:
     size_t count_normal_token_owners() const;
 
     // returns empty vector if keyspace_name not found.
-    inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
+    inet_address_vector_topology_change pending_endpoints_for(token token, const sstring& keyspace_name) const;
 
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
     std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;

@@ -74,12 +74,12 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     }
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, can_yield can_yield) {
+inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(token search_token, can_yield can_yield) {
     return do_get_natural_endpoints(search_token, *_shared_token_metadata.get(), can_yield);
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) {
-    const token& key_token = tm.first_token(search_token);
+inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_endpoints(token search_token, const token_metadata& tm, can_yield can_yield) {
+    token key_token = tm.first_token(search_token);
     auto& cached_endpoints = get_cached_endpoints(tm);
     auto res = cached_endpoints.find(key_token);
 
@@ -94,7 +94,7 @@ inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_en
     return res->second;
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield can_yield) {
+inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(token search_token, can_yield can_yield) {
     token_metadata_ptr tmptr = _shared_token_metadata.get();
     inet_address_vector_replica_set natural_endpoints = do_get_natural_endpoints(search_token, *tmptr, can_yield);
     if (tmptr->is_any_node_being_replaced() &&
@@ -146,8 +146,8 @@ abstract_replication_strategy::get_cached_endpoints(const token_metadata& tm) {
 static
 void
 insert_token_range_to_sorted_container_while_unwrapping(
-        const dht::token& prev_tok,
-        const dht::token& tok,
+        dht::token prev_tok,
+        dht::token tok,
         dht::token_range_vector& ret) {
     if (prev_tok < tok) {
         auto pos = ret.end();

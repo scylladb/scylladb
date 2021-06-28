@@ -101,7 +101,7 @@ stream_id::stream_id(dht::token token, size_t vnode_index)
         | mask_shift(rand, stream_id_random_bits, stream_id_random_shift)
         ;
 
-    copy_int_to_bytes(dht::token::to_int64(token), 0, _value);
+    copy_int_to_bytes(token.to_int64(), 0, _value);
     copy_int_to_bytes(low_qword, sizeof(int64_t), _value);
     // not a hot code path. make sure we did not mess up the shifts and masks.
     assert(version() == version_1);
@@ -195,7 +195,7 @@ static std::vector<stream_id> create_stream_ids(
     result.reserve(shard_count);
     dht::sharder sharder(shard_count, ignore_msb);
     for (size_t shard_idx = 0; shard_idx < shard_count; ++shard_idx) {
-        auto t = dht::find_first_token_for_shard(sharder, start, end, shard_idx);
+        auto t = dht::find_first_token_for_shard(sharder, start, end, shard_idx).value_or(end);
         // compose the id from token and the "index" of the range end owning vnode
         // as defined by token sort order. Basically grouping within this
         // shard set.

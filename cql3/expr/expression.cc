@@ -561,7 +561,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                             format("Unhandled multi-column binary_operator: {}", opr));
                 }
             },
-            [] (const token& tok) -> bool {
+            [] (token tok) -> bool {
                 // The RHS value was already used to ensure we fetch only rows in the specified
                 // token range.  It is impossible for any fetched row not to match now.
                 return true;
@@ -868,7 +868,7 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                             // We don't use index table for multi-column restrictions, as it cannot avoid filtering.
                             return false;
                         },
-                        [&] (const token&) { return false; },
+                        [&] (token) { return false; },
                         [&] (const binary_operator&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: nested binary operators are not supported");
                         },
@@ -911,7 +911,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const binary_operator& opr) {
                 os << "(" << *opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
             },
-            [&] (const token& t) { os << "TOKEN"; },
+            [&] (token t) { os << "TOKEN"; },
             [&] (const column_value& col) {
                 fmt::print(os, "{}", col);
             },
@@ -953,7 +953,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const column_value_tuple& tuple) -> expression {
                 throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
             },
-            [&] (const token&) { return expr; },
+            [&] (token) { return expr; },
         }, expr);
 }
 

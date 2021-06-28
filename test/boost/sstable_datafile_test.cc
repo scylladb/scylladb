@@ -6237,10 +6237,6 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_stop_tracking_compaction) {
     });
 }
 
-static dht::token token_from_long(int64_t value) {
-    return { dht::token::kind::key, value };
-}
-
 SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
     using value_set = std::unordered_set<int64_t>;
     using interval_map_type = boost::icl::interval_map<compatible_ring_position, value_set>;
@@ -6254,7 +6250,7 @@ SEASTAR_TEST_CASE(basic_interval_map_testing_for_sstable_set) {
         auto s = builder.build();
 
     auto make_pos = [&] (int64_t token) -> compatible_ring_position {
-        return compatible_ring_position(s, dht::ring_position::starting_at(token_from_long(token)));
+        return compatible_ring_position(s, dht::ring_position::starting_at(dht::token::from_int64(token)));
     };
 
     auto add = [&] (int64_t start, int64_t end, int gen) {

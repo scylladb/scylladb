@@ -143,15 +143,19 @@ query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
 }
 
 static inline
-const dht::token& start_token(const dht::partition_range& r) {
-    static const dht::token min_token = dht::minimum_token();
-    return r.start() ? r.start()->value().token() : min_token;
+const std::optional<dht::token> start_token(const dht::partition_range& r) {
+    if (auto bound = r.start()) {
+        return bound->value().token();
+    }
+    return std::nullopt;
 }
 
 static inline
-const dht::token& end_token(const dht::partition_range& r) {
-    static const dht::token max_token = dht::maximum_token();
-    return r.end() ? r.end()->value().token() : max_token;
+const std::optional<dht::token> end_token(const dht::partition_range& r) {
+    if (auto bound = r.end()) {
+        return bound->value().token();
+    }
+    return std::nullopt;
 }
 
 static inline
@@ -253,7 +257,7 @@ public:
             }
         }
     }
-    dht::token& token() {
+    dht::token token() {
         return _token;
     }
 };
@@ -1915,7 +1919,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
 }
 
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
+storage_proxy::create_write_response_handler_helper(schema_ptr s, dht::token token, std::unique_ptr<mutation_holder> mh,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
     auto keyspace_name = s->ks_name();
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
@@ -2242,7 +2246,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 }
 
 storage_proxy::paxos_participants
-storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
+storage_proxy::get_paxos_participants(const sstring& ks_name, dht::token token, db::consistency_level cl_for_paxos) {
     keyspace& ks = _db.local().find_keyspace(ks_name);
     auto& rs = ks.get_replication_strategy();
     inet_address_vector_replica_set natural_endpoints = rs.get_natural_endpoints_without_node_being_replaced(token);
@@ -3859,7 +3863,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         const inet_address_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
         service_permit permit) {
-    const dht::token& token = pr.start()->value().token();
+    dht::token token = pr.start()->value().token();
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
@@ -4096,7 +4100,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
-        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
+        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range).value_or(dht::minimum_token()));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
         inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, ks, live_endpoints, merged_preferred_replicas, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
@@ -4109,7 +4113,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
-            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
+            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range).value_or(dht::minimum_token()));
             inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, current_range_preferred_replicas, pcf);
 
             // Origin has this to say here:
@@ -4119,7 +4123,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (end_token(range) == dht::maximum_token()) {
+            if (!end_token(range)) {
                 break;
             }
 
@@ -4636,7 +4640,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     co_return condition_met;
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) const {
+inet_address_vector_replica_set storage_proxy::get_live_endpoints(keyspace& ks, dht::token token) const {
     auto& rs = ks.get_replication_strategy();
     inet_address_vector_replica_set eps = rs.get_natural_endpoints_without_node_being_replaced(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
@@ -4653,7 +4657,7 @@ void storage_proxy::sort_endpoints_by_proximity(inet_address_vector_replica_set&
     }
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const {
+inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(keyspace& ks, dht::token token) const {
     auto eps = get_live_endpoints(ks, token);
     sort_endpoints_by_proximity(eps);
     return eps;
@@ -4708,19 +4712,30 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
         return;
     }
 
+    auto is_empty_range = [] (const std::optional<dht::token> s, const std::optional<dht::token> e) -> bool {
+        return e && e->is_minimum();
+    };
+    auto is_singular_range = [] (const std::optional<dht::token> s, const std::optional<dht::token> e) -> bool {
+        return s && e && *s == *e;
+    };
+
+    std::optional<dht::token> start = start_token(cr);
+    std::optional<dht::token> end = end_token(cr);
+
+    if (is_empty_range(start, end)) {
+        _i++; // empty range? Move to the next one
+        return;
+    }
+
     // special case for bounds containing exactly 1 token
-    if (start_token(cr) == end_token(cr)) {
-        if (start_token(cr).is_minimum()) {
-            _i++; // empty range? Move to the next one
-            return;
-        }
+    if (is_singular_range(start, end)) {
         add_range(get_remainder());
         return;
     }
 
     // divide the queryRange into pieces delimited by the ring
     auto ring_iter = _tmptr->ring_range(cr.start());
-    for (const dht::token& upper_bound_token : ring_iter) {
+    for (dht::token upper_bound_token : ring_iter) {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
          *   - if remainder is tokens, then we'll just split using the provided token.
@@ -4740,7 +4755,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 
         // We shouldn't attempt to split on upper bound, because it may result in
         // an ambiguous range of the form (x; x]
-        if (end_token(cr) == upper_bound_token) {
+        if (end && *end == upper_bound_token) {
             break;
         }
 

@@ -650,20 +650,19 @@ dht::partition_range_vector partition_ranges_from_token(const expr::expression& 
     if (values == expr::value_set(expr::value_list{})) {
         return {};
     }
-    const auto bounds = expr::to_range(values);
-    const auto start_token = bounds.start() ? bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
-            : dht::minimum_token();
-    auto end_token = bounds.end() ? bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
-            : dht::maximum_token();
-    const bool include_start = bounds.start() && bounds.start()->is_inclusive();
-    const auto include_end = bounds.end() && bounds.end()->is_inclusive();
 
-    auto start = dht::partition_range::bound(include_start
-                                             ? dht::ring_position::starting_at(start_token)
-                                             : dht::ring_position::ending_at(start_token));
-    auto end = dht::partition_range::bound(include_end
-                                           ? dht::ring_position::ending_at(end_token)
-                                           : dht::ring_position::starting_at(end_token));
+    const nonwrapping_range<managed_bytes> bounds = expr::to_range(values);
+    std::optional<dht::partition_range::bound> start = {};
+    std::optional<dht::partition_range::bound> end = {};
+
+    if (bounds.start()) {
+        dht::token t = bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); });
+        start = bounds.start()->is_inclusive() ? dht::ring_position::starting_at(t) : dht::ring_position::ending_at(t);
+    }
+    if (bounds.end()) {
+        dht::token t = bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); });
+        end = bounds.end()->is_inclusive() ? dht::ring_position::ending_at(t) : dht::ring_position::starting_at(t);
+    }
 
     return {{std::move(start), std::move(end)}};
 }

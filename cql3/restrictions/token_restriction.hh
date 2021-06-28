@@ -100,9 +100,9 @@ public:
         const auto start_token = bounds.start() ? bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
                 : dht::minimum_token();
         auto end_token = bounds.end() ? bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
-                : dht::maximum_token();
+                : dht::greatest_token();
         const bool include_start = bounds.start() && bounds.start()->is_inclusive();
-        const auto include_end = bounds.end() && bounds.end()->is_inclusive();
+        const auto include_end = !bounds.end() || bounds.end()->is_inclusive();
 
         /*
          * If we ask SP.getRangeSlice() for (token(200), token(200)], it will happily return the whole ring.

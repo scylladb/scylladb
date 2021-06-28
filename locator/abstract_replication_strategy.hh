@@ -98,7 +98,7 @@ public:
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
-    virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
+    virtual inet_address_vector_replica_set calculate_natural_endpoints(token search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
 
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
@@ -106,8 +106,8 @@ public:
                                               const sstring& strategy_name,
                                               const shared_token_metadata& stm,
                                               const std::map<sstring, sstring>& config_options);
-    inet_address_vector_replica_set get_natural_endpoints(const token& search_token, can_yield = can_yield::no);
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);
+    inet_address_vector_replica_set get_natural_endpoints(token search_token, can_yield = can_yield::no);
+    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(token search_token, can_yield = can_yield::no);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
@@ -136,7 +136,7 @@ public:
 private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
-    virtual inet_address_vector_replica_set do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);
+    virtual inet_address_vector_replica_set do_get_natural_endpoints(token search_token, const token_metadata& tm, can_yield);
 
 public:
     // get_primary_ranges() returns the list of "primary ranges" for the given

@@ -302,14 +302,14 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_tokens.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().sorted_tokens(), [](const dht::token& i) {
+        return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().sorted_tokens(), [](dht::token i) {
            return boost::lexical_cast<std::string>(i);
         }));
     });
 
     ss::get_node_tokens.set(r, [&ctx] (std::unique_ptr<request> req) {
         gms::inet_address addr(req->param["endpoint"]);
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().get_tokens(addr), [](const dht::token& i) {
+        return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().get_tokens(addr), [](dht::token i) {
            return boost::lexical_cast<std::string>(i);
        }));
     });

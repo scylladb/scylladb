@@ -1798,7 +1798,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     unsigned _concurrency = 1;
 
     void on_partition_range_change(const dht::partition_range& pr);
-    bool maybe_move_to_next_shard(const dht::token* const t = nullptr);
+    bool maybe_move_to_next_shard(std::optional<dht::token> t = std::nullopt);
     future<> handle_empty_reader_buffer(db::timeout_clock::time_point timeout);
 
 public:
@@ -1846,7 +1846,7 @@ void multishard_combining_reader::on_partition_range_change(const dht::partition
     }
 }
 
-bool multishard_combining_reader::maybe_move_to_next_shard(const dht::token* const t) {
+bool multishard_combining_reader::maybe_move_to_next_shard(std::optional<dht::token> t) {
     if (_shard_selection_min_heap.empty() || (t && *t < _shard_selection_min_heap.front().token)) {
         return false;
     }
@@ -1931,7 +1931,7 @@ future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point 
         }
 
         while (!reader.is_buffer_empty() && !is_buffer_full()) {
-            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && maybe_move_to_next_shard(&mf.as_partition_start().key().token())) {
+            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && maybe_move_to_next_shard(mf.as_partition_start().key().token())) {
                 return make_ready_future<>();
             }
             push_mutation_fragment(reader.pop_mutation_fragment());

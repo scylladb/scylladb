@@ -149,7 +149,7 @@ class view_builder final : public service::migration_listener::only_view_notific
         dht::decorated_key current_key{dht::minimum_token(), partition_key::make_empty()};
         std::vector<view_build_status> build_status;
 
-        const dht::token& current_token() const {
+        dht::token current_token() const {
             return current_key.token();
         }
     };
