@@ -683,10 +683,11 @@ public:
         replay_position rp(_desc.id, position_type(pos));
 
         // Run like this to ensure flush ordering, and making flushes "waitable"
-        return _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
+        co_await _pending_ops.run_with_ordered_post_op(rp, [] {}, [&] {
             assert(_pending_ops.has_operation(rp));
             return do_flush(pos);
         });
+        co_return me;
     }
     future<sseg_ptr> terminate() {
         assert(_closed);
