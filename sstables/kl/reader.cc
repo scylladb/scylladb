@@ -1120,6 +1120,12 @@ public:
                     });
                 });
             }
+        }).then_wrapped([this] (future<> f) {
+            try {
+                f.get();
+            } catch(sstables::malformed_sstable_exception& e) {
+                throw sstables::malformed_sstable_exception(format("Failed to read partition from SSTable {} due to {}", _sst->get_filename(), e.what()));
+            }
         });
     }
     virtual future<> next_partition() override {
