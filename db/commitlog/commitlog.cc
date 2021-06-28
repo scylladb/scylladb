@@ -1124,11 +1124,10 @@ db::commitlog::segment_manager::allocate_when_possible(shared_ptr<entry_writer> 
     if (_request_controller.waiters()) {
         totals.requests_blocked_memory++;
     }
-    return fut.then([this, writer = std::move(writer), timeout] (auto permit) mutable {
-        return active_segment(timeout).then([this, timeout, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
-            return s->allocate(std::move(writer), std::move(permit), timeout);
-        });
-    });
+
+    auto permit = co_await std::move(fut);
+    auto s = co_await active_segment(timeout);
+    co_await s->allocate(std::move(writer), std::move(permit), timeout);
 }
 
 const size_t db::commitlog::segment::default_size;
