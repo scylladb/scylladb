@@ -1219,9 +1219,10 @@ int main(int ac, char** av) {
                 return ss.local().join_cluster();
             }).get();
 
-            sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+            sl_controller.invoke_on_all([&ss] (qos::service_level_controller& controller) {
                 controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
-                        ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));
+                        ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));                
+                ss.local().register_subscriber(&controller);
             }).get();
 
             supervisor::notify("starting tracing");
@@ -1405,8 +1406,12 @@ int main(int ac, char** av) {
                 repair_shutdown(db).get();
             });
 
-            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
-                sl_controller.stop().get();
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [&ss] {
+                sl_controller.invoke_on_all([&ss] (qos::service_level_controller& controller) {                    
+                    return ss.local().unregister_subscriber(&controller);
+                }).then([] {
+                    return sl_controller.stop();
+                }).get();
             });
 
             auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
