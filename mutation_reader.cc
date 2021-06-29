@@ -1200,6 +1200,9 @@ flat_mutation_reader evictable_reader::recreate_reader() {
     _range_override.reset();
     _slice_override.reset();
 
+    _drop_partition_start = false;
+    _drop_static_row = false;
+
     if (_last_pkey) {
         bool partition_range_is_inclusive = true;
 
@@ -1337,9 +1340,14 @@ bool evictable_reader::should_drop_fragment(const mutation_fragment& mf) {
         _drop_partition_start = false;
         return true;
     }
-    if (_drop_static_row && mf.is_static_row()) {
-        _drop_static_row = false;
-        return true;
+    // Unlike partition-start above, a partition is not guaranteed to have a
+    // static row fragment. So reset the flag regardless of whether we could
+    // drop one or not.
+    // We are guaranteed to get here only right after dropping a partition-start,
+    // so if we are not seeing a static row here, the partition doesn't have one.
+    if (_drop_static_row) {
+         _drop_static_row = false;
+        return mf.is_static_row();
     }
     return false;
 }
