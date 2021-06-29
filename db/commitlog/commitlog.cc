@@ -902,35 +902,37 @@ public:
          */
         auto me = shared_from_this();
         auto fp = _file_pos;
-        return _pending_ops.wait_for_pending(timeout).then([me, fp, timeout] {
-            if (fp != me->_file_pos) {
+        try {
+            co_await _pending_ops.wait_for_pending(timeout);
+            if (fp != _file_pos) {
                 // some other request already wrote this buffer.
                 // If so, wait for the operation at our intended file offset
                 // to finish, then we know the flush is complete and we
                 // are in accord.
                 // (Note: wait_for_pending(pos) waits for operation _at_ pos (and before),
-                replay_position rp(me->_desc.id, position_type(fp));
-                return me->_pending_ops.wait_for_pending(rp, timeout).then([me, fp] {
-                    assert(me->_segment_manager->cfg.mode != sync_mode::BATCH || me->_flush_pos > fp);
-                    if (me->_flush_pos <= fp) {
-                        // previous op we were waiting for was not sync one, so it did not flush
-                        // force flush here
-                        return me->do_flush(fp);
-                    }
-                    return make_ready_future<sseg_ptr>(me);
-                });
+                replay_position rp(_desc.id, position_type(fp));
+                co_await _pending_ops.wait_for_pending(rp, timeout);
+                
+                assert(_segment_manager->cfg.mode != sync_mode::BATCH || _flush_pos > fp);
+                if (_flush_pos <= fp) {
+                    // previous op we were waiting for was not sync one, so it did not flush
+                    // force flush here
+                    co_await do_flush(fp);
+                }
+            } else {
+                // It is ok to leave the sync behind on timeout because there will be at most one
+                // such sync, all later allocations will block on _pending_ops until it is done.
+                co_await with_timeout(timeout, sync());
             }
-            // It is ok to leave the sync behind on timeout because there will be at most one
-            // such sync, all later allocations will block on _pending_ops until it is done.
-            return with_timeout(timeout, me->sync());
-        }).handle_exception([me, fp](auto p) {
+        } catch (...) {
             // If we get an IO exception (which we assume this is)
             // we should close the segment.
             // TODO: should we also trunctate away any partial write
             // we did?
             me->_closed = true; // just mark segment as closed, no writes will be done.
-            return make_exception_future<sseg_ptr>(p);
-        });
+            throw;
+        };
+        co_return me;
     }
 
     void background_cycle() {
