@@ -1215,7 +1215,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     if (_clustering_prefix_restrictions.empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    if (count_if(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+    if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
             using namespace expr;
