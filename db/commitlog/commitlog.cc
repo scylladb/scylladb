@@ -301,7 +301,7 @@ public:
     }
 
     future<>
-    allocate_when_possible(shared_ptr<entry_writer> writer, db::timeout_clock::time_point timeout);
+    allocate_when_possible(entry_writer& writer, db::timeout_clock::time_point timeout);
 
     struct stats {
         uint64_t cycle_count = 0;
@@ -955,24 +955,24 @@ public:
      * Should only be called from "allocate_when_possible". "this" must be secure in a shared_ptr that will not
      * die. We don't keep ourselves alive (anymore)
      */
-    future<> allocate(shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, db::timeout_clock::time_point timeout) {
+    future<> allocate(entry_writer& writer, segment_manager::request_controller_units permit, db::timeout_clock::time_point timeout) {
         for (;;) {
             if (must_sync()) {
                 co_await with_timeout(timeout, sync());
                 continue;
             }
 
-            const auto size = writer->size(*this);
-            const auto s = size + writer->num_entries * entry_overhead_size + (writer->num_entries > 1 ? multi_entry_overhead_size : 0u); // total size
+            const auto size = writer.size(*this);
+            const auto s = size + writer.num_entries * entry_overhead_size + (writer.num_entries > 1 ? multi_entry_overhead_size : 0u); // total size
 
             _segment_manager->sanity_check_size(s);
 
             if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
                 auto new_seg = co_await finish_and_get_new(timeout);
-                co_await new_seg->allocate(std::move(writer), std::move(permit), timeout);
+                co_await new_seg->allocate(writer, std::move(permit), timeout);
                 break;
             } else if (!_buffer.empty() && (s > _buffer_ostream.size())) {  // enough data?
-                if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync) {
+                if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
                     // TODO: this could cause starvation if we're really unlucky.
                     // If we run batch mode and find ourselves not fit in a non-empty
                     // buffer, we must force a cycle and wait for it (to keep flush order)
@@ -1010,7 +1010,7 @@ public:
             // -> entries[]
             // post:
             //      crc2  : uint32_t - crc1 + each entry crc.
-            if (writer->num_entries > 1) {
+            if (writer.num_entries > 1) {
                 mecrc.emplace();
                 write<uint32_t>(out, multi_entry_size_magic);
                 write<uint32_t>(out, s);
@@ -1019,10 +1019,10 @@ public:
                 write<uint32_t>(out, mecrc->checksum());
             }
 
-            for (size_t entry = 0; entry < writer->num_entries; ++entry) {
+            for (size_t entry = 0; entry < writer.num_entries; ++entry) {
                 replay_position rp(_desc.id, position());
-                auto id = writer->id(entry);
-                auto entry_size = writer->num_entries == 1 ? size : writer->size(*this, entry);
+                auto id = writer.id(entry);
+                auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
                 auto es = entry_size + entry_overhead_size;
 
                 _cf_dirty[id]++; // increase use count for cf.
@@ -1038,7 +1038,7 @@ public:
                 // actual data
                 auto entry_out = out.write_substream(entry_size);
                 auto entry_data = entry_out.to_input_stream();
-                writer->write(*this, entry_out, entry);
+                writer.write(*this, entry_out, entry);
                 entry_data.with_stream([&] (auto data_str) {
                     crc.process_fragmented(ser::buffer_view<typename std::vector<temporary_buffer<char>>::iterator>(data_str));
                 });
@@ -1049,7 +1049,7 @@ public:
                     mecrc->process(checksum);
                 }
 
-                writer->result(entry, std::move(h));
+                writer.result(entry, std::move(h));
             }
 
             if (mecrc) {
@@ -1060,7 +1060,7 @@ public:
             ++_segment_manager->totals.allocation_count;
             ++_num_allocs;
 
-            if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync) {
+            if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
                 co_await batch_cycle(timeout).discard_result();
             } else {
                 // If this buffer alone is too big, potentially bigger than the maximum allowed size,
@@ -1133,8 +1133,8 @@ public:
 };
 
 future<>
-db::commitlog::segment_manager::allocate_when_possible(shared_ptr<entry_writer> writer, db::timeout_clock::time_point timeout) {
-    auto size = writer->size();
+db::commitlog::segment_manager::allocate_when_possible(entry_writer& writer, db::timeout_clock::time_point timeout) {
+    auto size = writer.size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
     // point.
@@ -1147,7 +1147,7 @@ db::commitlog::segment_manager::allocate_when_possible(shared_ptr<entry_writer> 
 
     auto permit = co_await std::move(fut);
     auto s = co_await active_segment(timeout);
-    co_await s->allocate(std::move(writer), std::move(permit), timeout);
+    co_await s->allocate(writer, std::move(permit), timeout);
 }
 
 const size_t db::commitlog::segment::default_size;
@@ -2046,7 +2046,7 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
         }
     };
     auto writer = ::make_shared<serializer_func_entry_writer>(id, size, std::move(func), sync);
-    return _segment_manager->allocate_when_possible(writer, timeout).then([writer] {
+    return _segment_manager->allocate_when_possible(*writer, timeout).then([writer] {
         return std::move(writer->res);
     });
 }
@@ -2086,7 +2086,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
         }
     };
     auto writer = ::make_shared<cl_entry_writer>(cew);
-    return _segment_manager->allocate_when_possible(writer, timeout).then([writer] {
+    return _segment_manager->allocate_when_possible(*writer, timeout).then([writer] {
         return std::move(writer->res);
     });
 }
@@ -2145,7 +2145,7 @@ db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db
 
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
     auto writer = ::make_shared<cl_entries_writer>(sync, std::move(entry_writers));
-    return _segment_manager->allocate_when_possible(writer, timeout).then([writer] {
+    return _segment_manager->allocate_when_possible(*writer, timeout).then([writer] {
         return std::move(writer->res);
     });
 }
