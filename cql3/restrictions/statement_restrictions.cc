@@ -363,6 +363,7 @@ statement_restrictions::statement_restrictions(database& db,
                                     "(unless you use the token() function or allow filtering)");
                         }
                         _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+                        _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
                     } else if (def.is_clustering_key()) {
                         _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                     } else {
@@ -370,7 +371,6 @@ statement_restrictions::statement_restrictions(database& db,
                     }
                 }
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
-                _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
             }
         }
     }
