@@ -708,14 +708,11 @@ public:
     }
     future<sseg_ptr> close() {
         _closed = true;
-        return sync().then([] (sseg_ptr s) {
-            return s->flush();
-        }).then([](sseg_ptr s) {
-            return s->terminate();
-        }).then([](sseg_ptr s) {
-            s->_segment_manager->totals.wasted_size_on_disk += (s->_size_on_disk - s->file_position());
-            return s;
-        });
+        auto s = co_await sync();
+        co_await flush();
+        co_await terminate();
+        _segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
+        co_return s;
     }
     future<sseg_ptr> do_flush(uint64_t pos) {
         auto me = shared_from_this();
