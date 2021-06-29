@@ -2045,10 +2045,9 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
             res = std::move(h);
         }
     };
-    auto writer = ::make_shared<serializer_func_entry_writer>(id, size, std::move(func), sync);
-    return _segment_manager->allocate_when_possible(*writer, timeout).then([writer] {
-        return std::move(writer->res);
-    });
+    serializer_func_entry_writer writer(id, size, std::move(func), sync);
+    co_await _segment_manager->allocate_when_possible(writer, timeout);
+    co_return std::move(writer.res);
 }
 
 future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
