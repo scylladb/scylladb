@@ -1811,15 +1811,18 @@ void db::commitlog::segment_manager::add_file_to_close(file f) {
 }
 
 future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
-    return seastar::file_size(filename).then([this, filename](uint64_t size) {
-        clogger.debug("Deleting segment file {}", filename);
-        return commit_io_check(&seastar::remove_file, filename).then([this, size] {
-            clogger.trace("Reclaimed {} MB", size/(1024*1024));
-            totals.total_size_on_disk -= size;
-            auto p = std::exchange(_disk_deletions, {});
-            p.set_value();
-        });
-    });
+    clogger.debug("Deleting segment file {}", filename);
+    try {
+        auto size = co_await seastar::file_size(filename);
+        co_await seastar::remove_file(filename);
+        clogger.trace("Reclaimed {} MB", size/(1024*1024));
+        totals.total_size_on_disk -= size;
+        auto p = std::exchange(_disk_deletions, {});
+        p.set_value();
+    } catch (...) {
+        commit_error_handler(std::current_exception());
+        throw;
+    }
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
