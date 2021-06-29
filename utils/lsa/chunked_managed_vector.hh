@@ -290,6 +290,21 @@ public:
     bool operator!=(const chunked_managed_vector& x) const {
         return !operator==(x);
     }
+
+    // Returns the amount of external memory used to hold inserted items.
+    // Takes into account reserved space.
+    size_t external_memory_usage() const {
+        // This ignores per-chunk sizeof(managed_vector::external) but should
+        // be close-enough.
+        return _chunks.external_memory_usage() + _capacity * sizeof(T);
+    }
+
+    // Clears the vector and ensures that the destructor will not have to free any memory so
+    // that the object can be destroyed under any allocator.
+    void clear_and_release() noexcept {
+        clear();
+        _chunks.clear_and_release();
+    }
 };
 
 
