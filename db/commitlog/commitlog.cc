@@ -1512,11 +1512,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 }
 
 future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) const {
-    return do_io_check(commit_error_handler, [this, from = std::move(from), to = std::move(to)]() mutable {
-        return seastar::rename_file(std::move(from), std::move(to)).then([this] {
-            return seastar::sync_directory(cfg.commit_log_location);
-        });
-    });
+    try {
+        co_await seastar::rename_file(from, to);
+        co_await seastar::sync_directory(cfg.commit_log_location);
+    } catch (...) {
+        commit_error_handler(std::current_exception());
+        throw;
+    }
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment() {
