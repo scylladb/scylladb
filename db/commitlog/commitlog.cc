@@ -653,15 +653,26 @@ public:
          * queue, just to be sure.
          */
         auto me = shared_from_this();
-        return close().finally([me] {
-            // When we get here, nothing should add ops,
-            // and we should have waited out all pending.
-            return me->_pending_ops.close().finally([me] {
-                return me->_file.truncate(me->_flush_pos).then([me] {
-                    return me->_file.close().finally([me] { me->_closed_file = true; });
-                });
-            });
-        });
+        // could have kept the "finally" continuations
+        // here, but this potentially missed immediate 
+        // exceptions thrown in close/p_o.close.
+        std::exception_ptr p;
+        try {
+            co_await close();
+        } catch (...) {
+            p = std::current_exception();
+        }
+    
+        co_await _pending_ops.close();
+        co_await _file.truncate(_flush_pos);
+        co_await _file.close();
+        _closed_file = true;
+
+        if (p) {
+            std::rethrow_exception(p);
+        }
+
+        co_return me;
     }
     // See class comment for info
     future<sseg_ptr> sync() {
