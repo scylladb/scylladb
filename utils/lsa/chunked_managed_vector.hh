@@ -27,7 +27,7 @@
 // std::deque would be a good fit, except the backing array can grow quite large.
 
 #include "utils/logalloc.hh"
-#include "utils/small_vector.hh"
+#include "utils/managed_vector.hh"
 
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/algorithm/clamp.hpp>
@@ -41,16 +41,13 @@
 
 namespace lsa {
 
-struct chunked_vector_free_deleter {
-    void operator()(void* x) const { ::free(x); }
-};
-
-template <typename T, size_t max_contiguous_allocation = 128*1024>
+template <typename T>
 class chunked_managed_vector {
+    static const size_t max_contiguous_allocation = logalloc::segment_size * 0.1;
     static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
-    using chunk_ptr = std::unique_ptr<T[], chunked_vector_free_deleter>;
+    using chunk_ptr = managed_vector<T>;
     // Each chunk holds max_chunk_capacity() items, except possibly the last
-    utils::small_vector<chunk_ptr, 1> _chunks;
+    managed_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
     size_t _capacity = 0;
 private:
@@ -65,7 +62,10 @@ private:
     void do_reserve_for_push_back();
     size_t make_room(size_t n, bool stop_after_one);
     chunk_ptr new_chunk(size_t n);
-    T* addr(size_t i) const {
+    const T* addr(size_t i) const {
+        return &_chunks[i / max_chunk_capacity()][i % max_chunk_capacity()];
+    }
+    T* addr(size_t i) {
         return &_chunks[i / max_chunk_capacity()][i % max_chunk_capacity()];
     }
     void check_bounds(size_t i) const {
@@ -73,7 +73,7 @@ private:
             throw std::out_of_range("chunked_managed_vector out of range access");
         }
     }
-    static void migrate(T* begin, T* end, T* result);
+    static void migrate(T* begin, T* end, managed_vector<T>& result);
 public:
     using value_type = T;
     using size_type = size_t;
@@ -119,24 +119,24 @@ public:
 
     void push_back(const T& x) {
         reserve_for_push_back();
-        new (addr(_size)) T(x);
+        _chunks.back().emplace_back(x);
         ++_size;
     }
     void push_back(T&& x) {
         reserve_for_push_back();
-        new (addr(_size)) T(std::move(x));
+        _chunks.back().emplace_back(std::move(x));
         ++_size;
     }
     template <typename... Args>
     T& emplace_back(Args&&... args) {
         reserve_for_push_back();
-        auto& ret = *new (addr(_size)) T(std::forward<Args>(args)...);
+        auto& ret = _chunks.back().emplace_back(std::forward<Args>(args)...);
         ++_size;
         return ret;
     }
     void pop_back() {
         --_size;
-        addr(_size)->~T();
+        _chunks.back().pop_back();
     }
     const T& back() const {
         return *addr(_size - 1);
@@ -191,7 +191,7 @@ public:
         using reference = ValueType&;
     private:
         pointer addr() const {
-            return &_chunks[_i / max_chunk_capacity()][_i % max_chunk_capacity()];
+            return &const_cast<chunk_ptr*>(_chunks)[_i / max_chunk_capacity()][_i % max_chunk_capacity()];
         }
         iterator_type(const chunk_ptr* chunks, size_t i) : _chunks(chunks), _i(i) {}
     public:
@@ -293,23 +293,23 @@ public:
 };
 
 
-template <typename T, size_t max_contiguous_allocation>
-chunked_managed_vector<T, max_contiguous_allocation>::chunked_managed_vector(const chunked_managed_vector& x)
+template <typename T>
+chunked_managed_vector<T>::chunked_managed_vector(const chunked_managed_vector& x)
         : chunked_managed_vector() {
     reserve(x.size());
     std::copy(x.begin(), x.end(), std::back_inserter(*this));
 }
 
-template <typename T, size_t max_contiguous_allocation>
-chunked_managed_vector<T, max_contiguous_allocation>::chunked_managed_vector(chunked_managed_vector&& x) noexcept
+template <typename T>
+chunked_managed_vector<T>::chunked_managed_vector(chunked_managed_vector&& x) noexcept
         : _chunks(std::exchange(x._chunks, {}))
         , _size(std::exchange(x._size, 0))
         , _capacity(std::exchange(x._capacity, 0)) {
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 template <typename Iterator>
-chunked_managed_vector<T, max_contiguous_allocation>::chunked_managed_vector(Iterator begin, Iterator end)
+chunked_managed_vector<T>::chunked_managed_vector(Iterator begin, Iterator end)
         : chunked_managed_vector() {
     auto is_random_access = std::is_base_of<std::random_access_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
     if (is_random_access) {
@@ -321,24 +321,24 @@ chunked_managed_vector<T, max_contiguous_allocation>::chunked_managed_vector(Ite
     }
 }
 
-template <typename T, size_t max_contiguous_allocation>
-chunked_managed_vector<T, max_contiguous_allocation>::chunked_managed_vector(size_t n, const T& value) {
+template <typename T>
+chunked_managed_vector<T>::chunked_managed_vector(size_t n, const T& value) {
     reserve(n);
     std::fill_n(std::back_inserter(*this), n, value);
 }
 
 
-template <typename T, size_t max_contiguous_allocation>
-chunked_managed_vector<T, max_contiguous_allocation>&
-chunked_managed_vector<T, max_contiguous_allocation>::operator=(const chunked_managed_vector& x) {
+template <typename T>
+chunked_managed_vector<T>&
+chunked_managed_vector<T>::operator=(const chunked_managed_vector& x) {
     auto tmp = chunked_managed_vector(x);
     return *this = std::move(tmp);
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 inline
-chunked_managed_vector<T, max_contiguous_allocation>&
-chunked_managed_vector<T, max_contiguous_allocation>::operator=(chunked_managed_vector&& x) noexcept {
+chunked_managed_vector<T>&
+chunked_managed_vector<T>::operator=(chunked_managed_vector&& x) noexcept {
     if (this != &x) {
         this->~chunked_managed_vector();
         new (this) chunked_managed_vector(std::move(x));
@@ -346,39 +346,30 @@ chunked_managed_vector<T, max_contiguous_allocation>::operator=(chunked_managed_
     return *this;
 }
 
-template <typename T, size_t max_contiguous_allocation>
-chunked_managed_vector<T, max_contiguous_allocation>::~chunked_managed_vector() {
-    if constexpr (!std::is_trivially_destructible_v<T>) {
-        for (auto i = size_t(0); i != _size; ++i) {
-            addr(i)->~T();
-        }
-    }
+template <typename T>
+chunked_managed_vector<T>::~chunked_managed_vector() {
 }
 
-template <typename T, size_t max_contiguous_allocation>
-typename chunked_managed_vector<T, max_contiguous_allocation>::chunk_ptr
-chunked_managed_vector<T, max_contiguous_allocation>::new_chunk(size_t n) {
-    auto p = malloc(n * sizeof(T));
-    if (!p) {
-        throw std::bad_alloc();
-    }
-    return chunk_ptr(reinterpret_cast<T*>(p));
+template <typename T>
+typename chunked_managed_vector<T>::chunk_ptr
+chunked_managed_vector<T>::new_chunk(size_t n) {
+    managed_vector<T> p;
+    p.reserve(n);
+    return p;
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 void
-chunked_managed_vector<T, max_contiguous_allocation>::migrate(T* begin, T* end, T* result) {
+chunked_managed_vector<T>::migrate(T* begin, T* end, managed_vector<T>& result) {
     while (begin != end) {
-        new (result) T(std::move(*begin));
-        begin->~T();
+        result.emplace_back(std::move(*begin));
         ++begin;
-        ++result;
     }
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 size_t
-chunked_managed_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_after_one) {
+chunked_managed_vector<T>::make_room(size_t n, bool stop_after_one) {
     // First, if the last chunk is below max_chunk_capacity(), enlarge it
 
     auto last_chunk_capacity_deficit = _chunks.size() * max_chunk_capacity() - _capacity;
@@ -388,7 +379,7 @@ chunked_managed_vector<T, max_contiguous_allocation>::make_room(size_t n, bool s
         auto new_last_chunk_capacity = last_chunk_capacity + capacity_increase;
         // FIXME: realloc? maybe not worth the complication; only works for PODs
         auto new_last_chunk = new_chunk(new_last_chunk_capacity);
-        migrate(addr(_capacity - last_chunk_capacity), addr(_size), new_last_chunk.get());
+        migrate(addr(_capacity - last_chunk_capacity), addr(_size), new_last_chunk);
         _chunks.back() = std::move(new_last_chunk);
         _capacity += capacity_increase;
     }
@@ -410,9 +401,9 @@ chunked_managed_vector<T, max_contiguous_allocation>::make_room(size_t n, bool s
     return (n - _capacity);
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 void
-chunked_managed_vector<T, max_contiguous_allocation>::do_reserve_for_push_back() {
+chunked_managed_vector<T>::do_reserve_for_push_back() {
     if (_capacity == 0) {
         // allocate a bit of room in case utilization will be low
         reserve(boost::algorithm::clamp(512 / sizeof(T), 1, max_chunk_capacity()));
@@ -425,9 +416,9 @@ chunked_managed_vector<T, max_contiguous_allocation>::do_reserve_for_push_back()
     }
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 void
-chunked_managed_vector<T, max_contiguous_allocation>::resize(size_t n) {
+chunked_managed_vector<T>::resize(size_t n) {
     reserve(n);
     // FIXME: construct whole chunks at once
     while (_size > n) {
@@ -439,9 +430,9 @@ chunked_managed_vector<T, max_contiguous_allocation>::resize(size_t n) {
     shrink_to_fit();
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 void
-chunked_managed_vector<T, max_contiguous_allocation>::shrink_to_fit() {
+chunked_managed_vector<T>::shrink_to_fit() {
     if (_chunks.empty()) {
         return;
     }
@@ -455,15 +446,15 @@ chunked_managed_vector<T, max_contiguous_allocation>::shrink_to_fit() {
         auto new_last_chunk_capacity = _size - (_chunks.size() - 1) * max_chunk_capacity();
         // FIXME: realloc? maybe not worth the complication; only works for PODs
         auto new_last_chunk = new_chunk(new_last_chunk_capacity);
-        migrate(addr((_chunks.size() - 1) * max_chunk_capacity()), addr(_size), new_last_chunk.get());
+        migrate(addr((_chunks.size() - 1) * max_chunk_capacity()), addr(_size), new_last_chunk);
         _chunks.back() = std::move(new_last_chunk);
         _capacity = _size;
     }
 }
 
-template <typename T, size_t max_contiguous_allocation>
+template <typename T>
 void
-chunked_managed_vector<T, max_contiguous_allocation>::clear() {
+chunked_managed_vector<T>::clear() {
     while (_size > 0) {
         pop_back();
     }

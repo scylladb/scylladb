@@ -19,9 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_MODULE core
+#include <boost/test/unit_test.hpp>
+#include <seastar/testing/test_case.hh>
 
-#include <boost/test/included/unit_test.hpp>
 #include <deque>
 #include <random>
 #include "utils/lsa/chunked_managed_vector.hh"
@@ -31,18 +31,26 @@
 #include <boost/range/algorithm/reverse.hpp>
 #include <boost/range/irange.hpp>
 
-using disk_array = lsa::chunked_managed_vector<uint64_t, 1024>;
+using namespace logalloc;
 
+using disk_array = lsa::chunked_managed_vector<uint64_t>;
 
 using deque = std::deque<int>;
 
-BOOST_AUTO_TEST_CASE(test_random_walk) {
+SEASTAR_TEST_CASE(test_random_walk) {
+  region region;
+  allocating_section as;
+  with_allocator(region.allocator(), [&] {
     auto rand = std::default_random_engine();
     auto op_gen = std::uniform_int_distribution<unsigned>(0, 9);
     auto nr_dist = std::geometric_distribution<size_t>(0.7);
     deque d;
     disk_array c;
     for (auto i = 0; i != 1000000; ++i) {
+        if (i % 10000 == 0) {
+            region.full_compaction();
+        }
+        as(region, [&] {
         auto op = op_gen(rand);
         switch (op) {
             case 0: {
@@ -114,9 +122,12 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
             default:
                 abort();
         }
+        });
         BOOST_REQUIRE_EQUAL(c.size(), d.size());
         BOOST_REQUIRE(boost::equal(c, d));
     }
+  });
+  return make_ready_future<>();
 }
 
 class exception_safety_checker {
@@ -164,7 +175,11 @@ public:
     exception_safe_class& operator=(exception_safe_class&&) = default;
 };
 
-BOOST_AUTO_TEST_CASE(tests_constructor_exception_safety) {
+SEASTAR_TEST_CASE(tests_constructor_exception_safety) {
+  region region;
+  allocating_section as;
+  with_allocator(region.allocator(), [&] {
+   as(region, [&] {
     auto checker = exception_safety_checker();
     auto v = std::vector<exception_safe_class>(100, exception_safe_class(checker));
     checker.set_countdown(5);
@@ -175,9 +190,16 @@ BOOST_AUTO_TEST_CASE(tests_constructor_exception_safety) {
         v.clear();
         BOOST_REQUIRE(checker.ok());
     }
+   });
+  });
+  return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(tests_reserve_partial) {
+SEASTAR_TEST_CASE(tests_reserve_partial) {
+  region region;
+  allocating_section as;
+  with_allocator(region.allocator(), [&] {
+   as(region, [&] {
     auto rand = std::default_random_engine();
     auto size_dist = std::uniform_int_distribution<unsigned>(1, 1 << 12);
 
@@ -190,4 +212,7 @@ BOOST_AUTO_TEST_CASE(tests_reserve_partial) {
         }
         BOOST_REQUIRE_EQUAL(v.capacity(), orig_size);
     }
+   });
+  });
+  return make_ready_future<>();
 }
