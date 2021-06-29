@@ -2142,10 +2142,9 @@ db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db
     };
 
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
-    auto writer = ::make_shared<cl_entries_writer>(sync, std::move(entry_writers));
-    return _segment_manager->allocate_when_possible(*writer, timeout).then([writer] {
-        return std::move(writer->res);
-    });
+    cl_entries_writer writer(sync, std::move(entry_writers));
+    co_await _segment_manager->allocate_when_possible(writer, timeout);
+    co_return std::move(writer.res);
 }
 
 db::commitlog::commitlog(config cfg)
