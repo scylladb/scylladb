@@ -2084,10 +2084,9 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
             res = std::move(h);
         }
     };
-    auto writer = ::make_shared<cl_entry_writer>(cew);
-    return _segment_manager->allocate_when_possible(*writer, timeout).then([writer] {
-        return std::move(writer->res);
-    });
+    cl_entry_writer writer(cew);
+    co_await _segment_manager->allocate_when_possible(writer, timeout);
+    co_return std::move(writer.res);
 }
 
 future<std::vector<db::rp_handle>> 
