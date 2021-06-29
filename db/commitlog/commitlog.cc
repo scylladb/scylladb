@@ -1932,13 +1932,12 @@ future<> db::commitlog::segment_manager::orphan_all() {
  */
 future<> db::commitlog::segment_manager::clear() {
     clogger.debug("Clearing commitlog");
-    return shutdown().then([this] {
-        clogger.debug("Clearing all segments");
-        for (auto& s : _segments) {
-            s->mark_clean();
-        }
-        return orphan_all();
-    });
+    co_await shutdown();
+    clogger.debug("Clearing all segments");
+    for (auto& s : _segments) {
+        s->mark_clean();
+    }
+    co_await orphan_all();
 }
 /**
  * Called by timer in periodic mode.
