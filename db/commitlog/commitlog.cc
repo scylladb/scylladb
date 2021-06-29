@@ -2242,7 +2242,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<>
-db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
+db::commitlog::read_log_file(const sstring& filename_in, const sstring& pfx_in, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
         file_input_stream_options make_file_input_stream_options(seastar::io_priority_class read_io_prio_class) {
@@ -2295,104 +2295,105 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             }
             return fin.skip(bytes);
         }
-        future<> stop() {
+        void stop() {
             eof = true;
-            return make_ready_future<>();
         }
-        future<> fail() {
+        void fail() {
             failed = true;
-            return stop();
+            stop();
         }
         future<> read_header() {
-            return frag_reader.read_exactly(fin, segment::descriptor_header_size).then([this](fragmented_temporary_buffer buf) {
-                if (!advance(buf)) {
-                    // zero length file. accept it just to be nice.
-                    return make_ready_future<>();
-                }
-                // Will throw if we got eof
-                auto in = buf.get_istream();
-                auto magic = read<uint32_t>(in);
-                auto ver = read<uint32_t>(in);
-                auto id = read<uint64_t>(in);
-                auto checksum = read<uint32_t>(in);
+            fragmented_temporary_buffer buf = co_await frag_reader.read_exactly(fin, segment::descriptor_header_size);
+            if (!advance(buf)) {
+                // zero length file. accept it just to be nice.
+                co_return;
+            }
+            // Will throw if we got eof
+            auto in = buf.get_istream();
+            auto magic = read<uint32_t>(in);
+            auto ver = read<uint32_t>(in);
+            auto id = read<uint64_t>(in);
+            auto checksum = read<uint32_t>(in);
 
-                if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
-                    // let's assume this was an empty (pre-allocated)
-                    // file. just skip it.
-                    return stop();
-                }
-                if (id != d.id) {
-                    // filename and id in file does not match.
-                    // assume not valid/recycled.
-                    return stop();
-                }
+            if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
+                // let's assume this was an empty (pre-allocated)
+                // file. just skip it.
+                co_return stop();
+            }
+            if (id != d.id) {
+                // filename and id in file does not match.
+                // assume not valid/recycled.
+                stop();
+                co_return;
+            }
 
-                if (magic != segment::segment_magic) {
-                    throw invalid_segment_format();
-                }
-                crc32_nbo crc;
-                crc.process(ver);
-                crc.process<int32_t>(id & 0xffffffff);
-                crc.process<int32_t>(id >> 32);
+            if (magic != segment::segment_magic) {
+                throw invalid_segment_format();
+            }
+            crc32_nbo crc;
+            crc.process(ver);
+            crc.process<int32_t>(id & 0xffffffff);
+            crc.process<int32_t>(id >> 32);
 
-                auto cs = crc.checksum();
-                if (cs != checksum) {
-                    throw header_checksum_error();
-                }
+            auto cs = crc.checksum();
+            if (cs != checksum) {
+                throw header_checksum_error();
+            }
 
-                this->id = id;
-                this->next = 0;
-
-                return make_ready_future<>();
-            });
+            this->id = id;
+            this->next = 0;
         }
         future<> read_chunk() {
-            return frag_reader.read_exactly(fin, segment::segment_overhead_size).then([this](fragmented_temporary_buffer buf) {
-                auto start = pos;
+            fragmented_temporary_buffer buf = co_await frag_reader.read_exactly(fin, segment::segment_overhead_size);                auto start = pos;
 
-                if (!advance(buf)) {
-                    return make_ready_future<>();
-                }
+            if (!advance(buf)) {
+                co_return;
+            }
 
-                auto in = buf.get_istream();
-                auto next = read<uint32_t>(in);
-                auto checksum = read<uint32_t>(in);
+            auto in = buf.get_istream();
+            auto next = read<uint32_t>(in);
+            auto checksum = read<uint32_t>(in);
 
-                if (next == 0 && checksum == 0) {
-                    // in a pre-allocating world, this means eof
-                    return stop();
-                }
+            if (next == 0 && checksum == 0) {
+                // in a pre-allocating world, this means eof
+                stop();
+                co_return;
+            }
 
-                crc32_nbo crc;
-                crc.process<int32_t>(id & 0xffffffff);
-                crc.process<int32_t>(id >> 32);
-                crc.process<uint32_t>(start);
+            crc32_nbo crc;
+            crc.process<int32_t>(id & 0xffffffff);
+            crc.process<int32_t>(id >> 32);
+            crc.process<uint32_t>(start);
 
-                auto cs = crc.checksum();
-                if (cs != checksum) {
-                    // if a chunk header checksum is broken, we shall just assume that all
-                    // remaining is as well. We cannot trust the "next" pointer, so...
-                    clogger.debug("Checksum error in segment chunk at {}.", start);
-                    corrupt_size += (file_size - pos);
-                    return stop();
-                }
+            auto cs = crc.checksum();
+            if (cs != checksum) {
+                // if a chunk header checksum is broken, we shall just assume that all
+                // remaining is as well. We cannot trust the "next" pointer, so...
+                clogger.debug("Checksum error in segment chunk at {}.", start);
+                corrupt_size += (file_size - pos);
+                stop();
+                co_return;
+            }
 
-                this->next = next;
+            this->next = next;
 
-                if (start_off >= next) {
-                    return skip(next - pos);
-                }
+            if (start_off >= next) {
+                co_return co_await skip(next - pos);
+            }
 
-                return do_until(std::bind(&work::end_of_chunk, this), std::bind(&work::read_entry, this));
-            });
+            while (!end_of_chunk()) {
+                co_await read_entry();
+            }
         }
 
         using produce_func = std::function<future<>(buffer_and_replay_position, uint32_t)>;
 
         future<> produce(buffer_and_replay_position bar) {
-            return s.produce(std::move(bar)).handle_exception([this](auto ep) {
-                return fail();
-            });
+            try {
+                co_await s.produce(std::move(bar));
+            } catch (...) {
+                fail();
+            }
         }
 
         future<> read_entry() {
@@ -2522,58 +2523,67 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
         }
 
         future<> read_file() {
-            return f.size().then([this](uint64_t size) {
-                file_size = size;
-            }).then([this] {
-                return read_header().then(
-                        [this] {
-                            return do_until(std::bind(&work::end_of_file, this), std::bind(&work::read_chunk, this));
-                }).then([this] {
-                  if (corrupt_size > 0) {
-                      throw segment_data_corruption_error("Data corruption", corrupt_size);
-                  }
-                });
-            }).finally([this] {
-                return fin.close();
-            });
+            std::exception_ptr p;
+            try {
+                file_size = co_await f.size();
+                co_await read_header();
+                while (!end_of_file()) {
+                    co_await read_chunk();
+                }
+                if (corrupt_size > 0) {
+                    throw segment_data_corruption_error("Data corruption", corrupt_size);
+                }
+            } catch (...) {
+                p = std::current_exception();
+            }
+            co_await fin.close();
+            if (p) {
+                std::rethrow_exception(p);
+            }
         }
     };
 
+    sstring filename(filename_in);
+    sstring pfx(pfx_in);
+
     auto bare_filename = std::filesystem::path(filename).filename().string();
     if (bare_filename.rfind(pfx, 0) != 0) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    auto fut = do_io_check(commit_error_handler, [&] {
-        auto fut = open_file_dma(filename, open_flags::ro);
+    file f;
+
+    try {
+        f = co_await open_file_dma(filename, open_flags::ro);
         if (exts && !exts->commitlog_file_extensions().empty()) {
-            for (auto * ext : exts->commitlog_file_extensions()) {
-                fut = fut.then([ext, filename](file f) {
-                   return ext->wrap_file(filename, f, open_flags::ro).then([f](file nf) mutable {
-                       return nf ? nf : std::move(f);
-                   });
-                });
+            for (auto* ext : exts->commitlog_file_extensions()) {
+                auto nf = co_await ext->wrap_file(filename, f, open_flags::ro);
+                if (nf) {
+                    f = std::move(nf);
+                }
             }
         }
-        return fut;
-    });
+    } catch (...) {
+        commit_error_handler(std::current_exception());
+        throw;
+    }
 
-    return fut.then([off, next, read_io_prio_class, pfx, filename] (file f) {
-        f = make_checked_file(commit_error_handler, std::move(f));
-        descriptor d(filename, pfx);
-        auto w = make_lw_shared<work>(std::move(f), d, read_io_prio_class, off);
-        auto ret = w->s.listen(next).done();
+    f = make_checked_file(commit_error_handler, std::move(f));
 
-        return w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
-            if (!w->failed) {
-                w->s.close();
-            }
-        }).handle_exception([w](auto ep) {
-            w->s.set_exception(ep);
-        }).finally([ret = std::move(ret)] () mutable {
-            return std::move(ret);
-        });
-    });
+    descriptor d(filename, pfx);
+    work w(std::move(f), d, read_io_prio_class, off);
+
+    auto s = w.s.listen(next);
+    try {
+        co_await w.s.started();
+        co_await w.read_file();
+        if (!w.failed) {
+            w.s.close();
+        }
+    } catch (...) {
+        w.s.set_exception(std::current_exception());
+    }
+    co_await s.done();
 }
 
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
