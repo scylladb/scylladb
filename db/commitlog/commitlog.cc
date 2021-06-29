@@ -1724,10 +1724,9 @@ future<> db::commitlog::segment_manager::shutdown_all_segments() {
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
     auto def_copy = _segments;
-    return parallel_for_each(def_copy, [] (sseg_ptr s) {
-        return s->shutdown().then([](sseg_ptr s) {
-            clogger.debug("Shutdown segment {}", *s);
-        });
+    co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
+        co_await s->shutdown();
+        clogger.debug("Shutdown segment {}", *s);
     });
 }
 
