@@ -141,17 +141,17 @@ public:
 };
 
 class exception_safe_class {
-    exception_safety_checker& _esc;
+    exception_safety_checker* _esc;
 public:
-    explicit exception_safe_class(exception_safety_checker& esc) : _esc(esc) {
-        _esc.add_live_object();
+    explicit exception_safe_class(exception_safety_checker& esc) : _esc(&esc) {
+        _esc->add_live_object();
     }
     exception_safe_class(const exception_safe_class& x) : _esc(x._esc) {
-        _esc.add_live_object();
+        _esc->add_live_object();
     }
     exception_safe_class(exception_safe_class&&) = default;
     ~exception_safe_class() {
-        _esc.del_live_object();
+        _esc->del_live_object();
     }
     exception_safe_class& operator=(const exception_safe_class& x) {
         if (this != &x) {
