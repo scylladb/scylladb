@@ -1737,53 +1737,68 @@ future<> db::commitlog::segment_manager::shutdown() {
         // Wait for all pending requests to finish. Need to sync first because segments that are
         // alive may be holding semaphore permits.
         auto block_new_requests = get_units(_request_controller, max_request_controller_units());
-        return sync_all_segments().then_wrapped([this, block_new_requests = std::move(block_new_requests)] (future<> f) mutable {
-            if (f.failed()) {
-                clogger.error("Syncing all segments failed during shutdown: {}. Aborting.", f.get_exception());
+        try {
+            co_await sync_all_segments();
+        } catch (...) {
+            clogger.error("Syncing all segments failed during shutdown: {}. Aborting.", std::current_exception());
+            abort();
+        }
+
+        std::exception_ptr p;
+
+        try {
+            co_await std::move(block_new_requests);
+
+            _timer.cancel(); // no more timer calls
+            _shutdown = true; // no re-arm, no create new segments.
+
+            // do a discard + delete sweep to force 
+            // gate holder (i.e. replenish) to wake up
+            discard_unused_segments();
+
+            auto f = _gate.close();
+            co_await do_pending_deletes();
+            auto ep = std::make_exception_ptr(shutdown_marker{});
+            if (_recycled_segments.empty()) {
+                abort_recycled_list(ep);
+            }
+            abort_deletion_promise(ep);
+            auto f2 = std::exchange(_background_sync, make_ready_future<>());
+
+            co_await std::move(f);
+            co_await std::move(f2);
+
+            try {
+                co_await shutdown_all_segments();
+            } catch (...) {
+                clogger.error("Shutting down all segments failed during shutdown: {}. Aborting.", std::current_exception());
                 abort();
             }
-            return std::move(block_new_requests).then([this] (auto permits) {
-                _timer.cancel(); // no more timer calls
-                _shutdown = true; // no re-arm, no create new segments.
+        } catch (...) {
+            p = std::current_exception();
+        }
+            
+        discard_unused_segments();
 
-                // do a discard + delete sweep to force 
-                // gate holder (i.e. replenish) to wake up
-                discard_unused_segments();
-                auto f = do_pending_deletes().then([this] {
-                    auto ep = std::make_exception_ptr(shutdown_marker{});
-                    if (_recycled_segments.empty()) {
-                        abort_recycled_list(ep);
-                    }
-                    abort_deletion_promise(ep);
-                    return std::exchange(_background_sync, make_ready_future<>());
-                });
-
-
-                // Now first wait for periodic task to finish, then sync and close all
-                // segments, flushing out any remaining data.
-                return _gate.close().then([this, f = std::move(f)]() mutable {
-                    return std::move(f).then(std::bind(&segment_manager::shutdown_all_segments, this)).handle_exception([](std::exception_ptr ex) {
-                        clogger.error("Shutting down all segments failed during shutdown: {}. Aborting.", ex);
-                        abort();
-                    });
-                }).finally([permits = std::move(permits)] { });
-            });
-        }).finally([this] {
-            discard_unused_segments();
-            // Now that the gate is closed and requests completed we are sure nobody else will pop()
-            return clear_reserve_segments().finally([this] {
-                return std::move(_reserve_replenisher).then_wrapped([this] (auto f) {
-                    // Could be cleaner with proper seastar support
-                    if (f.failed()) {
-                        _shutdown_promise->set_exception(f.get_exception());
-                    } else {
-                        _shutdown_promise->set_value();
-                    }
-                });
-            });
-        });
+        try {
+            co_await clear_reserve_segments();
+        } catch (...) {
+            p = std::current_exception();
+        }
+        try {
+            co_await std::move(_reserve_replenisher);
+        } catch (...) {
+            p = std::current_exception();
+        }
+        // slight functional change from non-coroutine version: we propagate all/any
+        // exceptions, not just the replenish one.
+        if (p) {
+            _shutdown_promise->set_exception(p);
+        } else {
+            _shutdown_promise->set_value();
+        }
     }
-    return _shutdown_promise->get_shared_future();
+    co_return co_await _shutdown_promise->get_shared_future();
 }
 
 void db::commitlog::segment_manager::add_file_to_delete(sstring filename, descriptor d) {
