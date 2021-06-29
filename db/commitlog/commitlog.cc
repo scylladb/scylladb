@@ -1592,28 +1592,28 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(db::timeout_clock::time_point timeout) {
     // If there is no active segment, try to allocate one using new_segment(). If we time out,
     // make sure later invocations can still pick that segment up once it's ready.
-    return repeat_until_value([this, timeout] () -> future<std::optional<sseg_ptr>> {
+    for (;;) {
         if (!_segments.empty() && _segments.back()->is_still_allocating()) {
-            return make_ready_future<std::optional<sseg_ptr>>(_segments.back());
+            co_return _segments.back();
         }
-        return [this, timeout] {
-            if (!_segment_allocating) {
-                promise<> p;
-                _segment_allocating.emplace(p.get_future());
-                auto f = _segment_allocating->get_future(timeout);
-                try_with_gate(_gate, [this] {
-                    return new_segment().discard_result().finally([this]() {
-                        _segment_allocating = std::nullopt;
-                    });
-                }).forward_to(std::move(p));
-                return f;
-            } else {
-                return _segment_allocating->get_future(timeout);
-            }
-        }().then([] () -> std::optional<sseg_ptr> {
-            return std::nullopt;
-        });
-    });
+
+        if (_segment_allocating) {
+            co_await _segment_allocating->get_future(timeout);
+            continue;
+        }
+
+        promise<> p;
+        _segment_allocating.emplace(p.get_future());
+        auto finally = defer([&] { _segment_allocating = std::nullopt; });
+        try {
+            gate::holder g(_gate);
+            auto s = co_await with_timeout(timeout, new_segment());
+            p.set_value();
+        } catch (...) {
+            p.set_exception(std::current_exception());
+            throw;
+        }
+    }
 }
 
 /**
