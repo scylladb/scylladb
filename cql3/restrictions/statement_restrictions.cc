@@ -1015,7 +1015,7 @@ constexpr bool inclusive = true;
 /// Calculates clustering bounds for the single-column case.
 std::vector<query::clustering_range> get_single_column_clustering_bounds(
         const query_options& options,
-        schema_ptr schema,
+        const schema& schema,
         const std::vector<expression>& single_column_restrictions) {
     const size_t size_limit =
             options.get_cql_config().restrictions.clustering_key_restrictions_max_cartesian_product_size;
@@ -1023,7 +1023,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     std::vector<std::vector<managed_bytes>> prior_column_values; // Equality values of columns seen so far.
     for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
         auto values = possible_lhs_values(
-                &schema->clustering_column_at(i), // This should be the LHS of restrictions[i].
+                &schema.clustering_column_at(i), // This should be the LHS of restrictions[i].
                 single_column_restrictions[i],
                 options);
         if (auto list = std::get_if<value_list>(&values)) {
@@ -1041,7 +1041,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                 ck_ranges.push_back(
                         reverse_if_reqd(
                                 last_range->transform([] (const managed_bytes& val) { return clustering_key_prefix::from_range(std::array<managed_bytes, 1>{val}); }),
-                                *schema->clustering_column_at(i).type));
+                                *schema.clustering_column_at(i).type));
             } else {
                 // Prior clustering columns are equality-restricted (either via = or IN), producing one or more
                 // prior_column_values elements.  Now we will turn each such element into a CK range dictated by those
@@ -1063,10 +1063,10 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                     }
                     query::clustering_range::bound new_start(new_lb, extra_lb ? extra_lb->is_inclusive() : inclusive);
                     query::clustering_range::bound new_end  (new_ub, extra_ub ? extra_ub->is_inclusive() : inclusive);
-                    ck_ranges.push_back(reverse_if_reqd({new_start, new_end}, *schema->clustering_column_at(i).type));
+                    ck_ranges.push_back(reverse_if_reqd({new_start, new_end}, *schema.clustering_column_at(i).type));
                 }
             }
-            sort(ck_ranges.begin(), ck_ranges.end(), range_less{*schema});
+            sort(ck_ranges.begin(), ck_ranges.end(), range_less{schema});
             return ck_ranges;
         }
     }
@@ -1075,7 +1075,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     std::vector<query::clustering_range> ck_ranges(product_size);
     cartesian_product cp(prior_column_values);
     std::transform(cp.begin(), cp.end(), ck_ranges.begin(), std::bind_front(query::clustering_range::make_singular));
-    sort(ck_ranges.begin(), ck_ranges.end(), range_less{*schema});
+    sort(ck_ranges.begin(), ck_ranges.end(), range_less{schema});
     return ck_ranges;
 }
 
@@ -1247,7 +1247,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
         }
         return bounds;
     } else {
-        return get_single_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions);
+        return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
     }
 }
 
