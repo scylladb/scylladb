@@ -1674,7 +1674,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
         dataset& ds = *ds_ptr;
         output_mgr->add_dataset_population(ds);
 
-        env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }};",
+        env.execute_cql(format("{} WITH compression = {{ 'class': '{}' }};",
             ds.create_table_statement(), cfg.compressor)).get();
 
         column_family& cf = find_table(db, ds);

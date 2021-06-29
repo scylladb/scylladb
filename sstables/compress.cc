@@ -269,7 +269,7 @@ local_compression::local_compression(const compression& c)
             if (key == compression_parameters::CHUNK_LENGTH_KB || key == compression_parameters::CHUNK_LENGTH_KB_ERR) {
                 return to_sstring(c.chunk_len / 1024);
             }
-            if (key == compression_parameters::SSTABLE_COMPRESSION) {
+            if (key == compression_parameters::CLASS || key == compression_parameters::SSTABLE_COMPRESSION_DEPRECATED) {
                 return n;
             }
             for (auto& o : c.options.elements) {
@@ -306,7 +306,7 @@ void compression::set_compressor(compressor_ptr c) {
         const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
         for (auto& p : c->options()) {
-            if (p.first != compression_parameters::SSTABLE_COMPRESSION) {
+            if (p.first != compression_parameters::CLASS && p.first != compression_parameters::SSTABLE_COMPRESSION_DEPRECATED) {
                 auto& k = p.first;
                 auto& v = p.second;
                 options.elements.push_back({bytes(k.begin(), k.end()), bytes(v.begin(), v.end())});

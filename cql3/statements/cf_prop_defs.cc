@@ -139,9 +139,10 @@ void cf_prop_defs::validate(const database& db, const schema::extensions_map& sc
 
     auto compression_options = get_compression_options();
     if (compression_options && !compression_options->empty()) {
-        auto sstable_compression_class = compression_options->find(sstring(compression_parameters::SSTABLE_COMPRESSION));
-        if (sstable_compression_class == compression_options->end()) {
-            throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
+        auto sstable_compression_class1 = compression_options->find(sstring(compression_parameters::CLASS));
+        auto sstable_compression_class2 = compression_options->find(sstring(compression_parameters::SSTABLE_COMPRESSION_DEPRECATED));
+        if (sstable_compression_class1 == compression_options->end() && sstable_compression_class2 == compression_options->end()) {
+            throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::CLASS + "' for the '" + KW_COMPRESSION + "' option.");
         }
         compression_parameters cp(*compression_options);
         cp.validate();
