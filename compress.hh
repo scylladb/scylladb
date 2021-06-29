@@ -96,12 +96,14 @@ public:
     static constexpr int32_t DEFAULT_CHUNK_LENGTH = 4 * 1024;
     static constexpr double DEFAULT_CRC_CHECK_CHANCE = 1.0;
 
-    static const sstring SSTABLE_COMPRESSION;
+    static const sstring CLASS;
+    static const sstring SSTABLE_COMPRESSION_DEPRECATED;
     static const sstring CHUNK_LENGTH_KB;
     static const sstring CHUNK_LENGTH_KB_ERR;
     static const sstring CRC_CHECK_CHANCE;
 private:
     compressor_ptr _compressor;
+    bool _using_deprecated_sstable_compression_name = false;
     std::optional<int> _chunk_length;
     std::optional<double> _crc_check_chance;
 public:

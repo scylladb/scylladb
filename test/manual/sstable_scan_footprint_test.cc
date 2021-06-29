@@ -217,7 +217,7 @@ void test_main_thread(cql_test_env& env) {
         return;
     }
 
-    env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }} "
+    env.execute_cql(format("{} WITH compression = {{ 'class': '{}' }} "
                            "AND compaction = {{'class' : 'NullCompactionStrategy'}};",
         "create table test (pk int, ck int, value blob, primary key (pk,ck))", compressor)).get();
 
