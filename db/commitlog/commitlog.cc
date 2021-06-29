@@ -1699,14 +1699,11 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
         tmp.emplace_back(std::move(s));
         return true;
     });
-
-    auto i = tmp.begin();
-    auto e = tmp.end();
-
-    return parallel_for_each(i, e, [this](const sstring& filename) {
+    
+    co_await parallel_for_each(tmp, [this](const sstring& filename) {
         clogger.debug("Deleting recycled segment file {}", filename);
         return delete_file(filename);
-    }).finally([this, tmp = std::move(tmp)] {
+    }).finally([this] {
         return do_pending_deletes();
     });
 }
