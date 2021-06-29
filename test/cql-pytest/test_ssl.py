@@ -71,3 +71,22 @@ def try_connect(orig_cluster, ssl_version):
         ssl_context=ssl_context)
     cluster.connect()
     cluster.shutdown()
+
+# Test that if we try to connect to an SSL port with *unencrypted* CQL,
+# it doesn't work.
+# Note that Cassandra can be configured (with "optional: true") to allow both
+# SSL and non-SSL on the same port. But Scylla doesn't support this, and
+# Cassandra also won't if configured with the recommended (but not default)
+# "optional: false" - as we do in the run-cassandra script.
+def test_non_tls_on_tls(cql):
+    if not cql.cluster.ssl_context:
+        pytest.skip("SSL-specific tests are skipped without the '--ssl' option")
+    # Copy the configuration of the existing "cql", just not the ssl_context
+    cluster = cassandra.cluster.Cluster(
+        contact_points=cql.cluster.contact_points,
+        port=cql.cluster.port,
+        protocol_version=cql.cluster.protocol_version,
+        auth_provider=cql.cluster.auth_provider)
+    with pytest.raises(cassandra.cluster.NoHostAvailable, match="ProtocolError"):
+        cluster.connect()
+    cluster.shutdown() # can't be reached
