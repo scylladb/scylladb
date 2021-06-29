@@ -1210,36 +1210,31 @@ size_t db::commitlog::segment_manager::max_request_controller_units() const {
 }
 
 future<> db::commitlog::segment_manager::replenish_reserve() {
-    return do_until([this] { return _shutdown; }, [this] {
-        return _reserve_segments.not_full().then([this] {
-            if (_shutdown) {
-                return make_ready_future<>();
+    while (!_shutdown) {
+        co_await _reserve_segments.not_full();
+        if (_shutdown) {
+            break;
+        }
+        try {
+            gate::holder g(_gate);
+            // note: if we were strict with disk size, we would refuse to do this 
+            // unless disk footprint is lower than threshold. but we cannot (yet?)
+            // trust that flush logic will absolutely free up an existing 
+            // segment (because colocation stuff etc), so always allow a new
+            // file if needed. That and performance stuff...
+            auto s = co_await allocate_segment();
+            auto ret = _reserve_segments.push(std::move(s));
+            if (!ret) {
+                clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
             }
-            return with_gate(_gate, [this] {
-                // note: if we were strict with disk size, we would refuse to do this 
-                // unless disk footprint is lower than threshold. but we cannot (yet?)
-                // trust that flush logic will absolutely free up an existing 
-                // segment (because colocation stuff etc), so always allow a new
-                // file if needed. That and performance stuff...
-                return allocate_segment().then([this](sseg_ptr s) {
-                    auto ret = _reserve_segments.push(std::move(s));
-                    if (!ret) {
-                        clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
-                    }
-                    return make_ready_future<>();
-                });
-            }).handle_exception([](std::exception_ptr ep) {
-                try {
-                    std::rethrow_exception(ep);
-                } catch (shutdown_marker&) {
-                    return make_ready_future<>();
-                } catch (...) {
-                }
-                clogger.warn("Exception in segment reservation: {}", ep);
-                return sleep(100ms);
-            });
-        });
-    });
+            continue;
+        } catch (shutdown_marker&) {
+            break;
+        } catch (...) {
+            clogger.warn("Exception in segment reservation: {}", std::current_exception());
+        }
+        co_await sleep(100ms);
+    }
 }
 
 future<std::vector<db::commitlog::descriptor>>
