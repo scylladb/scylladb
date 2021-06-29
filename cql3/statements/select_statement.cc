@@ -861,6 +861,7 @@ indexed_table_select_statement::prepare(database& db,
     const auto& im = index_opt->metadata();
     sstring index_table_name = im.name() + "_index";
     schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
+    restrictions->prepare_indexed(*view_schema, im.local());
 
     return ::make_shared<cql3::statements::indexed_table_select_statement>(
             schema,
@@ -1166,22 +1167,8 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
                     ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value))};
             clustering_restrictions->merge_with(token_restriction);
 
-            if (_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
-                auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_clustering_key_restrictions>(_restrictions->get_clustering_columns_restrictions());
-                if (single_ck_restrictions) {
-                    auto prefix_restrictions = single_ck_restrictions->get_longest_prefix_restrictions();
-                    auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *prefix_restrictions);
-                    const auto indexed_column = _view_schema->get_column_definition(to_bytes(_index.target_column()));
-                    for (auto restriction_it : clustering_restrictions_from_base->restrictions()) {
-                        if (restriction_it.first == indexed_column) {
-                            continue; // In the index table, the indexed column is the partition (not clustering) key.
-                        }
-                        clustering_restrictions->merge_with(restriction_it.second);
-                    }
-                }
-            }
-
-            partition_slice_builder.with_ranges(clustering_restrictions->bounds_ranges(options));
+            partition_slice_builder.with_ranges(
+                    _restrictions->get_global_index_clustering_ranges(options, *_view_schema));
         }
     }
 

@@ -1340,5 +1340,77 @@ const single_column_restrictions::restrictions_map& statement_restrictions::get_
     return single_restrictions->restrictions();
 }
 
+void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool is_local) {
+    if (is_local || !_partition_range_is_simple) {
+        return;
+    }
+    // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
+    // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
+    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
+    _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
+    for (const auto& e : _partition_range_restrictions) {
+        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto pos = _schema->position(*col) + 1;
+        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
+    }
+    const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::partition_key, 0);
+    for (const auto& e : _clustering_prefix_restrictions) {
+        if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+            // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
+            break;
+        }
+        const auto any_binop = find_atom(e, [] (auto&&) { return true; });
+        if (!any_binop) {
+            break;
+        }
+        const auto col = std::get<column_value>(*any_binop->lhs).col;
+        if (*col == indexed_column) {
+            continue;
+        }
+        _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
+    }
+    auto token_column = &idx_tbl_schema.clustering_column_at(0);
+    (*_idx_tbl_ck_prefix)[0] = binary_operator(
+            column_value(token_column),
+            oper_t::EQ,
+            // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
+            // handy mechanism for doing that in query_options.
+            ::make_shared<constants::value>(raw_value::make_unset_value()));
+}
+
+std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
+        const query_options& options,
+        const schema& idx_tbl_schema) const {
+    if (!_idx_tbl_ck_prefix) {
+        on_internal_error(
+                rlogger, "statement_restrictions::get_global_index_clustering_ranges called with unprepared index");
+    }
+    std::vector<managed_bytes> pk_value(_schema->partition_key_size());
+    for (const auto& e : _partition_range_restrictions) {
+        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        if (vals.empty()) { // Case of C=1 AND C=2.
+            return {};
+        }
+        pk_value[_schema->position(*col)] = std::move(vals[0]);
+    }
+    std::vector<bytes> pkv_linearized(pk_value.size());
+    std::transform(pk_value.cbegin(), pk_value.cend(), pkv_linearized.begin(),
+                   [] (const managed_bytes& mb) { return to_bytes(mb); });
+    auto& token_column = idx_tbl_schema.clustering_column_at(0);
+    bytes_opt token_bytes = token_column.get_computation().compute_value(
+            *_schema, pkv_linearized, clustering_row(clustering_key_prefix::make_empty()));
+    if (!token_bytes) {
+        on_internal_error(rlogger,
+                          format("null value for token column in indexing table {}",
+                                 token_column.name_as_text()));
+    }
+    // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
+    // overwritten.
+    const_cast<::shared_ptr<term>&>(std::get<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
+            ::make_shared<constants::value>(raw_value::make_value(*token_bytes));
+    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
+}
+
 } // namespace restrictions
 } // namespace cql3
