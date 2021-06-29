@@ -2160,10 +2160,8 @@ db::commitlog::~commitlog()
 
 future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
     commitlog c(std::move(cfg));
-    auto f = c._segment_manager->init();
-    return f.then([c = std::move(c)]() mutable {
-        return make_ready_future<commitlog>(std::move(c));
-    });
+    co_await c._segment_manager->init();
+    co_return c;
 }
 
 db::commitlog::flush_handler_anchor::flush_handler_anchor(flush_handler_anchor&& f)
