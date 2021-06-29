@@ -1269,25 +1269,25 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
 }
 
 future<> db::commitlog::segment_manager::init() {
-    return list_descriptors(cfg.commit_log_location).then([this](std::vector<descriptor> descs) {
-        assert(_reserve_segments.empty()); // _segments_to_replay must not pick them up
-        segment_id_type id = std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count() + 1;
-        for (auto& d : descs) {
-            id = std::max(id, replay_position(d.id).base_id());
-            _segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
-        }
+    auto descs = co_await list_descriptors(cfg.commit_log_location);
 
-        // base id counter is [ <shard> | <base> ]
-        _ids = replay_position(this_shard_id(), id).id;
-        // always run the timer now, since we need to handle segment pre-alloc etc as well.
-        _timer.set_callback(std::bind(&segment_manager::on_timer, this));
-        auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
-        clogger.trace("Delaying timer loop {} ms", delay);
-        // We need to wait until we have scanned all other segments to actually start serving new
-        // segments. We are ready now
-        _reserve_replenisher = replenish_reserve();
-        arm(delay);
-    });
+    assert(_reserve_segments.empty()); // _segments_to_replay must not pick them up
+    segment_id_type id = std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count() + 1;
+    for (auto& d : descs) {
+        id = std::max(id, replay_position(d.id).base_id());
+        _segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
+    }
+
+    // base id counter is [ <shard> | <base> ]
+    _ids = replay_position(this_shard_id(), id).id;
+    // always run the timer now, since we need to handle segment pre-alloc etc as well.
+    _timer.set_callback(std::bind(&segment_manager::on_timer, this));
+    auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
+    clogger.trace("Delaying timer loop {} ms", delay);
+    // We need to wait until we have scanned all other segments to actually start serving new
+    // segments. We are ready now
+    _reserve_replenisher = replenish_reserve();
+    arm(delay);
 }
 
 void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
