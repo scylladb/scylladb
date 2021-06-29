@@ -221,20 +221,9 @@ static std::vector<expr::expression> extract_partition_range(
     return {};
 }
 
-/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector such that:
-/// 1. all elements must be simultaneously satisfied (as restrictions) for where_clause to be satisfied
-/// 2. each element is an atom or a conjunction of atoms
-/// 3. either all atoms (across all elements) are multi-column or they are all single-column
-/// 4. if single-column, then:
-///   4.1 all atoms from an element have the same LHS, which we call the element's LHS
-///   4.2 each element's LHS is different from any other element's LHS
-///   4.3 the list of each element's LHS, in order, forms a clustering-key prefix
-///   4.4 elements other than the last have only EQ or IN atoms
-///   4.5 the last element has only EQ, IN, or is_slice() atoms
-///
-/// These elements define the boundaries of any clustering slice that can possibly meet where_clause.
-///
-/// This vector can be calculated before binding expression markers, since LHS and operator are always known.
+/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector.  These elements define the
+/// boundaries of any clustering slice that can possibly meet where_clause.  This vector can be calculated before
+/// binding expression markers, since LHS and operator are always known.
 static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         const expr::expression& where_clause, schema_ptr schema) {
     using namespace expr;
