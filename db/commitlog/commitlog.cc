@@ -1583,11 +1583,10 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         }
     }
 
-    return _reserve_segments.pop_eventually().then([this] (auto s) {
-        _segments.push_back(std::move(s));
-        _segments.back()->reset_sync_time();
-        return make_ready_future<sseg_ptr>(_segments.back());
-    });
+    auto s = co_await _reserve_segments.pop_eventually();
+    _segments.push_back(s);
+    _segments.back()->reset_sync_time();
+    co_return s;
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(db::timeout_clock::time_point timeout) {
