@@ -1916,11 +1916,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     auto ftd = std::exchange(_files_to_delete, {});
     auto i = ftc.begin();
     auto e = ftc.end();
-    return parallel_for_each(i, e, [](file & f) {
-        return f.close();
-    }).then([this, ftc = std::move(ftc), ftd = std::move(ftd)] {
-        return delete_segments(boost::copy_range<std::vector<sstring>>(ftd | boost::adaptors::map_keys));
-    });
+    co_await parallel_for_each(ftc, std::mem_fn(&file::close));
+    co_await delete_segments(boost::copy_range<std::vector<sstring>>(ftd | boost::adaptors::map_keys));
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
