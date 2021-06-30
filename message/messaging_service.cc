@@ -420,7 +420,15 @@ void messaging_service::do_start_listen() {
         if (_server_tls[0]) {
             mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _cfg.ssl_port);
         }
-        mlogger.info("Starting Messaging Service on port {}", _cfg.port);
+        if (_server_tls[1]) {
+            mlogger.info("Starting Encrypted Messaging Service on SSL broadcast address {} port {}", utils::fb_utilities::get_broadcast_address(), _cfg.ssl_port);
+        }
+        if (_server[0]) {
+            mlogger.info("Starting Messaging Service on port {}", _cfg.port);
+        }
+        if (_server[1]) {
+            mlogger.info("Starting Messaging Service on broadcast address {} port {}", utils::fb_utilities::get_broadcast_address(), _cfg.port);
+        }
     }
 }
 
