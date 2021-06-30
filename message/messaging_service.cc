@@ -357,7 +357,7 @@ void messaging_service::do_start_listen() {
         cfg.sched_group = scheduling_group_for_isolation_cookie(isolation_cookie);
         return cfg;
     };
-    if (!_server[0] && _cfg.encrypt != encrypt_what::all) {
+    if (!_server[0] && _cfg.encrypt != encrypt_what::all && _cfg.port) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.streaming_domain = sdomain;
             so.filter_connection = {};
@@ -390,7 +390,7 @@ void messaging_service::do_start_listen() {
         }
     }
     
-    if (!_server_tls[0]) {
+    if (!_server_tls[0] && _cfg.ssl_port) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.filter_connection = {};
             so.streaming_domain = sdomain;
@@ -420,7 +420,15 @@ void messaging_service::do_start_listen() {
         if (_server_tls[0]) {
             mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _cfg.ssl_port);
         }
-        mlogger.info("Starting Messaging Service on port {}", _cfg.port);
+        if (_server_tls[1]) {
+            mlogger.info("Starting Encrypted Messaging Service on SSL broadcast address {} port {}", utils::fb_utilities::get_broadcast_address(), _cfg.ssl_port);
+        }
+        if (_server[0]) {
+            mlogger.info("Starting Messaging Service on port {}", _cfg.port);
+        }
+        if (_server[1]) {
+            mlogger.info("Starting Messaging Service on broadcast address {} port {}", utils::fb_utilities::get_broadcast_address(), _cfg.port);
+        }
     }
 }
 

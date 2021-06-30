@@ -78,6 +78,9 @@ used _only_ for "storage" messages (read and write), and other messages such
 as gossip were sent to a different port. So today we are still stuck with
 this outdated name of this configuration option.
 
+Configuring `storage_port` or `ssl_storage_port` to 0 disables listening
+on the respective unecrypted/encrypted inter-node communication port.
+
 There is also a `listen_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
 internal protocol. This address defaults to `localhost`, but in any
