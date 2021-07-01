@@ -31,7 +31,7 @@
 #include "log.hh"
 #include "schema_builder.hh"
 #include "memtable.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 static
 partition_key new_key(schema_ptr s) {
@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
+            tests::reader_concurrency_semaphore_wrapper semaphore;
 
             cache_tracker tracker;
             row_cache cache(s, make_empty_snapshot_source(), tracker);
@@ -188,7 +189,7 @@ int main(int argc, char** argv) {
             // Verify that all mutations from memtable went through
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
-                auto reader = cache.make_reader(s, tests::make_permit(), range);
+                auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                 auto close_reader = deferred_close(reader);
                 auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
                 assert(mo);
@@ -206,7 +207,7 @@ int main(int argc, char** argv) {
 
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
-                auto reader = cache.make_reader(s, tests::make_permit(), range);
+                auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                 auto close_reader = deferred_close(reader);
                 auto mfopt = reader(db::no_timeout).get0();
                 assert(mfopt);
@@ -245,7 +246,7 @@ int main(int argc, char** argv) {
                 }
 
                 try {
-                    auto reader = cache.make_reader(s, tests::make_permit(), range);
+                    auto reader = cache.make_reader(s, semaphore.make_permit(), range);
                     auto close_reader = deferred_close(reader);
                     assert(!reader(db::no_timeout).get0());
                     auto evicted_from_cache = logalloc::segment_size + large_cell_size;
