@@ -487,7 +487,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<::cf_stats>();
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
@@ -539,7 +539,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     auto cf_stats = make_lw_shared<::cf_stats>();
 
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
@@ -618,7 +618,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
 
     auto cf_stats = make_lw_shared<::cf_stats>();
 
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;

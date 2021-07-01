@@ -401,7 +401,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     });
 
     auto tmp = tmpdir();
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.datadir = tmp.path().string();
     cfg.enable_commitlog = false;
     cfg.enable_incremental_backups = false;
@@ -476,7 +476,7 @@ SEASTAR_TEST_CASE(compact) {
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+    auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager(), env.semaphore()), column_family::no_commitlog(), *cm, *cl_stats, *tracker);
     cf->mark_ready_for_writes();
 
     return test_setup::do_with_tmp_directory([s, generation, cf, cm] (test_env& env, sstring tmpdir_path) {
@@ -660,6 +660,8 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, sstrin
         return make_ready_future<>();
     }).then([cf, created] {
         return std::move(*created);
+    }).finally([cf] () mutable {
+        return cf.stop_and_keep_alive();
     });
 }
 
@@ -1066,7 +1068,7 @@ SEASTAR_TEST_CASE(leveled_01) {
     }
     BOOST_REQUIRE(gens.empty());
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1118,7 +1120,7 @@ SEASTAR_TEST_CASE(leveled_02) {
     }
     BOOST_REQUIRE(gens.empty());
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1174,7 +1176,7 @@ SEASTAR_TEST_CASE(leveled_03) {
     }
     BOOST_REQUIRE(gen_and_level.empty());
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1238,7 +1240,7 @@ SEASTAR_TEST_CASE(leveled_04) {
     }
     BOOST_REQUIRE(levels.empty());
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1291,7 +1293,7 @@ SEASTAR_TEST_CASE(leveled_06) {
     BOOST_REQUIRE(sst->get_sstable_level() == 1);
     BOOST_REQUIRE(sst->generation() == 1);
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1315,7 +1317,7 @@ SEASTAR_TEST_CASE(leveled_07) {
         BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp < leveled_manifest::MAX_COMPACTING_L0);
     }
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1351,7 +1353,7 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
         return sst->generation() != 0;
     }));
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1400,7 +1402,7 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
         BOOST_REQUIRE(candidate.sstables.empty());
     }
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1433,7 +1435,7 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1458,7 +1460,7 @@ SEASTAR_TEST_CASE(check_overlapping) {
     BOOST_REQUIRE(overlapping_sstables.size() == 1);
     BOOST_REQUIRE(overlapping_sstables.front()->generation() == 4);
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -1503,6 +1505,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
 
         auto compact = [&, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> to_compact) -> std::vector<shared_sstable> {
             column_family_for_tests cf(env.manager(), s);
+            auto stop_cf = deferred_stop(cf);
             for (auto&& sst : all) {
                 column_family_test(cf).add_sstable(sst);
             }
@@ -2127,6 +2130,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 builder.with_column("r1", utf8_type);
                 schema_ptr s = builder.build(schema_builder::compact_storage::no);
                 column_family_for_tests cf(env.manager(), s);
+                auto close_cf = deferred_stop(cf);
                 auto mt = make_lw_shared<memtable>(s);
                 auto now = gc_clock::now();
                 int32_t last_expiry = 0;
@@ -2179,7 +2183,7 @@ static stats_metadata build_stats(int64_t min_timestamp, int64_t max_timestamp, 
 }
 
 SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     auto key_and_token_pair = token_generation_for_current_shard(4);
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
@@ -2192,6 +2196,8 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
 
     {
         column_family_for_tests cf(env.manager());
+        auto close_cf = deferred_stop(cf);
+
         auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
         auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
@@ -2202,6 +2208,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
 
     {
         column_family_for_tests cf(env.manager());
+        auto close_cf = deferred_stop(cf);
 
         auto sst1 = add_sstable_for_overlapping_test(env, cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
         auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
@@ -2212,8 +2219,6 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst->generation() == 1);
     }
-
-    return make_ready_future<>();
   });
 }
 
@@ -2244,6 +2249,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         sst = env.reusable_sst(s, tmp.path().string(), 1).get0();
 
         column_family_for_tests cf(env.manager());
+        auto close_cf = deferred_stop(cf);
 
         auto ssts = std::vector<shared_sstable>{ sst };
         auto expired = get_fully_expired_sstables(*cf, ssts, gc_clock::now());
@@ -2295,7 +2301,7 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
         BOOST_REQUIRE(sst->generation() != (min_threshold + 1));
     }
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -2349,7 +2355,7 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     BOOST_REQUIRE(gens.contains(min_threshold + 1));
     BOOST_REQUIRE(!gens.contains(min_threshold + 2));
 
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -2820,6 +2826,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                       .with_column("r1", int32_type)
                       .build();
             column_family_for_tests cf(env.manager(), s);
+            auto close_cf = deferred_stop(cf);
             auto tmp = tmpdir();
             auto mt = make_lw_shared<memtable>(s);
             const column_definition &r1_col = *s->get_column_definition("r1");
@@ -3566,6 +3573,8 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
       for (const auto version : writable_sstable_versions) {
         simple_schema table;
 
+        auto permit = env.make_reader_permit();
+
         std::vector<mutation_fragment> fragments;
 
         uint32_t count = 1000; // large enough to cross index block several times
@@ -3787,7 +3796,7 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     }
     auto desc = cs.get_sstables_for_compaction(*cf, std::move(candidates));
     BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
-    return make_ready_future<>();
+    return cf.stop_and_keep_alive();
   });
 }
 
@@ -4016,6 +4025,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
 
         column_family_for_tests cf(env.manager(), s);
+        auto close_cf = deferred_stop(cf);
         auto creator = [&, gen = make_lw_shared<unsigned>(2)] {
             auto sst = env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
             return sst;
@@ -4286,6 +4296,7 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
             // NEEDED for partitioned_sstable_set to actually have an effect
             std::for_each(all.begin(), all.end(), [] (auto& sst) { sst->set_sstable_level(1); });
             column_family_for_tests cf(env.manager(), s);
+            auto close_cf = deferred_stop(cf);
             return compact_sstables(sstables::compaction_descriptor(std::move(all), cf->get_sstable_set(), default_priority_class(), 0, 0 /*std::numeric_limits<uint64_t>::max()*/),
                 *cf, sst_gen).get0().new_sstables;
         };
@@ -4518,7 +4529,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             auto sst = make_sstable_containing(sst_gen, mutations);
             auto run_identifier = sst->run_identifier();
 
-            auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(),
+            auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager(), env.semaphore()), column_family::no_commitlog(),
                 db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
             cf->mark_ready_for_writes();
             cf->start();
@@ -4658,7 +4669,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
-            auto cfg = column_family_test_config(env.manager());
+            auto cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<column_family>(schema, cfg, column_family::no_commitlog(),
                 db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
@@ -4824,7 +4835,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
-            auto cfg = column_family_test_config(env.manager());
+            auto cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<column_family>(schema, cfg, column_family::no_commitlog(),
                 db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
@@ -5245,7 +5256,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto cm = make_lw_shared<compaction_manager>();
         auto tracker = make_lw_shared<cache_tracker>();
-        auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager(), env.semaphore()), column_family::no_commitlog(), *cm, cl_stats, *tracker);
         cf->mark_ready_for_writes();
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
@@ -5388,6 +5399,7 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
         auto candidates = std::vector<sstables::shared_sstable>({ sst, sst2 });
 
         column_family_for_tests cf(env.manager());
+        auto close_cf = deferred_stop(cf);
 
         {
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, cf.schema()->compaction_strategy_options());
@@ -5448,6 +5460,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_stop_tracking_compaction) {
         };
 
         column_family_for_tests cf(env.manager(), s);
+        auto close_cf = deferred_stop(cf);
         cf->set_compaction_strategy(sstables::compaction_strategy_type::leveled);
 
         {
@@ -5559,7 +5572,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         auto cm = make_lw_shared<compaction_manager>();
         cm->enable();
 
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_commitlog = false;
         cfg.enable_incremental_backups = false;
@@ -5670,7 +5683,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 compacting->insert(std::move(sst));
             }
             auto reader = compacting->make_range_sstable_reader(s,
-                tests::make_permit(),
+                env.make_reader_permit(),
                 query::full_partition_range,
                 s->full_slice(),
                 service::get_local_compaction_priority(),
@@ -5828,7 +5841,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         forward_jump_clocks(std::chrono::seconds(ttl));
 
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = false;
         cfg.enable_commitlog = false;
@@ -5935,7 +5948,7 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         auto mut4 = make_insert(1ms);
 
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = true;
         cfg.enable_commitlog = false;
@@ -5972,7 +5985,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
                 .build();
 
         auto tmp = tmpdir();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_commitlog = false;
         cfg.enable_disk_writes = true;
@@ -6075,7 +6088,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         };
 
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmpdir_path;
         cfg.enable_disk_writes = true;
         cfg.enable_commitlog = false;
@@ -6207,7 +6220,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
         };
 
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmpdir_path;
         cfg.enable_disk_writes = true;
         cfg.enable_commitlog = false;
@@ -6408,7 +6421,7 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
 
         auto tmp = tmpdir();
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         cfg.datadir = tmp.path().string();
         cfg.enable_disk_writes = true;
         cfg.enable_cache = false;
@@ -6677,7 +6690,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             ss.add_row(mut, ss.make_ckey(0), "val");
 
             auto cm = make_lw_shared<compaction_manager>();
-            column_family::config cfg = column_family_test_config(env.manager());
+            column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string();
             cfg.enable_disk_writes = true;
             cfg.enable_cache = false;
@@ -6870,7 +6883,7 @@ SEASTAR_TEST_CASE(single_key_reader_through_compound_set_test) {
 
         auto tmp = tmpdir();
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         ::cf_stats cf_stats{0};
         cfg.cf_stats = &cf_stats;
         cfg.datadir = tmp.path().string();
@@ -6941,7 +6954,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         auto dkey = sst1->get_first_decorated_key();
 
         auto cm = make_lw_shared<compaction_manager>();
-        column_family::config cfg = column_family_test_config(env.manager());
+        column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
         ::cf_stats cf_stats{0};
         cfg.cf_stats = &cf_stats;
         cfg.datadir = tmp.path().string();
@@ -7037,7 +7050,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
         auto make_table_with_single_fully_expired_sstable = [&] (auto idx) {
             auto s = make_schema(idx);
-            column_family::config cfg = column_family_test_config(env.manager());
+            column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
             cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
             touch_directory(cfg.datadir).get();
             cfg.enable_commitlog = false;
