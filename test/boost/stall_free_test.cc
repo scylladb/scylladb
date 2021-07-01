@@ -104,6 +104,21 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_unique_ptr) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_ptr) {
+    int cleared_gently = 0;
+    foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>> p0 = smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        lw_shared_ptr<clear_gently_tracker<int>> p = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+            BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
+            cleared_gently++;
+        });
+        return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
+    }).get0();
+
+    utils::clear_gently(p0).get();
+    BOOST_CHECK(p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr) {
     int cleared_gently = 0;
     lw_shared_ptr<clear_gently_tracker<int>> p0 = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {

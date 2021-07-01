@@ -26,6 +26,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/sharded.hh>
 #include "utils/collection-concepts.hh"
 
 using namespace seastar;
@@ -117,6 +118,9 @@ concept MapLike = Container<T> && requires (T x) {
 template <HasClearGentlyMethod T>
 future<> clear_gently(T& o) noexcept;
 
+template <typename T>
+future<> clear_gently(foreign_ptr<T>& o) noexcept;
+
 template <SharedPointer T>
 future<> clear_gently(T& o) noexcept;
 
@@ -167,6 +171,13 @@ future<> clear_gently(T&) noexcept {
 template <HasClearGentlyMethod T>
 future<> clear_gently(T& o) noexcept {
     return futurize_invoke(std::bind(&T::clear_gently, &o));
+}
+
+template <typename T>
+future<> clear_gently(foreign_ptr<T>& o) noexcept {
+    return smp::submit_to(o.get_owner_shard(), [&o] {
+        return internal::clear_gently(*o);
+    });
 }
 
 template <SharedPointer T>
