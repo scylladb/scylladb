@@ -614,6 +614,9 @@ public:
     future<> change_hints_host_filter(db::hints::host_filter new_filter);
     const db::hints::host_filter& get_hints_host_filter() const;
 
+    future<db::hints::sync_point> create_hint_sync_point(const std::vector<gms::inet_address> target_hosts) const;
+    future<> wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline);
+
     const stats& get_stats() const {
         return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);
     }
