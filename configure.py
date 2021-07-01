@@ -425,6 +425,7 @@ scylla_tests = set([
     'test/boost/gossiping_property_file_snitch_test',
     'test/boost/hash_test',
     'test/boost/hashers_test',
+    'test/boost/hint_test',
     'test/boost/idl_test',
     'test/boost/input_stream_test',
     'test/boost/json_cql_query_test',
@@ -861,6 +862,7 @@ scylla_core = (['database.cc',
                 'db/hints/manager.cc',
                 'db/hints/resource_manager.cc',
                 'db/hints/host_filter.cc',
+                'db/hints/sync_point.cc',
                 'db/config.cc',
                 'db/extensions.cc',
                 'db/heat_load_balance.cc',
@@ -1099,6 +1101,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/messaging_service.idl.hh',
         'idl/paxos.idl.hh',
         'idl/raft.idl.hh',
+        'idl/hinted_handoff.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
