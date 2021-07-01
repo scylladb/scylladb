@@ -27,6 +27,7 @@
 #include <list>
 #include <chrono>
 #include <optional>
+#include <map>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/timer.hh>
@@ -41,6 +42,10 @@
 #include "db/hints/host_filter.hh"
 
 class fragmented_temporary_buffer;
+
+namespace seastar {
+class abort_source;
+}
 
 namespace utils {
 class directories;
@@ -156,8 +161,11 @@ public:
             gms::gossiper& _gossiper;
             seastar::shared_mutex& _file_update_mutex;
 
+            std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
+
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;
+            ~sender();
 
             /// \brief A constructor that should be called from the copy/move-constructor of end_point_hints_manager.
             ///
@@ -191,6 +199,9 @@ public:
 
             /// \brief Sets the sent_upper_bound_rp marker to indicate that the hints were replayed _up to_ given position.
             void rewind_sent_replay_position_to(db::replay_position rp);
+
+            /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
+            future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp);
 
         private:
             /// \brief Gets the name of the current segment that should be sent.
@@ -285,6 +296,12 @@ public:
             /// \param m mutation to send
             /// \return future that resolves when the mutation sending processing is complete.
             future<> send_one_mutation(frozen_mutation_and_schema m);
+
+            /// \brief Notifies replay waiters for which the target replay position was reached.
+            void notify_replay_waiters() noexcept;
+
+            /// \brief Dismisses ALL current replay waiters with an exception.
+            void dismiss_replay_waiters() noexcept;
 
             /// \brief Get the last modification time stamp for a given file.
             /// \param fname File name

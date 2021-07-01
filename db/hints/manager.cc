@@ -25,6 +25,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/abort_source.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/div_ceil.hh"
 #include "db/extensions.hh"
@@ -696,6 +697,10 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
+manager::end_point_hints_manager::sender::~sender() {
+    dismiss_replay_waiters();
+}
+
 
 future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
@@ -834,6 +839,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 // Update the sent upper bound only if it is a local segment.
                 if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
                     _sent_upper_bound_rp = new_bound;
+                    notify_replay_waiters();
                 }
             } else {
                 ctx_ptr->on_hint_send_failure(rp);
@@ -843,6 +849,61 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
     }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
+    });
+}
+
+void manager::end_point_hints_manager::sender::notify_replay_waiters() noexcept {
+    if (!_foreign_segments_to_replay.empty()) {
+        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
+        return;
+    }
+
+    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
+    while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
+        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        auto ptr = _replay_waiters.begin()->second;
+        (**ptr).set_value();
+        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
+        _replay_waiters.erase(_replay_waiters.begin());
+    }
+}
+
+void manager::end_point_hints_manager::sender::dismiss_replay_waiters() noexcept {
+    for (auto& p : _replay_waiters) {
+        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
+        auto ptr = p.second;
+        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", end_point_key())));
+        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
+    }
+    _replay_waiters.clear();
+}
+
+future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
+    if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
+        return make_ready_future<>();
+    }
+
+    if (as.abort_requested()) {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", end_point_key());
+        return make_exception_future<>(abort_requested_exception());
+    }
+
+    auto ptr = make_lw_shared<std::optional<promise<>>>(promise<>());
+    auto it = _replay_waiters.emplace(up_to_rp, ptr);
+    auto sub = as.subscribe([this, ptr, it] () noexcept {
+        if (!ptr->has_value()) {
+            // The promise already was resolved by `notify_replay_waiters` and removed from the map
+            return;
+        }
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", end_point_key());
+        _replay_waiters.erase(it);
+        (**ptr).set_exception(abort_requested_exception());
+    });
+
+    return (**ptr).get_future().finally([this, sub = std::move(sub)] {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", end_point_key());
     });
 }
 
@@ -890,6 +951,7 @@ db::replay_position manager::end_point_hints_manager::sender::send_one_file_ctx:
 
 void manager::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
+    notify_replay_waiters();
 }
 
 // runs in a seastar::async context
@@ -996,6 +1058,8 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
             }
             pop_current_segment();
             ++replayed_segments_count;
+
+            notify_replay_waiters();
         }
 
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
