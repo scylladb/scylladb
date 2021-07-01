@@ -1895,7 +1895,7 @@ future<> storage_service::node_ops_cmd_heartbeat_updater(const node_ops_cmd& cmd
             auto req = node_ops_cmd_request{cmd, uuid, {}, {}, {}};
             parallel_for_each(nodes, [this, ops, uuid, &req] (const gms::inet_address& node) {
                 return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([ops, uuid, node] (node_ops_cmd_response resp) {
-                    slogger.info("{}[{}]: Got heartbeat response from node={}", ops, uuid, node);
+                    slogger.debug("{}[{}]: Got heartbeat response from node={}", ops, uuid, node);
                     return make_ready_future<>();
                 });
             }).handle_exception([ops, uuid] (std::exception_ptr ep) {
