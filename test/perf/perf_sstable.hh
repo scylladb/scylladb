@@ -200,10 +200,10 @@ public:
     }
 
     future<double> read_all_indexes(int idx) {
-        return do_with(test(_sst[0]), [] (auto& sst) {
+        return do_with(test(_sst[0]), [this] (auto& sst) {
             const auto start = perf_sstable_test_env::now();
 
-            return sst.read_indexes().then([start] (const auto& indexes) {
+            return sst.read_indexes(_env.make_reader_permit()).then([start] (const auto& indexes) {
                 auto end = perf_sstable_test_env::now();
                 auto duration = std::chrono::duration<double>(end - start).count();
                 return indexes.size() / duration;

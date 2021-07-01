@@ -93,7 +93,7 @@ public:
     }
     future<std::vector<sstables::test::index_entry>> read_index() {
         load();
-        return sstables::test(_sst).read_indexes();
+        return sstables::test(_sst).read_indexes(_env.make_reader_permit());
     }
     flat_mutation_reader make_reader() {
         return _sst->make_reader(_sst->_schema, tests::make_permit(), query::full_partition_range, _sst->_schema->full_slice());

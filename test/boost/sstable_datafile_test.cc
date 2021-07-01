@@ -1475,8 +1475,8 @@ SEASTAR_TEST_CASE(check_read_indexes) {
         auto sst = env.make_sstable(s, get_test_dir("summary_test", s), 1, version, big);
 
         auto fut = sst->load();
-        return fut.then([sst] {
-            return sstables::test(sst).read_indexes().then([sst] (auto list) {
+        return fut.then([sst, &env] {
+            return sstables::test(sst).read_indexes(env.make_reader_permit()).then([sst] (auto list) {
                 BOOST_REQUIRE(list.size() == 130);
                 return make_ready_future<>();
             });
