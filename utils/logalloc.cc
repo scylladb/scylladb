@@ -557,6 +557,7 @@ tracker& shard_tracker() {
 
 struct alignas(segment_size) segment {
     static constexpr int size_shift = segment_size_shift;
+    static constexpr int size_mask = segment_size | (segment_size - 1);
     using size_type = std::conditional_t<(size_shift < 16), uint16_t, uint32_t>;
     static constexpr size_t size = segment_size;
 
@@ -598,19 +599,30 @@ static_assert(min_free_space_for_compaction >= max_managed_object_size,
 extern constexpr log_heap_options segment_descriptor_hist_options(min_free_space_for_compaction, 3, segment_size);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
+    static constexpr segment::size_type free_space_mask = segment::size_mask;
+    static constexpr unsigned bits_for_free_space = segment::size_shift + 1;
+
     segment::size_type _free_space;
     region::impl* _region;
+
+    segment::size_type free_space() const {
+        return _free_space & free_space_mask;
+    }
+
+    void set_free_space(segment::size_type free_space) {
+        _free_space = (_free_space & ~free_space_mask) | free_space;
+    }
 
     segment_descriptor()
         : _region(nullptr)
     { }
 
     bool is_empty() const {
-        return _free_space == segment::size;
+        return free_space() == segment::size;
     }
 
     occupancy_stats occupancy() const {
-        return { _free_space, segment::size };
+        return { free_space(), segment::size };
     }
 
     void record_alloc(segment::size_type size) {
@@ -985,7 +997,7 @@ segment_pool::new_segment(region::impl* r) {
     auto seg = allocate_or_fallback_to_reserve();
     ++_segments_in_use;
     segment_descriptor& desc = descriptor(seg);
-    desc._free_space = segment::size;
+    desc.set_free_space(segment::size);
     desc._region = r;
     return seg;
 }
@@ -1077,7 +1089,7 @@ bool segment::is_empty() {
 
 occupancy_stats
 segment::occupancy() {
-    return { shard_segment_pool.descriptor(this)._free_space, segment::size };
+    return { shard_segment_pool.descriptor(this).free_space(), segment::size };
 }
 
 //
@@ -2444,5 +2456,5 @@ occupancy_stats lsa_global_occupancy_stats() {
 // This avoids using the occupancy, which entails extra division operations.
 template<>
 size_t hist_key<logalloc::segment_descriptor>(const logalloc::segment_descriptor& desc) {
-    return desc._free_space;
+    return desc.free_space();
 }

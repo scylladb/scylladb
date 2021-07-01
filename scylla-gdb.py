@@ -2260,6 +2260,22 @@ class scylla_ptr(gdb.Command):
 
         gdb.write("{}\n".format(str(ptr_meta)))
 
+
+class segment_descriptor:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def region(self):
+        return self.ref['_region']
+
+    def is_lsa(self):
+        return bool(self.ref['_region'])
+
+    def free_space(self):
+        return int(gdb.parse_and_eval('%d & (\'logalloc\'::segment::size_mask)'
+                                      % (self.ref['_free_space'])))
+
+
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -2273,11 +2289,12 @@ class scylla_segment_descs(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
-            if desc['_region']:
-                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc['_free_space'],
-                                                                                   segment_size - int(desc['_free_space']),
-                                                                                   float(segment_size - int(desc['_free_space'])) * 100 / segment_size,
-                                                                                   int(desc['_region'])))
+            desc = segment_descriptor(desc)
+            if desc.is_lsa():
+                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc.free_space(),
+                                                                                   segment_size - int(desc.free_space()),
+                                                                                   float(segment_size - int(desc.free_space())) * 100 / segment_size,
+                                                                                   int(desc.region())))
             else:
                 gdb.write('0x%x: std\n' % (addr))
             addr += segment_size
