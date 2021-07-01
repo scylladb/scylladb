@@ -1334,6 +1334,11 @@ database::drop_caches() const {
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
+
+        auto sstables = t.get_sstables();
+        for (sstables::shared_sstable sst : *sstables) {
+            co_await sst->drop_caches();
+        }
     }
     co_return;
 }

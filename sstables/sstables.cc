@@ -1396,6 +1396,12 @@ future<> sstable::create_data() noexcept {
     });
 }
 
+future<> sstable::drop_caches() {
+    return _cached_index_file->evict_gently().then([this] {
+        return _index_cache->evict_gently();
+    });
+}
+
 future<> sstable::read_filter(const io_priority_class& pc) {
     if (!has_component(component_type::Filter)) {
         _components->filter = std::make_unique<utils::filter::always_present_filter>();

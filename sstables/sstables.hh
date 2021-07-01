@@ -815,6 +815,9 @@ public:
         return _origin;
     }
 
+    // Drops all evictable in-memory caches of on-disk content.
+    future<> drop_caches();
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
