@@ -31,7 +31,6 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/tmpdir.hh"
-#include "test/lib/reader_permit.hh"
 
 #include "utils/cached_file.hh"
 

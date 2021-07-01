@@ -41,7 +41,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;
 
-        auto mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+        auto mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
         auto sst1 = env.make_sstable(s, tmpdir_path, gen++);
         sstable_writer_config cfg = env.manager().configure_writer("");
         sst1->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
@@ -51,7 +51,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
 
         // Test that a random sstable_origin is stored and retrieved properly.
-        mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+        mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
         auto sst2 = env.make_sstable(s, tmpdir_path, gen++);
         sst2->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
         sst2->load().get();
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;
 
-        auto mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+        auto mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
         auto sst1 = env.make_sstable(s, tmpdir_path, gen++);
         sstable_writer_config cfg = env.manager().configure_writer("");
         sst1->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
@@ -86,7 +86,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
 
         // Test that a random sstable_origin is stored and retrieved properly.
-        mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+        mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
         auto sst2 = env.make_sstable(s, tmpdir_path, gen++);
         sst2->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
         sst2->load().get();

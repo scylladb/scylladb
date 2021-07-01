@@ -35,7 +35,6 @@
 #include "test/lib/dummy_sharder.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
 #include "test/lib/log.hh"
-#include "test/lib/reader_permit.hh"
 
 #include "dht/sharder.hh"
 #include "mutation_reader.hh"
@@ -85,7 +84,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                 keep_alive_sharder.push_back(sharder);
 
                 return mutation_source([&, remote_memtables, evict_paused_readers, single_fragment_buffer] (schema_ptr s,
-                        reader_permit,
+                        reader_permit permit,
                         const dht::partition_range& range,
                         const query::partition_slice& slice,
                         const io_priority_class& pc,
@@ -110,7 +109,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
 
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
                     auto mr = make_multishard_combining_reader_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
-                            tests::make_permit(), range, slice, pc, trace_state, fwd_mr);
+                            std::move(permit), range, slice, pc, trace_state, fwd_mr);
                     if (fwd_sm == streamed_mutation::forwarding::yes) {
                         return make_forwardable(std::move(mr));
                     }

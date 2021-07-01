@@ -439,7 +439,8 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             sstables::sstable_writer_config sst_cfg = e.db().local().get_user_sstables_manager().configure_writer("test");
             auto& pc = service::get_local_streaming_priority();
 
-            sst->write_components(flat_mutation_reader_from_mutations(tests::make_permit(), {m}), 1ul, s, sst_cfg, {}, pc).get();
+            auto permit = e.local_db().get_reader_concurrency_semaphore().make_permit(s.get(), "test");
+            sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;
@@ -548,7 +549,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
         auto& pc = service::get_local_streaming_priority();
 
-        sst->write_components(flat_mutation_reader_from_mutations(tests::make_permit(), {m}), 1ul, s, sst_cfg, {}, pc).get();
+        auto permit = e.local_db().get_reader_concurrency_semaphore().make_permit(s.get(), "test");
+        sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
 
@@ -624,7 +626,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
             auto& pc = service::get_local_streaming_priority();
 
-            sst->write_components(flat_mutation_reader_from_mutations(tests::make_permit(), {m}), 1ul, s, sst_cfg, {}, pc).get();
+            auto permit = e.local_db().get_reader_concurrency_semaphore().make_permit(s.get(), "test");
+            sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;

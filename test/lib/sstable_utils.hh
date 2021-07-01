@@ -30,7 +30,6 @@
 #include "dht/i_partitioner.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
-#include "test/lib/reader_permit.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "gc_clock.hh"
 #include <seastar/core/coroutine.hh>

@@ -31,7 +31,6 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"
-#include "test/lib/reader_permit.hh"
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -55,7 +54,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                     mt->apply(m);
                 }
                 created_with_base_schema = env.make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
-                created_with_base_schema->write_components(mt->make_flat_reader(base, tests::make_permit()), base_mutations.size(), base,
+                created_with_base_schema->write_components(mt->make_flat_reader(base, env.make_reader_permit()), base_mutations.size(), base,
                         env.manager().configure_writer(), mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
@@ -74,14 +73,14 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             const auto pr = dht::partition_range::make_open_ended_both_sides();
 
             auto mr = assert_that(created_with_base_schema->as_mutation_source()
-                        .make_reader(changed, tests::make_permit(), pr, changed->full_slice()));
+                        .make_reader(changed, env.make_reader_permit(), pr, changed->full_slice()));
             for (auto& m : changed_mutations) {
                 mr.produces(m);
             }
             mr.produces_end_of_stream();
 
             mr = assert_that(created_with_changed_schema->as_mutation_source()
-                    .make_reader(changed, tests::make_permit(), pr, changed->full_slice()));
+                    .make_reader(changed, env.make_reader_permit(), pr, changed->full_slice()));
             for (auto& m : changed_mutations) {
                 mr.produces(m);
             }

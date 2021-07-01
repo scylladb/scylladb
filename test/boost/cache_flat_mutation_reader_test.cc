@@ -36,7 +36,7 @@
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 #include <variant>
 
@@ -219,6 +219,8 @@ void test_slice_single_version(mutation& underlying,
                                std::deque<expected_fragment> expected_sm_fragments,
                                std::deque<expected_row> expected_cache_rows,
                                std::deque<range_tombstone> expected_cache_tombstones) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
     // Set up underlying
     memtable_snapshot_source source_mt(SCHEMA);
     source_mt.apply(underlying);
@@ -229,7 +231,7 @@ void test_slice_single_version(mutation& underlying,
 
     try {
         auto range = dht::partition_range::make_singular(DK);
-        auto reader = cache.make_reader(SCHEMA, tests::make_permit(), range, slice);
+        auto reader = cache.make_reader(SCHEMA, semaphore.make_permit(), range, slice);
 
         check_produces_only(DK, std::move(reader), expected_sm_fragments, slice.row_ranges(*SCHEMA, DK.key()));
 

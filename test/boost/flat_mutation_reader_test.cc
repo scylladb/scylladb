@@ -40,7 +40,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/log.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
@@ -54,8 +54,9 @@ struct mock_consumer {
         std::vector<mutation_fragment> _fragments;
     };
     const schema& _schema;
+    reader_permit _permit;
     result _result;
-    mock_consumer(const schema& s, size_t depth) : _schema(s) {
+    mock_consumer(const schema& s, reader_permit permit, size_t depth) : _schema(s), _permit(std::move(permit)) {
         _result._depth = depth;
     }
     stop_iteration update_depth() {
@@ -70,15 +71,15 @@ struct mock_consumer {
         return stop_iteration::no;
     }
     stop_iteration consume(static_row&& sr) {
-        _result._fragments.push_back(mutation_fragment(_schema, tests::make_permit(), std::move(sr)));
+        _result._fragments.push_back(mutation_fragment(_schema, _permit, std::move(sr)));
         return update_depth();
     }
     stop_iteration consume(clustering_row&& cr) {
-        _result._fragments.push_back(mutation_fragment(_schema, tests::make_permit(), std::move(cr)));
+        _result._fragments.push_back(mutation_fragment(_schema, _permit, std::move(cr)));
         return update_depth();
     }
     stop_iteration consume(range_tombstone&& rt) {
-        _result._fragments.push_back(mutation_fragment(_schema, tests::make_permit(), std::move(rt)));
+        _result._fragments.push_back(mutation_fragment(_schema, _permit, std::move(rt)));
         return update_depth();
     }
     stop_iteration consume_end_of_partition() {
@@ -92,7 +93,8 @@ struct mock_consumer {
 };
 
 static size_t count_fragments(mutation m) {
-    auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto r = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m});
     auto close_reader = deferred_close(r);
     size_t res = 0;
     auto mfopt = r(db::no_timeout).get0();
@@ -105,17 +107,18 @@ static size_t count_fragments(mutation m) {
 
 SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         for_each_mutation([&] (const mutation& m) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
-                auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
+                auto r = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m});
                 auto close_reader = deferred_close(r);
-                auto result = r.consume(mock_consumer(*m.schema(), depth), db::no_timeout).get0();
+                auto result = r.consume(mock_consumer(*m.schema(), semaphore.make_permit(), depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = assert_that(flat_mutation_reader_from_mutations(tests::make_permit(), {m}));
+                auto r2 = assert_that(flat_mutation_reader_from_mutations(semaphore.make_permit(), {m}));
                 r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
                 for (auto& mf : result._fragments) {
                     r2.produces(*m.schema(), mf);
@@ -127,18 +130,19 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
 
 SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
     return seastar::async([] {
-        auto test = [] (mutation m1, mutation m2) {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto test = [&semaphore] (mutation m1, mutation m2) {
             size_t fragments_in_m1 = count_fragments(m1);
             size_t fragments_in_m2 = count_fragments(m2);
             for (size_t depth = 1; depth < fragments_in_m1; ++depth) {
-                auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m1, m2});
+                auto r = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m1, m2});
                 auto close_r = deferred_close(r);
-                auto result = r.consume(mock_consumer(*m1.schema(), depth), db::no_timeout).get0();
+                auto result = r.consume(mock_consumer(*m1.schema(), semaphore.make_permit(), depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m1.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = flat_mutation_reader_from_mutations(tests::make_permit(), {m1, m2});
+                auto r2 = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m1, m2});
                 auto close_r2 = deferred_close(r2);
                 auto start = r2(db::no_timeout).get0();
                 BOOST_REQUIRE(start);
@@ -150,9 +154,9 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                 }
             }
             for (size_t depth = fragments_in_m1; depth < fragments_in_m1 + fragments_in_m2 + 1; ++depth) {
-                auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m1, m2});
+                auto r = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m1, m2});
                 auto close_r = deferred_close(r);
-                auto result = r.consume(mock_consumer(*m1.schema(), depth), db::no_timeout).get0();
+                auto result = r.consume(mock_consumer(*m1.schema(), semaphore.make_permit(), depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(2, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(2, result._consume_end_of_partition_call_count);
@@ -164,7 +168,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                     ++tombstones_count;
                 }
                 BOOST_REQUIRE_EQUAL(tombstones_count, result._consume_tombstone_call_count);
-                auto r2 = flat_mutation_reader_from_mutations(tests::make_permit(), {m1, m2});
+                auto r2 = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m1, m2});
                 auto close_r2 = deferred_close(r2);
                 auto start = r2(db::no_timeout).get0();
                 BOOST_REQUIRE(start);
@@ -192,10 +196,11 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
 
 SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         for_each_mutation([&] (const mutation& m) {
             std::vector<frozen_mutation> fms;
 
-            fragment_and_freeze(flat_mutation_reader_from_mutations(tests::make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
+            fragment_and_freeze(flat_mutation_reader_from_mutations(semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
                 BOOST_REQUIRE(!frag);
                 fms.emplace_back(std::move(fm));
                 return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -209,7 +214,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
             fms.clear();
 
             std::optional<bool> fragmented;
-            fragment_and_freeze(flat_mutation_reader_from_mutations(tests::make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
+            fragment_and_freeze(flat_mutation_reader_from_mutations(semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
                 BOOST_REQUIRE(!fragmented || *fragmented == frag);
                 *fragmented = frag;
                 fms.emplace_back(std::move(fm));
@@ -233,7 +238,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
             BOOST_REQUIRE_EQUAL(m, m2);
         });
 
-        auto test_random_streams = [] (random_mutation_generator&& gen) {
+        auto test_random_streams = [&semaphore] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
                 auto muts = gen(4);
                 auto s = muts[0].schema();
@@ -241,7 +246,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
                 std::vector<frozen_mutation> frozen;
 
                 // Freeze all
-                fragment_and_freeze(flat_mutation_reader_from_mutations(tests::make_permit(), muts), [&] (auto fm, bool frag) {
+                fragment_and_freeze(flat_mutation_reader_from_mutations(semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
                     BOOST_REQUIRE(!frag);
                     frozen.emplace_back(fm);
                     return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -253,7 +258,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 
                 // Freeze first
                 frozen.clear();
-                fragment_and_freeze(flat_mutation_reader_from_mutations(tests::make_permit(), muts), [&] (auto fm, bool frag) {
+                fragment_and_freeze(flat_mutation_reader_from_mutations(semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
                     BOOST_REQUIRE(!frag);
                     frozen.emplace_back(fm);
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -263,7 +268,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
 
                 // Fragment and freeze all
                 frozen.clear();
-                fragment_and_freeze(flat_mutation_reader_from_mutations(tests::make_permit(), muts), [&] (auto fm, bool frag) {
+                fragment_and_freeze(flat_mutation_reader_from_mutations(semaphore.make_permit(), muts), [&] (auto fm, bool frag) {
                     frozen.emplace_back(fm);
                     return make_ready_future<stop_iteration>(stop_iteration::no);
                 }, 1).get0();
@@ -297,7 +302,8 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
     };
 
     simple_schema s;
-    auto permit = tests::make_permit();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
     auto pkey = s.make_pkey(1);
     auto mut_orig = mutation(s.schema(), pkey);
 
@@ -312,9 +318,9 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
     // having to have loads of data.
     const auto max_buffer_size = size_t{100};
 
-    auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), {mut_orig}, dht::partition_range::make_open_ended_both_sides());
+    auto reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), {mut_orig}, dht::partition_range::make_open_ended_both_sides());
     auto close_reader = deferred_close(reader);
-    auto dummy_impl = std::make_unique<dummy_reader_impl>(s.schema(), tests::make_permit());
+    auto dummy_impl = std::make_unique<dummy_reader_impl>(s.schema(), semaphore.make_permit());
     reader.set_max_buffer_size(max_buffer_size);
 
     reader.fill_buffer(db::no_timeout).get();
@@ -359,7 +365,8 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
 SEASTAR_TEST_CASE(test_multi_range_reader) {
     return seastar::async([] {
         simple_schema s;
-        auto permit = tests::make_permit();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto permit = semaphore.make_permit();
 
         auto keys = s.make_pkeys(10);
         auto ring = s.to_ring_positions(keys);
@@ -376,8 +383,8 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
             return m;
         }));
 
-        auto source = mutation_source([&] (schema_ptr, reader_permit, const dht::partition_range& range) {
-            return flat_mutation_reader_from_mutations(tests::make_permit(), ms, range);
+        auto source = mutation_source([&] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
+            return flat_mutation_reader_from_mutations(std::move(permit), ms, range);
         });
 
         const auto empty_ranges = dht::partition_range_vector{};
@@ -404,14 +411,14 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         // Generator ranges are single pass, so we need a new range each time they are used.
         auto run_test = [&] (auto make_empty_ranges, auto make_single_ranges, auto make_multiple_ranges) {
             testlog.info("empty ranges");
-            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_empty_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), semaphore.make_permit(), source, make_empty_ranges(), s.schema()->full_slice()))
                     .produces_end_of_stream()
                     .fast_forward_to(fft_range)
                     .produces(ms[9])
                     .produces_end_of_stream();
 
             testlog.info("single range");
-            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_single_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), semaphore.make_permit(), source, make_single_ranges(), s.schema()->full_slice()))
                     .produces(ms[1])
                     .produces(ms[2])
                     .produces_end_of_stream()
@@ -420,7 +427,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces_end_of_stream();
 
             testlog.info("read full partitions and fast forward");
-            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_multiple_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), semaphore.make_permit(), source, make_multiple_ranges(), s.schema()->full_slice()))
                     .produces(ms[1])
                     .produces(ms[2])
                     .produces(ms[4])
@@ -430,7 +437,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces_end_of_stream();
 
             testlog.info("read, skip partitions and fast forward");
-            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_multiple_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), semaphore.make_permit(), source, make_multiple_ranges(), s.schema()->full_slice()))
                     .produces_partition_start(keys[1])
                     .next_partition()
                     .produces_partition_start(keys[2])
@@ -469,6 +476,7 @@ using in_thread = seastar::bool_class<class in_thread_tag>;
 
 struct flat_stream_consumer {
     schema_ptr _schema;
+    reader_permit _permit;
     reversed_partitions _reversed;
     skip_after_first_fragment _skip_partition;
     skip_after_first_partition _skip_stream;
@@ -487,10 +495,11 @@ private:
         }
     }
 public:
-    flat_stream_consumer(schema_ptr s, reversed_partitions reversed,
+    flat_stream_consumer(schema_ptr s, reader_permit permit, reversed_partitions reversed,
                          skip_after_first_fragment skip_partition = skip_after_first_fragment::no,
                          skip_after_first_partition skip_stream = skip_after_first_partition::no)
         : _schema(std::move(s))
+        , _permit(std::move(permit))
         , _reversed(reversed)
         , _skip_partition(skip_partition)
         , _skip_stream(skip_stream)
@@ -512,7 +521,7 @@ public:
         BOOST_REQUIRE(!_previous_position);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(sr.position());
-        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, tests::make_permit(), std::move(sr)));
+        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(sr)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume(clustering_row&& cr) {
@@ -520,7 +529,7 @@ public:
         verify_order(cr.position());
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(cr.position());
-        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, tests::make_permit(), std::move(cr)));
+        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(cr)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume(range_tombstone&& rt) {
@@ -529,7 +538,7 @@ public:
         verify_order(pos);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(pos);
-        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, tests::make_permit(), std::move(rt)));
+        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(rt)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume_end_of_partition() {
@@ -546,6 +555,7 @@ public:
 };
 
 void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partitions reversed, in_thread thread) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto reversed_msg = reversed ? ", reversed partitions" : "";
 
     auto consume_fn = [&] (flat_mutation_reader& fmr, flat_stream_consumer fsc) {
@@ -564,17 +574,17 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
   {
     testlog.info("Consume all{}", reversed_msg);
-    auto fmr = flat_mutation_reader_from_mutations(tests::make_permit(), muts);
+    auto fmr = flat_mutation_reader_from_mutations(semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
-    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed));
+    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed));
     BOOST_REQUIRE_EQUAL(muts, muts2);
   }
 
   {
     testlog.info("Consume first fragment from partition{}", reversed_msg);
-    auto fmr = flat_mutation_reader_from_mutations(tests::make_permit(), muts);
+    auto fmr = flat_mutation_reader_from_mutations(semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
-    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::yes));
+    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed, skip_after_first_fragment::yes));
     BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
     for (auto j = 0u; j < muts.size(); j++) {
         BOOST_REQUIRE(muts[j].decorated_key().equal(*muts[j].schema(), muts2[j].decorated_key()));
@@ -588,9 +598,9 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
   {
     testlog.info("Consume first partition{}", reversed_msg);
-    auto fmr = flat_mutation_reader_from_mutations(tests::make_permit(), muts);
+    auto fmr = flat_mutation_reader_from_mutations(semaphore.make_permit(), muts);
     auto close_fmr = deferred_close(fmr);
-    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
+    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, semaphore.make_permit(), reversed, skip_after_first_fragment::no,
                                              skip_after_first_partition::yes));
     BOOST_REQUIRE_EQUAL(muts2.size(), 1);
     BOOST_REQUIRE_EQUAL(muts2[0], muts[0]);
@@ -606,9 +616,9 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return true;
         });
         testlog.info("Consume all, filtered");
-        auto fmr = flat_mutation_reader_from_mutations(tests::make_permit(), muts);
+        auto fmr = flat_mutation_reader_from_mutations(semaphore.make_permit(), muts);
         auto close_fmr = deferred_close(fmr);
-        auto muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter), db::no_timeout);
+        auto muts2 = fmr.consume_in_thread(flat_stream_consumer(s, semaphore.make_permit(), reversed), std::move(filter), db::no_timeout);
         BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
         for (auto j = size_t(1); j < muts.size(); j += 2) {
             BOOST_REQUIRE_EQUAL(muts[j], muts2[j / 2]);
@@ -635,7 +645,8 @@ SEASTAR_TEST_CASE(test_consume_flat) {
 SEASTAR_TEST_CASE(test_make_forwardable) {
     return seastar::async([] {
         simple_schema s;
-        auto permit = tests::make_permit();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto permit = semaphore.make_permit();
 
         auto keys = s.make_pkeys(10);
 
@@ -654,7 +665,7 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
 
         auto make_reader = [&] (auto& range) {
             return assert_that(
-                make_forwardable(flat_mutation_reader_from_mutations(tests::make_permit(), ms, range, streamed_mutation::forwarding::no)));
+                make_forwardable(flat_mutation_reader_from_mutations(semaphore.make_permit(), ms, range, streamed_mutation::forwarding::no)));
         };
 
         auto test = [&] (auto& rd, auto& partition) {
@@ -696,8 +707,9 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
 
 SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         for_each_mutation([&] (const mutation& m) {
-            auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), {mutation(m)});
+            auto rd = flat_mutation_reader_from_mutations(semaphore.make_permit(), {mutation(m)});
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get();
             rd(db::no_timeout).get();
@@ -725,33 +737,34 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source)
     auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
         return mutation_source([=] (
                 schema_ptr schema,
-                reader_permit,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding) mutable {
-            return flat_mutation_reader_from_mutations(tests::make_permit(), squash_mutations(muts), range, slice, fwd_sm);
+            return flat_mutation_reader_from_mutations(std::move(permit), squash_mutations(muts), range, slice, fwd_sm);
         });
     };
     run_mutation_source_tests(populate);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
         return mutation_source([=] (
                 schema_ptr schema,
-                reader_permit,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding) mutable {
-            auto get_fragments = [&muts] {
+            auto get_fragments = [&permit, &muts] {
                 std::deque<mutation_fragment> fragments;
-                auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), squash_mutations(muts));
+                auto rd = flat_mutation_reader_from_mutations(permit, squash_mutations(muts));
                 auto close_rd = deferred_close(rd);
                 rd.consume_pausable([&fragments] (mutation_fragment mf) {
                     fragments.emplace_back(std::move(mf));
@@ -760,7 +773,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source)
                 return std::move(fragments);
             };
 
-            auto rd = make_flat_mutation_reader_from_fragments(schema, tests::make_permit(), get_fragments(), range, slice);
+            auto rd = make_flat_mutation_reader_from_fragments(schema, permit, get_fragments(), range, slice);
             if (fwd_sm) {
                 return make_forwardable(std::move(rd));
             }
@@ -772,6 +785,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source)
 
 SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
     simple_schema schema;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
 
     struct phony_consumer {
         void consume_new_partition(const dht::decorated_key&) { }
@@ -799,7 +813,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
         }
 
         const uint64_t hard_limit = size_t(1) << 18;
-        auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+        auto reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), {mut});
         // need to close both readers since the reverse_reader
         // doesn't own the reader passed to it by ref.
         auto close_reader = deferred_close(reader);

@@ -35,7 +35,7 @@
 #include "memtable.hh"
 
 #include "test/lib/mutation_assertions.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 
 #include <boost/range/algorithm/transform.hpp>
@@ -99,7 +99,8 @@ public:
 
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     return seastar::async([] {
-        run_mutation_source_tests([](schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        run_mutation_source_tests([&](schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
             // We create a mutation source which combines N memtables.
             // The input fragments are spread among the memtables according to some selection logic,
 
@@ -115,7 +116,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
-                auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
+                auto rd = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m});
                 auto close_rd = deferred_close(rd);
                 rd.consume(fragment_scatterer{muts}, db::no_timeout).get();
                 for (int i = 0; i < n; ++i) {
@@ -124,7 +125,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             }
 
             return mutation_source([memtables] (schema_ptr s,
-                    reader_permit,
+                    reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
@@ -134,9 +135,9 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             {
                 std::vector<flat_mutation_reader> readers;
                 for (int i = 0; i < n; ++i) {
-                    readers.push_back(memtables[i]->make_flat_reader(s, tests::make_permit(), range, slice, pc, trace_state, fwd, fwd_mr));
+                    readers.push_back(memtables[i]->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
                 }
-                return make_combined_reader(s, tests::make_permit(), std::move(readers), fwd, fwd_mr);
+                return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
             });
         });
     });
@@ -150,6 +151,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
                 .with_column("ck2", int32_type, column_kind::clustering_key)
                 .with_column("r", int32_type)
                 .build();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
         auto create_ck = [&] (std::vector<int> v) {
@@ -166,13 +168,15 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         auto rt3 = range_tombstone(create_ck({ 1, 1 }), t0,  bound_kind::incl_start, create_ck({ 2 }), bound_kind::incl_end);
         auto rt4 = range_tombstone(create_ck({ 2 }), t0, bound_kind::incl_start, create_ck({ 2, 2 }), bound_kind::incl_end);
 
-        mutation_fragment cr1(*s, tests::make_permit(), clustering_row(create_ck({ 0, 0 })));
-        mutation_fragment cr2(*s, tests::make_permit(), clustering_row(create_ck({ 1, 0 })));
-        mutation_fragment cr3(*s, tests::make_permit(), clustering_row(create_ck({ 1, 1 })));
+        auto permit = semaphore.make_permit();
+
+        mutation_fragment cr1(*s, permit, clustering_row(create_ck({ 0, 0 })));
+        mutation_fragment cr2(*s, permit, clustering_row(create_ck({ 1, 0 })));
+        mutation_fragment cr3(*s, permit, clustering_row(create_ck({ 1, 1 })));
         auto cr4 = rows_entry(create_ck({ 1, 2 }));
         auto cr5 = rows_entry(create_ck({ 1, 3 }));
 
-        range_tombstone_stream rts(*s, tests::make_permit());
+        range_tombstone_stream rts(*s, permit);
         rts.apply(range_tombstone(rt1));
         rts.apply(range_tombstone(rt2));
         rts.apply(range_tombstone(rt4));
@@ -188,7 +192,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         mf = rts.get_next(cr2);
         BOOST_REQUIRE(!mf);
 
-        mf = rts.get_next(mutation_fragment(*s, tests::make_permit(), range_tombstone(rt3)));
+        mf = rts.get_next(mutation_fragment(*s, permit, range_tombstone(rt3)));
         BOOST_REQUIRE(mf && mf->is_range_tombstone());
         BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, rt2));
 
@@ -398,11 +402,12 @@ SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view_in_a
 
 SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
     return seastar::async([] {
-        for_each_mutation_pair([](const mutation& m1, const mutation& m2, are_equal eq) {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        for_each_mutation_pair([&](const mutation& m1, const mutation& m2, are_equal eq) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 
-                auto reader = transform(flat_mutation_reader_from_mutations(tests::make_permit(), {m1}), schema_upgrader(m2.schema()));
+                auto reader = transform(flat_mutation_reader_from_mutations(semaphore.make_permit(), {m1}), schema_upgrader(m2.schema()));
                 auto close_reader = deferred_close(reader);
                 auto from_upgrader = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
 

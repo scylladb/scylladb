@@ -115,7 +115,7 @@ void run_sstable_resharding_test() {
         auto shard = shards.front();
         BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(new_sst->generation()) == shard);
 
-        auto rd = assert_that(new_sst->as_mutation_source().make_reader(s, tests::make_permit()));
+        auto rd = assert_that(new_sst->as_mutation_source().make_reader(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
         for (auto k : boost::irange(0u, keys_per_shard)) {
             rd.produces(muts[shard][k]);

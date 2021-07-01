@@ -53,7 +53,6 @@
 #include "sstables/mx/writer.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/exception_utils.hh"
-#include "test/lib/reader_permit.hh"
 
 #include <boost/range/algorithm/sort.hpp>
 
@@ -96,7 +95,7 @@ public:
         return sstables::test(_sst).read_indexes(_env.make_reader_permit());
     }
     flat_mutation_reader make_reader() {
-        return _sst->make_reader(_sst->_schema, tests::make_permit(), query::full_partition_range, _sst->_schema->full_slice());
+        return _sst->make_reader(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
     }
 
     const stats_metadata& get_stats_metadata() const {
@@ -116,7 +115,7 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor()) {
         return _sst->make_reader(_sst->_schema,
-                                          tests::make_permit(),
+                                          _env.make_reader_permit(),
                                           range,
                                           slice,
                                           pc,
@@ -3130,7 +3129,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     sstables::compact_sstables(std::move(desc), *cf).get();
 
     auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
-    return compacted_sst->as_mutation_source().make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
@@ -3312,9 +3311,9 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable
     auto sst = env.make_sstable(s, tmp.path().string(), 1, version, sstable::format_types::big, 4096);
 
     sst->write_components(make_combined_reader(s,
-        tests::make_permit(),
-        mt1->make_flat_reader(s, tests::make_permit()),
-        mt2->make_flat_reader(s, tests::make_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
+        env.make_reader_permit(),
+        mt1->make_flat_reader(s, env.make_reader_permit()),
+        mt2->make_flat_reader(s, env.make_reader_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
     return tmp;
 }
 
@@ -4660,8 +4659,8 @@ static sstring get_read_index_test_path(sstring table_name) {
     return format("test/resource/sstables/3.x/uncompressed/read_{}", table_name);
 }
 
-static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
-    return std::make_unique<index_reader>(sst, tests::make_permit(), default_priority_class(), tracing::trace_state_ptr());
+static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
+    return std::make_unique<index_reader>(sst, std::move(permit), default_priority_class(), tracing::trace_state_ptr());
 }
 
 shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
@@ -4684,7 +4683,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = make_test_sstable(env, s, table_name);
-    assert_that(get_index_reader(sst)).is_empty(*s);
+    assert_that(get_index_reader(sst, env.make_reader_permit())).is_empty(*s);
   }).get();
 }
 
@@ -4704,7 +4703,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = make_test_sstable(env, s, table_name);
-    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+    assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
   }).get();
 }
 
@@ -4723,7 +4722,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = make_test_sstable(env, s, table_name);
-    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+    assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
   }).get();
 }
 
@@ -4750,7 +4749,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     auto sst = make_test_sstable(env, s, table_name);
-    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+    assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
   }).get();
 }
 
@@ -5203,11 +5202,11 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
             1 /* generation */,
             version,
             sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(write_schema, tests::make_permit()), 1, write_schema, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(write_schema, env.make_reader_permit()), 1, write_schema, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
-            assert_that(sst->make_reader(read_schema, tests::make_permit(), query::full_partition_range, read_schema->full_slice()))
+            assert_that(sst->make_reader(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))
                 .produces_partition_start(dk)
                 .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
                 .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})
@@ -5264,7 +5263,7 @@ struct large_row_handler : public db::large_data_handler {
 };
 }
 
-static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const partition_key& pk,
+static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, memtable& mt, const partition_key& pk,
         std::vector<clustering_key*> expected, uint64_t threshold, sstables::sstable_version_types version) {
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
@@ -5293,12 +5292,13 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s, tests::make_permit()), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     mutation partition = s.new_mutation("pv");
     const partition_key& pk = partition.key();
     s.add_static_row(partition, "foo bar zed");
@@ -5312,13 +5312,14 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     auto mt = make_lw_shared<memtable>(s.schema());
     mt->apply(partition);
 
-    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck1, &ck2}, 21, version);
-    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck2}, 22, version);
+    test_sstable_write_large_row_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck1, &ck2}, 21, version);
+    test_sstable_write_large_row_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck2}, 22, version);
   }
 }
 
 static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     mutation p = s.new_mutation("pv");
     const partition_key& pk = p.key();
     sstring sv;
@@ -5344,7 +5345,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc, tests::make_permit()), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
+    sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
 }

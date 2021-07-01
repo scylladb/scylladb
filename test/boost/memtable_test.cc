@@ -38,7 +38,7 @@
 #include "test/lib/data_model.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -88,6 +88,7 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
 
 SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         lw_shared_ptr<memtable> mt;
         std::vector<flat_mutation_reader> readers;
         auto clear_readers = [&readers] {
@@ -106,7 +107,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
             for (auto&& m : muts) {
                 mt->apply(m);
                 // Create reader so that each mutation is in a separate version
-                flat_mutation_reader rd = mt->make_flat_reader(s, tests::make_permit(), ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
+                flat_mutation_reader rd = mt->make_flat_reader(s, semaphore.make_permit(), ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
                 rd.set_max_buffer_size(1);
                 rd.fill_buffer(db::no_timeout).get();
                 readers.emplace_back(std::move(rd));
@@ -123,6 +124,8 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     // streamed_mutation::forwarding is set to no. Therefore, we cannot use
     // run_mutation_source_tests() to test it.
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto make_memtable = [] (dirty_memory_manager& mgr, table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
             auto mt = make_lw_shared<memtable>(muts.front().schema(), mgr, tbl_stats);
@@ -146,7 +149,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 testlog.info("Simple read");
                 auto mt = make_memtable(mgr, tbl_stats, muts);
 
-                assert_that(mt->make_flush_reader(gen.schema(), tests::make_permit(), default_priority_class()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_compacted(compacted_muts[1], now)
                     .produces_compacted(compacted_muts[2], now)
@@ -155,7 +158,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), tests::make_permit(), default_priority_class()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), default_priority_class()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
                     .next_partition()
@@ -169,7 +172,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), tests::make_permit(), default_priority_class()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
                     .next_partition()
@@ -200,6 +203,8 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
                 .with_column("v2", bytes_type, column_kind::regular_column)
                 .build();
 
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto mt = make_lw_shared<memtable>(s1);
 
         std::vector<mutation> ring = make_ring(s1, 3);
@@ -209,8 +214,8 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
             mt->apply(m);
         }
 
-        auto check_rd_s1 = assert_that(mt->make_flat_reader(s1, tests::make_permit()));
-        auto check_rd_s2 = assert_that(mt->make_flat_reader(s2, tests::make_permit()));
+        auto check_rd_s1 = assert_that(mt->make_flat_reader(s1, semaphore.make_permit()));
+        auto check_rd_s2 = assert_that(mt->make_flat_reader(s2, semaphore.make_permit()));
         check_rd_s1.next_mutation().has_schema(s1).is_equal_to(ring[0]);
         check_rd_s2.next_mutation().has_schema(s2).is_equal_to(ring[0]);
         mt->set_schema(s2);
@@ -221,13 +226,13 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
         check_rd_s1.produces_end_of_stream();
         check_rd_s2.produces_end_of_stream();
 
-        assert_that(mt->make_flat_reader(s1, tests::make_permit()))
+        assert_that(mt->make_flat_reader(s1, semaphore.make_permit()))
             .produces(ring[0])
             .produces(ring[1])
             .produces(ring[2])
             .produces_end_of_stream();
 
-        assert_that(mt->make_flat_reader(s2, tests::make_permit()))
+        assert_that(mt->make_flat_reader(s2, semaphore.make_permit()))
             .produces(ring[0])
             .produces(ring[1])
             .produces(ring[2])
@@ -241,6 +246,8 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
 
         dirty_memory_manager mgr;
         table_stats tbl_stats;
@@ -259,7 +266,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         }
 
         // Create a reader which will cause many partition versions to be created
-        flat_mutation_reader_opt rd1 = mt->make_flat_reader(s, tests::make_permit());
+        flat_mutation_reader_opt rd1 = mt->make_flat_reader(s, semaphore.make_permit());
         auto close_rd1 = deferred_close(*rd1);
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer(db::no_timeout).get();
@@ -276,7 +283,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         std::vector<size_t> virtual_dirty_values;
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
-        auto flush_reader_check = assert_that(mt->make_flush_reader(s, tests::make_permit(), service::get_local_priority_manager().memtable_flush_priority()));
+        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority()));
         flush_reader_check.produces_partition(current_ring[0]);
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
@@ -306,6 +313,8 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
 
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto mt = make_lw_shared<memtable>(s);
 
         auto empty_m = make_unique_mutation(s);
@@ -323,29 +332,29 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        std::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        std::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
 
         mt->apply(m2);
-        std::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        std::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd2->set_max_buffer_size(1);
         rd2->fill_buffer().get();
 
         mt->apply(m3);
-        std::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        std::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd3->set_max_buffer_size(1);
         rd3->fill_buffer().get();
 
         logalloc::shard_tracker().full_compaction();
 
-        auto rd4 = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        auto rd4 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd4.set_max_buffer_size(1);
         rd4.fill_buffer().get();
-        auto rd5 = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        auto rd5 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd5.set_max_buffer_size(1);
         rd5.fill_buffer().get();
-        auto rd6 = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        auto rd6 = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd6.set_max_buffer_size(1);
         rd6.fill_buffer().get();
 
@@ -373,6 +382,8 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
 
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         table_stats tbl_stats;
         dirty_memory_manager mgr;
 
@@ -394,7 +405,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         std::vector<size_t> virtual_dirty_values;
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
-        auto rd = mt->make_flush_reader(s, tests::make_permit(), service::get_local_priority_manager().memtable_flush_priority());
+        auto rd = mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority());
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
@@ -423,6 +434,8 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
             .with_column("col", bytes_type, column_kind::regular_column)
             .build();
 
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto mt = make_lw_shared<memtable>(s);
         auto mt2 = make_lw_shared<memtable>(s);
 
@@ -433,7 +446,7 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
             mt2->apply(m);
         }
 
-        auto rd = assert_that(mt->make_flat_reader(s, tests::make_permit()));
+        auto rd = assert_that(mt->make_flat_reader(s, semaphore.make_permit()));
         rd.produces(ring[0]);
         mt->mark_flushed(mt2->as_data_source());
         rd.produces(ring[1]);
@@ -447,6 +460,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -455,7 +469,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
         }
 
         memory::with_allocation_failures([&] {
-            assert_that(mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range))
+            assert_that(mt->make_flat_reader(s, semaphore.make_permit(), query::full_partition_range))
                 .produces(ms);
         });
     });
@@ -465,6 +479,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -476,7 +491,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
             auto revert = defer([&] {
                 mt->revert_flushed_memory();
             });
-            assert_that(mt->make_flush_reader(s, tests::make_permit(), default_priority_class()))
+            assert_that(mt->make_flush_reader(s, semaphore.make_permit(), default_priority_class()))
                 .produces(ms);
         });
     });
@@ -486,6 +501,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
     return seastar::async([] {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -494,7 +510,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
         }
 
         memory::with_allocation_failures([&] {
-            assert_that(mt->make_flat_reader(s, tests::make_permit(), dht::partition_range::make_singular(ms[1].decorated_key())))
+            assert_that(mt->make_flat_reader(s, semaphore.make_permit(), dht::partition_range::make_singular(ms[1].decorated_key())))
                 .produces(ms[1]);
         });
     });
@@ -506,6 +522,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto mt = make_lw_shared<memtable>(s);
 
@@ -514,7 +531,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         mt->apply(m);
 
         {
-            auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
@@ -524,7 +541,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto slice = s->full_slice();
             slice.options.set<query::partition_slice::option::with_digest>();
-            auto rd = mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range, slice);
+            auto rd = mt->make_flat_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
@@ -532,7 +549,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         }
 
         {
-            auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
@@ -543,7 +560,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         mt->apply(m);
 
         {
-            auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
@@ -553,7 +570,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto slice = s->full_slice();
             slice.options.set<query::partition_slice::option::with_digest>();
-            auto rd = mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range, slice);
+            auto rd = mt->make_flat_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
@@ -561,7 +578,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         }
 
         {
-            auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();

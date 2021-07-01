@@ -558,13 +558,14 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 
 // Call with region locked.
 static mutation_partition read_using_cursor(partition_snapshot& snap) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     partition_snapshot_row_cursor cur(*snap.schema(), snap);
     cur.maybe_refresh();
     auto mp = read_partition_from(*snap.schema(), cur);
     for (auto&& rt : snap.range_tombstones()) {
         mp.apply_delete(*snap.schema(), rt);
     }
-    mp.apply(*snap.schema(), mutation_fragment(*snap.schema(), tests::make_permit(), static_row(snap.static_row(false))));
+    mp.apply(*snap.schema(), mutation_fragment(*snap.schema(), semaphore.make_permit(), static_row(snap.static_row(false))));
     mp.set_static_row_continuous(snap.static_row_continuous());
     mp.apply(snap.partition_tombstone());
     return mp;
