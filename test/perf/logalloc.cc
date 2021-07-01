@@ -32,7 +32,6 @@
 #include "utils/logalloc.hh"
 #include "log.hh"
 #include "test/perf/perf.hh"
-#include "test/lib/reader_permit.hh"
 
 class piggie {
     size_t _extra_size;

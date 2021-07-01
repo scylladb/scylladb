@@ -212,7 +212,7 @@ public:
     }
 
     future<double> read_sequential_partitions(int idx) {
-        return with_closeable(_sst[0]->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [this] (flat_mutation_reader& r) {
+        return with_closeable(_sst[0]->make_reader(s, _env.make_reader_permit(), query::full_partition_range, s->full_slice()), [this] (flat_mutation_reader& r) {
             auto start = perf_sstable_test_env::now();
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);
