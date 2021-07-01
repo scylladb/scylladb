@@ -783,6 +783,10 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
     }, std::move(cfg_in));
 }
 
+reader_permit make_reader_permit(cql_test_env& env) {
+    return env.local_db().get_reader_concurrency_semaphore().make_permit(nullptr, "test");
+}
+
 namespace debug {
 
 seastar::sharded<database>* db;
