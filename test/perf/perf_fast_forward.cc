@@ -802,7 +802,7 @@ public:
 };
 
 // cf should belong to ks.test
-static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
+static test_result scan_rows_with_stride(column_family& cf, clustered_ds& ds, int n_rows, int n_read = 1, int n_skip = 0) {
     auto rd = cf.make_reader(cf.schema(),
         tests::make_permit(),
         query::full_partition_range,
@@ -820,8 +820,8 @@ static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_re
     while (ck < n_rows) {
         if (n_skip) {
             rd.fast_forward_to(position_range(
-                position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck)),
-                position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck + n_read))
+                position_in_partition(position_in_partition::clustering_row_tag_t(), ds.make_ck(*cf.schema(), ck)),
+                position_in_partition(position_in_partition::clustering_row_tag_t(), ds.make_ck(*cf.schema(), ck + n_read))
             ), db::no_timeout).get();
         }
         fragments += consume_all(rd);
@@ -871,7 +871,7 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     return {before, fragments};
 }
 
-static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1) {
+static test_result slice_rows(column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     auto rd = cf.make_reader(cf.schema(),
         tests::make_permit(),
         query::full_partition_range,
@@ -885,8 +885,8 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
     assert_partition_start(rd);
 
     rd.fast_forward_to(position_range(
-            position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
-            position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read))), db::no_timeout).get();
+            position_in_partition::for_key(ds.make_ck(*cf.schema(), offset)),
+            position_in_partition::for_key(ds.make_ck(*cf.schema(), offset + n_read))), db::no_timeout).get();
     uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
@@ -897,11 +897,11 @@ static test_result test_reading_all(flat_mutation_reader& rd) {
     return {before, consume_all(rd)};
 }
 
-static test_result slice_rows_by_ck(column_family& cf, int offset = 0, int n_read = 1) {
+static test_result slice_rows_by_ck(column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     auto slice = partition_slice_builder(*cf.schema())
         .with_range(query::clustering_range::make(
-            clustering_key::from_singular(*cf.schema(), offset),
-            clustering_key::from_singular(*cf.schema(), offset + n_read - 1)))
+            ds.make_ck(*cf.schema(), offset),
+            ds.make_ck(*cf.schema(), offset + n_read - 1)))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, slice);
@@ -910,10 +910,10 @@ static test_result slice_rows_by_ck(column_family& cf, int offset = 0, int n_rea
     return test_reading_all(rd);
 }
 
-static test_result select_spread_rows(column_family& cf, int stride = 0, int n_read = 1) {
+static test_result select_spread_rows(column_family& cf, clustered_ds& ds, int stride = 0, int n_read = 1) {
     auto sb = partition_slice_builder(*cf.schema());
     for (int i = 0; i < n_read; ++i) {
-        sb.with_range(query::clustering_range::make_singular(clustering_key::from_singular(*cf.schema(), i * stride)));
+        sb.with_range(query::clustering_range::make_singular(ds.make_ck(*cf.schema(), i * stride)));
     }
 
     auto slice = sb.build();
@@ -926,10 +926,10 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
     return test_reading_all(rd);
 }
 
-static test_result test_slicing_using_restrictions(column_family& cf, int_range row_range) {
+static test_result test_slicing_using_restrictions(column_family& cf, clustered_ds& ds, int_range row_range) {
     auto slice = partition_slice_builder(*cf.schema())
         .with_range(std::move(row_range).transform([&] (int i) -> clustering_key {
-            return clustering_key::from_singular(*cf.schema(), i);
+            return ds.make_ck(*cf.schema(), i);
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
@@ -940,7 +940,7 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
     return test_reading_all(rd);
 }
 
-static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
+static test_result slice_rows_single_key(column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
@@ -948,8 +948,8 @@ static test_result slice_rows_single_key(column_family& cf, int offset = 0, int 
     metrics_snapshot before;
     assert_partition_start(rd);
     rd.fast_forward_to(position_range(
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read))), db::no_timeout).get();
+        position_in_partition::for_key(ds.make_ck(*cf.schema(), offset)),
+        position_in_partition::for_key(ds.make_ck(*cf.schema(), offset + n_read))), db::no_timeout).get();
     uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
@@ -1007,7 +1007,7 @@ public:
         return cfg.n_rows;
     }
 
-    clustering_key make_ck(const schema &s, int ck) override {
+    clustering_key make_ck(const schema& s, int ck) override {
         return clustering_key::from_single_value(s, serialized<int64_t>(ck));
     }
 
@@ -1117,7 +1117,7 @@ public:
 static test_result test_forwarding_with_restriction(column_family& cf, clustered_ds& ds, table_config& cfg, bool single_partition) {
     auto first_key = ds.n_rows(cfg) / 2;
     auto slice = partition_slice_builder(*cf.schema())
-        .with_range(query::clustering_range::make_starting_with(clustering_key::from_singular(*cf.schema(), first_key)))
+        .with_range(query::clustering_range::make_starting_with(ds.make_ck(*cf.schema(), first_key)))
         .build();
 
     auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
@@ -1137,14 +1137,14 @@ static test_result test_forwarding_with_restriction(column_family& cf, clustered
     fragments += consume_all(rd);
 
     rd.fast_forward_to(position_range(
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 1)),
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 2))), db::no_timeout).get();
+        position_in_partition::for_key(ds.make_ck(*cf.schema(), 1)),
+        position_in_partition::for_key(ds.make_ck(*cf.schema(), 2))), db::no_timeout).get();
 
     fragments += consume_all(rd);
 
     rd.fast_forward_to(position_range(
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key - 2)),
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key + 2))), db::no_timeout).get();
+        position_in_partition::for_key(ds.make_ck(*cf.schema(), first_key - 2)),
+        position_in_partition::for_key(ds.make_ck(*cf.schema(), first_key + 2))), db::no_timeout).get();
 
     fragments += consume_all_with_next_partition(rd);
     return {before, fragments};
@@ -1345,7 +1345,7 @@ void test_large_partition_single_key_slice(column_family& cf, clustered_ds& ds) 
     struct first {
     };
     auto test = [&](int_range range) {
-        auto r = test_slicing_using_restrictions(cf, range);
+        auto r = test_slicing_using_restrictions(cf, ds, range);
         r.set_params(to_sstrings(new_test_case ? "->": 0, format("{}", range)));
         check_fragment_count(r, cardinality(intersection(range, live_range)));
         return r;
@@ -1467,7 +1467,7 @@ void test_large_partition_skips(column_family& cf, clustered_ds& ds) {
 
     output_mgr->set_test_param_names({{"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
     auto do_test = [&] (int n_read, int n_skip) {
-        auto r = scan_rows_with_stride(cf, n_rows, n_read, n_skip);
+        auto r = scan_rows_with_stride(cf, ds, n_rows, n_read, n_skip);
         r.set_params(to_sstrings(n_read, n_skip));
         check_fragment_count(r, count_for_skip_pattern(n_rows, n_read, n_skip));
         return r;
@@ -1519,7 +1519,7 @@ void test_large_partition_slicing(column_family& cf, clustered_ds& ds) {
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
       run_test_case([&] {
-        auto r = slice_rows(cf, offset, read);
+        auto r = slice_rows(cf, ds, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_rows - offset, read));
         return r;
@@ -1543,7 +1543,7 @@ void test_large_partition_slicing_clustering_keys(column_family& cf, clustered_d
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
       run_test_case([&] {
-        auto r = slice_rows_by_ck(cf, offset, read);
+        auto r = slice_rows_by_ck(cf, ds, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_rows - offset, read));
         return r;
@@ -1567,7 +1567,7 @@ void test_large_partition_slicing_single_partition_reader(column_family& cf, clu
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int offset, int read) {
       run_test_case([&] {
-        auto r = slice_rows_single_key(cf, offset, read);
+        auto r = slice_rows_single_key(cf, ds, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_rows - offset, read));
         return r;
@@ -1591,7 +1591,7 @@ void test_large_partition_select_few_rows(column_family& cf, clustered_ds& ds) {
     output_mgr->set_test_param_names({{"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int stride, int read) {
       run_test_case([&] {
-        auto r = select_spread_rows(cf, stride, read);
+        auto r = select_spread_rows(cf, ds, stride, read);
         r.set_params(to_sstrings(stride, read));
         check_fragment_count(r, read);
         return r;
