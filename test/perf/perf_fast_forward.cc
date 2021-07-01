@@ -789,6 +789,18 @@ static void assert_partition_start(flat_mutation_reader& rd) {
     assert(mfopt->is_partition_start());
 }
 
+// A dataset with one large partition with many clustered fragments.
+// Partition key: pk int [0]
+// Clusterint key: ck int [0 .. n_rows() - 1]
+class clustered_ds {
+public:
+    virtual int n_rows(const table_config&) = 0;
+
+    virtual clustering_key make_ck(const schema& s, int ck) {
+        return clustering_key::from_single_value(s, serialized(ck));
+    }
+};
+
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
     auto rd = cf.make_reader(cf.schema(),
@@ -968,18 +980,6 @@ bytes make_blob(size_t blob_size) {
     }
     return big_blob;
 }
-
-// A dataset with one large partition with many clustered fragments.
-// Partition key: pk int [0]
-// Clusterint key: ck int [0 .. n_rows() - 1]
-class clustered_ds {
-public:
-    virtual int n_rows(const table_config&) = 0;
-
-    virtual clustering_key make_ck(const schema& s, int ck) {
-        return clustering_key::from_single_value(s, serialized(ck));
-    }
-};
 
 // A dataset with many partitions.
 // Partition key: pk int [0 .. n_partitions() - 1]
