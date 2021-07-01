@@ -124,11 +124,15 @@ public:
                 seastar::gate file_send_gate;
                 std::optional<db::replay_position> first_failed_rp;
                 std::optional<db::replay_position> last_succeeded_rp;
+                std::set<db::replay_position> in_progress_rps;
                 bool segment_replay_failed = false;
 
                 void mark_hint_as_in_progress(db::replay_position rp);
                 void on_hint_send_success(db::replay_position rp) noexcept;
                 void on_hint_send_failure(db::replay_position rp) noexcept;
+
+                // Returns a position below which hints were successfully replayed.
+                db::replay_position get_replayed_bound() const noexcept;
             };
 
         private:
@@ -136,6 +140,7 @@ public:
             // Segments to replay which were not created on this shard but were moved during rebalancing
             std::list<sstring> _foreign_segments_to_replay;
             replay_position _last_not_complete_rp;
+            replay_position _sent_upper_bound_rp;
             std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
             state_set _state;
             future<> _stopped;
@@ -183,6 +188,9 @@ public:
             /// \brief Check if there are still unsent segments.
             /// \return TRUE if there are still unsent segments.
             bool have_segments() const noexcept { return !_segments_to_replay.empty() || !_foreign_segments_to_replay.empty(); };
+
+            /// \brief Sets the sent_upper_bound_rp marker to indicate that the hints were replayed _up to_ given position.
+            void rewind_sent_replay_position_to(db::replay_position rp);
 
         private:
             /// \brief Gets the name of the current segment that should be sent.

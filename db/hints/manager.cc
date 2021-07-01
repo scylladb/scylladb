@@ -365,6 +365,24 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
                 }
 
                 std::vector<sstring> segs_vec = l.get_segments_to_replay();
+
+                if (segs_vec.empty()) {
+                    // If the segs_vec is empty, this means that there are no more
+                    // hints to be replayed. We can safely skip to the position of the
+                    // last written hint.
+                    //
+                    // This is necessary: remember that we artificially set
+                    // the last replayed position based on the creation time
+                    // of the endpoint manager. If we replay all segments from
+                    // previous runtimes but won't write any new hints during
+                    // this runtime, then without the logic below the hint replay
+                    // tracker won't reach the hint written tracker.
+                    auto rp = _last_written_rp;
+                    rp.pos++;
+                    _sender.rewind_sent_replay_position_to(rp);
+                    return make_ready_future<commitlog>(std::move(l));
+                }
+
                 std::vector<std::pair<db::segment_id_type, sstring>> local_segs_vec;
                 local_segs_vec.reserve(segs_vec.size());
 
@@ -806,11 +824,17 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
-        }).then_wrapped([units = std::move(units), ctx_ptr, rp] (future<>&& f) {
+        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr] (future<>&& f) {
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
                 ctx_ptr->on_hint_send_success(rp);
+                auto new_bound = ctx_ptr->get_replayed_bound();
+                // Segments from other shards are replayed first and are considered to be "before" replay position 0.
+                // Update the sent upper bound only if it is a local segment.
+                if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
+                    _sent_upper_bound_rp = new_bound;
+                }
             } else {
                 ctx_ptr->on_hint_send_failure(rp);
             }
@@ -823,19 +847,49 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
+    in_progress_rps.insert(rp);
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
+    in_progress_rps.erase(rp);
     if (!last_succeeded_rp || *last_succeeded_rp < rp) {
         last_succeeded_rp = rp;
     }
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
+    in_progress_rps.erase(rp);
     segment_replay_failed = true;
     if (!first_failed_rp || rp < *first_failed_rp) {
         first_failed_rp = rp;
     }
+}
+
+db::replay_position manager::end_point_hints_manager::sender::send_one_file_ctx::get_replayed_bound() const noexcept {
+    // We are sure that all hints were sent _below_ the position which is the minimum of the following:
+    // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
+    // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
+    // - Position of the lowest hint which is being currently sent (in_progress_rps.begin()).
+
+    db::replay_position rp;
+    if (first_failed_rp) {
+        rp = *first_failed_rp;
+    } else if (last_succeeded_rp) {
+        // It is always true that `first_failed_rp` <= `last_succeeded_rp`, so no need to compare
+        rp = *last_succeeded_rp;
+        // We replayed _up to_ `last_attempted_rp`, so the bound is not strict; we can increase `pos` by one
+        rp.pos++;
+    }
+
+    if (!in_progress_rps.empty() && *in_progress_rps.begin() < rp) {
+        rp = *in_progress_rps.begin();
+    }
+
+    return rp;
+}
+
+void manager::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
+    _sent_upper_bound_rp = rp;
 }
 
 // runs in a seastar::async context
