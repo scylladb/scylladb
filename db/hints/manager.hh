@@ -40,6 +40,7 @@
 #include "utils/loading_shared_values.hh"
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
+#include "db/hints/sync_point.hh"
 
 class fragmented_temporary_buffer;
 
@@ -441,6 +442,11 @@ public:
             return _last_written_rp;
         }
 
+        /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
+        future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+            return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
+        }
+
         /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
         ///
         /// Runs a given functor under the file_update_mutex of the given end_point_hints_manager instance.
@@ -638,6 +644,12 @@ public:
     void allow_replaying() noexcept {
         _state.set(state::replay_allowed);
     }
+
+    /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
+    sync_point::shard_rps calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const;
+
+    /// \brief Waits until hint replay reach replay positions described in `rps`.
+    future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
 
     /// \brief Creates an object which aids in hints directory initialization.
     /// This object can saafely be copied and used from any shard.

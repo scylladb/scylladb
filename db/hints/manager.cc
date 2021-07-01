@@ -26,6 +26,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/div_ceil.hh"
 #include "db/extensions.hh"
@@ -165,6 +166,60 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
             ep_man.allow_hints();
         }
     });
+}
+
+sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const {
+    sync_point::shard_rps rps;
+    for (auto addr : target_hosts) {
+        auto it = _ep_managers.find(addr);
+        if (it != _ep_managers.end()) {
+            const end_point_hints_manager& ep_man = it->second;
+            rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
+        }
+    }
+    return rps;
+}
+
+future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps) {
+    abort_source local_as;
+
+    auto sub = as.subscribe([&local_as] () noexcept {
+        if (!local_as.abort_requested()) {
+            local_as.request_abort();
+        }
+    });
+
+    bool was_aborted = false;
+    co_await parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
+        const auto addr = p.first;
+        auto& ep_man = p.second;
+
+        db::replay_position rp;
+        auto it = rps.find(addr);
+        if (it != rps.end()) {
+            rp = it->second;
+        }
+
+        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception([&local_as, &was_aborted] (auto eptr) {
+            if (!local_as.abort_requested()) {
+                local_as.request_abort();
+            }
+            try {
+                std::rethrow_exception(std::move(eptr));
+            } catch (abort_requested_exception&) {
+                was_aborted = true;
+            } catch (...) {
+                return make_exception_future<>(std::current_exception());
+            }
+            return make_ready_future();
+        });
+    });
+
+    if (was_aborted) {
+        throw abort_requested_exception();
+    }
+
+    co_return;
 }
 
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
