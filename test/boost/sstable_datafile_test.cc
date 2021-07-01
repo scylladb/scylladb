@@ -3597,7 +3597,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
             fragments.emplace_back(*table.schema(), tests::make_permit(), range_tombstone(rts.back()));
             ++seq;
 
-            fragments.emplace_back(*table.schema(), tests::make_permit(), table.make_row(table.make_ckey(seq), make_random_string(1)));
+            fragments.emplace_back(*table.schema(), tests::make_permit(), table.make_row(permit, table.make_ckey(seq), make_random_string(1)));
             ++seq;
         }
 
@@ -4936,12 +4936,12 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
                 auto ck = ss.make_ckey(tests::random::get_int<uint32_t>(0, 8));
                 testlog.trace("Generating clustering row {}", ck);
 
-                all_fragments.emplace_back(*schema, permit, ss.make_row(ck, "cv"));
+                all_fragments.emplace_back(*schema, permit, ss.make_row(permit, ck, "cv"));
                 expected_rows.clustering_rows.insert(ck);
             } else {
                 testlog.trace("Generating static row");
 
-                all_fragments.emplace_back(*schema, permit, ss.make_static_row("sv"));
+                all_fragments.emplace_back(*schema, permit, ss.make_static_row(permit, "sv"));
                 expected_rows.has_static_row = true;
             }
         }

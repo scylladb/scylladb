@@ -297,11 +297,12 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
     };
 
     simple_schema s;
+    auto permit = tests::make_permit();
     auto pkey = s.make_pkey(1);
     auto mut_orig = mutation(s.schema(), pkey);
 
     auto mf_range = boost::irange(0, 50) | boost::adaptors::transformed([&] (auto n) {
-        return s.make_row(s.make_ckey(n), "a_16_byte_value_");
+        return s.make_row(permit, s.make_ckey(n), "a_16_byte_value_");
     });
     for (auto&& mf : mf_range) {
         mut_orig.apply(mf);
@@ -358,12 +359,13 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
 SEASTAR_TEST_CASE(test_multi_range_reader) {
     return seastar::async([] {
         simple_schema s;
+        auto permit = tests::make_permit();
 
         auto keys = s.make_pkeys(10);
         auto ring = s.to_ring_positions(keys);
 
         auto crs = boost::copy_range<std::vector<mutation_fragment>>(boost::irange(0, 3) | boost::adaptors::transformed([&] (auto n) {
-            return s.make_row(s.make_ckey(n), "value");
+            return s.make_row(permit, s.make_ckey(n), "value");
         }));
 
         auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&] (auto& key) {
@@ -633,12 +635,13 @@ SEASTAR_TEST_CASE(test_consume_flat) {
 SEASTAR_TEST_CASE(test_make_forwardable) {
     return seastar::async([] {
         simple_schema s;
+        auto permit = tests::make_permit();
 
         auto keys = s.make_pkeys(10);
 
         auto crs = boost::copy_range < std::vector <
                    mutation_fragment >> (boost::irange(0, 3) | boost::adaptors::transformed([&](auto n) {
-                       return s.make_row(s.make_ckey(n), "value");
+                       return s.make_row(permit, s.make_ckey(n), "value");
                    }));
 
         auto ms = boost::copy_range < std::vector < mutation >> (keys | boost::adaptors::transformed([&](auto &key) {

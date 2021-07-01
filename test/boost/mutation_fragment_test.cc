@@ -441,7 +441,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
     // static row
     {
         try {
-            auto sr = s.make_static_row(val);
+            auto sr = s.make_static_row(permit, val);
             // Copy to move to our permit.
             sr = mutation_fragment(*s.schema(), permit, sr);
             sr.mutate_as_clustering_row(*s.schema(), [&] (clustering_row&) {
@@ -454,7 +454,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
     // clustering row
     {
         try {
-            auto cr = s.make_row(s.make_ckey(0), val);
+            auto cr = s.make_row(permit, s.make_ckey(0), val);
             // Copy to move to our permit.
             cr = mutation_fragment(*s.schema(), permit, cr);
             cr.mutate_as_clustering_row(*s.schema(), [&] (clustering_row&) {
