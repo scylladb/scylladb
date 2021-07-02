@@ -442,7 +442,7 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
                     if (can_move) {
                         tombstones.apply_monotonically(s, std::move(current->partition().mutable_row_tombstones()));
                     } else {
-                        tombstones.apply_monotonically(s, current->partition().row_tombstones());
+                        tombstones.apply_monotonically(s, const_cast<const mutation_partition&>(current->partition()).row_tombstones());
                     }
                     current = current->next();
                     can_move &= current && !current->is_referenced();

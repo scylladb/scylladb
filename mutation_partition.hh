@@ -1313,7 +1313,7 @@ public:
     rows_type& mutable_clustered_rows() noexcept { return _rows; }
 
     const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }
-    range_tombstone_list& row_tombstones() noexcept { return _row_tombstones; }
+    utils::immutable_collection<range_tombstone_list> row_tombstones() noexcept { return _row_tombstones; }
     range_tombstone_list& mutable_row_tombstones() noexcept { return _row_tombstones; }
 
     const row* find_row(const schema& s, const clustering_key& key) const;
