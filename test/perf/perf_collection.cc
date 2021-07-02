@@ -301,7 +301,7 @@ public:
     virtual void insert_and_erase(per_key_t k) override {
         perf_intrusive_key key(k);
         auto i = _t.insert_before(_t.end(), key);
-        i.erase();
+        _t.erase(i);
     }
     virtual void show_stats() {
         struct intrusive_b::stats st = _t.get_stats();
