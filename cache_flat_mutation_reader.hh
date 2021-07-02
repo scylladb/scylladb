@@ -732,7 +732,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone& rt) {
     if (can_populate()) {
         clogger.trace("csm {}: maybe_add_to_cache({})", fmt::ptr(this), rt);
         _lsa_manager.run_in_update_section_with_allocator([&] {
-            _snp->version()->partition().row_tombstones().apply_monotonically(*_schema, rt);
+            _snp->version()->partition().mutable_row_tombstones().apply_monotonically(*_schema, rt);
         });
     } else {
         _read_context.cache().on_mispopulate();

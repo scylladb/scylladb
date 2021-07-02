@@ -1314,6 +1314,7 @@ public:
 
     const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }
     range_tombstone_list& row_tombstones() noexcept { return _row_tombstones; }
+    range_tombstone_list& mutable_row_tombstones() noexcept { return _row_tombstones; }
 
     const row* find_row(const schema& s, const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;

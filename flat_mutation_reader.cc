@@ -466,7 +466,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             }
         }
         void prepare_next_range_tombstone() {
-            auto& rts = _cur->partition().row_tombstones();
+            auto& rts = _cur->partition().mutable_row_tombstones();
             auto rt = rts.pop_front_and_lock();
             if (rt) {
                 auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
@@ -521,7 +521,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             auto deleter = current_deleter<rows_entry>();
             crs.clear_and_dispose(deleter);
 
-            auto &rts = _cur->partition().row_tombstones();
+            auto &rts = _cur->partition().mutable_row_tombstones();
             auto rt = rts.pop_front_and_lock();
             while (rt) {
                 current_deleter<range_tombstone>()(rt);
