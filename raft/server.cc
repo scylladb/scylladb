@@ -88,6 +88,7 @@ public:
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
+    raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
 private:
     std::unique_ptr<rpc> _rpc;
@@ -1052,6 +1053,10 @@ void server_impl::elapse_election() {
 
 void server_impl::tick() {
     _fsm->tick();
+}
+
+raft::server_id server_impl::id() const {
+    return _id;
 }
 
 const server_address_set& server_impl::get_rpc_config() const {
