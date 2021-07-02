@@ -229,13 +229,13 @@ Prometheus exporter for machine metrics, written in Go with pluggable metric col
 
 %post node-exporter
 if [ $1 -eq 1 ] ; then
-    /usr/bin/systemctl preset node-exporter.service ||:
+    /usr/bin/systemctl preset scylla-node-exporter.service ||:
 fi
 
 %preun node-exporter
 if [ $1 -eq 0 ] ; then
-    /usr/bin/systemctl --no-reload disable node-exporter.service ||:
-    /usr/bin/systemctl stop node-exporter.service ||:
+    /usr/bin/systemctl --no-reload disable scylla-node-exporter.service ||:
+    /usr/bin/systemctl stop scylla-node-exporter.service ||:
 fi
 
 %postun node-exporter
