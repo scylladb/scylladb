@@ -499,7 +499,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("jerry")))));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
-                        auto &rows = m->partition().clustered_rows();
+                        auto rows = m->partition().clustered_rows();
                         BOOST_REQUIRE(rows.calculate_size() == 1);
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
@@ -513,7 +513,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("tom")))));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
-                        auto &rows = m->partition().clustered_rows();
+                        auto rows = m->partition().clustered_rows();
                         BOOST_REQUIRE(rows.calculate_size() == 1);
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
@@ -527,7 +527,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("john")))));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
-                        auto &rows = m->partition().clustered_rows();
+                        auto rows = m->partition().clustered_rows();
                         BOOST_REQUIRE(rows.calculate_size() == 1);
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
@@ -541,7 +541,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("nadav")))));
                         BOOST_REQUIRE(m->partition().partition_tombstone());
-                        auto &rows = m->partition().clustered_rows();
+                        auto rows = m->partition().clustered_rows();
                         BOOST_REQUIRE(rows.calculate_size() == 0);
                         return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout);
                     }).then([reader] (mutation_opt m) {
@@ -1542,7 +1542,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s, &key] (mutation_opt m) {
                 BOOST_REQUIRE(m);
                 BOOST_REQUIRE(m->key().equal(*s, key));
-                auto& rows = m->partition().clustered_rows();
+                auto rows = m->partition().clustered_rows();
                 BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
                 auto& row = rows.begin()->row();
                 auto& cells = row.cells();
@@ -1720,7 +1720,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                 return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s] (mutation_opt m) {
                     BOOST_REQUIRE(m);
                     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
-                    auto& rows = m->partition().clustered_rows();
+                    auto rows = m->partition().clustered_rows();
                     BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
                     auto& row = rows.begin()->row();
                     BOOST_REQUIRE(!row.deleted_at());
@@ -5865,7 +5865,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s, &key, is_tombstone_purgeable, &tomb] (mutation_opt m) {
                 BOOST_REQUIRE(m);
                 BOOST_REQUIRE(m->key().equal(*s, key));
-                auto& rows = m->partition().clustered_rows();
+                auto rows = m->partition().clustered_rows();
                 BOOST_REQUIRE_EQUAL(rows.calculate_size(), 0);
                 BOOST_REQUIRE(is_tombstone_purgeable(m->partition().partition_tombstone()));
                 BOOST_REQUIRE(m->partition().partition_tombstone() == tomb);

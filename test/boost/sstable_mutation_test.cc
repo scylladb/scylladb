@@ -630,7 +630,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
                                     make_ckey("aaa"),
                                     bound_kind::incl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
-                    auto& rows = mut->partition().clustered_rows();
+                    auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 1);
                     for (auto& e : rows) {
                         BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb")));
@@ -685,7 +685,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
                                     make_ckey("aaa"),
                                     bound_kind::incl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
-                    auto& rows = mut->partition().clustered_rows();
+                    auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 0);
                     return stop_iteration::no;
                 });
@@ -758,7 +758,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
                         return clustering_key::from_deeply_exploded(*s, std::move(v));
                     };
                     BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
-                    auto& rows = mut->partition().clustered_rows();
+                    auto rows = mut->partition().clustered_rows();
                     auto& rts = mut->partition().row_tombstones();
 
                     auto it = rts.begin();

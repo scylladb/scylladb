@@ -44,6 +44,7 @@
 #include "utils/lru.hh"
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
+#include "utils/immutable-collection.hh"
 
 class mutation_fragment;
 class mutation_partition_view;
@@ -1308,7 +1309,7 @@ public:
 
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const noexcept { return _rows; }
-    rows_type& clustered_rows() noexcept { return _rows; }
+    utils::immutable_collection<rows_type> clustered_rows() noexcept { return _rows; }
     rows_type& mutable_clustered_rows() noexcept { return _rows; }
 
     const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }

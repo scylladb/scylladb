@@ -76,7 +76,7 @@ public:
         rows_entry::tri_compare cmp(*snp.schema());
         _in_latest = true;
         for (auto&& v : snp.versions()) {
-            auto& rows = v.partition().clustered_rows();
+            auto rows = v.partition().clustered_rows();
             _it = rows.find(_pos, cmp);
             if (_it != rows.end()) {
                 return true;
@@ -176,7 +176,7 @@ class partition_snapshot_row_cursor final {
         bool first = true;
         for (auto&& v : _snp.versions()) {
             unique_owner = unique_owner && (first || !v.is_referenced());
-            auto& rows = v.partition().clustered_rows();
+            auto rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, cmp);
             if (first) {
                 _latest_it = pos;
@@ -272,7 +272,7 @@ public:
         if (!is_in_latest_version()) {
             rows_entry::tri_compare cmp(_schema);
             position_in_version::less_compare heap_less(_schema);
-            auto& rows = _snp.version()->partition().clustered_rows();
+            auto rows = _snp.version()->partition().clustered_rows();
             bool match;
             auto it = rows.lower_bound(_position, match, cmp);
             _latest_it = it;
