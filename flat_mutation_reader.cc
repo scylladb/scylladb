@@ -452,7 +452,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
         mutation_fragment_opt _cr;
     private:
         void prepare_next_clustering_row() {
-            auto& crs = _cur->partition().clustered_rows();
+            auto& crs = _cur->partition().mutable_clustered_rows();
             while (true) {
                 auto re = crs.unlink_leftmost_without_rebalance();
                 if (!re) {
@@ -517,7 +517,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             prepare_next_range_tombstone();
         }
         void destroy_current_mutation() {
-            auto &crs = _cur->partition().clustered_rows();
+            auto &crs = _cur->partition().mutable_clustered_rows();
             auto deleter = current_deleter<rows_entry>();
             crs.clear_and_dispose(deleter);
 

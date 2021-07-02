@@ -372,7 +372,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                         this->maybe_update_continuity();
                     } else if (can_populate()) {
                         rows_entry::tri_compare cmp(*_schema);
-                        auto& rows = _snp->version()->partition().clustered_rows();
+                        auto& rows = _snp->version()->partition().mutable_clustered_rows();
                         if (query::is_single_row(*_schema, *_ck_ranges_curr)) {
                             with_allocator(_snp->region().allocator(), [&] {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
@@ -430,7 +430,7 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
     // so we need to ensure we have an entry in the latest version.
     if (!_last_row.is_in_latest_version()) {
         with_allocator(_snp->region().allocator(), [&] {
-            auto& rows = _snp->version()->partition().clustered_rows();
+            auto& rows = _snp->version()->partition().mutable_clustered_rows();
             rows_entry::tri_compare cmp(*_schema);
             // FIXME: Avoid the copy by inserting an incomplete clustering row
             auto e = alloc_strategy_unique_ptr<rows_entry>(
@@ -492,7 +492,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         new_entry->set_continuous(false);
         auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
                                               : mp.clustered_rows().lower_bound(cr.key(), cmp);
-        auto insert_result = mp.clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
+        auto insert_result = mp.mutable_clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
         it = insert_result.first;
         if (insert_result.second) {
             _snp->tracker()->insert(*it);
@@ -592,7 +592,7 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
                 // FIXME: _lower_bound could be adjacent to the previous row, in which case we could skip this
                 clogger.trace("csm {}: insert dummy at {}", fmt::ptr(this), _lower_bound);
                 auto it = with_allocator(_lsa_manager.region().allocator(), [&] {
-                    auto& rows = _snp->version()->partition().clustered_rows();
+                    auto& rows = _snp->version()->partition().mutable_clustered_rows();
                     auto new_entry = current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no);
                     return rows.insert_before(_next_row.get_iterator_in_latest_version(), *new_entry);
                 });

@@ -400,7 +400,7 @@ public:
     // Can be called only when cursor is valid and pointing at a row.
     // The cursor remains valid after the call and points at the same row as before.
     ensure_result ensure_entry_in_latest() {
-        auto&& rows = _snp.version()->partition().clustered_rows();
+        auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         rows_entry& latest = *latest_i;
         if (is_in_latest_version()) {
@@ -445,7 +445,7 @@ public:
                 return std::nullopt;
             }
         }
-        auto&& rows = _snp.version()->partition().clustered_rows();
+        auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
             is_continuous(latest_i && latest_i->continuous()));

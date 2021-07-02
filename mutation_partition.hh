@@ -1309,6 +1309,7 @@ public:
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const noexcept { return _rows; }
     rows_type& clustered_rows() noexcept { return _rows; }
+    rows_type& mutable_clustered_rows() noexcept { return _rows; }
 
     const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }
     range_tombstone_list& row_tombstones() noexcept { return _row_tombstones; }
