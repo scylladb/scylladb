@@ -825,6 +825,29 @@ public:
         bool operator==(const iterator_base& o) const noexcept { return is_end() ? o.is_end() : _hook == o._hook; }
         bool operator!=(const iterator_base& o) const noexcept { return !(*this == o); }
         operator bool() const noexcept { return !is_end(); }
+
+        /*
+         * Special constructor for the case when there's the need for an
+         * iterator to the given value poiter. We can get all we need
+         * through the hook -> node_base -> node chain.
+         */
+        iterator_base(pointer key) noexcept : iterator_base(&(key->*Hook), 0) {
+            revalidate();
+        }
+
+        /*
+         * Returns pointer on the owning tree if the element is the
+         * last one left in it.
+         */
+        tree_ptr tree_if_singular() noexcept {
+            node_base* n = revalidate();
+
+            if (n->is_root() && n->is_leaf() && n->num_keys == 1) {
+                return n->is_inline() ? tree::from_inline(n) : node::from_base(n)->_parent.t;
+            } else {
+                return nullptr;
+            }
+        }
     };
 
     using iterator_base_const = iterator_base<true>;
@@ -871,29 +894,6 @@ public:
             } else {
                 super::_idx = other._idx;
                 super::_hook = const_cast<member_hook*>(other._hook);
-            }
-        }
-
-        /*
-         * Special constructor for the case when there's the need for an
-         * iterator to the given value poiter. We can get all we need
-         * through the hook -> node_base -> node chain.
-         */
-        iterator(Key* key) noexcept : super(&(key->*Hook), 0) {
-            super::revalidate();
-        }
-
-        /*
-         * Returns pointer on the owning tree if the element is the
-         * last one left in it.
-         */
-        tree* tree_if_singular() noexcept {
-            node_base* n = super::revalidate();
-
-            if (n->is_root() && n->is_leaf() && n->num_keys == 1) {
-                return n->is_inline() ? tree::from_inline(n) : node::from_base(n)->_parent.t;
-            } else {
-                return nullptr;
             }
         }
 
