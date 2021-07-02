@@ -388,11 +388,11 @@ public:
         return _bytes.minimal_external_memory_usage();
     }
 
-    size_t external_memory_usage() const {
+    size_t external_memory_usage() const noexcept {
         return _bytes.external_memory_usage();
     }
 
-    size_t memory_usage() const {
+    size_t memory_usage() const noexcept {
         return sizeof(*this) + external_memory_usage();
     }
 };
