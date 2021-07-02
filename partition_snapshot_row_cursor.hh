@@ -202,7 +202,8 @@ class partition_snapshot_row_cursor final {
         assert(iterators_valid());
         for (auto&& curr : _current_row) {
             if (!keep && curr.unique_owner) {
-                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
+                mutation_partition::rows_type::key_grabber kg(curr.it);
+                kg.release(current_deleter<rows_entry>());
             } else {
                 ++curr.it;
             }

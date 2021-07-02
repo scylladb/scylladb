@@ -854,6 +854,7 @@ public:
 
     class iterator final : public iterator_base_nonconst {
         friend class tree;
+        friend class key_grabber;
         using super = iterator_base_nonconst;
 
         explicit iterator(const tree* t) noexcept : super(t) {}
@@ -896,6 +897,7 @@ public:
             }
         }
 
+    private:
         template <typename Disp>
         requires Disposer<Disp, Key>
         iterator erase_and_dispose(Disp&& disp) noexcept {
@@ -920,9 +922,6 @@ public:
             return cur;
         }
 
-        iterator erase() noexcept { return erase_and_dispose(default_dispose<Key>); }
-
-    private:
         template <typename Pointer>
         iterator insert_before(Pointer kptr) {
             cursor cur;
@@ -1000,7 +999,9 @@ public:
     }
 
     /*
-     * The KeyPointer implementation for moving the key between trees.
+     * Helper to remove keys from trees using only the key iterator.
+     *
+     * Conforms to KeyPointer and can be used to move keys between trees.
      * Create it with an iterator to a key in one tree and feed to some
      * .insert method into the other. If the key will be taken by the
      * target, it will be instantly removed from the source, and the
@@ -1018,9 +1019,16 @@ public:
         key_grabber(key_grabber&&) noexcept = default;
 
         Key& operator*() const noexcept { return *_it; }
+
+        template <typename Disp>
+        requires Disposer<Disp, Key>
+        void release(Disp&& disp) {
+            _it = _it.erase_and_dispose(std::move(disp));
+        }
+
         Key* release() noexcept {
             Key& key = *_it;
-            _it = _it.erase();
+            release(default_dispose<Key>);
             return &key;
         }
     };
