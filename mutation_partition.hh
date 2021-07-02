@@ -1305,11 +1305,14 @@ public:
     tombstone partition_tombstone() const { return _tombstone; }
     lazy_row& static_row() { return _static_row; }
     const lazy_row& static_row() const { return _static_row; }
+
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
-    const rows_type& clustered_rows() const { return _rows; }
-    const range_tombstone_list& row_tombstones() const { return _row_tombstones; }
-    rows_type& clustered_rows() { return _rows; }
-    range_tombstone_list& row_tombstones() { return _row_tombstones; }
+    const rows_type& clustered_rows() const noexcept { return _rows; }
+    rows_type& clustered_rows() noexcept { return _rows; }
+
+    const range_tombstone_list& row_tombstones() const noexcept { return _row_tombstones; }
+    range_tombstone_list& row_tombstones() noexcept { return _row_tombstones; }
+
     const row* find_row(const schema& s, const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     row_tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
