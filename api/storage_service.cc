@@ -199,7 +199,7 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
     });
 }
 
-future<json::json_return_type> set_tables_autocompaction(http_context& ctx, service::storage_service& ss, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
+future<> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
     if (tables.empty()) {
         tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
     }
@@ -221,7 +221,7 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, serv
             }).finally([g = std::move(g)] {});
         });
     }).then([] {
-        return make_ready_future<json::json_return_type>(json_void());
+        return make_ready_future<>();
     });
 }
 
@@ -697,9 +697,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+    register_path_routine(ctx, r, "keyspace_compaction", ss::force_keyspace_compaction, [&ctx](std::unordered_map<sstring, sstring>&& val) {
+        sstring keyspace = std::move(val["ks"]);
+        auto column_families = parse_tables(keyspace, ctx, val, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
@@ -717,7 +717,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             }
             co_return;
         }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
+                return make_ready_future<>();
         });
     });
 
@@ -1108,18 +1108,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
     });
 
-    ss::enable_auto_compaction.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        return set_tables_autocompaction(ctx, ss.local(), keyspace, tables, true);
+    register_path_routine(ctx, r, "enable_autocompaction", ss::enable_auto_compaction, [&ctx](std::unordered_map<sstring, sstring>&& val) {
+        auto keyspace = std::move(val["ks"]);
+        auto tables = parse_tables(keyspace, ctx, val, "cf");
+        return set_tables_autocompaction(ctx, keyspace, tables, true);
     });
 
-    ss::disable_auto_compaction.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-
-        return set_tables_autocompaction(ctx, ss.local(), keyspace, tables, false);
+    register_path_routine(ctx, r, "disable_autocompaction", ss::disable_auto_compaction, [&ctx](std::unordered_map<sstring, sstring>&& val) {
+        auto keyspace = std::move(val["ks"]);
+        auto tables = parse_tables(keyspace, ctx, val, "cf");
+        return set_tables_autocompaction(ctx, keyspace, tables, false);
     });
 
     ss::deliver_hints.set(r, [](std::unique_ptr<request> req) {
