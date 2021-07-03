@@ -530,6 +530,48 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
+    ctx.db.local().get_builtin_routine_registry().register_routine("toppartitions",
+        db::make_single_value_routine<sstring>("toppartitions", [&ctx] (db::builtin_routine::parameter_map&& par) {
+            bool filters_provided = par.contains("table_filters") || par.contains("keyspace_filters");
+
+            std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
+            if (par.contains("table_filters") && !par["table_filters"].empty()) {
+                std::istringstream ss { std::move(par["table_filters"]) };
+                std::string filter;
+                while (std::getline(ss, filter, ',')) {
+                    table_filters.emplace(parse_fully_qualified_cf_name(std::move(filter)));
+                }
+            }
+
+            std::unordered_set<sstring> keyspace_filters {};
+            if (par.contains("keyspace_filters") && !par["keyspace_filters"].empty()) {
+                std::istringstream ss { std::move(par["keyspace_filters"]) };
+                std::string filter;
+                while (std::getline(ss, filter, ',')) {
+                    keyspace_filters.emplace(std::move(filter));
+                }
+            }
+
+            // when the query is empty return immediately
+            if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
+                apilog.debug("toppartitions query: processing results");
+                httpd::column_family_json::toppartitions_query_results results;
+
+                results.read_cardinality = 0;
+                results.write_cardinality = 0;
+
+                return make_ready_future<sstring>(json::json_return_type(results)._res);
+            }
+
+            std::chrono::milliseconds duration = par.contains("duration") ? std::chrono::milliseconds(std::stoul(par["duration"])) : 1000ms;
+            unsigned capacity = par.contains("capacity") ? std::stoul(par["capacity"]) : 256;
+            unsigned list_size = par.contains("list_size") ? std::stoul(par["list_size"]) : 10;
+
+            return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration, list_size, capacity), [&ctx] (db::toppartitions_query& q) -> seastar::future<sstring> {
+                return run_toppartitions_query(q, ctx).then([] (json::json_return_type&& json) -> seastar::future<sstring> { return make_ready_future<sstring>(json._res); });
+            });
+    }));
+
     ss::get_leaving_nodes.set(r, [&ctx](const_req req) {
         return container_to_vec(ctx.get_token_metadata().get_leaving_endpoints());
     });
