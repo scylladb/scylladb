@@ -721,18 +721,20 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+    register_path_routine(ctx, r, "keyspace_cleanup", ss::force_keyspace_cleanup, {}, [&ctx, &ss] (std::unordered_map<sstring, sstring>&& val) {
+        auto keyspace = validate_keyspace(ctx, val["ks"]);
+        auto column_families = parse_tables(keyspace, ctx, val, "cf");
+        
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
+
         return ss.local().is_cleanup_allowed(keyspace).then([&ctx, keyspace,
                 column_families = std::move(column_families)] (bool is_cleanup_allowed) mutable {
             if (!is_cleanup_allowed) {
-                return make_exception_future<json::json_return_type>(
-                        std::runtime_error("Can not perform cleanup operation when topology changes"));
+                throw std::runtime_error("Can not perform cleanup operation when topology changes");
             }
+
             return ctx.db.invoke_on_all([keyspace, column_families] (database& db) -> future<> {
                 auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
                     return db.find_uuid(keyspace, table_name);
@@ -741,18 +743,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
                     return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
+
                 auto& cm = db.get_compaction_manager();
+
                 // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
                 for (auto& id : table_ids) {
                     table& t = db.find_column_family(id);
                     co_await cm.perform_cleanup(db, &t);
                 }
+
                 co_return;
-            }).then([]{
-                return make_ready_future<json::json_return_type>(0);
             });
         });
-    });
+    }, true);
 
     register_path_routine(ctx, r, "keyspace_flush", ss::upgrade_sstables, {"exclude_current_version"}, [&ctx](std::unordered_map<sstring, sstring>&& val) {
         bool exclude_current_version = val["exclude_current_version"] == "true";
