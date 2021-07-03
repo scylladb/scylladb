@@ -71,12 +71,51 @@ const locator::token_metadata& http_context::get_token_metadata() {
 namespace ss = httpd::storage_service_json;
 using namespace json;
 
-sstring validate_keyspace(http_context& ctx, const parameters& param) {
-    const auto& ks_name = param["keyspace"];
-    if (ctx.db.local().has_keyspace(ks_name)) {
-        return ks_name;
+static sstring validate_keyspace(http_context& ctx, const sstring& keyspace) {
+    if (ctx.db.local().has_keyspace(keyspace)) {
+        return keyspace;
     }
-    throw bad_param_exception(no_such_keyspace(ks_name).what());
+    throw bad_param_exception(no_such_keyspace(keyspace).what());
+}
+
+sstring validate_keyspace(http_context& ctx, const parameters& param) {
+    return validate_keyspace(ctx, param["keyspace"]);
+}
+
+static void register_path_routine(http_context& ctx, routes& r, const sstring& name, const seastar::httpd::path_description& path, std::vector<sstring> extra_param, std::function<future<>(std::unordered_map<sstring, sstring>&& val)> fun, bool zero_on_success = false) {
+    path.set(r, [&ctx, extra_param = std::move(extra_param), fun, zero_on_success](std::unique_ptr<request> req) {
+        std::unordered_map<sstring, sstring> vals;
+        vals["ks"] = validate_keyspace(ctx, req->param);
+        vals["cf"] = req->get_query_param("cf");
+        for (auto p : extra_param) {
+            vals[p] = req->get_query_param(p);
+        }
+        return fun(std::move(vals)).then([zero_on_success] (){
+            if (zero_on_success) {
+                return make_ready_future<json::json_return_type>(0);
+            }
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+    ctx.db.local().get_builtin_routine_registry().register_routine(name,
+                    db::make_void_value_routine(fun));
+}
+
+[[maybe_unused]] static void register_path_routine(http_context& ctx, routes& r, const sstring& name, const seastar::httpd::path_description& path, std::function<future<>(std::unordered_map<sstring, sstring>&& val)> fun) {
+    register_path_routine(ctx, r, name, path, {}, fun);
+}
+
+
+[[maybe_unused]] static void register_void_routine(http_context& ctx, const sstring& name, std::function<future<>()> fun) {
+    ctx.db.local().get_builtin_routine_registry().register_routine(name,
+            db::make_void_value_routine([fun] (std::unordered_map<sstring, sstring>&&) {
+        return fun();
+    }));
+}
+
+[[maybe_unused]] static void register_void_routine(http_context& ctx, const sstring& name, std::function<future<>(std::unordered_map<sstring, sstring>&& val)> fun) {
+    ctx.db.local().get_builtin_routine_registry().register_routine(name,
+            db::make_void_value_routine(fun));
 }
 
 // splits a request parameter assumed to hold a comma-separated list of table names
