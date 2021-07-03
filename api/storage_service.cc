@@ -768,18 +768,18 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     }));
 
-    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+    register_path_routine(ctx, r, "keyspace_flush", ss::force_keyspace_flush, [&ctx](std::unordered_map<sstring, sstring>&& val) {
+        auto keyspace = std::move(val["ks"]);
+        auto column_families = parse_tables(keyspace, ctx, val, "cf");
+
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
+        
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
             return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
                 return db.find_column_family(keyspace, cf).flush();
             });
-        }).then([]{
-                return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
@@ -1442,7 +1442,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     register_path_routine(ctx, r, "keyspace_scrub", ss::scrub, {"skip_corrupted", "disable_snapshot"}, [&ctx, &snap_ctl](std::unordered_map<sstring, sstring>&& val) {
         bool skip_corrupted = val["skip_corrupted"] == "true";
         bool disable_snapshot = val["disable_snapshot"] == "true";
-        sstring keyspace = val["ks"];
+        sstring keyspace = std::move(val["ks"]);
         auto column_families = parse_tables(keyspace, ctx, val, "cf");
 
         if (column_families.empty()) {
