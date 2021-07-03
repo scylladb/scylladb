@@ -78,6 +78,7 @@ public:
         uint64_t reads_done;
         uint64_t pinned_dirty_memory_overload;
         uint64_t range_tombstone_reads;
+        uint64_t row_tombstone_reads;
 
         uint64_t active_reads() const {
             return reads - reads_done;
@@ -120,6 +121,7 @@ public:
     void on_row_dropped_from_memtable() noexcept { ++_stats.rows_dropped_from_memtable; }
     void on_row_merged_from_memtable() noexcept { ++_stats.rows_merged_from_memtable; }
     void on_range_tombstone_read() noexcept { ++_stats.range_tombstone_reads; }
+    void on_row_tombstone_read() noexcept { ++_stats.row_tombstone_reads; }
     void pinned_dirty_memory_overload(uint64_t bytes) noexcept;
     allocation_strategy& allocator() noexcept;
     logalloc::region& region() noexcept;

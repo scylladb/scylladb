@@ -701,6 +701,9 @@ void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment&
     push_mutation_fragment(std::move(mf));
     _lower_bound = std::move(new_lower_bound);
     _lower_bound_changed = true;
+    if (row.tomb()) {
+        _read_context.cache()._tracker.on_row_tombstone_read();
+    }
 }
 
 inline
