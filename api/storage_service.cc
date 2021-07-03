@@ -157,7 +157,7 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
 
 using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<request>, sstring, std::vector<sstring>)>;
 
-static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
+[[maybe_unused]] static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
@@ -754,19 +754,22 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
-        bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
+    register_path_routine(ctx, r, "keyspace_flush", ss::upgrade_sstables, {"exclude_current_version"}, [&ctx](std::unordered_map<sstring, sstring>&& val) {
+        bool exclude_current_version = val["exclude_current_version"] == "true";
+        sstring keyspace = std::move(val["ks"]);
+        auto column_families = parse_tables(keyspace, ctx, val, "cf");
 
-        return ctx.db.invoke_on_all([=] (database& db) {
-            return do_for_each(column_families, [=, &db](sstring cfname) {
+        if (column_families.empty()) {
+            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        }
+        return ctx.db.invoke_on_all([column_families, exclude_current_version, keyspace] (database& db) {
+            return do_for_each(column_families, [exclude_current_version, keyspace, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
                 return cm.perform_sstable_upgrade(db, &cf, exclude_current_version);
             });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
         });
-    }));
+    }, true);
 
     register_path_routine(ctx, r, "keyspace_flush", ss::force_keyspace_flush, [&ctx](std::unordered_map<sstring, sstring>&& val) {
         auto keyspace = std::move(val["ks"]);
@@ -775,7 +778,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        
+
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
             return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
                 return db.find_column_family(keyspace, cf).flush();
