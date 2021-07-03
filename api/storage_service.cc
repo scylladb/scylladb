@@ -312,6 +312,15 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
                 });
     });
 
+    ctx.db.local().get_builtin_routine_registry().register_routine("keyspace_repair",
+            db::make_single_value_routine<int32_t>("repair", [&ctx, &repair](std::unordered_map<sstring, sstring>&& val) {
+        auto ks = val.contains("keyspace")
+            ? validate_keyspace(ctx, val["keyspace"])
+            : throw bad_param_exception("No keyspace specified");
+        val.erase("keyspace");
+        return repair_start(repair, ks, val);
+    }));
+
     ss::get_active_repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         return get_active_repairs(ctx.db).then([] (std::vector<int> res){
             return make_ready_future<json::json_return_type>(res);
