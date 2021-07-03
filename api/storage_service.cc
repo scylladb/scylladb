@@ -83,7 +83,7 @@ sstring validate_keyspace(http_context& ctx, const parameters& param) {
 }
 
 static void register_path_routine(http_context& ctx, routes& r, const sstring& name, const seastar::httpd::path_description& path, std::vector<sstring> extra_param, std::function<future<>(std::unordered_map<sstring, sstring>&& val)> fun, bool zero_on_success = false) {
-    path.set(r, [&ctx, extra_param = std::move(extra_param), fun, zero_on_success](std::unique_ptr<request> req) {
+    path.set(r, [&ctx, extra_param = std::move(extra_param), fun, zero_on_success] (std::unique_ptr<request> req) {
         std::unordered_map<sstring, sstring> vals;
         vals["ks"] = validate_keyspace(ctx, req->param);
         vals["cf"] = req->get_query_param("cf");
@@ -1423,13 +1423,20 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::scrub.set(r, wrap_ks_cf(ctx, [&snap_ctl] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    register_path_routine(ctx, r, "keyspace_scrub", ss::scrub, {"skip_corrupted", "disable_snapshot"}, [&ctx, &snap_ctl](std::unordered_map<sstring, sstring>&& val) {
+        bool skip_corrupted = val["skip_corrupted"] == "true";
+        bool disable_snapshot = val["disable_snapshot"] == "true";
+        sstring keyspace = val["ks"];
+        auto column_families = parse_tables(keyspace, ctx, val, "cf");
+
+        if (column_families.empty()) {
+            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        }
+
         auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
 
-        const sstring scrub_mode_str = req_param<sstring>(*req, "scrub_mode", "");
+        const sstring scrub_mode_str = val.contains("scrub_mode") ? val["scrub_mode"] : "";
         if (scrub_mode_str == "") {
-            const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
-
             if (skip_corrupted) {
                 scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
             }
@@ -1448,7 +1455,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
 
         auto f = make_ready_future<>();
-        if (!req_param<bool>(*req, "disable_snapshot", false)) {
+        if (!disable_snapshot) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
             f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
                 return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag);
@@ -1458,7 +1465,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = scrub_mode,
         };
-        const sstring quarantine_mode_str = req_param<sstring>(*req, "quarantine_mode", "INCLUDE");
+        const sstring quarantine_mode_str = val.contains("quarantine_mode") ? val["quarantine_mode"] : "INCLUDE";
         if (quarantine_mode_str == "INCLUDE") {
             opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
         } else if (quarantine_mode_str == "EXCLUDE") {
@@ -1476,10 +1483,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                     return cm.perform_sstable_scrub(&cf, opts);
                 });
             });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
         });
-    }));
+    }, true);
 }
 
 void unset_snapshot(http_context& ctx, routes& r) {
