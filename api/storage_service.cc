@@ -790,6 +790,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
+    register_void_routine(ctx, "decommission", [&ss] {
+        return ss.local().decommission();
+    });
+
     ss::move.set(r, [&ss] (std::unique_ptr<request> req) {
         auto new_token = req->get_query_param("new_token");
         return ss.local().move(new_token).then([] {
