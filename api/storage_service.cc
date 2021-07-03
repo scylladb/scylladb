@@ -823,6 +823,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
+    register_void_routine(ctx, "remove_node", [&ss] (std::unordered_map<sstring, sstring>&& val) {
+        return ss.local().removenode(std::move(val["host_id"]), {});
+    });
+
     ss::get_removal_status.set(r, [&ss](std::unique_ptr<request> req) {
         return ss.local().get_removal_status().then([] (auto status) {
             return make_ready_future<json::json_return_type>(status);
