@@ -876,6 +876,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
+
+    register_void_routine(ctx, "drain", [&ss] { return ss.local().drain(); });
+
     ss::truncate.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
         unimplemented();
