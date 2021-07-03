@@ -1022,6 +1022,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
+    register_void_routine(ctx, "rebuild", [&ss] (std::unordered_map<sstring, sstring>&& val) {
+        auto dc = val["source_dc"];
+        return ss.local().rebuild(dc);
+    });
+
     ss::bulk_load.set(r, [](std::unique_ptr<request> req) {
         //TBD
         unimplemented();
