@@ -26,6 +26,7 @@
 #include "bytes.hh"
 #include "hashing.hh"
 #include <seastar/core/simple-stream.hh>
+#include <seastar/core/loop.hh>
 #include <concepts>
 
 /**
@@ -459,5 +460,26 @@ public:
             _current = _begin.get();
             _begin->next.reset();
         }
+    }
+
+    // Makes this instance empty using async continuations, while allowing yielding.
+    //
+    // The first buffer is not deallocated, so callers may rely on the
+    // fact that if they write less than the initial chunk size between
+    // the clear() calls then writes will not involve any memory allocations,
+    // except for the first write made on this instance.
+    future<> clear_gently() noexcept {
+        if (!_begin) {
+            return make_ready_future<>();
+        }
+        _begin->offset = 0;
+        _size = 0;
+        return do_until([this] { return !_begin->next; }, [this] {
+            // move next->next first to avoid it being recursively destroyed
+            // in ~chunk when _begin->next is move-assigned.
+            auto next = std::move(_begin->next->next);
+            _begin->next = std::move(next);
+            return make_ready_future<>();
+        });
     }
 };

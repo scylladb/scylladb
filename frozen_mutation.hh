@@ -128,6 +128,10 @@ public:
     const bytes_ostream& representation() const { return _bytes; }
 
     mutation_fragment unfreeze(const schema& s, reader_permit permit);
+
+    future<> clear_gently() noexcept {
+        return _bytes.clear_gently();
+    }
 };
 
 frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf);
