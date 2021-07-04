@@ -380,7 +380,11 @@ class partition_snapshot_read_accounter {
 public:
     explicit partition_snapshot_read_accounter(memtable& mt): _mt(mt) {}
 
-    void operator()(const clustering_row& cr) {}
+    void operator()(const clustering_row& cr) {
+        if (cr.tomb()) {
+            ++_mt._table_stats.memtable_row_tombstone_reads;
+        }
+    }
     void operator()(const static_row& sr) {}
     void operator()(const range_tombstone& rt) {
         ++_mt._table_stats.memtable_range_tombstone_reads;
