@@ -21,6 +21,7 @@
 from util import new_test_keyspace, unique_name
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from threading import Thread
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
 def test_create_and_drop_keyspace(cql):
@@ -145,6 +146,64 @@ def test_alter_keyspace_double_with(cql):
         cql.execute('ALTER KEYSPACE WITH WITH DURABLE_WRITES = true')
     with pytest.raises(SyntaxException):
         cql.execute('ALTER KEYSPACE ks WITH WITH DURABLE_WRITES = true')
+
+# Reproducer for issue #8968: We have two threads, one thread loops trying to
+# create a keyspace and a table in it, and the other thread loops trying to
+# delete this keyspace. Obviously some of these operations are expected to
+# fail - we can't create an already-existing keyspace if its deletion hasn't
+# yet finished, and we can't create a table in a keyspace which was just
+# deleted. But we expect that at the end of the test the database remains in
+# some valid state - the keyspace should either exist or not exist. It
+# shouldn't be in some broken immortal state as reported in issue #8968.
+@pytest.mark.xfail(reason="issue #8968")
+def test_concurrent_create_and_drop_keyspace(cql):
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"
+    cfdef = "(a int PRIMARY KEY)"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        # The more iterations we do, the higher the chance of reproducing
+        # this issue. On my laptop, count = 40 reproduces the bug every time.
+        # Lower numbers have some chance of not catching the bug. If this
+        # issue starts to xpass, we may need to increase the count.
+        count = 40
+        def drops(count):
+            for i in range(count):
+                try:
+                    cql.execute(f"DROP KEYSPACE {keyspace}")
+                except Exception as e: print(e)
+                else: print("drop successful")
+        def creates(count):
+            for i in range(count):
+                try:
+                    cql.execute(f"CREATE KEYSPACE {keyspace} {ksdef}")
+                    print("create keyspace successful")
+                    # Create a table in this keyspace. This creation may
+                    # race with deletion of the entire keyspace by the
+                    # parallel thread. Reproducing #8968 requires this
+                    # operation - just creating and deleting the keyspace
+                    # without anything in it did not reproduce the problem.
+                    cql.execute(f"CREATE TABLE {keyspace}.xyz {cfdef}")
+                except Exception as e: print(e)
+                else: print("create table successful")
+        t1 = Thread(target=drops, args=[count])
+        t2 = Thread(target=creates, args=[count])
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        # At this point, the keyspace should either exist, or not exist.
+        # So CREATE KEYSPACE IF NOT EXIST should ensure it does exist,
+        # and then one DROP KEYSPACE should succeed, a second one should
+        # fail, and finally we can recreate the keyspace as new_test_keyspace
+        # expects it.
+        # If any of the following statements fail, it means we reached an
+        # invalid state. This is issue #8968.
+        cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} {ksdef}")
+        cql.execute(f"DROP KEYSPACE {keyspace}")
+        # See explanation above how different versions of Cassandra and
+        # Scylla produce different errors when dropping a non-existent ks:
+        with pytest.raises( (InvalidRequest, ConfigurationException) ):
+            cql.execute(f"DROP KEYSPACE {keyspace}")
+        cql.execute(f"CREATE KEYSPACE {keyspace} {ksdef}")
 
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
