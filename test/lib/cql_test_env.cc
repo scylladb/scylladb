@@ -195,7 +195,8 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
-        return local_qp().execute_direct(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
+        auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
+        return local_qp().execute_direct(text, *qs, *qo).finally([qs, qo] {});
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
