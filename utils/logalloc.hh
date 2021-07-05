@@ -432,6 +432,7 @@ public:
     struct config {
         bool defragment_on_idle;
         bool abort_on_lsa_bad_alloc;
+        bool sanitizer_report_backtrace = false; // Better reports but slower
         size_t lsa_reclamation_step;
         scheduling_group background_reclaim_sched_group;
     };
