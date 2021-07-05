@@ -149,7 +149,7 @@ public:
 
     future<raft::snapshot_id> take_snapshot() override {
         auto id = raft::snapshot_id::create_random_id();
-        _snapshots[id] = _val;
+        assert(_snapshots.emplace(id, _val).second);
         co_return id;
     }
 
@@ -433,7 +433,7 @@ public:
     }
 };
 
-template <typename State, State init_state>
+template <typename State>
 class persistence : public raft::persistence {
     snapshots_t<State>& _snapshots;
 
@@ -464,13 +464,13 @@ public:
     // containing opnly this server's ID which must be also provided here as `init_config_id`.
     // Otherwise it must be initialized with an empty configuration (it will be added to the cluster
     // through a configuration change) and `init_config_id` must be `nullopt`.
-    persistence(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id)
+    persistence(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id, State init_state)
         : _snapshots(snaps)
         , _stored_snapshot(
                 raft::snapshot{
                     .config = init_config_id ? raft::configuration{*init_config_id} : raft::configuration{}
                 },
-                init_state)
+                std::move(init_state))
         , _stored_term_and_vote(raft::term_t{1}, raft::server_id{})
     {}
 
@@ -500,7 +500,7 @@ public:
 
     virtual future<raft::snapshot> load_snapshot() override {
         auto [snap, state] = _stored_snapshot;
-        _snapshots[snap.id] = std::move(state);
+        _snapshots.insert_or_assign(snap.id, std::move(state));
         co_return snap;
     }
 
@@ -836,7 +836,7 @@ public:
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(*snapshots, std::move(send_rpc));
-        auto persistence_ = std::make_unique<persistence<state_t, M::init>>(*snapshots, first_server ? std::optional{id} : std::nullopt);
+        auto persistence_ = std::make_unique<persistence<state_t>>(*snapshots, first_server ? std::optional{id} : std::nullopt, M::init);
         auto queue = std::make_unique<delivery_queue<state_t>>(*rpc_);
 
         auto& sm_ref = *sm;
@@ -1138,8 +1138,10 @@ struct ExReg {
         ), input);
     }
 
-    static const state_t init = 0;
+    static const state_t init;
 };
+
+const ExReg::state_t ExReg::init = 0;
 
 namespace ser {
     template <>
