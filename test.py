@@ -186,8 +186,9 @@ class UnitTestSuite(TestSuite):
         # Map of custom test command line arguments, if configured
         self.custom_args = cfg.get("custom_args", {})
 
-    def create_test(self, *args, **kwargs):
-        return UnitTest(*args, **kwargs)
+    def create_test(self, shortname, args, suite, mode, options):
+        test = UnitTest(self.next_id, shortname, args, suite, mode, options)
+        self.tests.append(test)
 
     def add_test(self, shortname, mode, options):
         """Create a UnitTest class with possibly custom command line
@@ -200,8 +201,7 @@ class UnitTestSuite(TestSuite):
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
-            test = self.create_test(self.next_id, shortname, a, self, mode, options)
-            self.tests.append(test)
+            self.create_test(shortname, a, self, mode, options)
 
     @property
     def pattern(self):
@@ -211,8 +211,10 @@ class UnitTestSuite(TestSuite):
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
 
-    def create_test(self, *args, **kwargs):
-        return BoostTest(*args, **kwargs)
+    def create_test(self, shortname, args, suite, mode, options):
+        if True:
+            test = BoostTest(self.next_id, shortname, args, suite, mode, options)
+            self.tests.append(test)
 
     def junit_tests(self):
         """Boost tests produce an own XML output, so are not included in a junit report"""
