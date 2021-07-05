@@ -8,6 +8,8 @@ run_first:
     - cql_query_test
     - mutation_reader_test
     - view_schema_test
+    - multishard_combining_reader_as_mutation_source_test
+    - database_test
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
