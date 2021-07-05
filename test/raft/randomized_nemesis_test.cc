@@ -800,6 +800,39 @@ private:
     }
 };
 
+using reconfigure_result_t = std::variant<std::monostate,
+    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress>;
+
+future<reconfigure_result_t> reconfigure(
+        const std::vector<raft::server_id>& ids,
+        raft::logical_clock::time_point timeout,
+        logical_timer& timer,
+        raft::server& server) {
+    raft::server_address_set config;
+    for (auto id : ids) {
+        config.insert(raft::server_address { .id = id });
+    }
+
+    try {
+        co_await timer.with_timeout(timeout, [&server, config = std::move(config)] () {
+            return server.set_configuration(std::move(config));
+        }());
+        co_return std::monostate{};
+    } catch (raft::not_a_leader e) {
+        co_return e;
+    } catch (raft::dropped_entry e) {
+        co_return e;
+    } catch (raft::commit_status_unknown e) {
+        co_return e;
+    } catch (raft::conf_change_in_progress e) {
+        co_return e;
+    } catch (logical_timer::timed_out<void> e) {
+        (void)e.get_future().discard_result()
+            .handle_exception_type([] (const raft::dropped_entry&) {});
+        co_return timed_out_error{};
+    }
+}
+
 // Contains a `raft::server` and other facilities needed for it and the underlying
 // modules (persistence, rpc, etc.) to run, and to communicate with the external environment.
 template <PureStateMachine M>
@@ -912,10 +945,13 @@ public:
         });
     }
 
-    future<> set_configuration(raft::server_address_set c) {
+    future<reconfigure_result_t> reconfigure(
+            const std::vector<raft::server_id>& ids,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
         assert(_started);
-        return with_gate(_gate, [this, c = std::move(c)] {
-            return _server->set_configuration(std::move(c));
+        return with_gate(_gate, [this, &ids, timeout, &timer] {
+            return ::reconfigure(ids, timeout, timer, *_server);
         });
     }
 
@@ -1252,7 +1288,8 @@ SEASTAR_TEST_CASE(basic_test) {
 
         tlogger.debug("Started 2 more servers, changing configuration");
 
-        co_await env.get_server(leader_id).set_configuration({{.id = leader_id}, {.id = id2}, {.id = id3}});
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.get_server(leader_id).reconfigure({leader_id, id2, id3}, timer.now() + 100_t, timer)));
 
         tlogger.debug("Configuration changed");
 
