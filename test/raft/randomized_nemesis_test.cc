@@ -492,6 +492,12 @@ public:
         assert(it != _snapshots.end());
         _stored_snapshot = {snap, it->second};
 
+        if (!_stored_entries.empty() && snap.idx > _stored_entries.back()->idx) {
+            // Clear the log in order to not create a gap.
+            _stored_entries.clear();
+            co_return;
+        }
+
         auto first_to_remain = snap.idx + 1 >= preserve_log_entries ? raft::index_t{snap.idx + 1 - preserve_log_entries} : raft::index_t{0};
         _stored_entries.erase(_stored_entries.begin(), find(first_to_remain));
 
