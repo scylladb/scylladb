@@ -21,6 +21,8 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 try:
     arguments, extra_arguments = commandlineparser.parse()
+
+    logging.info("Setup ScyllaDB")
     setup = scyllasetup.ScyllaSetup(arguments, extra_arguments=extra_arguments)
     setup.developerMode()
     setup.cpuSet()
@@ -28,7 +30,10 @@ try:
     setup.cqlshrc()
     setup.arguments()
     setup.set_housekeeping()
+
+    logging.info("Run ScyllaDB")
     supervisord = subprocess.Popen(["/usr/bin/supervisord", "-c",  "/etc/supervisord.conf"])
     supervisord.wait()
 except Exception:
-    logging.exception('failed!')
+    logging.exception("Failed to configure or start Scylla", exc_info=True)
+    sys.exit(1)
