@@ -123,7 +123,7 @@ public:
                 std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
                 seastar::gate file_send_gate;
                 std::optional<db::replay_position> first_failed_rp;
-                std::optional<db::replay_position> last_attempted_rp;
+                std::optional<db::replay_position> last_succeeded_rp;
                 bool segment_replay_failed = false;
 
                 void mark_hint_as_in_progress(db::replay_position rp);

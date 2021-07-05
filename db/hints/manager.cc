@@ -815,10 +815,12 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
-    last_attempted_rp = rp;
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
+    if (!last_succeeded_rp || *last_succeeded_rp < rp) {
+        last_succeeded_rp = rp;
+    }
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
@@ -876,8 +878,8 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     if (ctx_ptr->segment_replay_failed) {
         // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
         // If there was an error thrown by read_log_file function itself, we will retry sending from
-        // the last entry that was successfully read from commitlog (last_attempted_rp).
-        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_attempted_rp.value_or(_last_not_complete_rp));
+        // the last hint that was successfully sent (last_succeeded_rp).
+        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
         manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
         return false;
     }
