@@ -1752,6 +1752,59 @@ public:
     }
 };
 
+// Must be executed sequentially.
+template <PureStateMachine M>
+struct reconfiguration {
+    raft::logical_clock::duration timeout;
+
+    struct state_type {
+        const std::vector<raft::server_id> all_servers;
+        environment<M>& env;
+        // a subset of all_servers that we modify;
+        // the set of servers which may potentially be in the current configuration
+        std::unordered_set<raft::server_id>& known;
+        logical_timer& timer;
+        std::mt19937 rnd;
+    };
+
+    using result_type = reconfigure_result_t;
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        assert(s.all_servers.size() > 1);
+        std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
+
+        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
+        nodes.resize(std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd));
+
+        assert(s.known.size() > 0);
+        auto [res, last] = co_await bouncing{[&nodes, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
+            return env.get_server(id).reconfigure(nodes, timeout, timer);
+        }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
+
+        std::visit(make_visitor(
+        [&, last = last] (std::monostate) {
+            tlogger.debug("reconfig successful from {} to {} by {}", s.known, nodes, last);
+            s.known = std::unordered_set<raft::server_id>{nodes.begin(), nodes.end()};
+            // TODO: include the old leader as well in case it's not part of the new config?
+            // it may remain a leader for some time...
+        },
+        [&, last = last] (raft::not_a_leader& e) {
+            tlogger.debug("reconfig failed, not a leader: {} tried {} by {}", e, nodes, last);
+        },
+        [&, last = last] (auto& e) {
+            s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.end()});
+            tlogger.debug("reconfig failed: {}, tried {} after merge {} by {}", e, nodes, s.known, last);
+        }
+        ), res);
+
+        co_return res;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const reconfiguration& r) {
+        return os << format("reconfiguration{{timeout:{}}}", r.timeout);
+    }
+};
+
 std::ostream& operator<<(std::ostream& os, const std::monostate&) {
     return os << "";
 }
