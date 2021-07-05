@@ -26,16 +26,7 @@
 #include "clustering_key_filter.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
-struct partition_snapshot_reader_dummy_accounter {
-   void operator()(const clustering_row& cr) {}
-   void operator()(const static_row& sr) {}
-   void operator()(const range_tombstone& rt) {}
-   void operator()(const partition_start& ph) {}
-   void operator()(const partition_end& eop) {}
-};
-extern partition_snapshot_reader_dummy_accounter no_accounter;
-
-template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
+template <typename MemoryAccounter>
 class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public MemoryAccounter {
     struct rows_position {
         mutation_partition::rows_type::const_iterator _position;
@@ -422,20 +413,4 @@ make_partition_snapshot_flat_reader(schema_ptr s,
     } else {
         return res;
     }
-}
-
-inline flat_mutation_reader
-make_partition_snapshot_flat_reader(schema_ptr s,
-                                    reader_permit permit,
-                                    dht::decorated_key dk,
-                                    query::clustering_key_filter_ranges crr,
-                                    partition_snapshot_ptr snp,
-                                    bool digest_requested,
-                                    logalloc::region& region,
-                                    logalloc::allocating_section& read_section,
-                                    boost::any pointer_to_container,
-                                    streamed_mutation::forwarding fwd)
-{
-    return make_partition_snapshot_flat_reader<partition_snapshot_reader_dummy_accounter>(std::move(s), std::move(permit),
-            std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, std::move(pointer_to_container), fwd);
 }
