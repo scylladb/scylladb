@@ -1431,6 +1431,8 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     shared_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
 
+    permit.gate_holder() = _query_gate.hold();
+
     if (db::is_datacenter_local(cl)) {
         h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit));
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
@@ -4333,6 +4335,8 @@ storage_proxy::do_query(schema_ptr s,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options)
 {
+    query_options.permit.gate_holder() = _query_gate.hold();
+
     static auto make_empty = [] {
         return make_ready_future<coordinator_query_result>(make_foreign(make_lw_shared<query::result>()));
     };
@@ -5471,6 +5475,7 @@ future<> storage_proxy::drain_on_shutdown() {
     //NOTE: the thread is spawned here because there are delicate lifetime issues to consider
     // and writing them down with plain futures is error-prone.
     return async([this] {
+        _query_gate.close().get();
         retire_view_response_handlers([] (const abstract_write_response_handler&) { return true; });
         _hints_resource_manager.stop().get();
     });

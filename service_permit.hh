@@ -23,14 +23,19 @@
 
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/gate.hh>
 
 class service_permit {
     seastar::lw_shared_ptr<seastar::semaphore_units<>> _permit;
+    gate::holder _gh; // for holding the storage_proxy query_gate until the query completes
     service_permit(seastar::semaphore_units<>&& u) : _permit(seastar::make_lw_shared<seastar::semaphore_units<>>(std::move(u))) {}
     friend service_permit make_service_permit(seastar::semaphore_units<>&& permit);
     friend service_permit empty_service_permit();
 public:
     size_t count() const { return _permit ? _permit->count() : 0; };
+    gate::holder& gate_holder() noexcept {
+        return _gh;
+    }
 };
 
 inline service_permit make_service_permit(seastar::semaphore_units<>&& permit) {
