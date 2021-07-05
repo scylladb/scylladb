@@ -1,7 +1,5 @@
 [Unit]
 Description=Run Scylla fstrim daily
-After=scylla-server.service
-BindsTo=scylla-server.service
 
 [Timer]
 OnCalendar=Sat *-*-* 00:00:00
