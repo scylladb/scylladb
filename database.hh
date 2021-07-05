@@ -334,6 +334,7 @@ struct table_stats {
     int64_t pending_compactions = 0;
     int64_t memtable_partition_insertions = 0;
     int64_t memtable_partition_hits = 0;
+    int64_t memtable_range_tombstone_reads = 0;
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_and_histogram reads{256};
     utils::timed_rate_moving_average_and_histogram writes{256};
