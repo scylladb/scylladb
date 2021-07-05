@@ -1805,6 +1805,8 @@ struct reconfiguration {
     }
 };
 
+namespace std {
+
 std::ostream& operator<<(std::ostream& os, const std::monostate&) {
     return os << "";
 }
@@ -1814,6 +1816,8 @@ std::ostream& operator<<(std::ostream& os, const std::variant<T, Ts...>& v) {
     std::visit([&os] (auto& arg) { os << arg; }, v);
     return os;
 }
+
+} // namespace std
 
 namespace operation {
 
