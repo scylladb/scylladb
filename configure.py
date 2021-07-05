@@ -1121,8 +1121,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/random_schema.cc',
 ]
 
-scylla_minimal_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
-scylla_raft_dependencies = list(set(scylla_minimal_raft_dependencies + scylla_core))
+scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
 
 deps = {
     'scylla': idls + ['main.cc', 'release.cc', 'utils/build_id.cc'] + scylla_core + api + alternator + redis,
@@ -1253,13 +1252,13 @@ deps['test/boost/linearizing_input_stream_test'] = [
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/alternator_unit_test'] += ['alternator/base64.cc']
 
-deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_minimal_raft_dependencies
-deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc'] + scylla_minimal_raft_dependencies
-deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/lib/log.cc'] + scylla_minimal_raft_dependencies
-deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/lib/log.cc'] + scylla_minimal_raft_dependencies
+deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_raft_dependencies
+deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc'] + scylla_raft_dependencies
+deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
+deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
-    scylla_raft_dependencies + scylla_tests_generic_dependencies
-deps['test/raft/raft_address_map_test'] = ['test/raft/raft_address_map_test.cc'] + scylla_raft_dependencies
+    scylla_core + scylla_tests_generic_dependencies
+deps['test/raft/raft_address_map_test'] = ['test/raft/raft_address_map_test.cc'] + scylla_core
 
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
 
