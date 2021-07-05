@@ -1177,6 +1177,38 @@ namespace ser {
 
 bool operator==(ExReg::ret a, ExReg::ret b) { return a.x == b.x; }
 
+// Wait until either one of `nodes` in `env` becomes a leader, or duration `d` expires according to `timer` (whichever happens first).
+// If the leader is found, returns it. Otherwise throws a `logical_timer::timed_out` exception.
+template <PureStateMachine M>
+struct wait_for_leader {
+    // FIXME: change into free function after clang bug #50345 is fixed
+    future<raft::server_id> operator()(
+            environment<M>& env,
+            std::vector<raft::server_id> nodes,
+            logical_timer& timer,
+            raft::logical_clock::duration d) {
+        auto l = co_await timer.with_timeout(timer.now() + d, [] (weak_ptr<environment<M>> env, std::vector<raft::server_id> nodes) -> future<raft::server_id> {
+            while (true) {
+                if (!env) {
+                    co_return raft::server_id{};
+                }
+
+                auto it = std::find_if(nodes.begin(), nodes.end(), [&env] (raft::server_id id) { return env->get_server(id).is_leader(); });
+                if (it != nodes.end()) {
+                    co_return *it;
+                }
+
+                co_await seastar::later();
+            }
+        }(env.weak_from_this(), std::move(nodes)));
+
+        assert(l != raft::server_id{});
+        assert(env.get_server(l).is_leader());
+
+        co_return l;
+    }
+};
+
 SEASTAR_TEST_CASE(basic_test) {
     logical_timer timer;
     environment_config cfg {
@@ -1199,16 +1231,7 @@ SEASTAR_TEST_CASE(basic_test) {
         auto leader_id = co_await env.new_server(true);
 
         // Wait at most 1000 ticks for the server to elect itself as a leader.
-        co_await timer.with_timeout(timer.now() + 1000_t, ([] (weak_ptr<environment<ExReg>> env, raft::server_id leader_id) -> future<> {
-            while (true) {
-                if (!env || env->get_server(leader_id).is_leader()) {
-                    co_return;
-                }
-                co_await seastar::later();
-            }
-        })(env.weak_from_this(), leader_id));
-
-        assert(env.get_server(leader_id).is_leader());
+        assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, 1000_t) == leader_id);
 
         auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
             return env.get_server(leader_id).call(std::move(input),  timer.now() + timeout, timer);
