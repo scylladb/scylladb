@@ -544,11 +544,11 @@ public:
     }
 };
 
-class partition_snapshot_accounter {
+class partition_snapshot_flush_accounter {
     const schema& _schema;
     flush_memory_accounter& _accounter;
 public:
-    partition_snapshot_accounter(const schema& s, flush_memory_accounter& acct)
+    partition_snapshot_flush_accounter(const schema& s, flush_memory_accounter& acct)
         : _schema(s), _accounter(acct) {}
 
     // We will be passed mutation fragments here, and they are allocated using the standard
@@ -616,7 +616,7 @@ private:
             update_last(key_and_snp->first);
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
-            auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
+            auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_flush_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
                             std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *snp_schema, _flushed_memory);
             mpsr.upgrade_schema(schema());
             _partition_reader = std::move(mpsr);
