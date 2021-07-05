@@ -105,8 +105,37 @@ private:
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
 
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
-    std::vector<expr::expression> _clustering_prefix_restrictions; ///< Parts of _where defining the clustering slice.
-    std::vector<expr::expression> _partition_range_restrictions; ///< Parts of _where defining the partition range.
+
+    /// Parts of _where defining the clustering slice.
+    ///
+    /// Meets all of the following conditions:
+    /// 1. all elements must be simultaneously satisfied (as restrictions) for _where to be satisfied
+    /// 2. each element is an atom or a conjunction of atoms
+    /// 3. either all atoms (across all elements) are multi-column or they are all single-column
+    /// 4. if single-column, then:
+    ///   4.1 all atoms from an element have the same LHS, which we call the element's LHS
+    ///   4.2 each element's LHS is different from any other element's LHS
+    ///   4.3 the list of each element's LHS, in order, forms a clustering-key prefix
+    ///   4.4 elements other than the last have only EQ or IN atoms
+    ///   4.5 the last element has only EQ, IN, or is_slice() atoms
+    /// 5. if multi-column, then each element is a binary_operator
+    std::vector<expr::expression> _clustering_prefix_restrictions;
+
+    /// Like _clustering_prefix_restrictions, but for the indexing table (if this is an index-reading statement).
+    /// Recall that the index-table CK is (token, PK, CK) of the base table for a global index and (indexed column,
+    /// CK) for a local index.
+    ///
+    /// Elements are single-column binary operators.  The first element's RHS is a dummy value.
+    std::optional<std::vector<expr::expression>> _idx_tbl_ck_prefix;
+
+    /// Parts of _where defining the partition range.
+    ///
+    /// If the partition range is dictated by token restrictions, this is a single element that holds all the
+    /// binary_operators on token.  If single-column restrictions define the partition range, each element holds
+    /// restrictions for one partition column.  Each partition column has a corresponding element, but the elements
+    /// are in arbitrary order.
+    std::vector<expr::expression> _partition_range_restrictions;
+
     bool _partition_range_is_simple; ///< False iff _partition_range_restrictions imply a Cartesian product.
 
 public:
@@ -447,6 +476,14 @@ public:
      * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
      */
     const single_column_restrictions::restrictions_map& get_single_column_clustering_key_restrictions() const;
+
+    /// Prepares internal data for evaluating index-table queries.  Must be called before
+    /// get_global_index_clustering_ranges().
+    void prepare_indexed(const schema& idx_tbl_schema, bool is_local);
+
+    /// Calculates clustering ranges for querying a global-index table.
+    std::vector<query::clustering_range> get_global_index_clustering_ranges(
+            const query_options& options, const schema& idx_tbl_schema) const;
 };
 
 }

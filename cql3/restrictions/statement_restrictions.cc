@@ -221,20 +221,9 @@ static std::vector<expr::expression> extract_partition_range(
     return {};
 }
 
-/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector such that:
-/// 1. all elements must be simultaneously satisfied (as restrictions) for where_clause to be satisfied
-/// 2. each element is an atom or a conjunction of atoms
-/// 3. either all atoms (across all elements) are multi-column or they are all single-column
-/// 4. if single-column, then:
-///   4.1 all atoms from an element have the same LHS, which we call the element's LHS
-///   4.2 each element's LHS is different from any other element's LHS
-///   4.3 the list of each element's LHS, in order, forms a clustering-key prefix
-///   4.4 elements other than the last have only EQ or IN atoms
-///   4.5 the last element has only EQ, IN, or is_slice() atoms
-///
-/// These elements define the boundaries of any clustering slice that can possibly meet where_clause.
-///
-/// This vector can be calculated before binding expression markers, since LHS and operator are always known.
+/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector.  These elements define the
+/// boundaries of any clustering slice that can possibly meet where_clause.  This vector can be calculated before
+/// binding expression markers, since LHS and operator are always known.
 static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         const expr::expression& where_clause, schema_ptr schema) {
     using namespace expr;
@@ -363,6 +352,7 @@ statement_restrictions::statement_restrictions(database& db,
                                     "(unless you use the token() function or allow filtering)");
                         }
                         _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+                        _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
                     } else if (def.is_clustering_key()) {
                         _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                     } else {
@@ -370,7 +360,6 @@ statement_restrictions::statement_restrictions(database& db,
                     }
                 }
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
-                _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
             }
         }
     }
@@ -1015,7 +1004,7 @@ constexpr bool inclusive = true;
 /// Calculates clustering bounds for the single-column case.
 std::vector<query::clustering_range> get_single_column_clustering_bounds(
         const query_options& options,
-        schema_ptr schema,
+        const schema& schema,
         const std::vector<expression>& single_column_restrictions) {
     const size_t size_limit =
             options.get_cql_config().restrictions.clustering_key_restrictions_max_cartesian_product_size;
@@ -1023,7 +1012,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     std::vector<std::vector<managed_bytes>> prior_column_values; // Equality values of columns seen so far.
     for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
         auto values = possible_lhs_values(
-                &schema->clustering_column_at(i), // This should be the LHS of restrictions[i].
+                &schema.clustering_column_at(i), // This should be the LHS of restrictions[i].
                 single_column_restrictions[i],
                 options);
         if (auto list = std::get_if<value_list>(&values)) {
@@ -1041,7 +1030,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                 ck_ranges.push_back(
                         reverse_if_reqd(
                                 last_range->transform([] (const managed_bytes& val) { return clustering_key_prefix::from_range(std::array<managed_bytes, 1>{val}); }),
-                                *schema->clustering_column_at(i).type));
+                                *schema.clustering_column_at(i).type));
             } else {
                 // Prior clustering columns are equality-restricted (either via = or IN), producing one or more
                 // prior_column_values elements.  Now we will turn each such element into a CK range dictated by those
@@ -1063,10 +1052,10 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                     }
                     query::clustering_range::bound new_start(new_lb, extra_lb ? extra_lb->is_inclusive() : inclusive);
                     query::clustering_range::bound new_end  (new_ub, extra_ub ? extra_ub->is_inclusive() : inclusive);
-                    ck_ranges.push_back(reverse_if_reqd({new_start, new_end}, *schema->clustering_column_at(i).type));
+                    ck_ranges.push_back(reverse_if_reqd({new_start, new_end}, *schema.clustering_column_at(i).type));
                 }
             }
-            sort(ck_ranges.begin(), ck_ranges.end(), range_less{*schema});
+            sort(ck_ranges.begin(), ck_ranges.end(), range_less{schema});
             return ck_ranges;
         }
     }
@@ -1075,7 +1064,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     std::vector<query::clustering_range> ck_ranges(product_size);
     cartesian_product cp(prior_column_values);
     std::transform(cp.begin(), cp.end(), ck_ranges.begin(), std::bind_front(query::clustering_range::make_singular));
-    sort(ck_ranges.begin(), ck_ranges.end(), range_less{*schema});
+    sort(ck_ranges.begin(), ck_ranges.end(), range_less{schema});
     return ck_ranges;
 }
 
@@ -1215,7 +1204,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     if (_clustering_prefix_restrictions.empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    if (count_if(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+    if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
             using namespace expr;
@@ -1247,7 +1236,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
         }
         return bounds;
     } else {
-        return get_single_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions);
+        return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
     }
 }
 
@@ -1349,6 +1338,78 @@ const single_column_restrictions::restrictions_map& statement_restrictions::get_
         throw std::runtime_error("statement restrictions for multi-column partition key restrictions are not implemented yet");
     }
     return single_restrictions->restrictions();
+}
+
+void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool is_local) {
+    if (is_local || !_partition_range_is_simple) {
+        return;
+    }
+    // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
+    // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
+    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
+    _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
+    for (const auto& e : _partition_range_restrictions) {
+        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto pos = _schema->position(*col) + 1;
+        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
+    }
+    const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::partition_key, 0);
+    for (const auto& e : _clustering_prefix_restrictions) {
+        if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+            // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
+            break;
+        }
+        const auto any_binop = find_atom(e, [] (auto&&) { return true; });
+        if (!any_binop) {
+            break;
+        }
+        const auto col = std::get<column_value>(*any_binop->lhs).col;
+        if (*col == indexed_column) {
+            continue;
+        }
+        _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
+    }
+    auto token_column = &idx_tbl_schema.clustering_column_at(0);
+    (*_idx_tbl_ck_prefix)[0] = binary_operator(
+            column_value(token_column),
+            oper_t::EQ,
+            // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
+            // handy mechanism for doing that in query_options.
+            ::make_shared<constants::value>(raw_value::make_unset_value()));
+}
+
+std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
+        const query_options& options,
+        const schema& idx_tbl_schema) const {
+    if (!_idx_tbl_ck_prefix) {
+        on_internal_error(
+                rlogger, "statement_restrictions::get_global_index_clustering_ranges called with unprepared index");
+    }
+    std::vector<managed_bytes> pk_value(_schema->partition_key_size());
+    for (const auto& e : _partition_range_restrictions) {
+        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        if (vals.empty()) { // Case of C=1 AND C=2.
+            return {};
+        }
+        pk_value[_schema->position(*col)] = std::move(vals[0]);
+    }
+    std::vector<bytes> pkv_linearized(pk_value.size());
+    std::transform(pk_value.cbegin(), pk_value.cend(), pkv_linearized.begin(),
+                   [] (const managed_bytes& mb) { return to_bytes(mb); });
+    auto& token_column = idx_tbl_schema.clustering_column_at(0);
+    bytes_opt token_bytes = token_column.get_computation().compute_value(
+            *_schema, pkv_linearized, clustering_row(clustering_key_prefix::make_empty()));
+    if (!token_bytes) {
+        on_internal_error(rlogger,
+                          format("null value for token column in indexing table {}",
+                                 token_column.name_as_text()));
+    }
+    // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
+    // overwritten.
+    const_cast<::shared_ptr<term>&>(std::get<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
+            ::make_shared<constants::value>(raw_value::make_value(*token_bytes));
+    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
 }
 
 } // namespace restrictions
