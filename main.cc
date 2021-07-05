@@ -613,6 +613,7 @@ int main(int ac, char** av) {
                 st_cfg.abort_on_lsa_bad_alloc = cfg->abort_on_lsa_bad_alloc();
                 st_cfg.lsa_reclamation_step = cfg->lsa_reclamation_step();
                 st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
+                st_cfg.sanitizer_report_backtrace = cfg->sanitizer_report_backtrace();
                 logalloc::shard_tracker().configure(st_cfg);
             }).get();
 

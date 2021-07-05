@@ -224,6 +224,8 @@ migrate_fn_type::unregister_migrator(uint32_t index) {
 
 namespace logalloc {
 
+static thread_local bool s_sanitizer_report_backtrace = false;
+
 #ifdef DEBUG_LSA_SANITIZER
 
 class region_sanitizer {
@@ -268,7 +270,8 @@ public:
     }
     void on_allocation(const void* ptr, size_t size) noexcept {
         run_and_handle_errors([&] {
-            auto [ it, success ] = _allocations.emplace(ptr, allocation { size, current_backtrace() });
+            auto backtrace = s_sanitizer_report_backtrace ? current_backtrace() : saved_backtrace();
+            auto [ it, success ] = _allocations.emplace(ptr, allocation { size, std::move(backtrace) });
             if (!success) {
                 logger.error("Attempting to allocate an {} byte object at an already occupied address {}:\n{}\n"
                              "Previous allocation of {} bytes:\n{}",
@@ -1725,6 +1728,7 @@ void tracker::configure(const config& cfg) {
         _impl->enable_abort_on_bad_alloc();
     }
     _impl->setup_background_reclaim(cfg.background_reclaim_sched_group);
+    s_sanitizer_report_backtrace = cfg.sanitizer_report_backtrace;
 }
 
 memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r) {

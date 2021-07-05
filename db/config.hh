@@ -354,6 +354,8 @@ public:
     named_value<uint16_t> redis_database_count;
     named_value<string_map> redis_keyspace_replication_strategy_options;
 
+    named_value<bool> sanitizer_report_backtrace;
+
     // Options to restrict (forbid, warn or somehow limit) certain operations
     // or options which non-expert users are more likely to regret than to
     // enjoy:
