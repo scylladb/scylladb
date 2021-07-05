@@ -5215,7 +5215,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
                 .produces_partition_end()
                 .produces_end_of_stream(),
             std::exception,
-            message_equals("Column val1 missing in current schema in sstable " + sst->get_filename()));
+            exception_predicate::message_contains("Column val1 missing in current schema"));
     }
   }
  }).get();
