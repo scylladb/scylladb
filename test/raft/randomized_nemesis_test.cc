@@ -1757,6 +1757,132 @@ std::ostream& operator<<(std::ostream& os, const thread_id& tid) {
 
 } // namespace operation
 
+// An immutable sequence of integers.
+class append_seq {
+public:
+    using elem_t = int32_t;
+
+private:
+    // This represents the sequence of integers from _seq->begin() to _seq->begin() + _end.
+    // The underlying vector *_seq may however be shared by other instances of `append_seq`.
+    // If only one instance is appending, the operation is O(1). However, each subsequent
+    // append performed by another instance sharing this vector must perform a copy.
+
+    lw_shared_ptr<std::vector<elem_t>> _seq; // always engaged
+    size_t _end; // <= _seq.size()
+    elem_t _digest; // sum of all elements modulo `magic`
+
+    static const elem_t magic = 54313;
+
+public:
+    append_seq(std::vector<elem_t> v) : _seq{make_lw_shared<std::vector<elem_t>>(std::move(v))}, _end{_seq->size()}, _digest{0} {
+        for (auto x : *_seq) {
+            _digest = digest_append(_digest, x);
+        }
+    }
+
+    static elem_t digest_append(elem_t d, elem_t x) {
+        assert(0 <= d < magic);
+
+        auto y = (d + x) % magic;
+        assert(digest_remove(y, x) == d);
+        return y;
+    }
+
+    static elem_t digest_remove(elem_t d, elem_t x) {
+        assert(0 <= d < magic);
+        auto y = (d - x) % magic;
+        return y < 0 ? y + magic : y;
+    }
+
+    elem_t digest() const {
+        return _digest;
+    }
+
+    append_seq append(elem_t x) const {
+        assert(_seq);
+        assert(_end <= _seq->size());
+
+        auto seq = _seq;
+        if (_end < seq->size()) {
+            // The shared sequence was already appended beyond _end by someone else.
+            // We need to copy everything so we don't break the other guy.
+            seq = make_lw_shared<std::vector<elem_t>>(seq->begin(), seq->begin() + _end);
+        }
+
+        seq->push_back(x);
+        return {std::move(seq), _end + 1, digest_append(_digest, x)};
+    }
+
+    elem_t operator[](size_t idx) const {
+        assert(_seq);
+        assert(idx < _end);
+        assert(_end <= _seq->size());
+        return (*_seq)[idx];
+    }
+
+    bool empty() const {
+        return _end == 0;
+    }
+
+    std::pair<append_seq, elem_t> pop() {
+        assert(_seq);
+        assert(_end <= _seq->size());
+        assert(0 < _end);
+
+        return {{_seq, _end - 1, digest_remove(_digest, (*_seq)[_end - 1])}, (*_seq)[_end - 1]};
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const append_seq& s) {
+        // TODO: don't copy the elements
+        std::vector<elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
+        return os << format("v {} _end {}", v, s._end);
+    }
+
+private:
+    append_seq(lw_shared_ptr<std::vector<elem_t>> seq, size_t end, elem_t d)
+        : _seq(std::move(seq)), _end(end), _digest(d) {}
+};
+
+struct AppendReg {
+    struct append { int32_t x; };
+    struct ret { int32_t x; append_seq prev; };
+
+    using state_t = append_seq;
+    using input_t = append;
+    using output_t = ret;
+
+    static std::pair<state_t, output_t> delta(const state_t& curr, input_t input) {
+        return {curr.append(input.x), {input.x, curr}};
+    }
+
+    static thread_local const state_t init;
+};
+
+thread_local const AppendReg::state_t AppendReg::init{{0}};
+
+namespace ser {
+    template <>
+    struct serializer<AppendReg::append> {
+        template <typename Output>
+        static void write(Output& buf, const AppendReg::append& op) { serializer<int32_t>::write(buf, op.x); };
+
+        template <typename Input>
+        static AppendReg::append read(Input& buf) { return { serializer<int32_t>::read(buf) }; }
+
+        template <typename Input>
+        static void skip(Input& buf) { serializer<int32_t>::skip(buf); }
+    };
+}
+
+std::ostream& operator<<(std::ostream& os, const AppendReg::append& a) {
+    return os << format("append{{{}}}", a.x);
+}
+
+std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
+    return os << format("ret{{{}, {}}}", r.x, r.prev);
+}
+
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<raft_call<ExReg>, network_majority_grudge<ExReg>>>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
