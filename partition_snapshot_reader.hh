@@ -241,7 +241,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             });
         }
 
-        mutation_fragment_opt next_range_rombstone(const query::clustering_range& ck_range,
+        mutation_fragment_opt next_range_tombstone(const query::clustering_range& ck_range,
                 const std::optional<position_in_partition>& last_row,
                 const std::optional<position_in_partition>& last_rts,
                 position_in_partition_view pos) {
@@ -298,7 +298,7 @@ private:
             auto pos_view = _next_row->as_clustering_row().position();
             _last_entry = position_in_partition(pos_view);
 
-            auto mf = _reader.next_range_rombstone(*_current_ck_range, _last_entry, _last_rts,  pos_view);
+            auto mf = _reader.next_range_tombstone(*_current_ck_range, _last_entry, _last_rts,  pos_view);
             if (mf) {
                 _last_rts = mf->as_range_tombstone().position();
                 return mf;
@@ -306,7 +306,7 @@ private:
             return std::exchange(_next_row, {});
         } else {
             _no_more_rows_in_current_range = true;
-            auto mf = _reader.next_range_rombstone(*_current_ck_range, _last_entry, _last_rts, position_in_partition_view::for_range_end(*_current_ck_range));
+            auto mf = _reader.next_range_tombstone(*_current_ck_range, _last_entry, _last_rts, position_in_partition_view::for_range_end(*_current_ck_range));
             if (mf) {
                 _last_rts = mf->as_range_tombstone().position();
             }
