@@ -494,18 +494,20 @@ private:
                 _state = state::ROW_BODY_PREV_SIZE;
                 co_yield consumer_m::proceed::yes;
             }
-        row_body_prev_size_label:
           {
             // Ignore the result
             consumer_m::row_processing_result ret = _extended_flags.is_static()
                 ? _consumer.consume_static_row_start()
                 : _consumer.consume_row_start(_row_key);
 
-            if (ret == consumer_m::row_processing_result::retry_later) {
+            while (ret == consumer_m::row_processing_result::retry_later) {
                 _state = state::ROW_BODY_PREV_SIZE;
                 co_yield consumer_m::proceed::no;
-                goto row_body_prev_size_label;
-            } else if (ret == consumer_m::row_processing_result::skip_row) {
+                ret = _extended_flags.is_static()
+                    ? _consumer.consume_static_row_start()
+                    : _consumer.consume_row_start(_row_key);
+            }
+            if (ret == consumer_m::row_processing_result::skip_row) {
                 _state = state::FLAGS;
                 auto current_pos = position() - _processing_data->size();
                 co_yield skip(*_processing_data, _next_row_offset - current_pos);
