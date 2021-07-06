@@ -452,14 +452,14 @@ private:
             }
             if (!should_read_block_header()) {
                 _state = state::CK_BLOCK2;
-                goto ck_block2_label;
+            } else {
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::CK_BLOCK_HEADER;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _ck_blocks_header = _u64;
             }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::CK_BLOCK_HEADER;
-                co_yield consumer_m::proceed::yes;
-            }
-            _ck_blocks_header = _u64;
-        ck_block2_label: {
+        {
             if (is_block_null()) {
                 _null_component_occured = true;
                 move_to_next_ck_block();
