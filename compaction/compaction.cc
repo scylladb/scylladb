@@ -1595,6 +1595,7 @@ compaction_type compaction_options::type() const {
         compaction_type::Reshard,
         compaction_type::Reshape,
     };
+    static_assert(std::variant_size_v<compaction_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
 }
 
