@@ -219,18 +219,18 @@ private:
         case state::ROW_START:
             if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                 _state = state::DELETION_TIME;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::DELETION_TIME:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
             // fallthrough
         case state::DELETION_TIME_2:
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_3;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
             // fallthrough
         case state::DELETION_TIME_3: {
@@ -245,13 +245,12 @@ private:
             _state = state::ATOM_START;
             if (ret == row_consumer::proceed::no) {
                 co_yield row_consumer::proceed::no;
-                continue;
             }
         }
         case state::ATOM_START:
             if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                 _state = state::ATOM_START_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::ATOM_START_2:
             if (_u16 == 0) {
@@ -262,14 +261,15 @@ private:
                     co_yield row_consumer::proceed::no;
                     continue;
                 }
+                break;
             } else {
                 _state = state::ATOM_MASK;
+                co_yield row_consumer::proceed::yes;
             }
-            break;
         case state::ATOM_MASK:
             if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::ATOM_MASK_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
             // fallthrough
         case state::ATOM_MASK_2: {
@@ -278,6 +278,7 @@ private:
             if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
                 _state = state::RANGE_TOMBSTONE;
                 _shadowable = (mask & column_mask::shadowable) != column_mask::none;
+                break;
             } else if ((mask & column_mask::counter) != column_mask::none) {
                 _deleted = false;
                 _counter = true;
@@ -286,6 +287,7 @@ private:
                 _deleted = false;
                 _counter = false;
                 _state = state::EXPIRING_CELL;
+                break;
             } else {
                 // FIXME: see ColumnSerializer.java:deserializeColumnBody
                 if ((mask & column_mask::counter_update) != column_mask::none) {
@@ -295,13 +297,13 @@ private:
                 _deleted = (mask & column_mask::deletion) != column_mask::none;
                 _counter = false;
                 _state = state::CELL;
+                break;
             }
-            break;
         }
         case state::COUNTER_CELL:
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::COUNTER_CELL_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
             // fallthrough
         case state::COUNTER_CELL_2:
@@ -311,14 +313,14 @@ private:
         case state::EXPIRING_CELL:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::EXPIRING_CELL_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
             // fallthrough
         case state::EXPIRING_CELL_2:
             _ttl = _u32;
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::EXPIRING_CELL_3;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
             // fallthrough
         case state::EXPIRING_CELL_3:
@@ -328,18 +330,18 @@ private:
         case state::CELL: {
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::CELL_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         }
         case state::CELL_2:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::CELL_VALUE_BYTES:
             if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::CELL_VALUE_BYTES_2:
         {
@@ -377,17 +379,17 @@ private:
         case state::RANGE_TOMBSTONE:
             if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_2;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::RANGE_TOMBSTONE_2:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_3;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::RANGE_TOMBSTONE_3:
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_4;
-                break;
+                co_yield row_consumer::proceed::yes;
             }
         case state::RANGE_TOMBSTONE_4:
         {
@@ -401,11 +403,8 @@ private:
             _key.release();
             _val.release();
             _state = state::ATOM_START;
-            if (ret == row_consumer::proceed::no) {
-                co_yield row_consumer::proceed::no;
-                continue;
-            }
-            break;
+            co_yield ret;
+            continue;
         }
         }
 
