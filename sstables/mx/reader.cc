@@ -24,6 +24,7 @@
 #include "sstables/liveness_info.hh"
 #include "sstables/mutation_fragment_filter.hh"
 #include "sstables/sstable_mutation_reader.hh"
+#include "sstables/processing_result_generator.hh"
 
 namespace sstables {
 namespace mx {
@@ -253,6 +254,9 @@ private:
      */
     tombstone _left_range_tombstone;
     tombstone _right_range_tombstone;
+
+    processing_result_generator _gen;
+    temporary_buffer<char>* _processing_data;
     void start_row(row_schema& rs) {
         _row = &rs;
         _row->_columns = _row->_all_columns;
@@ -337,25 +341,27 @@ public:
     }
 
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
-        return do_process_state(data);
+        _processing_data = &data;
+        return _gen.generate();
     }
 private:
-    data_consumer::processing_result do_process_state(temporary_buffer<char>& data) {
+    processing_result_generator do_process_state() {
+        while (true) {
         switch (_state) {
         case state::PARTITION_START:
         partition_start_label:
             _is_first_unfiltered = true;
-            if (read_short_length_bytes(data, _pk) != read_status::ready) {
+            if (read_short_length_bytes(*_processing_data, _pk) != read_status::ready) {
                 _state = state::DELETION_TIME;
                 break;
             }
         case state::DELETION_TIME:
-            if (read_32(data) != read_status::ready) {
+            if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_2;
                 break;
             }
         case state::DELETION_TIME_2:
-            if (read_64(data) != read_status::ready) {
+            if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_3;
                 break;
             }
@@ -369,7 +375,8 @@ private:
             _pk.release();
             _state = state::FLAGS;
             if (ret == consumer_m::proceed::no) {
-                return consumer_m::proceed::no;
+                co_yield consumer_m::proceed::no;
+                continue;
             }
         }
         case state::FLAGS:
@@ -377,7 +384,7 @@ private:
             _liveness = {};
             _row_tombstone = {};
             _row_shadowable_tombstone = {};
-            if (read_8(data) != read_status::ready) {
+            if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::FLAGS_2;
                 break;
             }
@@ -386,7 +393,8 @@ private:
             if (_flags.is_end_of_partition()) {
                 _state = state::PARTITION_START;
                 if (_consumer.consume_partition_end() == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
+                    co_yield consumer_m::proceed::no;
+                    continue;
                 }
                 goto partition_start_label;
             } else if (_flags.is_range_tombstone()) {
@@ -399,7 +407,7 @@ private:
                 _ck_size = _column_translation.clustering_column_value_fix_legths().size();
                 goto clustering_row_label;
             }
-            if (read_8(data) != read_status::ready) {
+            if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::EXTENDED_FLAGS;
                 break;
             }
@@ -437,7 +445,7 @@ private:
                 _state = state::CK_BLOCK2;
                 goto ck_block2_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::CK_BLOCK_HEADER;
                 break;
             }
@@ -460,9 +468,9 @@ private:
             }
             read_status status = read_status::waiting;
             if (auto len = get_ck_block_value_length()) {
-                status = read_bytes(data, *len, _column_value);
+                status = read_bytes(*_processing_data, *len, _column_value);
             } else {
-                status = read_unsigned_vint_length_bytes(data, _column_value);
+                status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
             }
             if (status != read_status::ready) {
                 _state = state::CK_BLOCK_END;
@@ -476,13 +484,13 @@ private:
             goto ck_block_label;
         case state::ROW_BODY:
         row_body_label:
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_SIZE;
                 break;
             }
         case state::ROW_BODY_SIZE:
-            _next_row_offset = position() - data.size() + _u64;
-            if (read_unsigned_vint(data) != read_status::ready) {
+            _next_row_offset = position() - _processing_data->size() + _u64;
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_PREV_SIZE;
                 break;
             }
@@ -495,11 +503,13 @@ private:
 
             if (ret == consumer_m::row_processing_result::retry_later) {
                 _state = state::ROW_BODY_PREV_SIZE;
-                return consumer_m::proceed::no;
+                co_yield consumer_m::proceed::no;
+                continue;
             } else if (ret == consumer_m::row_processing_result::skip_row) {
                 _state = state::FLAGS;
-                auto current_pos = position() - data.size();
-                return skip(data, _next_row_offset - current_pos);
+                auto current_pos = position() - _processing_data->size();
+                co_yield skip(*_processing_data, _next_row_offset - current_pos);
+                continue;
             }
 
             if (_extended_flags.is_static()) {
@@ -513,7 +523,7 @@ private:
                 _state = state::ROW_BODY_DELETION;
                 goto row_body_deletion_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_TIMESTAMP;
                 break;
             }
@@ -524,13 +534,13 @@ private:
                 _state = state::ROW_BODY_DELETION;
                 goto row_body_deletion_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_TIMESTAMP_TTL;
                 break;
             }
         case state::ROW_BODY_TIMESTAMP_TTL:
             _liveness.set_ttl(parse_ttl(_header, _u64));
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_TIMESTAMP_DELTIME;
                 break;
             }
@@ -542,13 +552,13 @@ private:
                 _state = state::ROW_BODY_SHADOWABLE_DELETION;
                 goto row_body_shadowable_deletion_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_DELETION_2;
                 break;
             }
         case state::ROW_BODY_DELETION_2:
             _row_tombstone.timestamp = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_DELETION_3;
                 break;
             }
@@ -564,13 +574,13 @@ private:
                 _state = state::ROW_BODY_MARKER;
                 goto row_body_marker_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
                 break;
             }
         case state::ROW_BODY_SHADOWABLE_DELETION_2:
             _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
                 break;
             }
@@ -586,7 +596,7 @@ private:
         case state::ROW_BODY_MISSING_COLUMNS:
         row_body_missing_columns_label:
             if (!_flags.has_all_columns()) {
-                if (read_unsigned_vint(data) != read_status::ready) {
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                     _state = state::ROW_BODY_MISSING_COLUMNS_2;
                     break;
                 }
@@ -600,7 +610,8 @@ private:
                 if (no_more_columns()) {
                     _state = state::FLAGS;
                     if (_consumer.consume_row_end() == consumer_m::proceed::no) {
-                        return consumer_m::proceed::no;
+                        co_yield consumer_m::proceed::no;
+                        continue;
                     }
                     goto flags_label;
                 }
@@ -611,7 +622,7 @@ private:
                 _subcolumns_to_read = 0;
             }
         case state::SIMPLE_COLUMN:
-            if (read_8(data) != read_status::ready) {
+            if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::COLUMN_FLAGS;
                 break;
             }
@@ -623,7 +634,7 @@ private:
                 _state = state::COLUMN_DELETION_TIME;
                 goto column_deletion_time_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::COLUMN_TIMESTAMP;
                 break;
             }
@@ -640,7 +651,7 @@ private:
                 _state = state::COLUMN_TTL;
                 goto column_ttl_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::COLUMN_DELETION_TIME_2;
                 break;
             }
@@ -657,7 +668,7 @@ private:
                 _state = state::COLUMN_VALUE;
                 goto column_cell_path_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::COLUMN_TTL_2;
                 break;
             }
@@ -666,7 +677,7 @@ private:
         case state::COLUMN_CELL_PATH:
         column_cell_path_label:
             if (!is_column_simple()) {
-                if (read_unsigned_vint_length_bytes_contiguous(data, _cell_path) != read_status::ready) {
+                if (read_unsigned_vint_length_bytes_contiguous(*_processing_data, _cell_path) != read_status::ready) {
                     _state = state::COLUMN_VALUE;
                     break;
                 }
@@ -682,9 +693,9 @@ private:
             }
             read_status status = read_status::waiting;
             if (auto len = get_column_value_length()) {
-                status = read_bytes(data, *len, _column_value);
+                status = read_bytes(*_processing_data, *len, _column_value);
             } else {
-                status = read_unsigned_vint_length_bytes(data, _column_value);
+                status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
             }
             if (status != read_status::ready) {
                 _state = state::COLUMN_END;
@@ -698,7 +709,8 @@ private:
                 if (_consumer.consume_counter_column(get_column_info(),
                                                      fragmented_temporary_buffer::view(_column_value),
                                                      _column_timestamp) == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
+                    co_yield consumer_m::proceed::no;
+                    continue;
                 }
             } else {
                 if (_consumer.consume_column(get_column_info(),
@@ -708,7 +720,8 @@ private:
                                              _column_ttl,
                                              _column_local_deletion_time,
                                              _column_flags.is_deleted()) == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
+                    co_yield consumer_m::proceed::no;
+                    continue;
                 }
             }
         case state::NEXT_COLUMN:
@@ -719,7 +732,8 @@ private:
                     move_to_next_column();
                     if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
                         _state = state::COLUMN;
-                        return consumer_m::proceed::no;
+                        co_yield consumer_m::proceed::no;
+                        continue;
                     }
                 }
             } else {
@@ -754,7 +768,7 @@ private:
                 goto column_label;
             }
             --_missing_columns_to_read;
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
                 break;
             }
@@ -767,13 +781,13 @@ private:
                 _complex_column_tombstone = {};
                 goto complex_column_2_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
                 break;
             }
         case state::COMPLEX_COLUMN_MARKED_FOR_DELETE:
             _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
                 break;
             }
@@ -783,10 +797,11 @@ private:
         complex_column_2_label:
             if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
                 _state = state::COMPLEX_COLUMN_SIZE;
-                return consumer_m::proceed::no;
+                co_yield consumer_m::proceed::no;
+                continue;
             }
         case state::COMPLEX_COLUMN_SIZE:
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::COMPLEX_COLUMN_SIZE_2;
                 break;
             }
@@ -797,20 +812,21 @@ private:
                 move_to_next_column();
                 if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
                     _state = state::COLUMN;
-                    return consumer_m::proceed::no;
+                    co_yield consumer_m::proceed::no;
+                    continue;
                 }
             }
             goto column_label;
         case state::RANGE_TOMBSTONE_MARKER:
         range_tombstone_marker_label:
             _is_first_unfiltered = false;
-            if (read_8(data) != read_status::ready) {
+            if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_KIND;
                 break;
             }
         case state::RANGE_TOMBSTONE_KIND:
             _range_tombstone_kind = bound_kind_m(_u8);
-            if (read_16(data) != read_status::ready) {
+            if (read_16(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_SIZE;
                 break;
             }
@@ -831,25 +847,25 @@ private:
             _reading_range_tombstone_ck = false;
         case state::RANGE_TOMBSTONE_BODY:
         range_tombstone_body_label:
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_SIZE;
                 break;
             }
         case state::RANGE_TOMBSTONE_BODY_SIZE:
             // Ignore result
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_PREV_SIZE;
                 break;
             }
         case state::RANGE_TOMBSTONE_BODY_PREV_SIZE:
             // Ignore result
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_TIMESTAMP;
                 break;
             }
         case state::RANGE_TOMBSTONE_BODY_TIMESTAMP:
             _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME;
                 break;
             }
@@ -866,18 +882,19 @@ private:
                                                       _left_range_tombstone) == consumer_m::proceed::no) {
                     _row_key.clear();
                     _state = state::FLAGS;
-                    return consumer_m::proceed::no;
+                    co_yield consumer_m::proceed::no;
+                    continue;
                 }
                 _row_key.clear();
                 goto flags_label;
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_TIMESTAMP2;
                 break;
             }
         case state::RANGE_TOMBSTONE_BODY_TIMESTAMP2:
             _right_range_tombstone.timestamp = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(data) != read_status::ready) {
+            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2;
                 break;
             }
@@ -890,13 +907,15 @@ private:
                                                   _right_range_tombstone) == consumer_m::proceed::no) {
                 _row_key.clear();
                 _state = state::FLAGS;
-                return consumer_m::proceed::no;
+                co_yield consumer_m::proceed::no;
+                continue;
             }
             _row_key.clear();
             goto flags_label;
         }
 
-        return data_consumer::proceed::yes;
+        co_yield data_consumer::proceed::yes;
+        }
     }
 public:
 
@@ -912,6 +931,7 @@ public:
         , _header(sst->get_serialization_header())
         , _column_translation(sst->get_column_translation(s, _header, sst->features()))
         , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
+        , _gen(do_process_state())
     {
         setup_columns(_regular_row, _column_translation.regular_columns());
         setup_columns(_static_row, _column_translation.static_columns());
@@ -939,6 +959,7 @@ public:
         auto reset_to_state = [this, el] (state s) {
             _state = s;
             _consumer.reset(el);
+            _gen = do_process_state();
         };
         switch (el) {
             case indexable_element::partition:
