@@ -715,24 +715,21 @@ private:
             } else {
                 _cell_path = temporary_buffer<char>(0);
             }
-        {
             if (!_column_flags.has_value()) {
                 _column_value = fragmented_temporary_buffer();
                 _state = state::COLUMN_END;
-                goto column_end_label;
-            }
-            read_status status = read_status::waiting;
-            if (auto len = get_column_value_length()) {
-                status = read_bytes(*_processing_data, *len, _column_value);
             } else {
-                status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
+                read_status status = read_status::waiting;
+                if (auto len = get_column_value_length()) {
+                    status = read_bytes(*_processing_data, *len, _column_value);
+                } else {
+                    status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
+                }
+                if (status != read_status::ready) {
+                    _state = state::COLUMN_END;
+                    co_yield consumer_m::proceed::yes;
+                }
             }
-            if (status != read_status::ready) {
-                _state = state::COLUMN_END;
-                co_yield consumer_m::proceed::yes;
-            }
-        }
-        column_end_label:
             _state = state::NEXT_COLUMN;
             if (is_column_counter() && !_column_flags.is_deleted()) {
                 if (_consumer.consume_counter_column(get_column_info(),
