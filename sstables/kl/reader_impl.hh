@@ -271,15 +271,61 @@ private:
             if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
                 _state = state::RANGE_TOMBSTONE;
                 _shadowable = (mask & column_mask::shadowable) != column_mask::none;
+                if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+                if (read_32(*_processing_data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_3;
+                    co_yield row_consumer::proceed::yes;
+                }
+                if (read_64(*_processing_data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_4;
+                    co_yield row_consumer::proceed::yes;
+                }
+            {
+                _sst->get_stats().on_range_tombstone_read();
+                deletion_time del;
+                del.local_deletion_time = _u32;
+                del.marked_for_delete_at = _u64;
+                auto ret = _shadowable
+                        ? _consumer.consume_shadowable_row_tombstone(to_bytes_view(_key), del)
+                        : _consumer.consume_range_tombstone(to_bytes_view(_key), to_bytes_view(_val), del);
+                _key.release();
+                _val.release();
+                _state = state::ATOM_START;
+                if (ret == row_consumer::proceed::no) {
+                    co_yield row_consumer::proceed::no;
+                    continue;
+                }
                 break;
+            }
             } else if ((mask & column_mask::counter) != column_mask::none) {
                 _deleted = false;
                 _counter = true;
                 _state = state::COUNTER_CELL;
+                if (read_64(*_processing_data) != read_status::ready) {
+                    _state = state::COUNTER_CELL_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+                // _timestamp_of_last_deletion = _u64;
+                _state = state::CELL;
+                goto state_CELL;
             } else if ((mask & column_mask::expiration) != column_mask::none) {
                 _deleted = false;
                 _counter = false;
                 _state = state::EXPIRING_CELL;
+                if (read_32(*_processing_data) != read_status::ready) {
+                    _state = state::EXPIRING_CELL_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+                _ttl = _u32;
+                if (read_32(*_processing_data) != read_status::ready) {
+                    _state = state::EXPIRING_CELL_3;
+                    co_yield row_consumer::proceed::yes;
+                }
+                _expiration = _u32;
+                _state = state::CELL;
                 break;
             } else {
                 // FIXME: see ColumnSerializer.java:deserializeColumnBody
@@ -293,26 +339,6 @@ private:
                 break;
             }
         }
-        case state::COUNTER_CELL:
-            if (read_64(*_processing_data) != read_status::ready) {
-                _state = state::COUNTER_CELL_2;
-                co_yield row_consumer::proceed::yes;
-            }
-            // _timestamp_of_last_deletion = _u64;
-            _state = state::CELL;
-            goto state_CELL;
-        case state::EXPIRING_CELL:
-            if (read_32(*_processing_data) != read_status::ready) {
-                _state = state::EXPIRING_CELL_2;
-                co_yield row_consumer::proceed::yes;
-            }
-            _ttl = _u32;
-            if (read_32(*_processing_data) != read_status::ready) {
-                _state = state::EXPIRING_CELL_3;
-                co_yield row_consumer::proceed::yes;
-            }
-            _expiration = _u32;
-            _state = state::CELL;
         state_CELL:
         case state::CELL: {
             if (read_64(*_processing_data) != read_status::ready) {
@@ -353,36 +379,6 @@ private:
             // buffers we held for it.
             _key.release();
             _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
-            _state = state::ATOM_START;
-            if (ret == row_consumer::proceed::no) {
-                co_yield row_consumer::proceed::no;
-                continue;
-            }
-            break;
-        }
-        case state::RANGE_TOMBSTONE:
-            if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_2;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (read_32(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_3;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (read_64(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_4;
-                co_yield row_consumer::proceed::yes;
-            }
-        {
-            _sst->get_stats().on_range_tombstone_read();
-            deletion_time del;
-            del.local_deletion_time = _u32;
-            del.marked_for_delete_at = _u64;
-            auto ret = _shadowable
-                     ? _consumer.consume_shadowable_row_tombstone(to_bytes_view(_key), del)
-                     : _consumer.consume_range_tombstone(to_bytes_view(_key), to_bytes_view(_val), del);
-            _key.release();
-            _val.release();
             _state = state::ATOM_START;
             co_yield ret;
             continue;
