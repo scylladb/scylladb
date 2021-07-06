@@ -215,8 +215,7 @@ public:
 private:
     processing_result_generator do_process_state() {
         while (true) {
-        switch (_state) {
-        case state::ROW_START:
+            if (_state == state::ROW_START) {
             if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                 _state = state::DELETION_TIME;
                 co_yield row_consumer::proceed::yes;
@@ -243,7 +242,8 @@ private:
                 co_yield row_consumer::proceed::no;
             }
         }
-        case state::ATOM_START:
+        }
+        while (true) {
             if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                 _state = state::ATOM_START_2;
                 co_yield row_consumer::proceed::yes;
@@ -251,11 +251,7 @@ private:
             if (_u16 == 0) {
                 // end of row marker
                 _state = state::ROW_START;
-                if (_consumer.consume_row_end() ==
-                        row_consumer::proceed::no) {
-                    co_yield row_consumer::proceed::no;
-                    continue;
-                }
+                co_yield _consumer.consume_row_end();
                 break;
             } else {
                 _state = state::ATOM_MASK;
@@ -294,11 +290,8 @@ private:
                 _key.release();
                 _val.release();
                 _state = state::ATOM_START;
-                if (ret == row_consumer::proceed::no) {
-                    co_yield row_consumer::proceed::no;
-                    continue;
-                }
-                break;
+                co_yield ret;
+                continue;
             }
             } else if ((mask & column_mask::counter) != column_mask::none) {
                 _deleted = false;
@@ -377,13 +370,8 @@ private:
             _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
             _state = state::ATOM_START;
             co_yield ret;
-            continue;
         }
-        default:
-            __builtin_unreachable();
         }
-
-        co_yield row_consumer::proceed::yes;
         }
     }
 public:
