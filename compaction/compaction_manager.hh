@@ -220,6 +220,13 @@ public:
     // Submit a column family to be scrubbed and wait for its termination.
     future<> perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode);
 
+    // Submit a column family to be validated and wait for its termination.
+    //
+    // Validation compaction reads each sstable individually, passing the
+    // fragment stream through mutation fragment stream validator, logging any
+    // errors found.
+    future<> perform_sstable_validation(column_family* cf);
+
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);
 

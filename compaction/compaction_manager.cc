@@ -27,6 +27,7 @@
 #include "database.hh"
 #include "service/storage_service.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
 #include "sstables/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include <cmath>
@@ -750,6 +751,48 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     });
 
     return task->compaction_done.get_future().then([task] {});
+}
+
+future<> compaction_manager::perform_sstable_validation(column_family* cf) {
+    return run_custom_job(cf, sstables::compaction_type::Validation, [this, &cf = *cf, sstables = get_candidates(*cf)] () mutable -> future<> {
+        class pending_tasks {
+            compaction_manager::stats& _stats;
+            size_t _n;
+        public:
+            pending_tasks(compaction_manager::stats& stats, size_t n) : _stats(stats), _n(n) { _stats.pending_tasks += _n; }
+            ~pending_tasks() { _stats.pending_tasks -= _n; }
+            void operator--(int) {
+                --_stats.pending_tasks;
+                --_n;
+            }
+        };
+        pending_tasks pending(_stats, sstables.size());
+
+        while (!sstables.empty()) {
+            auto sst = sstables.back();
+            sstables.pop_back();
+
+            try {
+                co_await with_scheduling_group(_maintenance_sg.cpu, [&] () {
+                    auto desc = sstables::compaction_descriptor({ sst }, {}, _maintenance_sg.io, sst->get_sstable_level(),
+                            sstables::compaction_descriptor::default_max_sstable_bytes, sst->run_identifier(), sstables::compaction_options::make_validation());
+                    return compact_sstables(std::move(desc), cf);
+                });
+            } catch (sstables::compaction_stop_exception&) {
+                throw; // let run_custom_job() handle this
+            } catch (storage_io_error&) {
+                throw; // let run_custom_job() handle this
+            } catch (...) {
+                // We are validating potentially corrupt sstables, errors are
+                // expected, just continue with the other sstables when seeing
+                // one.
+                _stats.errors++;
+                cmlog.error("Validating {} failed due to {}, continuing.", sst->get_filename(), std::current_exception());
+            }
+
+            pending--;
+        }
+    });
 }
 
 bool needs_cleanup(const sstables::shared_sstable& sst,
