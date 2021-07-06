@@ -216,162 +216,162 @@ private:
     processing_result_generator do_process_state() {
         while (true) {
             if (_state == state::ROW_START) {
-            if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
-                _state = state::DELETION_TIME;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (read_32(*_processing_data) != read_status::ready) {
-                _state = state::DELETION_TIME_2;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (read_64(*_processing_data) != read_status::ready) {
-                _state = state::DELETION_TIME_3;
-                co_yield row_consumer::proceed::yes;
-            }
-        {
-            deletion_time del;
-            del.local_deletion_time = _u32;
-            del.marked_for_delete_at = _u64;
-            _sst->get_stats().on_row_read();
-            auto ret = _consumer.consume_row_start(key_view(to_bytes_view(_key)), del);
-            // after calling the consume function, we can release the
-            // buffers we held for it.
-            _key.release();
-            _state = state::ATOM_START;
-            if (ret == row_consumer::proceed::no) {
-                co_yield row_consumer::proceed::no;
-            }
-        }
-        }
-        while (true) {
-            if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
-                _state = state::ATOM_START_2;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (_u16 == 0) {
-                // end of row marker
-                _state = state::ROW_START;
-                co_yield _consumer.consume_row_end();
-                break;
-            } else {
-                _state = state::ATOM_MASK;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (read_8(*_processing_data) != read_status::ready) {
-                _state = state::ATOM_MASK_2;
-                co_yield row_consumer::proceed::yes;
-            }
-        {
-            auto const mask = column_mask(_u8);
-
-            if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
-                _state = state::RANGE_TOMBSTONE;
-                _shadowable = (mask & column_mask::shadowable) != column_mask::none;
-                if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
-                    _state = state::RANGE_TOMBSTONE_2;
+                if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
+                    _state = state::DELETION_TIME;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_32(*_processing_data) != read_status::ready) {
-                    _state = state::RANGE_TOMBSTONE_3;
+                    _state = state::DELETION_TIME_2;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_64(*_processing_data) != read_status::ready) {
-                    _state = state::RANGE_TOMBSTONE_4;
+                    _state = state::DELETION_TIME_3;
                     co_yield row_consumer::proceed::yes;
                 }
             {
-                _sst->get_stats().on_range_tombstone_read();
                 deletion_time del;
                 del.local_deletion_time = _u32;
                 del.marked_for_delete_at = _u64;
-                auto ret = _shadowable
-                        ? _consumer.consume_shadowable_row_tombstone(to_bytes_view(_key), del)
-                        : _consumer.consume_range_tombstone(to_bytes_view(_key), to_bytes_view(_val), del);
+                _sst->get_stats().on_row_read();
+                auto ret = _consumer.consume_row_start(key_view(to_bytes_view(_key)), del);
+                // after calling the consume function, we can release the
+                // buffers we held for it.
                 _key.release();
-                _val.release();
+                _state = state::ATOM_START;
+                if (ret == row_consumer::proceed::no) {
+                    co_yield row_consumer::proceed::no;
+                }
+            }
+            }
+            while (true) {
+                if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
+                    _state = state::ATOM_START_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+                if (_u16 == 0) {
+                    // end of row marker
+                    _state = state::ROW_START;
+                    co_yield _consumer.consume_row_end();
+                    break;
+                } else {
+                    _state = state::ATOM_MASK;
+                    co_yield row_consumer::proceed::yes;
+                }
+                if (read_8(*_processing_data) != read_status::ready) {
+                    _state = state::ATOM_MASK_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+            {
+                auto const mask = column_mask(_u8);
+
+                if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
+                    _state = state::RANGE_TOMBSTONE;
+                    _shadowable = (mask & column_mask::shadowable) != column_mask::none;
+                    if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
+                        _state = state::RANGE_TOMBSTONE_2;
+                        co_yield row_consumer::proceed::yes;
+                    }
+                    if (read_32(*_processing_data) != read_status::ready) {
+                        _state = state::RANGE_TOMBSTONE_3;
+                        co_yield row_consumer::proceed::yes;
+                    }
+                    if (read_64(*_processing_data) != read_status::ready) {
+                        _state = state::RANGE_TOMBSTONE_4;
+                        co_yield row_consumer::proceed::yes;
+                    }
+                {
+                    _sst->get_stats().on_range_tombstone_read();
+                    deletion_time del;
+                    del.local_deletion_time = _u32;
+                    del.marked_for_delete_at = _u64;
+                    auto ret = _shadowable
+                            ? _consumer.consume_shadowable_row_tombstone(to_bytes_view(_key), del)
+                            : _consumer.consume_range_tombstone(to_bytes_view(_key), to_bytes_view(_val), del);
+                    _key.release();
+                    _val.release();
+                    _state = state::ATOM_START;
+                    co_yield ret;
+                    continue;
+                }
+                } else if ((mask & column_mask::counter) != column_mask::none) {
+                    _deleted = false;
+                    _counter = true;
+                    _state = state::COUNTER_CELL;
+                    if (read_64(*_processing_data) != read_status::ready) {
+                        _state = state::COUNTER_CELL_2;
+                        co_yield row_consumer::proceed::yes;
+                    }
+                    // _timestamp_of_last_deletion = _u64;
+                    _state = state::CELL;
+                } else if ((mask & column_mask::expiration) != column_mask::none) {
+                    _deleted = false;
+                    _counter = false;
+                    _state = state::EXPIRING_CELL;
+                    if (read_32(*_processing_data) != read_status::ready) {
+                        _state = state::EXPIRING_CELL_2;
+                        co_yield row_consumer::proceed::yes;
+                    }
+                    _ttl = _u32;
+                    if (read_32(*_processing_data) != read_status::ready) {
+                        _state = state::EXPIRING_CELL_3;
+                        co_yield row_consumer::proceed::yes;
+                    }
+                    _expiration = _u32;
+                    _state = state::CELL;
+                } else {
+                    // FIXME: see ColumnSerializer.java:deserializeColumnBody
+                    if ((mask & column_mask::counter_update) != column_mask::none) {
+                        throw malformed_sstable_exception("FIXME COUNTER_UPDATE_MASK");
+                    }
+                    _ttl = _expiration = 0;
+                    _deleted = (mask & column_mask::deletion) != column_mask::none;
+                    _counter = false;
+                    _state = state::CELL;
+                }
+            }
+            {
+                if (read_64(*_processing_data) != read_status::ready) {
+                    _state = state::CELL_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+            }
+                if (read_32(*_processing_data) != read_status::ready) {
+                    _state = state::CELL_VALUE_BYTES;
+                    co_yield row_consumer::proceed::yes;
+                }
+                if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
+                    _state = state::CELL_VALUE_BYTES_2;
+                    co_yield row_consumer::proceed::yes;
+                }
+            {
+                row_consumer::proceed ret;
+                if (_deleted) {
+                    if (_val_fragmented.size_bytes() != 4) {
+                        throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
+                    }
+                    _val = temporary_buffer<char>(4);
+                    auto v = fragmented_temporary_buffer::view(_val_fragmented);
+                    read_fragmented(v, 4, reinterpret_cast<bytes::value_type*>(_val.get_write()));
+                    deletion_time del;
+                    del.local_deletion_time = consume_be<uint32_t>(_val);
+                    del.marked_for_delete_at = _u64;
+                    ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                    _val.release();
+                } else if (_counter) {
+                    ret = _consumer.consume_counter_cell(to_bytes_view(_key),
+                            fragmented_temporary_buffer::view(_val_fragmented), _u64);
+                } else {
+                    ret = _consumer.consume_cell(to_bytes_view(_key),
+                            fragmented_temporary_buffer::view(_val_fragmented), _u64, _ttl, _expiration);
+                }
+                // after calling the consume function, we can release the
+                // buffers we held for it.
+                _key.release();
+                _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
                 _state = state::ATOM_START;
                 co_yield ret;
-                continue;
             }
-            } else if ((mask & column_mask::counter) != column_mask::none) {
-                _deleted = false;
-                _counter = true;
-                _state = state::COUNTER_CELL;
-                if (read_64(*_processing_data) != read_status::ready) {
-                    _state = state::COUNTER_CELL_2;
-                    co_yield row_consumer::proceed::yes;
-                }
-                // _timestamp_of_last_deletion = _u64;
-                _state = state::CELL;
-            } else if ((mask & column_mask::expiration) != column_mask::none) {
-                _deleted = false;
-                _counter = false;
-                _state = state::EXPIRING_CELL;
-                if (read_32(*_processing_data) != read_status::ready) {
-                    _state = state::EXPIRING_CELL_2;
-                    co_yield row_consumer::proceed::yes;
-                }
-                _ttl = _u32;
-                if (read_32(*_processing_data) != read_status::ready) {
-                    _state = state::EXPIRING_CELL_3;
-                    co_yield row_consumer::proceed::yes;
-                }
-                _expiration = _u32;
-                _state = state::CELL;
-            } else {
-                // FIXME: see ColumnSerializer.java:deserializeColumnBody
-                if ((mask & column_mask::counter_update) != column_mask::none) {
-                    throw malformed_sstable_exception("FIXME COUNTER_UPDATE_MASK");
-                }
-                _ttl = _expiration = 0;
-                _deleted = (mask & column_mask::deletion) != column_mask::none;
-                _counter = false;
-                _state = state::CELL;
             }
-        }
-        {
-            if (read_64(*_processing_data) != read_status::ready) {
-                _state = state::CELL_2;
-                co_yield row_consumer::proceed::yes;
-            }
-        }
-            if (read_32(*_processing_data) != read_status::ready) {
-                _state = state::CELL_VALUE_BYTES;
-                co_yield row_consumer::proceed::yes;
-            }
-            if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
-                _state = state::CELL_VALUE_BYTES_2;
-                co_yield row_consumer::proceed::yes;
-            }
-        {
-            row_consumer::proceed ret;
-            if (_deleted) {
-                if (_val_fragmented.size_bytes() != 4) {
-                    throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
-                }
-                _val = temporary_buffer<char>(4);
-                auto v = fragmented_temporary_buffer::view(_val_fragmented);
-                read_fragmented(v, 4, reinterpret_cast<bytes::value_type*>(_val.get_write()));
-                deletion_time del;
-                del.local_deletion_time = consume_be<uint32_t>(_val);
-                del.marked_for_delete_at = _u64;
-                ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
-                _val.release();
-            } else if (_counter) {
-                ret = _consumer.consume_counter_cell(to_bytes_view(_key),
-                        fragmented_temporary_buffer::view(_val_fragmented), _u64);
-            } else {
-                ret = _consumer.consume_cell(to_bytes_view(_key),
-                        fragmented_temporary_buffer::view(_val_fragmented), _u64, _ttl, _expiration);
-            }
-            // after calling the consume function, we can release the
-            // buffers we held for it.
-            _key.release();
-            _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
-            _state = state::ATOM_START;
-            co_yield ret;
-        }
-        }
         }
     }
 public:
