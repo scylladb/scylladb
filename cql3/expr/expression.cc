@@ -74,29 +74,6 @@ binary_operator::operator=(const binary_operator& x) {
 
 namespace {
 
-static
-managed_bytes_opt do_get_value(const schema& schema,
-        const column_definition& cdef,
-        const partition_key& key,
-        const clustering_key_prefix& ckey,
-        const row& cells,
-        gc_clock::time_point now) {
-    switch (cdef.kind) {
-        case column_kind::partition_key:
-            return managed_bytes(key.get_component(schema, cdef.component_index()));
-        case column_kind::clustering_key:
-            return managed_bytes(ckey.get_component(schema, cdef.component_index()));
-        default:
-            auto cell = cells.find_cell(cdef.id);
-            if (!cell) {
-                return std::nullopt;
-            }
-            assert(cdef.is_atomic());
-            auto c = cell->as_atomic_cell(cdef);
-            return c.is_dead(now) ? std::nullopt : managed_bytes_opt(c.value());
-    }
-}
-
 using children_t = std::vector<expression>; // conjunction's children.
 
 children_t explode_conjunction(expression e) {
@@ -117,20 +94,10 @@ struct row_data_from_partition_slice {
     const selection& sel;
 };
 
-/// Data used to derive cell values from a mutation.
-struct row_data_from_mutation {
-    // Underscores avoid name clashes.
-    const partition_key& partition_key_;
-    const clustering_key_prefix& clustering_key_;
-    const row& other_columns;
-    const schema& schema_;
-    gc_clock::time_point now;
-};
-
 /// Everything needed to compute column values during restriction evaluation.
 struct column_value_eval_bag {
     const query_options& options; // For evaluating subscript terms.
-    std::variant<row_data_from_partition_slice, row_data_from_mutation> row_data;
+    row_data_from_partition_slice row_data;
 };
 
 /// Returns col's value from queried data.
@@ -168,19 +135,9 @@ managed_bytes_opt get_value_from_partition_slice(
     }
 }
 
-/// Returns col's value from a mutation.
-managed_bytes_opt get_value_from_mutation(const column_value& col, row_data_from_mutation data) {
-    return do_get_value(
-            data.schema_, *col.col, data.partition_key_, data.clustering_key_, data.other_columns, data.now);
-}
-
 /// Returns col's value from the fetched data.
 managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag& bag) {
-    using std::placeholders::_1;
-    return std::visit(overloaded_functor{
-            std::bind(get_value_from_mutation, col, _1),
-            std::bind(get_value_from_partition_slice, col, _1, bag.options),
-        }, bag.row_data);
+    return get_value_from_partition_slice(col, bag.row_data, bag.options);
 }
 
 /// Type for comparing results of get_value().
@@ -682,13 +639,6 @@ bool is_satisfied_by(
     const auto regulars = get_non_pk_values(selection, static_row, row);
     return is_satisfied_by(
             restr, {options, row_data_from_partition_slice{partition_key, clustering_key, regulars, selection}});
-}
-
-bool is_satisfied_by(
-        const expression& restr,
-        const schema& schema, const partition_key& key, const clustering_key_prefix& ckey, const row& cells,
-        const query_options& options, gc_clock::time_point now) {
-    return is_satisfied_by(restr, {options, row_data_from_mutation{key, ckey, cells, schema, now}});
 }
 
 std::vector<managed_bytes_opt> first_multicolumn_bound(
