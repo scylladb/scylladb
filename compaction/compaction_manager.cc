@@ -293,9 +293,11 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstring name, non
     task->compacting_cf = cf;
     _tasks.push_back(task);
 
-    task->compaction_done = with_semaphore(_custom_job_sem, 1, [this, task, cf, job = std::move(job)] () mutable {
+    auto job_ptr = std::make_unique<noncopyable_function<future<>()>>(std::move(job));
+
+    task->compaction_done = with_semaphore(_custom_job_sem, 1, [this, task, cf, &job = *job_ptr] () mutable {
         // take read lock for cf, so major compaction and resharding can't proceed in parallel.
-        return with_lock(_compaction_locks[cf].for_read(), [this, task, cf, job = std::move(job)] () mutable {
+        return with_lock(_compaction_locks[cf].for_read(), [this, task, cf, &job] () mutable {
             _stats.active_tasks++;
             if (!can_proceed(task)) {
                 return make_ready_future<>();
@@ -306,7 +308,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstring name, non
             // compaction and some of them may not even belong to current shard.
             return job();
         });
-    }).then_wrapped([this, task, name] (future<> f) {
+    }).then_wrapped([this, task, name, job_ptr = std::move(job_ptr)] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
         try {
