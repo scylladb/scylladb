@@ -674,14 +674,13 @@ private:
             if (_column_flags.use_row_timestamp()) {
                 _column_timestamp = _liveness.timestamp();
                 _state = state::COLUMN_DELETION_TIME;
-                goto column_deletion_time_label;
+            } else {
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::COLUMN_TIMESTAMP;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _column_timestamp = parse_timestamp(_header, _u64);
             }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::COLUMN_TIMESTAMP;
-                co_yield consumer_m::proceed::yes;
-            }
-            _column_timestamp = parse_timestamp(_header, _u64);
-        column_deletion_time_label:
             if (_column_flags.use_row_ttl()) {
                 _column_local_deletion_time = _liveness.local_deletion_time();
                 _state = state::COLUMN_TTL;
