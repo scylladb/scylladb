@@ -81,7 +81,7 @@ private:
         auto funs = std::to_array(std::move(tick_funs));
         for (uint64_t tick = 0; tick < limit; ++tick) {
             if (_stop) {
-                _logger.debug("ticker: finishing after {} ticks", tick);
+                _logger.info("ticker: finishing after {} ticks", tick);
                 co_return;
             }
 
