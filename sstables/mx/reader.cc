@@ -548,19 +548,18 @@ private:
         row_body_deletion_label:
             if (!_flags.has_deletion()) {
                 _state = state::ROW_BODY_SHADOWABLE_DELETION;
-                goto row_body_shadowable_deletion_label;
+            } else {
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::ROW_BODY_DELETION_2;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _row_tombstone.timestamp = parse_timestamp(_header, _u64);
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::ROW_BODY_DELETION_3;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _row_tombstone.deletion_time = parse_expiry(_header, _u64);
             }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_DELETION_2;
-                co_yield consumer_m::proceed::yes;
-            }
-            _row_tombstone.timestamp = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_DELETION_3;
-                co_yield consumer_m::proceed::yes;
-            }
-            _row_tombstone.deletion_time = parse_expiry(_header, _u64);
-        row_body_shadowable_deletion_label:
             if (_extended_flags.has_scylla_shadowable_deletion()) {
                 if (!_has_shadowable_tombstones) {
                     throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
