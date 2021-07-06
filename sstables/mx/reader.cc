@@ -441,53 +441,49 @@ private:
             _is_first_unfiltered = false;
             _null_component_occured = false;
             setup_ck(_column_translation.clustering_column_value_fix_legths());
-        ck_block_label:
-            if (no_more_ck_blocks()) {
-                if (_reading_range_tombstone_ck) {
-                    _reading_range_tombstone_ck = false;
-                    goto range_tombstone_body_label;
+            while (!no_more_ck_blocks()) {
+                if (!should_read_block_header()) {
+                    _state = state::CK_BLOCK2;
                 } else {
-                    goto row_body_label;
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::CK_BLOCK_HEADER;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _ck_blocks_header = _u64;
                 }
-            }
-            if (!should_read_block_header()) {
-                _state = state::CK_BLOCK2;
-            } else {
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::CK_BLOCK_HEADER;
+            {
+                if (is_block_null()) {
+                    _null_component_occured = true;
+                    move_to_next_ck_block();
+                    continue;
+                }
+                if (_null_component_occured) {
+                    throw malformed_sstable_exception("non-null component after null component");
+                }
+                if (is_block_empty()) {
+                    _row_key.push_back({});
+                    move_to_next_ck_block();
+                    continue;
+                }
+                read_status status = read_status::waiting;
+                if (auto len = get_ck_block_value_length()) {
+                    status = read_bytes(*_processing_data, *len, _column_value);
+                } else {
+                    status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
+                }
+                if (status != read_status::ready) {
+                    _state = state::CK_BLOCK_END;
                     co_yield consumer_m::proceed::yes;
                 }
-                _ck_blocks_header = _u64;
             }
-        {
-            if (is_block_null()) {
-                _null_component_occured = true;
+                _row_key.push_back(std::move(_column_value));
                 move_to_next_ck_block();
-                goto ck_block_label;
+                _state = state::CK_BLOCK;
             }
-            if (_null_component_occured) {
-                throw malformed_sstable_exception("non-null component after null component");
+            if (_reading_range_tombstone_ck) {
+                _reading_range_tombstone_ck = false;
+                goto range_tombstone_body_label;
             }
-            if (is_block_empty()) {
-                _row_key.push_back({});
-                move_to_next_ck_block();
-                goto ck_block_label;
-            }
-            read_status status = read_status::waiting;
-            if (auto len = get_ck_block_value_length()) {
-                status = read_bytes(*_processing_data, *len, _column_value);
-            } else {
-                status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
-            }
-            if (status != read_status::ready) {
-                _state = state::CK_BLOCK_END;
-                co_yield consumer_m::proceed::yes;
-            }
-        }
-            _row_key.push_back(std::move(_column_value));
-            move_to_next_ck_block();
-            _state = state::CK_BLOCK;
-            goto ck_block_label;
         row_body_label:
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::ROW_BODY_SIZE;
