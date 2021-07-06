@@ -4545,6 +4545,92 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
     });
 }
 
+std::vector<mutation_fragment> write_corrupt_sstable(test_env& env, sstable& sst, reader_permit permit,
+        std::function<void(mutation_fragment&&, bool)> write_to_secondary) {
+    auto schema = sst.get_schema();
+    std::vector<mutation_fragment> corrupt_fragments;
+
+    const auto ts = api::timestamp_type{1};
+
+    auto local_keys = make_local_keys(3, schema);
+
+    auto config = env.manager().configure_writer();
+    config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
+    auto writer = sst.get_writer(*schema, local_keys.size(), config, encoding_stats{});
+
+    auto make_static_row = [&, schema, ts] {
+        auto r = row{};
+        auto cdef = schema->static_column_at(0);
+        auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
+        r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
+        return static_row(*schema, std::move(r));
+    };
+
+    auto make_clustering_row = [&, schema, ts] (unsigned i) {
+        auto r = row{};
+        auto cdef = schema->regular_column_at(0);
+        auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
+        r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
+        return clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r));
+    };
+
+    auto write_partition = [&, schema, ts] (int pk, bool is_corrupt) {
+        auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
+        auto dkey = dht::decorate_key(*schema, pkey);
+
+        testlog.trace("Writing partition {}", pkey.with_schema(*schema));
+
+        write_to_secondary(mutation_fragment(*schema, permit, partition_start(dkey, {})), is_corrupt);
+        corrupt_fragments.emplace_back(*schema, permit, partition_start(dkey, {}));
+        writer.consume_new_partition(dkey);
+
+        {
+            auto sr = make_static_row();
+
+            testlog.trace("Writing row {}", sr.position());
+
+            write_to_secondary(mutation_fragment(*schema, permit, static_row(*schema, sr)), is_corrupt);
+            corrupt_fragments.emplace_back(*schema, permit, static_row(*schema, sr));
+            writer.consume(std::move(sr));
+        }
+
+        const unsigned rows_count = 10;
+        for (unsigned i = 0; i < rows_count; ++i) {
+            auto cr = make_clustering_row(i);
+
+            testlog.trace("Writing row {}", cr.position());
+
+            write_to_secondary(mutation_fragment(*schema, permit, clustering_row(*schema, cr)), is_corrupt);
+            corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, cr));
+            writer.consume(clustering_row(*schema, cr));
+
+            // write row twice
+            if (i == (rows_count / 2)) {
+                auto bad_cr = make_clustering_row(i - 2);
+                testlog.trace("Writing out-of-order row {}", bad_cr.position());
+                write_to_secondary(mutation_fragment(*schema, permit, clustering_row(*schema, cr)), true);
+                corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, bad_cr));
+                writer.consume(std::move(bad_cr));
+            }
+        }
+
+        testlog.trace("Writing partition_end");
+
+        write_to_secondary(mutation_fragment(*schema, permit, partition_end{}), is_corrupt);
+        corrupt_fragments.emplace_back(*schema, permit, partition_end{});
+        writer.consume_end_of_partition();
+    };
+
+    write_partition(1, false);
+    write_partition(0, true);
+    write_partition(2, false);
+
+    testlog.info("Writing done");
+    writer.consume_end_of_stream();
+
+    return corrupt_fragments;
+}
+
 SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
     cql_test_config test_cfg;
 
@@ -4573,98 +4659,17 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
                 return env.make_sstable(schema, tmp.path().string(), (*gen)++);
             };
 
-            std::vector<mutation_fragment> corrupt_fragments;
             std::vector<mutation_fragment> scrubbed_fragments;
             auto sst = sst_gen();
 
+            const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&] (mutation_fragment&& mf, bool is_corrupt) {
+                if (!is_corrupt) {
+                    scrubbed_fragments.emplace_back(std::move(mf));
+                }
+            });
+
             testlog.info("Writing sstable {}", sst->get_filename());
 
-            {
-                const auto ts = api::timestamp_type{1};
-
-                auto local_keys = make_local_keys(3, schema);
-
-                auto config = env.manager().configure_writer();
-                config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
-                auto writer = sst->get_writer(*schema, local_keys.size(), config, encoding_stats{});
-
-                auto make_static_row = [&, schema, ts] {
-                    auto r = row{};
-                    auto cdef = schema->static_column_at(0);
-                    auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
-                    r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
-                    return static_row(*schema, std::move(r));
-                };
-
-                auto make_clustering_row = [&, schema, ts] (unsigned i) {
-                    auto r = row{};
-                    auto cdef = schema->regular_column_at(0);
-                    auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
-                    r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
-                    return clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r));
-                };
-
-                auto write_partition = [&, schema, ts] (int pk, bool write_to_scrubbed) {
-                    auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-                    auto dkey = dht::decorate_key(*schema, pkey);
-
-                    testlog.trace("Writing partition {}", pkey.with_schema(*schema));
-
-                    if (write_to_scrubbed) {
-                        scrubbed_fragments.emplace_back(*schema, permit, partition_start(dkey, {}));
-                    }
-                    corrupt_fragments.emplace_back(*schema, permit, partition_start(dkey, {}));
-                    writer.consume_new_partition(dkey);
-
-                    {
-                        auto sr = make_static_row();
-
-                        testlog.trace("Writing row {}", sr.position());
-
-                        if (write_to_scrubbed) {
-                            scrubbed_fragments.emplace_back(*schema, permit, static_row(*schema, sr));
-                        }
-                        corrupt_fragments.emplace_back(*schema, permit, static_row(*schema, sr));
-                        writer.consume(std::move(sr));
-                    }
-
-                    const unsigned rows_count = 10;
-                    for (unsigned i = 0; i < rows_count; ++i) {
-                        auto cr = make_clustering_row(i);
-
-                        testlog.trace("Writing row {}", cr.position());
-
-                        if (write_to_scrubbed) {
-                            scrubbed_fragments.emplace_back(*schema, permit, clustering_row(*schema, cr));
-                        }
-                        corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, cr));
-                        writer.consume(clustering_row(*schema, cr));
-
-                        // write row twice
-                        if (i == (rows_count / 2)) {
-                            auto bad_cr = make_clustering_row(i - 2);
-                            testlog.trace("Writing out-of-order row {}", bad_cr.position());
-                            corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, bad_cr));
-                            writer.consume(std::move(bad_cr));
-                        }
-                    }
-
-                    testlog.trace("Writing partition_end");
-
-                    if (write_to_scrubbed) {
-                        scrubbed_fragments.emplace_back(*schema, permit, partition_end{});
-                    }
-                    corrupt_fragments.emplace_back(*schema, permit, partition_end{});
-                    writer.consume_end_of_partition();
-                };
-
-                write_partition(1, true);
-                write_partition(0, false);
-                write_partition(2, true);
-
-                testlog.info("Writing done");
-                writer.consume_end_of_stream();
-            }
             sst->load().get();
 
             testlog.info("Loaded sstable {}", sst->get_filename());
@@ -4746,91 +4751,22 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
                 return env.make_sstable(schema, tmp.path().string(), (*gen)++);
             };
 
-            std::vector<mutation_fragment> corrupt_fragments;
             auto scrubbed_mt = make_lw_shared<memtable>(schema);
             auto sst = sst_gen();
 
             testlog.info("Writing sstable {}", sst->get_filename());
 
-            {
-                const auto ts = api::timestamp_type{1};
+            const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&, mut = std::optional<mutation>()] (mutation_fragment&& mf, bool) mutable {
+                if (mf.is_partition_start()) {
+                    mut.emplace(schema, mf.as_partition_start().key());
+                } else if (mf.is_end_of_partition()) {
+                    scrubbed_mt->apply(std::move(*mut));
+                    mut.reset();
+                } else {
+                    mut->apply(std::move(mf));
+                }
+            });
 
-                auto local_keys = make_local_keys(3, schema);
-
-                auto config = env.manager().configure_writer();
-                config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
-                auto writer = sst->get_writer(*schema, local_keys.size(), config, encoding_stats{});
-
-                auto make_static_row = [&, schema, ts] (mutation& mut) {
-                    auto r = row{};
-                    auto cdef = schema->static_column_at(0);
-                    r.apply(cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
-                    mut.set_static_cell(cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
-                    return static_row(*schema, std::move(r));
-                };
-
-                auto make_clustering_row = [&, schema, ts] (unsigned i, mutation* mut) {
-                    auto r = row{};
-                    auto cdef = schema->regular_column_at(0);
-                    auto ckey = clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i))));
-                    r.apply(cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
-                    if (mut) {
-                        mut->set_clustered_cell(ckey, cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
-                    }
-                    return clustering_row(std::move(ckey), {}, {}, std::move(r));
-                };
-
-                auto write_partition = [&, schema, ts] (int pk) {
-                    auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-                    auto dkey = dht::decorate_key(*schema, pkey);
-
-                    testlog.trace("Writing partition {}", pkey);
-
-                    auto mut = mutation(schema, dkey);
-                    corrupt_fragments.emplace_back(*schema, permit, partition_start(dkey, {}));
-                    writer.consume_new_partition(dkey);
-
-                    {
-                        auto sr = make_static_row(mut);
-
-                        testlog.trace("Writing row {}", sr.position());
-
-                        corrupt_fragments.emplace_back(*schema, permit, static_row(*schema, sr));
-                        writer.consume(std::move(sr));
-                    }
-
-                    const unsigned rows_count = 10;
-                    for (unsigned i = 0; i < rows_count; ++i) {
-                        auto cr = make_clustering_row(i, &mut);
-
-                        testlog.trace("Writing row {}", cr.position());
-
-                        corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, cr));
-                        writer.consume(clustering_row(*schema, cr));
-
-                        // write row twice
-                        if (i == (rows_count / 2)) {
-                            auto bad_cr = make_clustering_row(i - 2, nullptr);
-                            testlog.trace("Writing out-of-order row {}", bad_cr.position());
-                            corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, bad_cr));
-                            writer.consume(std::move(bad_cr));
-                        }
-                    }
-
-                    testlog.trace("Writing partition_end");
-
-                    corrupt_fragments.emplace_back(*schema, permit, partition_end{});
-                    writer.consume_end_of_partition();
-                    scrubbed_mt->apply(mut);
-                };
-
-                write_partition(1);
-                write_partition(0);
-                write_partition(2);
-
-                testlog.info("Writing done");
-                writer.consume_end_of_stream();
-            }
             sst->load().get();
 
             testlog.info("Loaded sstable {}", sst->get_filename());
