@@ -1156,17 +1156,6 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
         auto single_pk_restrictions = dynamic_pointer_cast<restrictions::single_column_partition_key_restrictions>(_restrictions->get_partition_key_restrictions());
         // Only EQ restrictions on base partition key can be used in an index view query
         if (single_pk_restrictions && single_pk_restrictions->is_all_eq()) {
-            auto clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *single_pk_restrictions);
-            // Computed token column needs to be added to index view restrictions
-            const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
-            auto base_pk = partition_key::from_optional_exploded(*_schema, single_pk_restrictions->values(options));
-            bytes token_value = compute_idx_token(base_pk);
-            auto token_restriction = ::make_shared<restrictions::single_column_restriction>(token_cdef);
-            token_restriction->expression = expr::binary_operator{
-                    &token_cdef, expr::oper_t::EQ,
-                    ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value))};
-            clustering_restrictions->merge_with(token_restriction);
-
             partition_slice_builder.with_ranges(
                     _restrictions->get_global_index_clustering_ranges(options, *_view_schema));
         }
