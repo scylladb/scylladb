@@ -24,6 +24,7 @@
 #include "sstables/consumer.hh"
 #include "sstables/types.hh"
 #include "sstables/sstables.hh"
+#include "sstables/processing_result_generator.hh"
 
 // Expose internal types for tests
 
@@ -170,6 +171,9 @@ private:
     uint32_t _ttl, _expiration;
 
     bool _shadowable;
+
+    processing_result_generator _gen;
+    temporary_buffer<char>* _processing_data;
 public:
     using consumer = row_consumer;
     bool non_consuming() const {
@@ -189,10 +193,11 @@ public:
     // leave only the unprocessed part. The caller must handle calling
     // process() again, and/or refilling the buffer, as needed.
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
-        return do_process_state(data);
+        _processing_data = &data;
+        return _gen.generate();
     }
 private:
-    data_consumer::processing_result do_process_state(temporary_buffer<char>& data) {
+    processing_result_generator do_process_state() {
 #if 0
         // Testing hack: call process() for tiny chunks separately, to verify
         // that primitive types crossing input buffer are handled correctly.
@@ -210,21 +215,22 @@ private:
             return row_consumer::proceed::yes;
         }
 #endif
-        sstlog.trace("data_consume_row_context {}: state={}, size={}", fmt::ptr(this), static_cast<int>(_state), data.size());
+        sstlog.trace("data_consume_row_context {}: state={}, size={}", fmt::ptr(this), static_cast<int>(_state), _processing_data->size());
+        while (true) {
         switch (_state) {
         case state::ROW_START:
-            if (read_short_length_bytes(data, _key) != read_status::ready) {
+            if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                 _state = state::DELETION_TIME;
                 break;
             }
         case state::DELETION_TIME:
-            if (read_32(data) != read_status::ready) {
+            if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_2;
                 break;
             }
             // fallthrough
         case state::DELETION_TIME_2:
-            if (read_64(data) != read_status::ready) {
+            if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_3;
                 break;
             }
@@ -240,11 +246,12 @@ private:
             _key.release();
             _state = state::ATOM_START;
             if (ret == row_consumer::proceed::no) {
-                return row_consumer::proceed::no;
+                co_yield row_consumer::proceed::no;
+                continue;
             }
         }
         case state::ATOM_START:
-            if (read_short_length_bytes(data, _key) != read_status::ready) {
+            if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                 _state = state::ATOM_START_2;
                 break;
             }
@@ -254,14 +261,15 @@ private:
                 _state = state::ROW_START;
                 if (_consumer.consume_row_end() ==
                         row_consumer::proceed::no) {
-                    return row_consumer::proceed::no;
+                    co_yield row_consumer::proceed::no;
+                    continue;
                 }
             } else {
                 _state = state::ATOM_MASK;
             }
             break;
         case state::ATOM_MASK:
-            if (read_8(data) != read_status::ready) {
+            if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::ATOM_MASK_2;
                 break;
             }
@@ -293,7 +301,7 @@ private:
             break;
         }
         case state::COUNTER_CELL:
-            if (read_64(data) != read_status::ready) {
+            if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::COUNTER_CELL_2;
                 break;
             }
@@ -303,14 +311,14 @@ private:
             _state = state::CELL;
             goto state_CELL;
         case state::EXPIRING_CELL:
-            if (read_32(data) != read_status::ready) {
+            if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::EXPIRING_CELL_2;
                 break;
             }
             // fallthrough
         case state::EXPIRING_CELL_2:
             _ttl = _u32;
-            if (read_32(data) != read_status::ready) {
+            if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::EXPIRING_CELL_3;
                 break;
             }
@@ -320,18 +328,18 @@ private:
             _state = state::CELL;
         state_CELL:
         case state::CELL: {
-            if (read_64(data) != read_status::ready) {
+            if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::CELL_2;
                 break;
             }
         }
         case state::CELL_2:
-            if (read_32(data) != read_status::ready) {
+            if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES;
                 break;
             }
         case state::CELL_VALUE_BYTES:
-            if (read_bytes(data, _u32, _val_fragmented) != read_status::ready) {
+            if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES_2;
                 break;
             }
@@ -363,22 +371,23 @@ private:
             _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
             _state = state::ATOM_START;
             if (ret == row_consumer::proceed::no) {
-                return row_consumer::proceed::no;
+                co_yield row_consumer::proceed::no;
+                continue;
             }
             break;
         }
         case state::RANGE_TOMBSTONE:
-            if (read_short_length_bytes(data, _val) != read_status::ready) {
+            if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_2;
                 break;
             }
         case state::RANGE_TOMBSTONE_2:
-            if (read_32(data) != read_status::ready) {
+            if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_3;
                 break;
             }
         case state::RANGE_TOMBSTONE_3:
-            if (read_64(data) != read_status::ready) {
+            if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_4;
                 break;
             }
@@ -395,16 +404,19 @@ private:
             _val.release();
             _state = state::ATOM_START;
             if (ret == row_consumer::proceed::no) {
-                return row_consumer::proceed::no;
+                co_yield row_consumer::proceed::no;
+                continue;
             }
             break;
         }
         case state::STOP_THEN_ATOM_START:
             _state = state::ATOM_START;
-            return row_consumer::proceed::no;
+            co_yield row_consumer::proceed::no;
+            continue;
         }
 
-        return row_consumer::proceed::yes;
+        co_yield row_consumer::proceed::yes;
+        }
     }
 public:
 
@@ -415,6 +427,7 @@ public:
                 : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
                 , _consumer(consumer)
                 , _sst(std::move(sst))
+                , _gen(do_process_state())
     {}
 
     void verify_end_state() {
@@ -443,6 +456,7 @@ public:
             assert(0);
         }
         _consumer.reset(el);
+        _gen = do_process_state();
     }
 
     reader_permit& permit() {
