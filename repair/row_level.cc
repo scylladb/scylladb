@@ -49,6 +49,7 @@
 #include "utils/stall_free.hh"
 #include "service/migration_manager.hh"
 #include "streaming/consumer.hh"
+#include <seastar/core/coroutine.hh>
 
 extern logging::logger rlogger;
 
@@ -401,14 +402,14 @@ public:
         return _dirty_on_master;
     }
     future<> clear_gently() noexcept {
-        auto f = _fm ? _fm->clear_gently() : make_ready_future<>();
-        return f.finally([this] {
+        if (_fm) {
+            co_await _fm->clear_gently();
             _fm.reset();
-            _dk_with_hash = {};
-            _boundary.reset();
-            _hash.reset();
-            _mf = {};
-        });
+        }
+        _dk_with_hash = {};
+        _boundary.reset();
+        _hash.reset();
+        _mf = {};
     }
 };
 
@@ -857,12 +858,9 @@ public:
 
 public:
     future<> clear_gently() noexcept {
-        // FIXME: coroutinize
-        return utils::clear_gently(_peer_row_hash_sets).then([this] {
-            return utils::clear_gently(_working_row_buf);
-        }).then([this] {
-            return utils::clear_gently(_row_buf);
-        });
+        co_await utils::clear_gently(_peer_row_hash_sets);
+        co_await utils::clear_gently(_working_row_buf);
+        co_await utils::clear_gently(_row_buf);
     }
 
     future<> stop() {
