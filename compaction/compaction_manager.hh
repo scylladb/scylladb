@@ -220,8 +220,10 @@ public:
     // it completes when future returned by job is ready or returns immediately
     // if manager was asked to stop.
     //
+    // parameter type is the compaction type the operation can most closely be
+    //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(column_family* cf, sstring name, noncopyable_function<future<>()> job);
+    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>()> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.

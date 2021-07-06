@@ -284,13 +284,14 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
     return task->compaction_done.get_future().then([task] {});
 }
 
-future<> compaction_manager::run_custom_job(column_family* cf, sstring name, noncopyable_function<future<>()> job) {
+future<> compaction_manager::run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>()> job) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
 
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
+    task->type = type;
     _tasks.push_back(task);
 
     auto job_ptr = std::make_unique<noncopyable_function<future<>()>>(std::move(job));
@@ -308,15 +309,15 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstring name, non
             // compaction and some of them may not even belong to current shard.
             return job();
         });
-    }).then_wrapped([this, task, name, job_ptr = std::move(job_ptr)] (future<> f) {
+    }).then_wrapped([this, task, job_ptr = std::move(job_ptr)] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
         try {
             f.get();
         } catch (sstables::compaction_stop_exception& e) {
-            cmlog.info("{} was abruptly stopped, reason: {}", name, e.what());
+            cmlog.info("{} was abruptly stopped, reason: {}", task->type, e.what());
         } catch (...) {
-            cmlog.error("{} failed: {}", name, std::current_exception());
+            cmlog.error("{} failed: {}", task->type, std::current_exception());
             throw;
         }
     });
