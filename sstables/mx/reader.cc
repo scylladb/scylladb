@@ -411,36 +411,33 @@ private:
                     goto range_tombstone_body_label;
                 } else {
                     _reading_range_tombstone_ck = true;
-                    goto clustering_row_label;
                 }
-                assert(0);
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
                 start_row(_regular_row);
                 _ck_size = _column_translation.clustering_column_value_fix_legths().size();
-                goto clustering_row_label;
-            }
-            if (read_8(*_processing_data) != read_status::ready) {
-                _state = state::EXTENDED_FLAGS;
-                co_yield consumer_m::proceed::yes;
-            }
-            _extended_flags = unfiltered_extended_flags_m(_u8);
-            if (_extended_flags.has_cassandra_shadowable_deletion()) {
-                throw std::runtime_error("SSTables with Cassandra-style shadowable deletion cannot be read by Scylla");
-            }
-            if (_extended_flags.is_static()) {
-                if (_is_first_unfiltered) {
-                    start_row(_static_row);
-                    _is_first_unfiltered = false;
-                    goto row_body_label;
-                } else {
-                    throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
+            } else {
+                if (read_8(*_processing_data) != read_status::ready) {
+                    _state = state::EXTENDED_FLAGS;
+                    co_yield consumer_m::proceed::yes;
                 }
+                _extended_flags = unfiltered_extended_flags_m(_u8);
+                if (_extended_flags.has_cassandra_shadowable_deletion()) {
+                    throw std::runtime_error("SSTables with Cassandra-style shadowable deletion cannot be read by Scylla");
+                }
+                if (_extended_flags.is_static()) {
+                    if (_is_first_unfiltered) {
+                        start_row(_static_row);
+                        _is_first_unfiltered = false;
+                        goto row_body_label;
+                    } else {
+                        throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
+                    }
+                }
+                start_row(_regular_row);
+                _ck_size = _column_translation.clustering_column_value_fix_legths().size();
             }
-            start_row(_regular_row);
-            _ck_size = _column_translation.clustering_column_value_fix_legths().size();
-        clustering_row_label:
             _is_first_unfiltered = false;
             _null_component_occured = false;
             setup_ck(_column_translation.clustering_column_value_fix_legths());
@@ -641,8 +638,6 @@ private:
                 }
                 if (!is_column_simple()) {
                     _state = state::COMPLEX_COLUMN;
-                    goto complex_column_label;
-                complex_column_label:
                     if (!_flags.has_complex_deletion()) {
                         _complex_column_tombstone = {};
                         goto complex_column_2_label;
