@@ -52,6 +52,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
 
 #include "sstables/sstables.hh"
@@ -1625,11 +1626,99 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
     return descriptor.options.visit(visitor_factory);
 }
 
+future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, const compaction_info& info) {
+    auto schema = reader.schema();
+
+    bool valid = true;
+    std::exception_ptr ex;
+
+    try {
+        auto validator = mutation_fragment_stream_validator(*schema);
+
+        while (auto mf_opt = co_await reader(db::no_timeout)) {
+            if (info.is_stop_requested()) [[unlikely]] {
+                // Compaction manager will catch this exception and re-schedule the compaction.
+                throw compaction_stop_exception(info.ks_name, info.cf_name, info.stop_requested);
+            }
+
+            const auto& mf = *mf_opt;
+
+            if (mf.is_partition_start()) {
+                const auto& ps = mf.as_partition_start();
+                if (!validator(mf)) {
+                    scrub_compaction::report_invalid_partition_start(compaction_type::Validation, validator, ps.key());
+                    validator.reset(mf);
+                    valid = false;
+                }
+                if (!validator(ps.key())) {
+                    scrub_compaction::report_invalid_partition(compaction_type::Validation, validator, ps.key());
+                    validator.reset(ps.key());
+                    valid = false;
+                }
+            } else {
+                if (!validator(mf)) {
+                    scrub_compaction::report_invalid_mutation_fragment(compaction_type::Validation, validator, mf);
+                    validator.reset(mf);
+                    valid = false;
+                }
+            }
+        }
+        if (!validator.on_end_of_stream()) {
+            scrub_compaction::report_invalid_end_of_stream(compaction_type::Validation, validator);
+            valid = false;
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await reader.close();
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    co_return valid;
+}
+
+static future<compaction_info> validate_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
+    auto schema = cf.schema();
+
+    formatted_sstables_list sstables_list_msg;
+    auto sstables = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(schema, make_lw_shared<sstable_list>(sstable_list{}), false));
+    for (const auto& sst : descriptor.sstables) {
+        sstables_list_msg += sst;
+        sstables->insert(sst);
+    }
+
+    auto info = compaction::create_compaction_info(cf, descriptor);
+    info->sstables = descriptor.sstables.size();
+    cf.get_compaction_manager().register_compaction(info);
+    auto deregister_compaction = defer([&cf, info] {
+        cf.get_compaction_manager().deregister_compaction(info);
+    });
+
+    clogger.info("Validating {}", sstables_list_msg);
+
+    auto permit = cf.compaction_concurrency_semaphore().make_permit(schema.get(), "Validation");
+    auto reader = sstables->make_local_shard_sstable_reader(schema, permit, query::full_partition_range, schema->full_slice(), descriptor.io_priority,
+            tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no, default_read_monitor_generator());
+
+    const auto valid = co_await validate_compaction_validate_reader(std::move(reader), *info);
+
+    clogger.info("Validated {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+
+    co_return *info;
+}
+
 future<compaction_info>
 compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
     if (descriptor.sstables.empty()) {
         throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
                 cf.schema()->ks_name(), cf.schema()->cf_name()));
+    }
+    if (descriptor.options.type() == compaction_type::Validation) {
+        // Bypass the usual compaction machinery for validation compaction
+        return validate_sstables(std::move(descriptor), cf);
     }
     auto c = make_compaction(cf, std::move(descriptor));
     if (c->enable_garbage_collected_sstable_writer()) {
