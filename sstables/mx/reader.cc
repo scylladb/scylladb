@@ -632,19 +632,18 @@ private:
                     _state = state::COMPLEX_COLUMN;
                     if (!_flags.has_complex_deletion()) {
                         _complex_column_tombstone = {};
-                        goto complex_column_2_label;
+                    } else {
+                        if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                            _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
+                            co_yield consumer_m::proceed::yes;
+                        }
+                        _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
+                        if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                            _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
+                            co_yield consumer_m::proceed::yes;
+                        }
+                        _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
                     }
-                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
-                        co_yield consumer_m::proceed::yes;
-                    }
-                    _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
-                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
-                        co_yield consumer_m::proceed::yes;
-                    }
-                    _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
-                complex_column_2_label:
                     if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
                         _state = state::COMPLEX_COLUMN_SIZE;
                         co_yield consumer_m::proceed::no;
