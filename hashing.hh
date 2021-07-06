@@ -62,7 +62,7 @@ struct appending_hash;
 template<typename H, typename T, typename... Args>
 requires Hasher<H>
 inline
-void feed_hash(H& h, const T& value, Args&&... args) noexcept {
+void feed_hash(H& h, const T& value, Args&&... args) noexcept(noexcept(std::declval<appending_hash<T>>()(h, value, args...))) {
     appending_hash<T>()(h, value, std::forward<Args>(args)...);
 };
 
