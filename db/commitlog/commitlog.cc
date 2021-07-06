@@ -1730,7 +1730,10 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
 
 future<> db::commitlog::segment_manager::sync_all_segments() {
     clogger.debug("Issuing sync for all segments");
-    return parallel_for_each(_segments, [] (sseg_ptr s) {
+    // #8952 - calls that do sync/cycle can end up altering
+    // _segments (end_flush()->discard_unused())
+    auto def_copy = _segments;
+    return parallel_for_each(def_copy, [] (sseg_ptr s) {
         return s->sync().then([](sseg_ptr s) {
             clogger.debug("Synced segment {}", *s);
         });
@@ -1739,7 +1742,10 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
 
 future<> db::commitlog::segment_manager::shutdown_all_segments() {
     clogger.debug("Issuing shutdown for all segments");
-    return parallel_for_each(_segments, [] (sseg_ptr s) {
+    // #8952 - calls that do sync/cycle can end up altering
+    // _segments (end_flush()->discard_unused())
+    auto def_copy = _segments;
+    return parallel_for_each(def_copy, [] (sseg_ptr s) {
         return s->shutdown().then([](sseg_ptr s) {
             clogger.debug("Shutdown segment {}", *s);
         });
@@ -1946,7 +1952,10 @@ future<> db::commitlog::segment_manager::clear() {
  */
 void db::commitlog::segment_manager::sync() {
     auto f = std::exchange(_background_sync, make_ready_future<>());
-    _background_sync = parallel_for_each(_segments, [](sseg_ptr s) {
+    // #8952 - calls that do sync/cycle can end up altering
+    // _segments (end_flush()->discard_unused())
+    auto def_copy = _segments;
+    _background_sync = parallel_for_each(def_copy, [](sseg_ptr s) {
         return s->sync().discard_result();
     }).then([f = std::move(f)]() mutable {
         return std::move(f);
