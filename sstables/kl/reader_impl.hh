@@ -221,19 +221,15 @@ private:
                 _state = state::DELETION_TIME;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::DELETION_TIME:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_2;
                 co_yield row_consumer::proceed::yes;
             }
-            // fallthrough
-        case state::DELETION_TIME_2:
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::DELETION_TIME_3;
                 co_yield row_consumer::proceed::yes;
             }
-            // fallthrough
-        case state::DELETION_TIME_3: {
+        {
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
@@ -252,7 +248,6 @@ private:
                 _state = state::ATOM_START_2;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::ATOM_START_2:
             if (_u16 == 0) {
                 // end of row marker
                 _state = state::ROW_START;
@@ -266,13 +261,11 @@ private:
                 _state = state::ATOM_MASK;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::ATOM_MASK:
             if (read_8(*_processing_data) != read_status::ready) {
                 _state = state::ATOM_MASK_2;
                 co_yield row_consumer::proceed::yes;
             }
-            // fallthrough
-        case state::ATOM_MASK_2: {
+        {
             auto const mask = column_mask(_u8);
 
             if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
@@ -305,8 +298,6 @@ private:
                 _state = state::COUNTER_CELL_2;
                 co_yield row_consumer::proceed::yes;
             }
-            // fallthrough
-        case state::COUNTER_CELL_2:
             // _timestamp_of_last_deletion = _u64;
             _state = state::CELL;
             goto state_CELL;
@@ -315,15 +306,11 @@ private:
                 _state = state::EXPIRING_CELL_2;
                 co_yield row_consumer::proceed::yes;
             }
-            // fallthrough
-        case state::EXPIRING_CELL_2:
             _ttl = _u32;
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::EXPIRING_CELL_3;
                 co_yield row_consumer::proceed::yes;
             }
-            // fallthrough
-        case state::EXPIRING_CELL_3:
             _expiration = _u32;
             _state = state::CELL;
         state_CELL:
@@ -333,17 +320,14 @@ private:
                 co_yield row_consumer::proceed::yes;
             }
         }
-        case state::CELL_2:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::CELL_VALUE_BYTES:
             if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES_2;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::CELL_VALUE_BYTES_2:
         {
             row_consumer::proceed ret;
             if (_deleted) {
@@ -381,17 +365,14 @@ private:
                 _state = state::RANGE_TOMBSTONE_2;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::RANGE_TOMBSTONE_2:
             if (read_32(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_3;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::RANGE_TOMBSTONE_3:
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_4;
                 co_yield row_consumer::proceed::yes;
             }
-        case state::RANGE_TOMBSTONE_4:
         {
             _sst->get_stats().on_range_tombstone_read();
             deletion_time del;
@@ -406,6 +387,8 @@ private:
             co_yield ret;
             continue;
         }
+        default:
+            __builtin_unreachable();
         }
 
         co_yield row_consumer::proceed::yes;
