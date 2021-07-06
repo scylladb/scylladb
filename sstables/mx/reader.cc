@@ -519,69 +519,68 @@ private:
                     throw malformed_sstable_exception(format("Static row has unexpected flags: timestamp={}, ttl={}, deletion={}",
                         _flags.has_timestamp(), _flags.has_ttl(), _flags.has_deletion()));
                 }
-                goto row_body_missing_columns_label;
-            }
-            if (!_flags.has_timestamp()) {
-                _state = state::ROW_BODY_DELETION;
             } else {
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_TIMESTAMP;
-                    co_yield consumer_m::proceed::yes;
-                }
-
-                _liveness.set_timestamp(parse_timestamp(_header, _u64));
-                if (!_flags.has_ttl()) {
+                if (!_flags.has_timestamp()) {
                     _state = state::ROW_BODY_DELETION;
                 } else {
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_TIMESTAMP_TTL;
+                        _state = state::ROW_BODY_TIMESTAMP;
                         co_yield consumer_m::proceed::yes;
                     }
-                    _liveness.set_ttl(parse_ttl(_header, _u64));
+
+                    _liveness.set_timestamp(parse_timestamp(_header, _u64));
+                    if (!_flags.has_ttl()) {
+                        _state = state::ROW_BODY_DELETION;
+                    } else {
+                        if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                            _state = state::ROW_BODY_TIMESTAMP_TTL;
+                            co_yield consumer_m::proceed::yes;
+                        }
+                        _liveness.set_ttl(parse_ttl(_header, _u64));
+                        if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                            _state = state::ROW_BODY_TIMESTAMP_DELTIME;
+                            co_yield consumer_m::proceed::yes;
+                        }
+                        _liveness.set_local_deletion_time(parse_expiry(_header, _u64));
+                    }
+                }
+                if (!_flags.has_deletion()) {
+                    _state = state::ROW_BODY_SHADOWABLE_DELETION;
+                } else {
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_TIMESTAMP_DELTIME;
+                        _state = state::ROW_BODY_DELETION_2;
                         co_yield consumer_m::proceed::yes;
                     }
-                    _liveness.set_local_deletion_time(parse_expiry(_header, _u64));
+                    _row_tombstone.timestamp = parse_timestamp(_header, _u64);
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::ROW_BODY_DELETION_3;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _row_tombstone.deletion_time = parse_expiry(_header, _u64);
                 }
-            }
-            if (!_flags.has_deletion()) {
-                _state = state::ROW_BODY_SHADOWABLE_DELETION;
-            } else {
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_DELETION_2;
+                if (_extended_flags.has_scylla_shadowable_deletion()) {
+                    if (!_has_shadowable_tombstones) {
+                        throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
+                    }
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
+                } else {
+                    _state = state::ROW_BODY_MARKER;
+                }
+                if (_consumer.consume_row_marker_and_tombstone(
+                        _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone)) == consumer_m::proceed::no) {
+                    _state = state::ROW_BODY_MISSING_COLUMNS;
                     co_yield consumer_m::proceed::yes;
                 }
-                _row_tombstone.timestamp = parse_timestamp(_header, _u64);
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_DELETION_3;
-                    co_yield consumer_m::proceed::yes;
-                }
-                _row_tombstone.deletion_time = parse_expiry(_header, _u64);
             }
-            if (_extended_flags.has_scylla_shadowable_deletion()) {
-                if (!_has_shadowable_tombstones) {
-                    throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
-                }
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
-                    co_yield consumer_m::proceed::yes;
-                }
-                _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
-                    co_yield consumer_m::proceed::yes;
-                }
-                _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
-            } else {
-                _state = state::ROW_BODY_MARKER;
-            }
-            if (_consumer.consume_row_marker_and_tombstone(
-                    _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone)) == consumer_m::proceed::no) {
-                _state = state::ROW_BODY_MISSING_COLUMNS;
-                co_yield consumer_m::proceed::yes;
-            }
-        row_body_missing_columns_label:
             if (!_flags.has_all_columns()) {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                     _state = state::ROW_BODY_MISSING_COLUMNS_2;
