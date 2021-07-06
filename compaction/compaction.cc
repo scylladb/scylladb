@@ -1590,6 +1590,7 @@ compaction_type compaction_options::type() const {
     static const compaction_type index_to_type[] = {
         compaction_type::Compaction,
         compaction_type::Cleanup,
+        compaction_type::Validation,
         compaction_type::Upgrade,
         compaction_type::Scrub,
         compaction_type::Reshard,
@@ -1615,6 +1616,9 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
         }
         std::unique_ptr<compaction> operator()(compaction_options::cleanup options) {
             return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(options));
+        }
+        std::unique_ptr<compaction> operator()(compaction_options::validation) {
+            return nullptr; // this compaction doesn't go through the regular path
         }
         std::unique_ptr<compaction> operator()(compaction_options::upgrade options) {
             return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(options));

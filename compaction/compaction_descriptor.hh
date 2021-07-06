@@ -69,6 +69,8 @@ public:
     struct cleanup {
         std::reference_wrapper<database> db;
     };
+    struct validation {
+    };
     struct upgrade {
         std::reference_wrapper<database> db;
     };
@@ -85,7 +87,7 @@ public:
     struct reshape {
     };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape>;
+    using options_variant = std::variant<regular, cleanup, validation, upgrade, scrub, reshard, reshape>;
 
 private:
     options_variant _options;
@@ -109,6 +111,10 @@ public:
 
     static compaction_options make_cleanup(database& db) {
         return compaction_options(cleanup{db});
+    }
+
+    static compaction_options make_validation() {
+        return compaction_options(validation{});
     }
 
     static compaction_options make_upgrade(database& db) {
