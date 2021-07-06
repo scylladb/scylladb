@@ -176,6 +176,9 @@ def run_iotune():
                 sys.exit(1)
 
 if __name__ == "__main__":
+    if not is_nonroot() and os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
     parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
     parser.add_argument('--ami', dest='ami', action='store_true',
                         help='configure AWS AMI')
