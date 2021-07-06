@@ -697,18 +697,16 @@ private:
             if (_column_flags.use_row_ttl()) {
                 _column_ttl = _liveness.ttl();
                 _state = state::COLUMN_VALUE;
-                goto column_cell_path_label;
             } else if (!_column_flags.is_expiring()) {
                 _column_ttl = gc_clock::duration::zero();
                 _state = state::COLUMN_VALUE;
-                goto column_cell_path_label;
+            } else {
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::COLUMN_TTL_2;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _column_ttl = parse_ttl(_header, _u64);
             }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::COLUMN_TTL_2;
-                co_yield consumer_m::proceed::yes;
-            }
-            _column_ttl = parse_ttl(_header, _u64);
-        column_cell_path_label:
             if (!is_column_simple()) {
                 if (read_unsigned_vint_length_bytes_contiguous(*_processing_data, _cell_path) != read_status::ready) {
                     _state = state::COLUMN_VALUE;
