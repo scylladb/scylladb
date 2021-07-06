@@ -253,7 +253,6 @@ private:
                     break;
                 } else {
                     _state = state::ATOM_MASK;
-                    co_yield row_consumer::proceed::yes;
                 }
                 if (read_8(*_processing_data) != read_status::ready) {
                     _state = state::ATOM_MASK_2;
