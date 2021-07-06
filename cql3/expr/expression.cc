@@ -101,9 +101,10 @@ struct column_value_eval_bag {
 };
 
 /// Returns col's value from queried data.
-managed_bytes_opt get_value_from_partition_slice(
-        const column_value& col, row_data_from_partition_slice data, const query_options& options) {
+managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag& bag) {
     auto cdef = col.col;
+    const row_data_from_partition_slice& data = bag.row_data;
+    const query_options& options = bag.options;
     if (col.sub) {
         auto col_type = static_pointer_cast<const collection_type_impl>(cdef->type);
         if (!col_type->is_map()) {
@@ -133,11 +134,6 @@ managed_bytes_opt get_value_from_partition_slice(
             throw exceptions::unsupported_operation_exception("Unknown column kind");
         }
     }
-}
-
-/// Returns col's value from the fetched data.
-managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag& bag) {
-    return get_value_from_partition_slice(col, bag.row_data, bag.options);
 }
 
 /// Type for comparing results of get_value().
