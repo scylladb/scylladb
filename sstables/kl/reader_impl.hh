@@ -310,7 +310,6 @@ private:
                 }
                 // _timestamp_of_last_deletion = _u64;
                 _state = state::CELL;
-                goto state_CELL;
             } else if ((mask & column_mask::expiration) != column_mask::none) {
                 _deleted = false;
                 _counter = false;
@@ -326,7 +325,6 @@ private:
                 }
                 _expiration = _u32;
                 _state = state::CELL;
-                break;
             } else {
                 // FIXME: see ColumnSerializer.java:deserializeColumnBody
                 if ((mask & column_mask::counter_update) != column_mask::none) {
@@ -336,11 +334,9 @@ private:
                 _deleted = (mask & column_mask::deletion) != column_mask::none;
                 _counter = false;
                 _state = state::CELL;
-                break;
             }
         }
-        state_CELL:
-        case state::CELL: {
+        {
             if (read_64(*_processing_data) != read_status::ready) {
                 _state = state::CELL_2;
                 co_yield row_consumer::proceed::yes;
