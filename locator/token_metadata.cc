@@ -32,6 +32,7 @@
 #include <boost/icl/interval_map.hpp>
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
+#include "utils/stall_free.hh"
 
 namespace locator {
 
@@ -955,39 +956,14 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
     });
 }
 
-template <typename Container>
-static future<> clear_container_gently(Container& c) noexcept;
-
-// The vector elements we use here (token / inet_address) have trivial destructors
-// so they can be safely cleared in bulk
-template <typename T, typename Container = std::vector<T>>
-static future<> clear_container_gently(Container& vect) noexcept {
-    vect.clear();
-    return make_ready_future<>();
-}
-
-template <typename Container>
-static future<> clear_container_gently(Container& c) noexcept {
-    for (auto b = c.begin(); b != c.end(); b = c.erase(b)) {
-        co_await make_ready_future<>(); // maybe yield
-    }
-}
-
-template <typename Container>
-static future<> clear_nested_container_gently(Container& c) noexcept {
-    for (auto b = c.begin(); b != c.end(); b = c.erase(b)) {
-        co_await clear_container_gently(b->second);
-    }
-}
-
 future<> token_metadata_impl::clear_gently() noexcept {
-    co_await clear_container_gently(_token_to_endpoint_map);
-    co_await clear_container_gently(_endpoint_to_host_id_map);
-    co_await clear_container_gently(_bootstrap_tokens);
-    co_await clear_container_gently(_leaving_endpoints);
-    co_await clear_container_gently(_replacing_endpoints);
-    co_await clear_container_gently(_pending_ranges_interval_map);
-    co_await clear_container_gently(_sorted_tokens);
+    co_await utils::clear_gently(_token_to_endpoint_map);
+    co_await utils::clear_gently(_endpoint_to_host_id_map);
+    co_await utils::clear_gently(_bootstrap_tokens);
+    co_await utils::clear_gently(_leaving_endpoints);
+    co_await utils::clear_gently(_replacing_endpoints);
+    co_await utils::clear_gently(_pending_ranges_interval_map);
+    co_await utils::clear_gently(_sorted_tokens);
     co_await _topology.clear_gently();
     co_return;
 }
@@ -1960,9 +1936,9 @@ token_metadata::invalidate_cached_rings() {
 
 /////////////////// class topology /////////////////////////////////////////////
 inline future<> topology::clear_gently() noexcept {
-    co_await clear_nested_container_gently(_dc_endpoints);
-    co_await clear_nested_container_gently(_dc_racks);
-    co_await clear_container_gently(_current_locations);
+    co_await utils::clear_gently(_dc_endpoints);
+    co_await utils::clear_gently(_dc_racks);
+    co_await utils::clear_gently(_current_locations);
     co_return;
 }
 
