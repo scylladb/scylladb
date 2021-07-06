@@ -135,25 +135,14 @@ class data_consume_rows_context : public data_consumer::continuous_data_consumer
 private:
     enum class state {
         ROW_START,
-        DELETION_TIME,
         DELETION_TIME_2,
         DELETION_TIME_3,
         ATOM_START,
         ATOM_START_2,
-        ATOM_MASK,
         ATOM_MASK_2,
-        COUNTER_CELL,
         COUNTER_CELL_2,
-        EXPIRING_CELL,
-        EXPIRING_CELL_2,
         EXPIRING_CELL_3,
-        CELL,
-        CELL_2,
-        CELL_VALUE_BYTES,
         CELL_VALUE_BYTES_2,
-        RANGE_TOMBSTONE,
-        RANGE_TOMBSTONE_2,
-        RANGE_TOMBSTONE_3,
         RANGE_TOMBSTONE_4,
     } _state = state::ROW_START;
 
@@ -217,7 +206,6 @@ private:
         while (true) {
             if (_state == state::ROW_START) {
                 if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
-                    _state = state::DELETION_TIME;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_32(*_processing_data) != read_status::ready) {
@@ -251,8 +239,6 @@ private:
                     _state = state::ROW_START;
                     co_yield _consumer.consume_row_end();
                     break;
-                } else {
-                    _state = state::ATOM_MASK;
                 }
                 if (read_8(*_processing_data) != read_status::ready) {
                     _state = state::ATOM_MASK_2;
@@ -261,14 +247,11 @@ private:
                 auto const mask = column_mask(_u8);
 
                 if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
-                    _state = state::RANGE_TOMBSTONE;
                     _shadowable = (mask & column_mask::shadowable) != column_mask::none;
                     if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
-                        _state = state::RANGE_TOMBSTONE_2;
                         co_yield row_consumer::proceed::yes;
                     }
                     if (read_32(*_processing_data) != read_status::ready) {
-                        _state = state::RANGE_TOMBSTONE_3;
                         co_yield row_consumer::proceed::yes;
                     }
                     if (read_64(*_processing_data) != read_status::ready) {
@@ -290,19 +273,15 @@ private:
                 } else if ((mask & column_mask::counter) != column_mask::none) {
                     _deleted = false;
                     _counter = true;
-                    _state = state::COUNTER_CELL;
                     if (read_64(*_processing_data) != read_status::ready) {
                         _state = state::COUNTER_CELL_2;
                         co_yield row_consumer::proceed::yes;
                     }
                     // _timestamp_of_last_deletion = _u64;
-                    _state = state::CELL;
                 } else if ((mask & column_mask::expiration) != column_mask::none) {
                     _deleted = false;
                     _counter = false;
-                    _state = state::EXPIRING_CELL;
                     if (read_32(*_processing_data) != read_status::ready) {
-                        _state = state::EXPIRING_CELL_2;
                         co_yield row_consumer::proceed::yes;
                     }
                     _ttl = _u32;
@@ -311,7 +290,6 @@ private:
                         co_yield row_consumer::proceed::yes;
                     }
                     _expiration = _u32;
-                    _state = state::CELL;
                 } else {
                     // FIXME: see ColumnSerializer.java:deserializeColumnBody
                     if ((mask & column_mask::counter_update) != column_mask::none) {
@@ -320,14 +298,11 @@ private:
                     _ttl = _expiration = 0;
                     _deleted = (mask & column_mask::deletion) != column_mask::none;
                     _counter = false;
-                    _state = state::CELL;
                 }
                 if (read_64(*_processing_data) != read_status::ready) {
-                    _state = state::CELL_2;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_32(*_processing_data) != read_status::ready) {
-                    _state = state::CELL_VALUE_BYTES;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
