@@ -259,15 +259,34 @@ void stats::register_stats() {
 
 bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key, gc_clock::time_point now) {
     const auto r = view.select_statement().get_restrictions()->get_partition_key_restrictions();
+    std::vector<bytes> exploded_pk = key.key().explode();
+    std::vector<bytes> exploded_ck;
+    std::vector<const column_definition*> pk_columns;
+    pk_columns.reserve(base.partition_key_size());
+    for (const column_definition& column : base.partition_key_columns()) {
+        pk_columns.push_back(&column);
+    }
+    auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), pk_columns);
+    uint64_t zero = 0;
+    auto dummy_row = query::result_row_view(ser::qr_row_view{simple_memory_input_stream(reinterpret_cast<const char*>(&zero), 8)});
     return cql3::expr::is_satisfied_by(
-            r->expression, base, key.key(), clustering_key_prefix::make_empty(), row(), cql3::query_options({ }), now);
+            r->expression, exploded_pk, exploded_ck, dummy_row, &dummy_row, *selection, cql3::query_options({ }));
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck, gc_clock::time_point now) {
     const auto r = view.select_statement().get_restrictions()->get_clustering_columns_restrictions();
+    std::vector<bytes> exploded_pk = key.explode();
+    std::vector<bytes> exploded_ck = ck.explode();
+    std::vector<const column_definition*> ck_columns;
+    ck_columns.reserve(base.clustering_key_size());
+    for (const column_definition& column : base.clustering_key_columns()) {
+        ck_columns.push_back(&column);
+    }
+    auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), ck_columns);
+    uint64_t zero = 0;
+    auto dummy_row = query::result_row_view(ser::qr_row_view{simple_memory_input_stream(reinterpret_cast<const char*>(&zero), 8)});
     return cql3::expr::is_satisfied_by(
-            r->expression,
-            base, key, ck, row(), cql3::query_options({ }), now);
+            r->expression, exploded_pk, exploded_ck, dummy_row, &dummy_row, *selection, cql3::query_options({ }));
 }
 
 bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update, gc_clock::time_point now) {
