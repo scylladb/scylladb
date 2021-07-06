@@ -564,21 +564,19 @@ private:
                 if (!_has_shadowable_tombstones) {
                     throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
                 }
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
             } else {
                 _state = state::ROW_BODY_MARKER;
-                goto row_body_marker_label;
             }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
-                co_yield consumer_m::proceed::yes;
-            }
-            _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
-                co_yield consumer_m::proceed::yes;
-            }
-            _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
-        row_body_marker_label:
             if (_consumer.consume_row_marker_and_tombstone(
                     _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone)) == consumer_m::proceed::no) {
                 _state = state::ROW_BODY_MISSING_COLUMNS;
