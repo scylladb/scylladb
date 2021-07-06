@@ -607,18 +607,15 @@ private:
                     _row->_columns_selector.set();
                 }
             }
-            row_body_missing_columns_read_columns_label:
-                if (_missing_columns_to_read == 0) {
-                    skip_absent_columns();
-                    goto column_label;
+                while (_missing_columns_to_read > 0) {
+                    --_missing_columns_to_read;
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _row->_columns_selector.flip(_u64);
                 }
-                --_missing_columns_to_read;
-                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
-                    co_yield consumer_m::proceed::yes;
-                }
-                _row->_columns_selector.flip(_u64);
-                goto row_body_missing_columns_read_columns_label;
+                skip_absent_columns();
             } else {
                 _row->_columns_selector.set();
             }
