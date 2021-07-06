@@ -1022,20 +1022,7 @@ static future<> try_wait_for_hints_to_be_replayed(repair_uniq_id id, std::vector
     auto& sp = service::get_local_storage_proxy();
     rlogger.info("repair id {}: started replaying hints before repair, source nodes: {}, target nodes: {}", id, source_nodes, target_nodes);
     try {
-        seastar::abort_source combined_as;
-        auto attach = [&] (seastar::abort_source& as) {
-            as.check();
-            return as.subscribe([&] () noexcept {
-                if (!combined_as.abort_requested()) {
-                    combined_as.request_abort();
-                }
-            });
-        };
-
-        const auto shutdown_sub = attach(repair_tracker().get_shutdown_abort_source());
-        const auto abort_all_sub = attach(repair_tracker().get_abort_all_abort_source());
-
-        co_await sp.wait_for_hints_to_be_replayed(id.uuid, std::move(source_nodes), std::move(target_nodes), combined_as);
+        co_await sp.wait_for_hints_to_be_replayed(id.uuid, std::move(source_nodes), std::move(target_nodes));
         rlogger.info("repair id {}: finished replaying hints (took {}s), continuing with repair", id, get_elapsed_seconds());
     } catch (...) {
         rlogger.warn("repair id {}: failed to replay hints before repair (took {}s): {}, the repair will continue", id, get_elapsed_seconds(), std::current_exception());

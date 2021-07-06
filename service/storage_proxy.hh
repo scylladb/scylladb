@@ -485,7 +485,7 @@ public:
     future<> uninit_messaging_service();
 
     // Waits until `source_endpoints` replay their current hints towards `target_endpoints`.
-    future<> wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints, seastar::abort_source& as);
+    future<> wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints);
 
 private:
     // Applies mutation on this node.
