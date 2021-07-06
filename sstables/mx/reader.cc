@@ -393,7 +393,27 @@ private:
                 goto partition_start_label;
             } else if (_flags.is_range_tombstone()) {
                 _state = state::RANGE_TOMBSTONE_MARKER;
-                goto range_tombstone_marker_label;
+                _is_first_unfiltered = false;
+                if (read_8(*_processing_data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_KIND;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _range_tombstone_kind = bound_kind_m(_u8);
+                if (read_16(*_processing_data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_SIZE;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _ck_size = _u16;
+                if (_ck_size == 0) {
+                    _row_key.clear();
+                    _range_tombstone_kind = is_start(_range_tombstone_kind)
+                            ? bound_kind_m::incl_start : bound_kind_m::incl_end;
+                    goto range_tombstone_body_label;
+                } else {
+                    _reading_range_tombstone_ck = true;
+                    goto clustering_row_label;
+                }
+                assert(0);
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
@@ -427,7 +447,8 @@ private:
         ck_block_label:
             if (no_more_ck_blocks()) {
                 if (_reading_range_tombstone_ck) {
-                    goto range_tombstone_consume_ck_label;
+                    _reading_range_tombstone_ck = false;
+                    goto range_tombstone_body_label;
                 } else {
                     goto row_body_label;
                 }
@@ -575,7 +596,37 @@ private:
                     _state = state::ROW_BODY_MISSING_COLUMNS_2;
                     co_yield consumer_m::proceed::yes;
                 }
-                goto row_body_missing_columns_2_label;
+            {
+                uint64_t missing_column_bitmap_or_count = _u64;
+                if (_row->_columns.size() < 64) {
+                    _row->_columns_selector.clear();
+                    _row->_columns_selector.append(missing_column_bitmap_or_count);
+                    _row->_columns_selector.flip();
+                    _row->_columns_selector.resize(_row->_columns.size());
+                    skip_absent_columns();
+                    goto column_label;
+                }
+                _row->_columns_selector.resize(_row->_columns.size());
+                if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
+                    _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
+                    _row->_columns_selector.reset();
+                } else {
+                    _missing_columns_to_read = missing_column_bitmap_or_count;
+                    _row->_columns_selector.set();
+                }
+            }
+            row_body_missing_columns_read_columns_label:
+                if (_missing_columns_to_read == 0) {
+                    skip_absent_columns();
+                    goto column_label;
+                }
+                --_missing_columns_to_read;
+                if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                    _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
+                    co_yield consumer_m::proceed::yes;
+                }
+                _row->_columns_selector.flip(_u64);
+                goto row_body_missing_columns_read_columns_label;
             } else {
                 _row->_columns_selector.set();
             }
@@ -591,6 +642,40 @@ private:
                 if (!is_column_simple()) {
                     _state = state::COMPLEX_COLUMN;
                     goto complex_column_label;
+                complex_column_label:
+                    if (!_flags.has_complex_deletion()) {
+                        _complex_column_tombstone = {};
+                        goto complex_column_2_label;
+                    }
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
+                complex_column_2_label:
+                    if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
+                        _state = state::COMPLEX_COLUMN_SIZE;
+                        co_yield consumer_m::proceed::no;
+                    }
+                    if (read_unsigned_vint(*_processing_data) != read_status::ready) {
+                        _state = state::COMPLEX_COLUMN_SIZE_2;
+                        co_yield consumer_m::proceed::yes;
+                    }
+                    _subcolumns_to_read = _u64;
+                    if (_subcolumns_to_read == 0) {
+                        const sstables::column_translation::column_info& column_info = get_column_info();
+                        move_to_next_column();
+                        if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
+                            _state = state::COLUMN;
+                            co_yield consumer_m::proceed::no;
+                        }
+                    }
+                    goto column_label;
                 }
                 _subcolumns_to_read = 0;
             }
@@ -699,96 +784,6 @@ private:
                 move_to_next_column();
             }
             goto column_label;
-        row_body_missing_columns_2_label: {
-            uint64_t missing_column_bitmap_or_count = _u64;
-            if (_row->_columns.size() < 64) {
-                _row->_columns_selector.clear();
-                _row->_columns_selector.append(missing_column_bitmap_or_count);
-                _row->_columns_selector.flip();
-                _row->_columns_selector.resize(_row->_columns.size());
-                skip_absent_columns();
-                goto column_label;
-            }
-            _row->_columns_selector.resize(_row->_columns.size());
-            if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
-                _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
-                _row->_columns_selector.reset();
-            } else {
-                _missing_columns_to_read = missing_column_bitmap_or_count;
-                _row->_columns_selector.set();
-            }
-            goto row_body_missing_columns_read_columns_label;
-        }
-        row_body_missing_columns_read_columns_label:
-            if (_missing_columns_to_read == 0) {
-                skip_absent_columns();
-                goto column_label;
-            }
-            --_missing_columns_to_read;
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
-                co_yield consumer_m::proceed::yes;
-            }
-            _row->_columns_selector.flip(_u64);
-            goto row_body_missing_columns_read_columns_label;
-        complex_column_label:
-            if (!_flags.has_complex_deletion()) {
-                _complex_column_tombstone = {};
-                goto complex_column_2_label;
-            }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
-                co_yield consumer_m::proceed::yes;
-            }
-            _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
-                co_yield consumer_m::proceed::yes;
-            }
-            _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
-        complex_column_2_label:
-            if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
-                _state = state::COMPLEX_COLUMN_SIZE;
-                co_yield consumer_m::proceed::no;
-            }
-            if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::COMPLEX_COLUMN_SIZE_2;
-                co_yield consumer_m::proceed::yes;
-            }
-            _subcolumns_to_read = _u64;
-            if (_subcolumns_to_read == 0) {
-                const sstables::column_translation::column_info& column_info = get_column_info();
-                move_to_next_column();
-                if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
-                    _state = state::COLUMN;
-                    co_yield consumer_m::proceed::no;
-                }
-            }
-            goto column_label;
-        range_tombstone_marker_label:
-            _is_first_unfiltered = false;
-            if (read_8(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_KIND;
-                co_yield consumer_m::proceed::yes;
-            }
-            _range_tombstone_kind = bound_kind_m(_u8);
-            if (read_16(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_SIZE;
-                co_yield consumer_m::proceed::yes;
-            }
-            _ck_size = _u16;
-            if (_ck_size == 0) {
-                _row_key.clear();
-                _range_tombstone_kind = is_start(_range_tombstone_kind)
-                        ? bound_kind_m::incl_start : bound_kind_m::incl_end;
-                goto range_tombstone_body_label;
-            } else {
-                _reading_range_tombstone_ck = true;
-                goto clustering_row_label;
-            }
-            assert(0);
-        range_tombstone_consume_ck_label:
-            _reading_range_tombstone_ck = false;
         range_tombstone_body_label:
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_BODY_SIZE;
