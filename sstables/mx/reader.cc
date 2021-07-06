@@ -575,11 +575,8 @@ private:
                 } else {
                     _state = state::ROW_BODY_MARKER;
                 }
-                if (_consumer.consume_row_marker_and_tombstone(
-                        _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone)) == consumer_m::proceed::no) {
-                    _state = state::ROW_BODY_MISSING_COLUMNS;
-                    co_yield consumer_m::proceed::yes;
-                }
+                _consumer.consume_row_marker_and_tombstone(
+                        _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone));
             }
             if (!_flags.has_all_columns()) {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
