@@ -228,7 +228,6 @@ private:
                     _state = state::DELETION_TIME_3;
                     co_yield row_consumer::proceed::yes;
                 }
-            {
                 deletion_time del;
                 del.local_deletion_time = _u32;
                 del.marked_for_delete_at = _u64;
@@ -241,7 +240,6 @@ private:
                 if (ret == row_consumer::proceed::no) {
                     co_yield row_consumer::proceed::no;
                 }
-            }
             }
             while (true) {
                 if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
@@ -261,7 +259,6 @@ private:
                     _state = state::ATOM_MASK_2;
                     co_yield row_consumer::proceed::yes;
                 }
-            {
                 auto const mask = column_mask(_u8);
 
                 if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
@@ -279,7 +276,6 @@ private:
                         _state = state::RANGE_TOMBSTONE_4;
                         co_yield row_consumer::proceed::yes;
                     }
-                {
                     _sst->get_stats().on_range_tombstone_read();
                     deletion_time del;
                     del.local_deletion_time = _u32;
@@ -292,7 +288,6 @@ private:
                     _state = state::ATOM_START;
                     co_yield ret;
                     continue;
-                }
                 } else if ((mask & column_mask::counter) != column_mask::none) {
                     _deleted = false;
                     _counter = true;
@@ -328,13 +323,10 @@ private:
                     _counter = false;
                     _state = state::CELL;
                 }
-            }
-            {
                 if (read_64(*_processing_data) != read_status::ready) {
                     _state = state::CELL_2;
                     co_yield row_consumer::proceed::yes;
                 }
-            }
                 if (read_32(*_processing_data) != read_status::ready) {
                     _state = state::CELL_VALUE_BYTES;
                     co_yield row_consumer::proceed::yes;
@@ -343,7 +335,6 @@ private:
                     _state = state::CELL_VALUE_BYTES_2;
                     co_yield row_consumer::proceed::yes;
                 }
-            {
                 row_consumer::proceed ret;
                 if (_deleted) {
                     if (_val_fragmented.size_bytes() != 4) {
@@ -370,7 +361,6 @@ private:
                 _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
                 _state = state::ATOM_START;
                 co_yield ret;
-            }
             }
         }
     }
