@@ -346,9 +346,9 @@ public:
     }
 private:
     processing_result_generator do_process_state() {
-        while (true) {
-        switch (_state) {
-        case state::PARTITION_START:
+        if (_state != state::PARTITION_START) {
+            goto flags_label;
+        }
         partition_start_label:
             _is_first_unfiltered = true;
             if (read_short_length_bytes(*_processing_data, _pk) != read_status::ready) {
@@ -376,7 +376,6 @@ private:
                 co_yield consumer_m::proceed::no;
             }
         }
-        case state::FLAGS:
         flags_label:
             _liveness = {};
             _row_tombstone = {};
@@ -481,7 +480,7 @@ private:
                 _state = state::ROW_BODY_PREV_SIZE;
                 co_yield consumer_m::proceed::yes;
             }
-        case state::ROW_BODY_PREV_SIZE:
+        row_body_prev_size_label:
           {
             // Ignore the result
             consumer_m::row_processing_result ret = _extended_flags.is_static()
@@ -491,12 +490,12 @@ private:
             if (ret == consumer_m::row_processing_result::retry_later) {
                 _state = state::ROW_BODY_PREV_SIZE;
                 co_yield consumer_m::proceed::no;
-                continue;
+                goto row_body_prev_size_label;
             } else if (ret == consumer_m::row_processing_result::skip_row) {
                 _state = state::FLAGS;
                 auto current_pos = position() - _processing_data->size();
                 co_yield skip(*_processing_data, _next_row_offset - current_pos);
-                continue;
+                goto flags_label;
             }
 
             if (_extended_flags.is_static()) {
@@ -580,7 +579,6 @@ private:
             } else {
                 _row->_columns_selector.set();
             }
-        case state::COLUMN:
         column_label:
             if (_subcolumns_to_read == 0) {
                 if (no_more_columns()) {
@@ -849,11 +847,6 @@ private:
             }
             _row_key.clear();
             goto flags_label;
-            break;
-        default:
-            __builtin_unreachable();
-        }
-        }
     }
 public:
 
