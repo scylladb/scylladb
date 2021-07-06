@@ -317,6 +317,20 @@ static bool is_partition_key_empty(
     }
 }
 
+static query::partition_slice make_partition_slice(const schema& s) {
+    query::partition_slice::option_set opts;
+    opts.set(query::partition_slice::option::send_partition_key);
+    opts.set(query::partition_slice::option::send_clustering_key);
+    opts.set(query::partition_slice::option::send_timestamp);
+    opts.set(query::partition_slice::option::send_ttl);
+    return query::partition_slice(
+            {query::full_clustering_range},
+            { },
+            boost::copy_range<query::column_id_vector>(s.regular_columns()
+                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
+            std::move(opts));
+}
+
 bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_row& update, gc_clock::time_point now) {
     return clustering_prefix_matches(base, view, key, update.key(), now)
             && boost::algorithm::all_of(
@@ -1382,20 +1396,6 @@ future<> view_builder::stop() {
             });
         });
     });
-}
-
-static query::partition_slice make_partition_slice(const schema& s) {
-    query::partition_slice::option_set opts;
-    opts.set(query::partition_slice::option::send_partition_key);
-    opts.set(query::partition_slice::option::send_clustering_key);
-    opts.set(query::partition_slice::option::send_timestamp);
-    opts.set(query::partition_slice::option::send_ttl);
-    return query::partition_slice(
-            {query::full_clustering_range},
-            { },
-            boost::copy_range<query::column_id_vector>(s.regular_columns()
-                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
-            std::move(opts));
 }
 
 view_builder::build_step& view_builder::get_or_create_build_step(utils::UUID base_id) {
