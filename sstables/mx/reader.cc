@@ -507,7 +507,7 @@ private:
                     if (_subcolumns_to_read == 0) {
                         const sstables::column_translation::column_info& column_info = get_column_info();
                         move_to_next_column();
-                        if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
+                        if (_consumer.consume_complex_column_end(column_info) == consumer_m::proceed::no) {
                             _consuming = false;
                             co_yield consumer_m::proceed::no;
                             _consuming = true;
@@ -581,7 +581,7 @@ private:
                 if (_subcolumns_to_read == 0) {
                     const sstables::column_translation::column_info& column_info = get_column_info();
                     move_to_next_column();
-                    if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
+                    if (_consumer.consume_complex_column_end(column_info) == consumer_m::proceed::no) {
                         co_yield consumer_m::proceed::no;
                     }
                 }
