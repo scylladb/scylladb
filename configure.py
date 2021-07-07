@@ -2018,24 +2018,24 @@ with open(buildfile_tmp, 'w') as f:
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(checkheaders_mode, hh) for hh in headers])))
 
     f.write(
-            'build build: phony {}\n'.format(' '.join([f'{mode}-build' for mode in build_modes]))
+            'build build: phony {}\n'.format(' '.join([f'{mode}-build' for mode in default_modes]))
     )
     f.write(
-            'build test: phony {}\n'.format(' '.join(['{mode}-test'.format(mode=mode) for mode in build_modes]))
+            'build test: phony {}\n'.format(' '.join(['{mode}-test'.format(mode=mode) for mode in default_modes]))
     )
     f.write(
-            'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in build_modes]))
+            'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in default_modes]))
     )
 
     f.write(textwrap.dedent(f'''\
-        build dist-unified-tar: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}.{scylla_release}.tar.gz' for mode in build_modes])}
-        build dist-unified-compat: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz' for mode in build_modes])}
+        build dist-unified-tar: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}.{scylla_release}.tar.gz' for mode in default_modes])}
+        build dist-unified-compat: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz' for mode in default_modes])}
         build dist-unified: phony dist-unified-tar dist-unified-compat
 
         build dist-server-deb: phony {' '.join(['$builddir/dist/{mode}/debian'.format(mode=mode) for mode in build_modes])}
         build dist-server-rpm: phony {' '.join(['$builddir/dist/{mode}/redhat'.format(mode=mode) for mode in build_modes])}
-        build dist-server-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in build_modes])}
-        build dist-server-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in build_modes])}
+        build dist-server-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
+        build dist-server-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
         build dist-server: phony dist-server-tar dist-server-compat dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
@@ -2053,7 +2053,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-jmx-deb: build-submodule-deb tools/jmx/build/{scylla_product}-jmx-package.tar.gz
           dir = tools/jmx
           artifact = $builddir/{scylla_product}-jmx-package.tar.gz
-        build dist-jmx-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in build_modes])}
+        build dist-jmx-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in default_modes])}
         build dist-jmx: phony dist-jmx-tar dist-jmx-rpm dist-jmx-deb
 
         build tools/java/build/{scylla_product}-tools-package.tar.gz: build-submodule-reloc
@@ -2064,7 +2064,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-tools-deb: build-submodule-deb tools/java/build/{scylla_product}-tools-package.tar.gz
           dir = tools/java
           artifact = $builddir/{scylla_product}-tools-package.tar.gz
-        build dist-tools-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in build_modes])}
+        build dist-tools-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in default_modes])}
         build dist-tools: phony dist-tools-tar dist-tools-rpm dist-tools-deb
 
         build tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz: build-submodule-reloc
@@ -2076,8 +2076,8 @@ with open(buildfile_tmp, 'w') as f:
         build dist-python3-deb: build-submodule-deb tools/python3/build/{scylla_product}-python3-{arch}-package.tar.gz
           dir = tools/python3
           artifact = $builddir/{scylla_product}-python3-{arch}-package.tar.gz
-        build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in build_modes])}
-        build dist-python3-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in build_modes])}
+        build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
+        build dist-python3-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
         build dist-python3: phony dist-python3-tar dist-python3-compat dist-python3-rpm dist-python3-deb $builddir/release/{scylla_product}-python3-{arch}-package.tar.gz
         build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb
         build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm
@@ -2088,7 +2088,7 @@ with open(buildfile_tmp, 'w') as f:
         '''))
 
     f.write(textwrap.dedent(f'''\
-        build dist-check: phony {' '.join(['dist-check-{mode}'.format(mode=mode) for mode in build_modes])}
+        build dist-check: phony {' '.join(['dist-check-{mode}'.format(mode=mode) for mode in default_modes])}
         rule dist-check
           command = ./tools/testing/dist-check/dist-check.sh --mode $mode
         '''))
