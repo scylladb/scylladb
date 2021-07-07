@@ -251,8 +251,14 @@ future<call_result_t<M>> call(
             return make_ready_future<call_result_t<M>>(e);
         } catch (logical_timer::timed_out<typename M::output_t> e) {
             (void)e.get_future().discard_result()
-                .handle_exception_type([] (const output_channel_dropped&) {})
-                .handle_exception_type([] (const raft::dropped_entry&) {});
+                .handle_exception([] (std::exception_ptr eptr) {
+                    try {
+                        std::rethrow_exception(eptr);
+                    } catch (const output_channel_dropped&) {
+                    } catch (const raft::dropped_entry&) {
+                    } catch (const raft::stopped_error&) {
+                    }
+                });
             return make_ready_future<call_result_t<M>>(timed_out_error{});
         }
     });
@@ -834,7 +840,13 @@ future<reconfigure_result_t> reconfigure(
         co_return e;
     } catch (logical_timer::timed_out<void> e) {
         (void)e.get_future().discard_result()
-            .handle_exception_type([] (const raft::dropped_entry&) {});
+            .handle_exception([] (std::exception_ptr eptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const raft::dropped_entry&) {
+                } catch (const raft::stopped_error&) {
+                }
+            });
         co_return timed_out_error{};
     }
 }
