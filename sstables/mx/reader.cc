@@ -284,14 +284,13 @@ private:
         if (_state != state::PARTITION_START) {
             goto flags_label;
         }
-        partition_start_label:
+        partition_start_label: {
             _is_first_unfiltered = true;
             _state = state::DELETION_TIME;
             co_yield read_short_length_bytes(*_processing_data, _pk);
             _state = state::OTHER;
             co_yield read_32(*_processing_data);
             co_yield read_64(*_processing_data);
-        {
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
@@ -361,7 +360,6 @@ private:
                     co_yield read_unsigned_vint(*_processing_data);
                     _ck_blocks_header = _u64;
                 }
-            {
                 if (is_block_null()) {
                     _null_component_occured = true;
                     move_to_next_ck_block();
@@ -382,7 +380,6 @@ private:
                     status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
                 }
                 co_yield status;
-            }
                 _row_key.push_back(std::move(_column_value));
                 move_to_next_ck_block();
             }
@@ -390,11 +387,10 @@ private:
                 _reading_range_tombstone_ck = false;
                 goto range_tombstone_body_label;
             }
-        row_body_label:
+        row_body_label: {
             co_yield read_unsigned_vint(*_processing_data);
             _next_row_offset = position() - _processing_data->size() + _u64;
             co_yield read_unsigned_vint(*_processing_data);
-          {
             // Ignore the result
             consumer_m::row_processing_result ret = _extended_flags.is_static()
                 ? _consumer.consume_static_row_start()
@@ -415,7 +411,6 @@ private:
                 }
                 goto flags_label;
             }
-          }
             if (_extended_flags.is_static()) {
                 if (_flags.has_timestamp() || _flags.has_ttl() || _flags.has_deletion()) {
                     throw malformed_sstable_exception(format("Static row has unexpected flags: timestamp={}, ttl={}, deletion={}",
@@ -453,7 +448,6 @@ private:
             }
             if (!_flags.has_all_columns()) {
                 co_yield read_unsigned_vint(*_processing_data);
-            {
                 uint64_t missing_column_bitmap_or_count = _u64;
                 if (_row->_columns.size() < 64) {
                     _row->_columns_selector.clear();
@@ -471,7 +465,6 @@ private:
                     _missing_columns_to_read = missing_column_bitmap_or_count;
                     _row->_columns_selector.set();
                 }
-            }
                 while (_missing_columns_to_read > 0) {
                     --_missing_columns_to_read;
                     co_yield read_unsigned_vint(*_processing_data);
@@ -481,6 +474,7 @@ private:
             } else {
                 _row->_columns_selector.set();
             }
+        }
         column_label:
             if (_subcolumns_to_read == 0) {
                 if (no_more_columns()) {
