@@ -194,15 +194,9 @@ private:
         while (true) {
             if (_state == state::ROW_START) {
                 _state = state::NOT_CLOSING;
-                if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
-                if (read_32(*_processing_data) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
-                if (read_64(*_processing_data) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
+                co_yield read_short_length_bytes(*_processing_data, _key);
+                co_yield read_32(*_processing_data);
+                co_yield read_64(*_processing_data);
                 deletion_time del;
                 del.local_deletion_time = _u32;
                 del.marked_for_delete_at = _u64;
@@ -217,9 +211,7 @@ private:
                 }
             }
             while (true) {
-                if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
+                co_yield read_short_length_bytes(*_processing_data, _key);
                 if (_u16 == 0) {
                     // end of row marker
                     _state = state::ROW_START;
@@ -227,22 +219,14 @@ private:
                     break;
                 }
                 _state = state::NOT_CLOSING;
-                if (read_8(*_processing_data) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
+                co_yield read_8(*_processing_data);
                 auto const mask = column_mask(_u8);
 
                 if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
                     _shadowable = (mask & column_mask::shadowable) != column_mask::none;
-                    if (read_short_length_bytes(*_processing_data, _val) != read_status::ready) {
-                        co_yield row_consumer::proceed::yes;
-                    }
-                    if (read_32(*_processing_data) != read_status::ready) {
-                        co_yield row_consumer::proceed::yes;
-                    }
-                    if (read_64(*_processing_data) != read_status::ready) {
-                        co_yield row_consumer::proceed::yes;
-                    }
+                    co_yield read_short_length_bytes(*_processing_data, _val);
+                    co_yield read_32(*_processing_data);
+                    co_yield read_64(*_processing_data);
                     _sst->get_stats().on_range_tombstone_read();
                     deletion_time del;
                     del.local_deletion_time = _u32;
@@ -258,20 +242,14 @@ private:
                 } else if ((mask & column_mask::counter) != column_mask::none) {
                     _deleted = false;
                     _counter = true;
-                    if (read_64(*_processing_data) != read_status::ready) {
-                        co_yield row_consumer::proceed::yes;
-                    }
+                    co_yield read_64(*_processing_data);
                     // _timestamp_of_last_deletion = _u64;
                 } else if ((mask & column_mask::expiration) != column_mask::none) {
                     _deleted = false;
                     _counter = false;
-                    if (read_32(*_processing_data) != read_status::ready) {
-                        co_yield row_consumer::proceed::yes;
-                    }
+                    co_yield read_32(*_processing_data);
                     _ttl = _u32;
-                    if (read_32(*_processing_data) != read_status::ready) {
-                        co_yield row_consumer::proceed::yes;
-                    }
+                    co_yield read_32(*_processing_data);
                     _expiration = _u32;
                 } else {
                     // FIXME: see ColumnSerializer.java:deserializeColumnBody
@@ -282,15 +260,9 @@ private:
                     _deleted = (mask & column_mask::deletion) != column_mask::none;
                     _counter = false;
                 }
-                if (read_64(*_processing_data) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
-                if (read_32(*_processing_data) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
-                if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
-                    co_yield row_consumer::proceed::yes;
-                }
+                co_yield read_64(*_processing_data);
+                co_yield read_32(*_processing_data);
+                co_yield read_bytes(*_processing_data, _u32, _val_fragmented);
                 row_consumer::proceed ret;
                 if (_deleted) {
                     if (_val_fragmented.size_bytes() != 4) {

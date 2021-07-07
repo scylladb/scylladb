@@ -39,6 +39,14 @@
  */
 class processing_result_generator {
 public:
+    struct promise_type;
+    struct read_awaiter {
+        data_consumer::read_status _rs;
+        read_awaiter(data_consumer::read_status rs) : _rs(rs) {}
+        constexpr bool await_ready() const noexcept { return _rs == data_consumer::read_status::ready; }
+        constexpr void await_suspend(std::experimental::coroutine_handle<promise_type>) const noexcept {}
+        constexpr void await_resume() const noexcept {}
+    };
     struct promise_type {
         using handle_type = std::experimental::coroutine_handle<promise_type>;
         processing_result_generator get_return_object() {
@@ -54,6 +62,12 @@ public:
         std::experimental::suspend_always yield_value(data_consumer::processing_result value) noexcept {
             current_value = std::move(value);
             return {};
+        }
+        read_awaiter yield_value(data_consumer::read_status rs) noexcept {
+            if (rs == data_consumer::read_status::waiting) {
+                current_value = data_consumer::proceed::yes;
+            }
+            return read_awaiter(rs);
         }
         // Disallow co_await in generator coroutines.
         void await_transform() = delete;
