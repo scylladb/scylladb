@@ -333,8 +333,8 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
     });
 }
 
-compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, abort_source& as)
-    : _compaction_controller(sg, iop, 250ms, [this, available_memory] () -> float {
+compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as)
+    : _compaction_controller(csg.cpu, csg.io, 250ms, [this, available_memory] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory;
         // This means we are using an unimplemented strategy
@@ -347,6 +347,7 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
         return b;
     })
     , _backlog_manager(_compaction_controller)
+    , _maintenance_sg(msg)
     , _available_memory(available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
@@ -355,9 +356,10 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
     register_metrics();
 }
 
-compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares, abort_source& as)
-    : _compaction_controller(sg, iop, shares)
+compaction_manager::compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as)
+    : _compaction_controller(csg.cpu, csg.io, shares)
     , _backlog_manager(_compaction_controller)
+    , _maintenance_sg(msg)
     , _available_memory(available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
@@ -369,6 +371,7 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
 compaction_manager::compaction_manager()
     : _compaction_controller(seastar::default_scheduling_group(), default_priority_class(), 1)
     , _backlog_manager(_compaction_controller)
+    , _maintenance_sg(maintenance_scheduling_group{default_scheduling_group(), default_priority_class()})
     , _available_memory(1)
 {
     // No metric registration because this constructor is supposed to be used only by the testing
