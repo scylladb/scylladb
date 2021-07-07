@@ -1633,10 +1633,10 @@ const std::vector<view_ptr>& table::views() const {
     return _views;
 }
 
-std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutation& update, gc_clock::time_point now) const {
+std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
     return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&, this] (auto&& view) {
-        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key(), now);
+        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
     }));
 }
 
@@ -2242,11 +2242,11 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
     utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
         now -= 10s;
     });
-    auto views = db::view::with_base_info_snapshot(affected_views(base, m, now));
+    auto views = db::view::with_base_info_snapshot(affected_views(base, m));
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
-    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views, now);
+    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
         co_await generate_and_propagate_view_updates(base, sem.make_permit(s.get(), "push-view-updates-1"), std::move(views), std::move(m), { }, std::move(tr_state), now);
