@@ -1156,6 +1156,66 @@ public:
 };
 
 class scrub_compaction final : public regular_compaction {
+public:
+    static void report_invalid_partition(compaction_type type, mutation_fragment_stream_validator& validator, const dht::decorated_key& new_key,
+            std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& current_key = validator.previous_partition_key();
+        clogger.error("[{} compaction {}.{}] Invalid partition {} ({}), partition is out-of-order compared to previous partition {} ({}){}{}",
+                type,
+                schema.ks_name(),
+                schema.cf_name(),
+                new_key.key().with_schema(schema),
+                new_key,
+                current_key.key().with_schema(schema),
+                current_key,
+                action.empty() ? "" : "; ",
+                action);
+    }
+    static void report_invalid_partition_start(compaction_type type, mutation_fragment_stream_validator& validator, const dht::decorated_key& new_key,
+            std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& current_key = validator.previous_partition_key();
+        clogger.error("[{} compaction {}.{}] Invalid partition start for partition {} ({}), previous partition {} ({}) didn't end with a partition-end fragment{}{}",
+                type,
+                schema.ks_name(),
+                schema.cf_name(),
+                new_key.key().with_schema(schema),
+                new_key,
+                current_key.key().with_schema(schema),
+                current_key,
+                action.empty() ? "" : "; ",
+                action);
+    }
+    static void report_invalid_mutation_fragment(compaction_type type, mutation_fragment_stream_validator& validator, const mutation_fragment& mf,
+            std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& key = validator.previous_partition_key();
+        const auto prev_pos = validator.previous_position();
+        clogger.error("[{} compaction {}.{}] Invalid {} fragment{} ({}) in partition {} ({}),"
+                " fragment is out-of-order compared to previous {} fragment{} ({}){}{}",
+                type,
+                schema.ks_name(),
+                schema.cf_name(),
+                mf.mutation_fragment_kind(),
+                mf.has_key() ? format(" with key {}", mf.key().with_schema(schema)) : "",
+                mf.position(),
+                key.key().with_schema(schema),
+                key,
+                prev_pos.region(),
+                prev_pos.has_key() ? format(" with key {}", prev_pos.key().with_schema(schema)) : "",
+                prev_pos,
+                action.empty() ? "" : "; ",
+                action);
+    }
+    static void report_invalid_end_of_stream(compaction_type type, mutation_fragment_stream_validator& validator, std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& key = validator.previous_partition_key();
+        clogger.error("[{} compaction {}.{}] Invalid end-of-stream, last partition {} ({}) didn't end with a partition-end fragment{}{}",
+                type, schema.ks_name(), schema.cf_name(), key.key().with_schema(schema), key, action.empty() ? "" : "; ", action);
+    }
+
+private:
     class reader : public flat_mutation_reader::impl {
         using skip = bool_class<class skip_tag>;
     private:
@@ -1173,16 +1233,8 @@ class scrub_compaction final : public regular_compaction {
 
         void on_unexpected_partition_start(const mutation_fragment& ps) {
             maybe_abort_scrub();
-            const auto& new_key = ps.as_partition_start().key();
-            const auto& current_key = _validator.previous_partition_key();
-            clogger.error("[scrub compaction {}.{}] Unexpected partition-start for partition {} ({}),"
-                    " rectifying by adding assumed missing partition-end to the current partition {} ({}).",
-                    _schema->ks_name(),
-                    _schema->cf_name(),
-                    new_key.key().with_schema(*_schema),
-                    new_key,
-                    current_key.key().with_schema(*_schema),
-                    current_key);
+            report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(),
+                    "Rectifying by adding assumed missing partition-end");
 
             auto pe = mutation_fragment(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
@@ -1205,27 +1257,13 @@ class scrub_compaction final : public regular_compaction {
 
         skip on_invalid_partition(const dht::decorated_key& new_key) {
             maybe_abort_scrub();
-            const auto& current_key = _validator.previous_partition_key();
             if (_scrub_mode == compaction_options::scrub::mode::segregate) {
-                clogger.error("[scrub compaction {}.{}] Detected out-of-order partition {} ({}) (previous being {} ({}))",
-                        _schema->ks_name(),
-                        _schema->cf_name(),
-                        new_key.key().with_schema(*_schema),
-                        new_key,
-                        current_key.key().with_schema(*_schema),
-                        current_key);
+                report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Detected");
                 _validator.reset(new_key);
                 // Let the segregating interposer consumer handle this.
                 return skip::no;
             }
-            clogger.error("[scrub compaction {}.{}] Skipping invalid partition {} ({}):"
-                    " partition has non-monotonic key compared to current one {} ({})",
-                    _schema->ks_name(),
-                    _schema->cf_name(),
-                    new_key.key().with_schema(*_schema),
-                    new_key,
-                    current_key.key().with_schema(*_schema),
-                    current_key);
+            report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Skipping");
             _skip_to_next_partition = true;
             return skip::yes;
         }
@@ -1239,14 +1277,8 @@ class scrub_compaction final : public regular_compaction {
             // The only case a partition end is invalid is when it comes after
             // another partition end, and we can just drop it in that case.
             if (!mf.is_end_of_partition() && _scrub_mode == compaction_options::scrub::mode::segregate) {
-                clogger.error("[scrub compaction {}.{}] Injecting partition start/end to segregate out-of-order fragment {} (previous position being {}) in partition {} ({}):",
-                        _schema->ks_name(),
-                        _schema->cf_name(),
-                        mf.position(),
-                        _validator.previous_position(),
-                        key.key().with_schema(*_schema),
-                        key);
-
+                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf,
+                        "Injecting partition start/end to segregate out-of-order fragment");
                 push_mutation_fragment(*_schema, _permit, partition_end{});
 
                 // We loose the partition tombstone if any, but it will be
@@ -1259,16 +1291,8 @@ class scrub_compaction final : public regular_compaction {
                 return skip::no;
             }
 
-            clogger.error("[scrub compaction {}.{}] Skipping invalid {} fragment {}in partition {} ({}):"
-                    " fragment has non-monotonic position {} compared to previous position {}.",
-                    _schema->ks_name(),
-                    _schema->cf_name(),
-                    mf.mutation_fragment_kind(),
-                    mf.has_key() ? format("with key {} ({}) ", mf.key().with_schema(*_schema), mf.key()) : "",
-                    key.key().with_schema(*_schema),
-                    key,
-                    mf.position(),
-                    _validator.previous_position());
+            report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "Skipping");
+
             return skip::yes;
         }
 
@@ -1276,8 +1300,7 @@ class scrub_compaction final : public regular_compaction {
             maybe_abort_scrub();
             // Handle missing partition_end
             push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
-            clogger.error("[scrub compaction {}.{}] Adding missing partition-end to the end of the stream.",
-                    _schema->ks_name(), _schema->cf_name());
+            report_invalid_end_of_stream(compaction_type::Scrub, _validator, "Rectifying by adding missing partition-end to the end of the stream");
         }
 
         void fill_buffer_from_underlying() {
