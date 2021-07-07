@@ -132,62 +132,23 @@ private:
     enum class state {
         PARTITION_START,
         DELETION_TIME,
-        DELETION_TIME_2,
         DELETION_TIME_3,
         FLAGS,
         FLAGS_2,
         EXTENDED_FLAGS,
-        CLUSTERING_ROW,
-        CK_BLOCK,
         CK_BLOCK_HEADER,
-        CK_BLOCK2,
         CK_BLOCK_END,
-        ROW_BODY,
-        ROW_BODY_SIZE,
-        ROW_BODY_PREV_SIZE,
-        ROW_BODY_TIMESTAMP,
-        ROW_BODY_TIMESTAMP_TTL,
         ROW_BODY_TIMESTAMP_DELTIME,
-        ROW_BODY_DELETION,
-        ROW_BODY_DELETION_2,
         ROW_BODY_DELETION_3,
-        ROW_BODY_SHADOWABLE_DELETION,
-        ROW_BODY_SHADOWABLE_DELETION_2,
-        ROW_BODY_SHADOWABLE_DELETION_3,
-        ROW_BODY_MARKER,
-        ROW_BODY_MISSING_COLUMNS,
         ROW_BODY_MISSING_COLUMNS_2,
-        ROW_BODY_MISSING_COLUMNS_READ_COLUMNS,
         ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2,
         COLUMN,
-        SIMPLE_COLUMN,
-        COMPLEX_COLUMN,
-        COMPLEX_COLUMN_MARKED_FOR_DELETE,
-        COMPLEX_COLUMN_LOCAL_DELETION_TIME,
-        COMPLEX_COLUMN_2,
-        COMPLEX_COLUMN_SIZE,
-        COMPLEX_COLUMN_SIZE_2,
         NEXT_COLUMN,
-        COLUMN_FLAGS,
         COLUMN_TIMESTAMP,
-        COLUMN_DELETION_TIME,
         COLUMN_DELETION_TIME_2,
-        COLUMN_TTL,
         COLUMN_TTL_2,
-        COLUMN_CELL_PATH,
-        COLUMN_VALUE,
         COLUMN_END,
-        RANGE_TOMBSTONE_MARKER,
-        RANGE_TOMBSTONE_KIND,
-        RANGE_TOMBSTONE_SIZE,
-        RANGE_TOMBSTONE_CONSUME_CK,
-        RANGE_TOMBSTONE_BODY,
-        RANGE_TOMBSTONE_BODY_SIZE,
-        RANGE_TOMBSTONE_BODY_PREV_SIZE,
-        RANGE_TOMBSTONE_BODY_TIMESTAMP,
-        RANGE_TOMBSTONE_BODY_TIMESTAMP2,
-        RANGE_TOMBSTONE_BODY_LOCAL_DELTIME,
-        RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2,
+        OTHER,
     } _state = state::PARTITION_START;
 
     consumer_m& _consumer;
@@ -325,7 +286,6 @@ public:
         return (_state == state::DELETION_TIME_3
                 || _state == state::FLAGS_2
                 || _state == state::EXTENDED_FLAGS
-                || _state == state::CLUSTERING_ROW
                 || _state == state::CK_BLOCK_HEADER
                 || _state == state::CK_BLOCK_END
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
@@ -356,7 +316,7 @@ private:
                 co_yield consumer_m::proceed::yes;
             }
             if (read_32(*_processing_data) != read_status::ready) {
-                _state = state::DELETION_TIME_2;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             if (read_64(*_processing_data) != read_status::ready) {
@@ -392,15 +352,15 @@ private:
                 }
                 goto partition_start_label;
             } else if (_flags.is_range_tombstone()) {
-                _state = state::RANGE_TOMBSTONE_MARKER;
+                _state = state::OTHER;
                 _is_first_unfiltered = false;
                 if (read_8(*_processing_data) != read_status::ready) {
-                    _state = state::RANGE_TOMBSTONE_KIND;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
                 _range_tombstone_kind = bound_kind_m(_u8);
                 if (read_16(*_processing_data) != read_status::ready) {
-                    _state = state::RANGE_TOMBSTONE_SIZE;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
                 _ck_size = _u16;
@@ -414,7 +374,7 @@ private:
                 }
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
-                _state = state::CLUSTERING_ROW;
+                _state = state::OTHER;
                 start_row(_regular_row);
                 _ck_size = _column_translation.clustering_column_value_fix_legths().size();
             } else {
@@ -443,7 +403,7 @@ private:
             setup_ck(_column_translation.clustering_column_value_fix_legths());
             while (!no_more_ck_blocks()) {
                 if (!should_read_block_header()) {
-                    _state = state::CK_BLOCK2;
+                    _state = state::OTHER;
                 } else {
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                         _state = state::CK_BLOCK_HEADER;
@@ -478,7 +438,7 @@ private:
             }
                 _row_key.push_back(std::move(_column_value));
                 move_to_next_ck_block();
-                _state = state::CK_BLOCK;
+                _state = state::OTHER;
             }
             if (_reading_range_tombstone_ck) {
                 _reading_range_tombstone_ck = false;
@@ -486,12 +446,12 @@ private:
             }
         row_body_label:
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_SIZE;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             _next_row_offset = position() - _processing_data->size() + _u64;
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::ROW_BODY_PREV_SIZE;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
           {
@@ -501,7 +461,7 @@ private:
                 : _consumer.consume_row_start(_row_key);
 
             while (ret == consumer_m::row_processing_result::retry_later) {
-                _state = state::ROW_BODY_PREV_SIZE;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::no;
                 ret = _extended_flags.is_static()
                     ? _consumer.consume_static_row_start()
@@ -521,19 +481,19 @@ private:
                 }
             } else {
                 if (!_flags.has_timestamp()) {
-                    _state = state::ROW_BODY_DELETION;
+                    _state = state::OTHER;
                 } else {
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_TIMESTAMP;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
 
                     _liveness.set_timestamp(parse_timestamp(_header, _u64));
                     if (!_flags.has_ttl()) {
-                        _state = state::ROW_BODY_DELETION;
+                        _state = state::OTHER;
                     } else {
                         if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                            _state = state::ROW_BODY_TIMESTAMP_TTL;
+                            _state = state::OTHER;
                             co_yield consumer_m::proceed::yes;
                         }
                         _liveness.set_ttl(parse_ttl(_header, _u64));
@@ -545,10 +505,10 @@ private:
                     }
                 }
                 if (!_flags.has_deletion()) {
-                    _state = state::ROW_BODY_SHADOWABLE_DELETION;
+                    _state = state::OTHER;
                 } else {
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_DELETION_2;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _row_tombstone.timestamp = parse_timestamp(_header, _u64);
@@ -563,17 +523,17 @@ private:
                         throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
                     }
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_SHADOWABLE_DELETION_2;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_SHADOWABLE_DELETION_3;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
                 } else {
-                    _state = state::ROW_BODY_MARKER;
+                    _state = state::OTHER;
                 }
                 _consumer.consume_row_marker_and_tombstone(
                         _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone));
@@ -624,27 +584,27 @@ private:
                     goto flags_label;
                 }
                 if (!is_column_simple()) {
-                    _state = state::COMPLEX_COLUMN;
+                    _state = state::OTHER;
                     if (!_flags.has_complex_deletion()) {
                         _complex_column_tombstone = {};
                     } else {
                         if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                            _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
+                            _state = state::OTHER;
                             co_yield consumer_m::proceed::yes;
                         }
                         _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
                         if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                            _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
+                            _state = state::OTHER;
                             co_yield consumer_m::proceed::yes;
                         }
                         _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
                     }
                     if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
-                        _state = state::COMPLEX_COLUMN_SIZE;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::no;
                     }
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::COMPLEX_COLUMN_SIZE_2;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _subcolumns_to_read = _u64;
@@ -661,14 +621,14 @@ private:
                 _subcolumns_to_read = 0;
             }
             if (read_8(*_processing_data) != read_status::ready) {
-                _state = state::COLUMN_FLAGS;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             _column_flags = column_flags_m(_u8);
 
             if (_column_flags.use_row_timestamp()) {
                 _column_timestamp = _liveness.timestamp();
-                _state = state::COLUMN_DELETION_TIME;
+                _state = state::OTHER;
             } else {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                     _state = state::COLUMN_TIMESTAMP;
@@ -678,10 +638,10 @@ private:
             }
             if (_column_flags.use_row_ttl()) {
                 _column_local_deletion_time = _liveness.local_deletion_time();
-                _state = state::COLUMN_TTL;
+                _state = state::OTHER;
             } else if (!_column_flags.is_deleted() && ! _column_flags.is_expiring()) {
                 _column_local_deletion_time = gc_clock::time_point::max();
-                _state = state::COLUMN_TTL;
+                _state = state::OTHER;
             } else {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                     _state = state::COLUMN_DELETION_TIME_2;
@@ -691,10 +651,10 @@ private:
             }
             if (_column_flags.use_row_ttl()) {
                 _column_ttl = _liveness.ttl();
-                _state = state::COLUMN_VALUE;
+                _state = state::OTHER;
             } else if (!_column_flags.is_expiring()) {
                 _column_ttl = gc_clock::duration::zero();
-                _state = state::COLUMN_VALUE;
+                _state = state::OTHER;
             } else {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
                     _state = state::COLUMN_TTL_2;
@@ -704,7 +664,7 @@ private:
             }
             if (!is_column_simple()) {
                 if (read_unsigned_vint_length_bytes_contiguous(*_processing_data, _cell_path) != read_status::ready) {
-                    _state = state::COLUMN_VALUE;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
             } else {
@@ -759,22 +719,22 @@ private:
             goto column_label;
         range_tombstone_body_label:
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_BODY_SIZE;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             // Ignore result
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_BODY_PREV_SIZE;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             // Ignore result
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_BODY_TIMESTAMP;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             _left_range_tombstone.deletion_time = parse_expiry(_header, _u64);
@@ -795,12 +755,12 @@ private:
                 goto flags_label;
             }
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_BODY_TIMESTAMP2;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             _right_range_tombstone.timestamp = parse_timestamp(_header, _u64);
             if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
             _sst->get_stats().on_range_tombstone_read();
