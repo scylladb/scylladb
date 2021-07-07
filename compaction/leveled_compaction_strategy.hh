@@ -30,9 +30,9 @@
 
 #include "compaction_strategy_type.hh"
 #include "database_fwd.hh"
-#include "sstables/size_tiered_compaction_strategy.hh"
-#include "sstables/compaction_strategy_impl.hh"
-#include "sstables/compaction_backlog_manager.hh"
+#include "size_tiered_compaction_strategy.hh"
+#include "compaction_strategy_impl.hh"
+#include "compaction_backlog_manager.hh"
 #include "sstables/shared_sstable.hh"
 
 class leveled_manifest;

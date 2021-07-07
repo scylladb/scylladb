@@ -30,7 +30,7 @@
 #include <functional>
 #include <filesystem>
 #include "seastarx.hh"
-#include "sstables/compaction_descriptor.hh"
+#include "compaction/compaction_descriptor.hh"
 
 class database;
 class table;

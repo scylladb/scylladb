@@ -32,7 +32,7 @@
 #include "seastarx.hh"
 #include "sstables/shared_sstable.hh"            // sstables::shared_sstable
 #include "sstables/version.hh"                   // sstable versions
-#include "sstables/compaction_descriptor.hh"     // for compaction_sstable_creator_fn
+#include "compaction/compaction_descriptor.hh"     // for compaction_sstable_creator_fn
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"

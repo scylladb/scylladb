@@ -21,9 +21,9 @@
 
 #include <vector>
 #include <map>
-#include "sstables/compaction_strategy_impl.hh"
+#include "compaction/compaction_strategy_impl.hh"
 #include "sstables/sstable_set.hh"
-#include "sstables/compaction.hh"
+#include "compaction/compaction.hh"
 #include "database.hh"
 
 namespace sstables {

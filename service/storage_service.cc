@@ -73,7 +73,7 @@
 #include "utils/exceptions.hh"
 #include "message/messaging_service.hh"
 #include "supervisor.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"

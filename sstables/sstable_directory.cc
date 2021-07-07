@@ -22,7 +22,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "lister.hh"

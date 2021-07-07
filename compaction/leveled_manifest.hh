@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "sstables.hh"
+#include "sstables/sstables.hh"
 #include "compaction.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "range.hh"

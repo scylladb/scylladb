@@ -46,11 +46,11 @@
 #include <algorithm>
 #include <vector>
 #include <iterator>
-#include "sstables.hh"
+#include "sstables/sstables.hh"
 #include "compaction.hh"
 #include "timestamp.hh"
 #include "cql3/statements/property_definitions.hh"
-#include "sstables/compaction_strategy_impl.hh"
+#include "compaction_strategy_impl.hh"
 
 static constexpr double DEFAULT_MAX_SSTABLE_AGE_DAYS = 365;
 static constexpr int64_t DEFAULT_BASE_TIME_SECONDS = 60;

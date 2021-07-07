@@ -30,7 +30,7 @@
 #include "row_cache.hh"
 #include "database.hh"
 #include "cell_locking.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "db/large_data_handler.hh"
 #include "sstables/sstables_manager.hh"
 

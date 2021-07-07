@@ -39,7 +39,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include "sstables/compaction.hh"
+#include "compaction/compaction.hh"
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
@@ -53,7 +53,7 @@
 #include "cell_locking.hh"
 #include "view_info.hh"
 #include "db/schema_tables.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "gms/feature_service.hh"
 
 #include "utils/human_readable.hh"

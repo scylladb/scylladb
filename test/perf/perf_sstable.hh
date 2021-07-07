@@ -24,7 +24,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "sstables/sstables.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "cell_locking.hh"
 #include "mutation_reader.hh"
 #include "test/lib/sstable_utils.hh"

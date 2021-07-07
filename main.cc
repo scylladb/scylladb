@@ -70,7 +70,7 @@
 
 #include "db/view/view_update_generator.hh"
 #include "service/cache_hitrate_calculator.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"

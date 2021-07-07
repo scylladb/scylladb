@@ -24,7 +24,7 @@
 
 #include "database.hh"
 #include "db/view/view_builder.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"

@@ -28,7 +28,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "sstables/sstables.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "sstables/key.hh"
 #include "test/lib/sstable_utils.hh"
 #include <seastar/testing/test_case.hh>

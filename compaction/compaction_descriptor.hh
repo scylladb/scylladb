@@ -27,8 +27,8 @@
 #include <variant>
 #include <seastar/core/smp.hh>
 #include <seastar/core/file.hh>
-#include "shared_sstable.hh"
-#include "sstable_set.hh"
+#include "sstables/shared_sstable.hh"
+#include "sstables/sstable_set.hh"
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
 #include "compaction_weight_registration.hh"

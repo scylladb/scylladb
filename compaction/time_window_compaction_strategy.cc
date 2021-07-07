@@ -19,8 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "sstables/time_window_compaction_strategy.hh"
-#include "sstables/leveled_manifest.hh"
+#include "time_window_compaction_strategy.hh"
+#include "leveled_manifest.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
 

@@ -42,7 +42,7 @@
 #include "column_family.hh"
 #include "log.hh"
 #include "release.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "db/extensions.hh"

@@ -37,7 +37,7 @@
 #include <list>
 #include <functional>
 #include <algorithm>
-#include "sstables/compaction.hh"
+#include "compaction.hh"
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
 #include "backlog_controller.hh"

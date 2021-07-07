@@ -40,13 +40,13 @@
 #include <vector>
 #include <chrono>
 #include <seastar/core/shared_ptr.hh>
-#include "sstables.hh"
+#include "sstables/sstables.hh"
 #include "compaction.hh"
 #include "database.hh"
 #include "compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
 #include "schema.hh"
-#include "sstable_set.hh"
+#include "sstables/sstable_set.hh"
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/adaptors.hpp>
@@ -55,9 +55,9 @@
 #include "date_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"
-#include "sstables/compaction_backlog_manager.hh"
-#include "sstables/size_tiered_backlog_tracker.hh"
-#include "sstables/leveled_manifest.hh"
+#include "compaction_backlog_manager.hh"
+#include "size_tiered_backlog_tracker.hh"
+#include "leveled_manifest.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");

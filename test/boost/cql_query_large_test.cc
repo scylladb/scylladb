@@ -40,7 +40,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
 #include "schema_builder.hh"
 

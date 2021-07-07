@@ -46,7 +46,7 @@
 #include "types/set.hh"
 #include "db/config.hh"
 #include "cql3/cql_config.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
 #include "utils/rjson.hh"
 #include "schema_builder.hh"

@@ -45,7 +45,7 @@
 #include "partition_slice_builder.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/reader_permit.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>

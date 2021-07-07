@@ -32,7 +32,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "sstables/sstables.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "cell_locking.hh"
 #include "compress.hh"
 #include "counters.hh"

@@ -23,8 +23,8 @@
 #pragma once
 
 #include "database_fwd.hh"
-#include "shared_sstable.hh"
-#include "sstables/compaction_descriptor.hh"
+#include "sstables/shared_sstable.hh"
+#include "compaction/compaction_descriptor.hh"
 #include "gc_clock.hh"
 #include "compaction_weight_registration.hh"
 #include "service/priority_manager.hh"

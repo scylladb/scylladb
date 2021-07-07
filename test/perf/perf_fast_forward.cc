@@ -42,7 +42,7 @@
 #include <seastar/core/units.hh>
 #include <seastar/testing/test_runner.hh>
 #include <seastar/util/closeable.hh>
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "sstables/partition_index_cache.hh"
 #include "linux-perf-event.hh"

@@ -40,7 +40,7 @@
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/config.hh"
-#include "sstables/compaction_manager.hh"
+#include "compaction/compaction_manager.hh"
 
 namespace db::view {
 class view_update_generator;
