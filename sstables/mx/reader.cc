@@ -132,25 +132,12 @@ private:
     enum class state {
         PARTITION_START,
         DELETION_TIME,
-        DELETION_TIME_3,
         FLAGS,
         FLAGS_2,
-        EXTENDED_FLAGS,
-        CK_BLOCK_HEADER,
-        CK_BLOCK_END,
-        ROW_BODY_TIMESTAMP_DELTIME,
-        ROW_BODY_DELETION_3,
-        ROW_BODY_MISSING_COLUMNS_2,
-        ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2,
-        COLUMN,
-        NEXT_COLUMN,
-        COLUMN_TIMESTAMP,
-        COLUMN_DELETION_TIME_2,
-        COLUMN_TTL_2,
-        COLUMN_END,
         OTHER,
     } _state = state::PARTITION_START;
 
+    bool _consuming = true;
     consumer_m& _consumer;
     shared_sstable _sst;
     const serialization_header& _header;
@@ -282,22 +269,9 @@ private:
     }
 public:
     using consumer = consumer_m;
+    // assumes !primitive_consumer::active()
     bool non_consuming() const {
-        return (_state == state::DELETION_TIME_3
-                || _state == state::FLAGS_2
-                || _state == state::EXTENDED_FLAGS
-                || _state == state::CK_BLOCK_HEADER
-                || _state == state::CK_BLOCK_END
-                || _state == state::ROW_BODY_TIMESTAMP_DELTIME
-                || _state == state::ROW_BODY_DELETION_3
-                || _state == state::ROW_BODY_MISSING_COLUMNS_2
-                || _state == state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2
-                || _state == state::COLUMN
-                || _state == state::NEXT_COLUMN
-                || _state == state::COLUMN_TIMESTAMP
-                || _state == state::COLUMN_DELETION_TIME_2
-                || _state == state::COLUMN_TTL_2
-                || _state == state::COLUMN_END);
+        return !_consuming;
     }
 
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
@@ -320,7 +294,7 @@ private:
                 co_yield consumer_m::proceed::yes;
             }
             if (read_64(*_processing_data) != read_status::ready) {
-                _state = state::DELETION_TIME_3;
+                _state = state::OTHER;
                 co_yield consumer_m::proceed::yes;
             }
         {
@@ -376,7 +350,7 @@ private:
                 _ck_size = _column_translation.clustering_column_value_fix_legths().size();
             } else {
                 if (read_8(*_processing_data) != read_status::ready) {
-                    _state = state::EXTENDED_FLAGS;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
                 _extended_flags = unfiltered_extended_flags_m(_u8);
@@ -401,7 +375,7 @@ private:
             while (!no_more_ck_blocks()) {
                 if (should_read_block_header()) {
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::CK_BLOCK_HEADER;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _ck_blocks_header = _u64;
@@ -427,7 +401,7 @@ private:
                     status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
                 }
                 if (status != read_status::ready) {
-                    _state = state::CK_BLOCK_END;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
             }
@@ -484,7 +458,7 @@ private:
                         }
                         _liveness.set_ttl(parse_ttl(_header, _u64));
                         if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                            _state = state::ROW_BODY_TIMESTAMP_DELTIME;
+                            _state = state::OTHER;
                             co_yield consumer_m::proceed::yes;
                         }
                         _liveness.set_local_deletion_time(parse_expiry(_header, _u64));
@@ -497,7 +471,7 @@ private:
                     }
                     _row_tombstone.timestamp = parse_timestamp(_header, _u64);
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_DELETION_3;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _row_tombstone.deletion_time = parse_expiry(_header, _u64);
@@ -521,7 +495,7 @@ private:
             }
             if (!_flags.has_all_columns()) {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::ROW_BODY_MISSING_COLUMNS_2;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
             {
@@ -546,7 +520,7 @@ private:
                 while (_missing_columns_to_read > 0) {
                     --_missing_columns_to_read;
                     if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                        _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::yes;
                     }
                     _row->_columns_selector.flip(_u64);
@@ -589,8 +563,10 @@ private:
                         const sstables::column_translation::column_info& column_info = get_column_info();
                         move_to_next_column();
                         if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
-                            _state = state::COLUMN;
+                            _state = state::OTHER;
+                            _consuming = false;
                             co_yield consumer_m::proceed::no;
+                            _consuming = true;
                         }
                     }
                     goto column_label;
@@ -607,7 +583,7 @@ private:
                 _column_timestamp = _liveness.timestamp();
             } else {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::COLUMN_TIMESTAMP;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
                 _column_timestamp = parse_timestamp(_header, _u64);
@@ -618,7 +594,7 @@ private:
                 _column_local_deletion_time = gc_clock::time_point::max();
             } else {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::COLUMN_DELETION_TIME_2;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
                 _column_local_deletion_time = parse_expiry(_header, _u64);
@@ -629,7 +605,7 @@ private:
                 _column_ttl = gc_clock::duration::zero();
             } else {
                 if (read_unsigned_vint(*_processing_data) != read_status::ready) {
-                    _state = state::COLUMN_TTL_2;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
                 _column_ttl = parse_ttl(_header, _u64);
@@ -644,7 +620,6 @@ private:
             }
             if (!_column_flags.has_value()) {
                 _column_value = fragmented_temporary_buffer();
-                _state = state::COLUMN_END;
             } else {
                 read_status status = read_status::waiting;
                 if (auto len = get_column_value_length()) {
@@ -653,11 +628,12 @@ private:
                     status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
                 }
                 if (status != read_status::ready) {
-                    _state = state::COLUMN_END;
+                    _state = state::OTHER;
                     co_yield consumer_m::proceed::yes;
                 }
             }
-            _state = state::NEXT_COLUMN;
+            _state = state::OTHER;
+            _consuming = false;
             if (is_column_counter() && !_column_flags.is_deleted()) {
                 if (_consumer.consume_counter_column(get_column_info(),
                                                      fragmented_temporary_buffer::view(_column_value),
@@ -681,13 +657,14 @@ private:
                     const sstables::column_translation::column_info& column_info = get_column_info();
                     move_to_next_column();
                     if (_consumer.consume_complex_column_end(column_info) != consumer_m::proceed::yes) {
-                        _state = state::COLUMN;
+                        _state = state::OTHER;
                         co_yield consumer_m::proceed::no;
                     }
                 }
             } else {
                 move_to_next_column();
             }
+            _consuming = true;
             goto column_label;
         range_tombstone_body_label:
             _state = state::OTHER;
