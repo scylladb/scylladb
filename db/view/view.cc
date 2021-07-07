@@ -257,7 +257,7 @@ void stats::register_stats() {
     });
 }
 
-bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key, gc_clock::time_point now) {
+bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key) {
     const auto r = view.select_statement().get_restrictions()->get_partition_key_restrictions();
     std::vector<bytes> exploded_pk = key.key().explode();
     std::vector<bytes> exploded_ck;
@@ -273,7 +273,7 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
             r->expression, exploded_pk, exploded_ck, dummy_row, &dummy_row, *selection, cql3::query_options({ }));
 }
 
-bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck, gc_clock::time_point now) {
+bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
     const auto r = view.select_statement().get_restrictions()->get_clustering_columns_restrictions();
     std::vector<bytes> exploded_pk = key.explode();
     std::vector<bytes> exploded_ck = ck.explode();
@@ -289,22 +289,21 @@ bool clustering_prefix_matches(const schema& base, const view_info& view, const 
             r->expression, exploded_pk, exploded_ck, dummy_row, &dummy_row, *selection, cql3::query_options({ }));
 }
 
-bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update, gc_clock::time_point now) {
+bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update) {
     // We can guarantee that the view won't be affected if:
     //  - the primary key is excluded by the view filter (note that this isn't true of the filter on regular columns:
     //    even if an update don't match a view condition on a regular column, that update can still invalidate a
     //    pre-existing entry) - note that the upper layers should already have checked the partition key;
-    return clustering_prefix_matches(base, view, key.key(), update.key(), now);
+    return clustering_prefix_matches(base, view, key.key(), update.key());
 }
 
 static bool update_requires_read_before_write(const schema& base,
         const std::vector<view_and_base>& views,
         const dht::decorated_key& key,
-        const rows_entry& update,
-        gc_clock::time_point now) {
+        const rows_entry& update) {
     for (auto&& v : views) {
         view_info& vf = *v.view->view_info();
-        if (may_be_affected_by(base, vf, key, update, now)) {
+        if (may_be_affected_by(base, vf, key, update)) {
             return true;
         }
     }
@@ -436,7 +435,7 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
     view_filter_checking_visitor visitor(base, view);
     query::result_view::consume(result, slice, visitor);
 
-    return clustering_prefix_matches(base, view, key, update.key(), now)
+    return clustering_prefix_matches(base, view, key, update.key())
             && visitor.matches_view_filter();
 }
 
@@ -1126,8 +1125,7 @@ future<view_update_builder> make_view_update_builder(
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
-        const std::vector<view_and_base>& views,
-        gc_clock::time_point now) {
+        const std::vector<view_and_base>& views) {
     utils::chunked_vector<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
     utils::chunked_vector<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
     clustering_key_prefix_view::tri_compare cmp(base);
@@ -1163,7 +1161,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
     }
 
     for (auto&& row : mp.clustered_rows()) {
-        if (update_requires_read_before_write(base, views, key, row, now)) {
+        if (update_requires_read_before_write(base, views, key, row)) {
             row_ranges.emplace_back(row.key());
         }
         co_await make_ready_future<>(); // yield if needed
@@ -1913,7 +1911,7 @@ public:
         inject_failure("view_builder_load_views");
         for (auto&& vs : _step.build_status) {
             if (_step.current_token() >= vs.next_token) {
-                if (partition_key_matches(*_step.reader.schema(), *vs.view->view_info(), _step.current_key, _now)) {
+                if (partition_key_matches(*_step.reader.schema(), *vs.view->view_info(), _step.current_key)) {
                     _views_to_build.push_back(vs.view);
                 }
                 if (vs.next_token || _step.current_token() != vs.first_token) {
