@@ -133,7 +133,6 @@ private:
         PARTITION_START,
         DELETION_TIME,
         FLAGS,
-        FLAGS_2,
         OTHER,
     } _state = state::PARTITION_START;
 
@@ -316,7 +315,6 @@ private:
             _row_tombstone = {};
             _row_shadowable_tombstone = {};
             if (read_8(*_processing_data) != read_status::ready) {
-                _state = state::FLAGS_2;
                 co_yield consumer_m::proceed::yes;
             }
             _flags = unfiltered_flags_m(_u8);
@@ -670,11 +668,11 @@ private:
                         format("Corrupted range tombstone: invalid boundary type {}", _range_tombstone_kind));
                 }
                 _sst->get_stats().on_range_tombstone_read();
+                _state = state::FLAGS;
                 if (_consumer.consume_range_tombstone(_row_key,
                                                       to_bound_kind(_range_tombstone_kind),
                                                       _left_range_tombstone) == consumer_m::proceed::no) {
                     _row_key.clear();
-                    _state = state::FLAGS;
                     co_yield consumer_m::proceed::no;
                 }
                 _row_key.clear();
@@ -689,12 +687,12 @@ private:
             }
             _sst->get_stats().on_range_tombstone_read();
             _right_range_tombstone.deletion_time = parse_expiry(_header, _u64);
+            _state = state::FLAGS;
             if (_consumer.consume_range_tombstone(_row_key,
                                                   _range_tombstone_kind,
                                                   _left_range_tombstone,
                                                   _right_range_tombstone) == consumer_m::proceed::no) {
                 _row_key.clear();
-                _state = state::FLAGS;
                 co_yield consumer_m::proceed::no;
             }
             _row_key.clear();
@@ -722,9 +720,9 @@ public:
 
     void verify_end_state() {
         // If reading a partial row (i.e., when we have a clustering row
-        // filter and using a promoted index), we may be in FLAGS or FLAGS_2
+        // filter and using a promoted index), we may be in FLAGS
         // state instead of PARTITION_START.
-        if (_state == state::FLAGS || _state == state::FLAGS_2) {
+        if (_state == state::FLAGS) {
             _consumer.on_end_of_stream();
             return;
         }
