@@ -77,10 +77,14 @@ private:
         auto new_capacity = std::max({ _capacity + std::min(_capacity, size_type(1024)), new_size, size_type(InternalSize + 8) });
         reserve(new_capacity);
     }
+public:
+    // Clears the vector and ensures that the destructor will not have to free any memory so
+    // that the object can be destroyed under any allocator.
     void clear_and_release() noexcept {
         clear();
         if (is_external()) {
             current_allocator().free(get_external(), get_external()->storage_size());
+            _data = reinterpret_cast<T*>(_internal.data());
         }
     }
 public:
@@ -242,6 +246,15 @@ public:
     size_t used_space_external_memory_usage() const {
         if (is_external()) {
             return sizeof(external) + _size * sizeof(T);
+        }
+        return 0;
+    }
+
+    // Returns the amount of external memory used to hold inserted items.
+    // Takes into account reserved space.
+    size_t external_memory_usage() const {
+        if (is_external()) {
+            return sizeof(external) + _capacity * sizeof(T);
         }
         return 0;
     }

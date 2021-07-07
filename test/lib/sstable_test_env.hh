@@ -42,9 +42,12 @@ public:
 };
 
 class test_env {
+    std::unique_ptr<cache_tracker> _cache_tracker;
     std::unique_ptr<test_env_sstables_manager> _mgr;
 public:
-    explicit test_env() : _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service)) { }
+    explicit test_env()
+        : _cache_tracker(std::make_unique<cache_tracker>())
+        , _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service, *_cache_tracker)) { }
 
     future<> stop() {
         return _mgr->close();

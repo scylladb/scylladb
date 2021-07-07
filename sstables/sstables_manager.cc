@@ -21,6 +21,7 @@
 
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"
@@ -31,8 +32,8 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat)
-    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat) {
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct)
+    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct) {
 }
 
 sstables_manager::~sstables_manager() {
@@ -78,7 +79,7 @@ void sstables_manager::deactivate(sstable* sst) {
     // guard against sstable::close_files() calling shared_from_this() and immediately destroying
     // the result, which will dispose of the sstable recursively
     auto ptr = sst->shared_from_this();
-    (void)sst->close_files().finally([ptr] {
+    (void)sst->destroy().finally([ptr] {
         // destruction of ptr will call maybe_done() and release close()
     });
 }

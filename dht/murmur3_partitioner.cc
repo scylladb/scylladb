@@ -45,7 +45,9 @@ murmur3_partitioner::get_token(uint64_t value) const {
 
 token
 murmur3_partitioner::get_token(const sstables::key_view& key) const {
-    return get_token(bytes_view(key));
+    return key.with_linearized([&] (bytes_view v) {
+        return get_token(v);
+    });
 }
 
 token

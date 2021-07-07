@@ -41,10 +41,8 @@ public:
         auto prev = dht::ring_position::min();
         _r->read_partition_data().get();
         while (!_r->eof()) {
-            auto& e = _r->current_partition_entry();
-            auto k = e.get_decorated_key();
-            auto token = dht::token(k.token());
-            auto rp = dht::ring_position(token, k.key().to_partition_key(s));
+            auto k = _r->get_partition_key();
+            auto rp = dht::ring_position(dht::decorate_key(s, k));
 
             if (rp_cmp(prev, rp) >= 0) {
                 BOOST_FAIL(format("Partitions have invalid order: {} >= {}", prev, rp));
@@ -52,8 +50,7 @@ public:
 
             prev = rp;
 
-            std::unique_ptr<sstables::clustered_index_cursor> cur = e.get_promoted_index()->make_cursor(
-                _r->sstable(), tests::make_permit(), nullptr, {});
+            sstables::clustered_index_cursor* cur = _r->current_clustered_cursor();
             std::optional<sstables::promoted_index_block_position> prev_end;
             while (auto ei_opt = cur->next_entry().get0()) {
                 sstables::clustered_index_cursor::entry_info& ei = *ei_opt;
@@ -70,8 +67,7 @@ public:
     index_reader_assertions& is_empty(const schema& s) {
         _r->read_partition_data().get();
         while (!_r->eof()) {
-            sstables::index_entry& ie = _r->current_partition_entry();
-            BOOST_REQUIRE(!ie.get_promoted_index() || ie.get_promoted_index()->get_promoted_index_size() == 0);
+            BOOST_REQUIRE(_r->get_promoted_index_size() == 0);
             _r->advance_to_next_partition().get();
         }
         return *this;

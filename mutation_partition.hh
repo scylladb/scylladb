@@ -41,6 +41,7 @@
 #include "range_tombstone_list.hh"
 #include "utils/intrusive_btree.hh"
 #include "utils/preempt.hh"
+#include "utils/lru.hh"
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
 
@@ -891,13 +892,11 @@ public:
 
 class cache_tracker;
 
-class rows_entry {
-    using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+class rows_entry final : public evictable {
     friend class size_calculator;
     intrusive_b::member_hook _link;
     clustering_key _key;
     deletable_row _row;
-    lru_link_type _lru_link;
     struct flags {
         // _before_ck and _after_ck encode position_in_partition::weight
         bool _before_ck : 1;
@@ -910,11 +909,6 @@ class rows_entry {
         flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
 public:
-    using lru_type = bi::list<rows_entry,
-        bi::member_hook<rows_entry, rows_entry::lru_link_type, &rows_entry::_lru_link>,
-        bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
-
-    void unlink_from_lru() noexcept { _lru_link.unlink(); }
     struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
@@ -1017,6 +1011,7 @@ public:
 
     size_t memory_usage(const schema&) const;
     void on_evicted(cache_tracker&) noexcept;
+    void on_evicted() noexcept override;
 
     class printer {
         const schema& _schema;

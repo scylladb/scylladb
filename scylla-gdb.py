@@ -1369,11 +1369,11 @@ class scylla_active_sstables(gdb.Command):
     def invoke(self, arg, from_tty):
         try:
             sizeof_index_entry = int(gdb.parse_and_eval('sizeof(sstables::index_entry)'))
-            sizeof_entry = int(gdb.parse_and_eval('sizeof(sstables::shared_index_lists::entry)'))
+            sizeof_entry = int(gdb.parse_and_eval('sizeof(sstables::partition_index_cache::entry)'))
 
             def count_index_lists(sst):
                 index_lists_size = 0
-                for key, entry in unordered_map(sst['_index_lists']['_lists']):
+                for key, entry in intrusive_btree(std_unique_ptr(sst['_index_cache']).get()['_entries']):
                     index_entries = std_vector(entry['list'])
                     index_lists_size += sizeof_entry
                     for e in index_entries:
@@ -2260,6 +2260,22 @@ class scylla_ptr(gdb.Command):
 
         gdb.write("{}\n".format(str(ptr_meta)))
 
+
+class segment_descriptor:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def region(self):
+        return self.ref['_region']
+
+    def is_lsa(self):
+        return bool(self.ref['_region'])
+
+    def free_space(self):
+        return int(gdb.parse_and_eval('%d & (\'logalloc\'::segment::size_mask)'
+                                      % (self.ref['_free_space'])))
+
+
 class scylla_segment_descs(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -2273,11 +2289,12 @@ class scylla_segment_descs(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
-            if desc['_region']:
-                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc['_free_space'],
-                                                                                   segment_size - int(desc['_free_space']),
-                                                                                   float(segment_size - int(desc['_free_space'])) * 100 / segment_size,
-                                                                                   int(desc['_region'])))
+            desc = segment_descriptor(desc)
+            if desc.is_lsa():
+                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc.free_space(),
+                                                                                   segment_size - int(desc.free_space()),
+                                                                                   float(segment_size - int(desc.free_space())) * 100 / segment_size,
+                                                                                   int(desc.region())))
             else:
                 gdb.write('0x%x: std\n' % (addr))
             addr += segment_size

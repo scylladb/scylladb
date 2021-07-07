@@ -58,10 +58,10 @@ schema_ptr make_primary_key_schema_from_types(std::vector<data_type> types) {
 void list_partitions(const schema& s, sstables::index_reader& idx_reader) {
     while (!idx_reader.eof()) {
         idx_reader.read_partition_data().get();
-        const auto& idx_entry = idx_reader.current_partition_entry();
+        auto pos = idx_reader.get_data_file_position();
 
-        auto pkey = idx_entry.get_key().to_partition_key(s);
-        fmt::print("{}: {} ({})\n", idx_entry.position(), pkey.with_schema(s), pkey);
+        auto pkey = idx_reader.get_partition_key();
+        fmt::print("{}: {} ({})\n", pos, pkey.with_schema(s), pkey);
 
         idx_reader.advance_to_next_partition().get();
     }
@@ -167,7 +167,8 @@ Note: UDT is not supported for now.
 
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
-            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service);
+            cache_tracker tracker;
+            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 
             auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str());

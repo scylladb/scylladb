@@ -1437,21 +1437,16 @@ mutation_partition::row_count() const {
 }
 
 rows_entry::rows_entry(rows_entry&& o) noexcept
-    : _link(std::move(o._link))
+    : evictable(std::move(o))
+    , _link(std::move(o._link))
     , _key(std::move(o._key))
     , _row(std::move(o._row))
-    , _lru_link()
     , _flags(std::move(o._flags))
 {
-    if (o._lru_link.is_linked()) {
-        auto prev = o._lru_link.prev_;
-        o._lru_link.unlink();
-        cache_tracker::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
-    }
 }
 
 void rows_entry::replace_with(rows_entry&& o) noexcept {
-    _lru_link.swap_nodes(o._lru_link);
+    swap(o);
     _row = std::move(o._row);
 }
 

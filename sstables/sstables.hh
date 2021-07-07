@@ -24,7 +24,6 @@
 
 #include "version.hh"
 #include "shared_sstable.hh"
-#include "shared_index_lists.hh"
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -68,6 +67,7 @@
 
 class sstable_assertions;
 class flat_mutation_reader;
+class cached_file;
 
 namespace sstables {
 
@@ -101,6 +101,7 @@ requires ConsumeRowsContext<DataConsumeRowsContext>
 class data_consume_context;
 
 class index_reader;
+class partition_index_cache;
 class sstables_manager;
 
 extern bool use_binary_search_in_promoted_index;
@@ -193,6 +194,10 @@ public:
     future<> open_data() noexcept;
     future<> update_info_for_opened_data();
 
+    // Call as the last method before the object is destroyed.
+    // No other uses of the object can happen at this point.
+    future<> destroy();
+
     future<> set_generation(int64_t generation);
     future<> move_to_new_dir(sstring new_dir, int64_t generation, bool do_sync_dirs = true);
 
@@ -281,6 +286,9 @@ public:
 
     uint64_t index_size() const {
         return _index_file_size;
+    }
+    file& index_file() {
+        return _index_file;
     }
     uint64_t filter_size() const {
         return _filter_file_size;
@@ -457,6 +465,7 @@ private:
     // it is then used to generate the ancestors metadata in the statistics or scylla components.
     std::set<int> _compaction_ancestors;
     file _index_file;
+    seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
@@ -482,7 +491,7 @@ private:
     format_types _format;
 
     filter_tracker _filter_tracker;
-    shared_index_lists _index_lists;
+    std::unique_ptr<partition_index_cache> _index_cache;
 
     enum class mark_for_deletion {
         implicit = -1,
@@ -806,6 +815,9 @@ public:
         return _origin;
     }
 
+    // Drops all evictable in-memory caches of on-disk content.
+    future<> drop_caches();
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
@@ -815,6 +827,7 @@ public:
     friend class sstable_writer;
     friend class mc::writer;
     friend class index_reader;
+    friend class promoted_index;
     friend class compaction;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>

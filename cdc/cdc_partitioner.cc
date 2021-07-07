@@ -49,7 +49,9 @@ static dht::token to_token(bytes_view key) {
 
 dht::token
 cdc_partitioner::get_token(const sstables::key_view& key) const {
-    return to_token(bytes_view(key));
+    return key.with_linearized([&] (bytes_view v) {
+        return to_token(v);
+    });
 }
 
 dht::token

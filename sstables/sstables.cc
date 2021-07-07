@@ -77,6 +77,7 @@
 #include "db/config.hh"
 #include "sstables/random_access_reader.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/partition_index_cache.hh"
 #include "utils/UUID_gen.hh"
 #include "database.hh"
 #include "sstables_manager.hh"
@@ -85,6 +86,7 @@
 #include "kl/reader.hh"
 #include "mx/reader.hh"
 #include "utils/bit_cast.hh"
+#include "utils/cached_file.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -1343,6 +1345,13 @@ future<> sstable::update_info_for_opened_data() {
     }).then([this] {
         return _index_file.size().then([this] (auto size) {
             _index_file_size = size;
+            assert(!_cached_index_file);
+            _cached_index_file = seastar::make_shared<cached_file>(_index_file,
+                                                                   index_page_cache_metrics,
+                                                                   _manager.get_cache_tracker().get_lru(),
+                                                                   _manager.get_cache_tracker().region(),
+                                                                   _index_file_size);
+            _index_file = make_cached_seastar_file(*_cached_index_file);
         });
     }).then([this] {
         if (this->has_component(component_type::Filter)) {
@@ -1384,6 +1393,12 @@ future<> sstable::create_data() noexcept {
     return open_or_create_data(oflags, std::move(opt)).then([this, oflags] {
         _open_mode.emplace(oflags);
         _stats.on_open_for_writing();
+    });
+}
+
+future<> sstable::drop_caches() {
+    return _cached_index_file->evict_gently().then([this] {
+        return _index_cache->evict_gently();
     });
 }
 
@@ -1744,13 +1759,13 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         bool should_continue() {
             return true;
         }
-        void consume_entry(index_entry&& ie, uint64_t index_offset) {
-            auto token = _partitioner.get_token(ie.get_key());
-            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
+        void consume_entry(parsed_partition_index_entry&& e) {
+            auto token = _partitioner.get_token(key_view(to_bytes_view(e.key)));
+            maybe_add_summary_entry(_summary, token, to_bytes_view(e.key), e.data_file_offset, e.index_offset, _state);
             if (!first_key) {
-                first_key = key(to_bytes(ie.get_key_bytes()));
+                first_key = key(to_bytes(to_bytes_view(e.key)));
             } else {
-                last_key = key(to_bytes(ie.get_key_bytes()));
+                last_key = key(to_bytes(to_bytes_view(e.key)));
             }
         }
         const index_sampling_state& state() const {
@@ -2823,7 +2838,7 @@ future<> replay_pending_delete_log(sstring pending_delete_log) {
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
-thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
+thread_local partition_index_cache::stats partition_index_cache::_shard_stats;
 thread_local cached_file::metrics index_page_cache_metrics;
 thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
@@ -2832,12 +2847,18 @@ future<> init_metrics() {
   return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;
     metrics.add_group("sstables", {
-        sm::make_derive("index_page_hits", [] { return shared_index_lists::shard_stats().hits; },
+        sm::make_derive("index_page_hits", [] { return partition_index_cache::shard_stats().hits; },
             sm::description("Index page requests which could be satisfied without waiting")),
-        sm::make_derive("index_page_misses", [] { return shared_index_lists::shard_stats().misses; },
+        sm::make_derive("index_page_misses", [] { return partition_index_cache::shard_stats().misses; },
             sm::description("Index page requests which initiated a read from disk")),
-        sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
+        sm::make_derive("index_page_blocks", [] { return partition_index_cache::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
+        sm::make_derive("index_page_evictions", [] { return partition_index_cache::shard_stats().evictions; },
+            sm::description("Index pages which got evicted from memory")),
+        sm::make_derive("index_page_populations", [] { return partition_index_cache::shard_stats().populations; },
+            sm::description("Index pages which got populated into memory")),
+        sm::make_gauge("index_page_used_bytes", [] { return partition_index_cache::shard_stats().used_bytes; },
+            sm::description("Amount of bytes used by index pages in memory")),
 
         sm::make_derive("index_page_cache_hits", [] { return index_page_cache_metrics.page_hits; },
             sm::description("Index page cache requests which were served from cache")),
@@ -2849,6 +2870,8 @@ future<> init_metrics() {
             sm::description("Total number of index page cache pages which were inserted into the cache")),
         sm::make_gauge("index_page_cache_bytes", [] { return index_page_cache_metrics.cached_bytes; },
             sm::description("Total number of bytes cached in the index page cache")),
+        sm::make_gauge("index_page_cache_bytes_in_std", [] { return index_page_cache_metrics.bytes_in_std; },
+            sm::description("Total number of bytes in temporary buffers which live in the std allocator")),
 
         sm::make_derive("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
             sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),
@@ -2955,6 +2978,8 @@ sstable::sstable(schema_ptr schema,
     , _generation(generation)
     , _version(v)
     , _format(f)
+    , _index_cache(std::make_unique<partition_index_cache>(
+            manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region()))
     , _now(now)
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
@@ -2972,6 +2997,18 @@ void sstable::unused() {
     } else {
         _manager.remove(this);
     }
+}
+
+future<> sstable::destroy() {
+    return close_files().finally([this] {
+        return _index_cache->evict_gently().then([this] {
+            if (_cached_index_file) {
+                return _cached_index_file->evict_gently();
+            } else {
+                return make_ready_future<>();
+            }
+        });
+    });
 }
 
 future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {

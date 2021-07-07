@@ -124,7 +124,9 @@ private:
     utils::small_vector<temporary_buffer<char>, 1> _read_bytes;
     temporary_buffer<char>* _read_bytes_where_contiguous; // which buffer to set, _key, _val, _cell_path or _pk?
     fragmented_temporary_buffer* _read_bytes_where;
-    inline read_status read_partial_int(temporary_buffer<char>& data, prestate next_state) {
+
+    // Alloc-free
+    inline read_status read_partial_int(temporary_buffer<char>& data, prestate next_state) noexcept {
         std::copy(data.begin(), data.end(), _read_int.bytes);
         _pos = data.size();
         data.trim(0);
@@ -196,7 +198,8 @@ public:
             return read_partial_int(data, prestate::READING_U16);
         }
     }
-    inline read_status read_32(temporary_buffer<char>& data) {
+    // Alloc-free
+    inline read_status read_32(temporary_buffer<char>& data) noexcept {
         if (data.size() >= sizeof(uint32_t)) {
             _u32 = consume_be<uint32_t>(data);
             return read_status::ready;

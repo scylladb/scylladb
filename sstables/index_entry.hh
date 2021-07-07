@@ -24,9 +24,15 @@
 #include <variant>
 #include "position_in_partition.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/lsa/chunked_managed_vector.hh"
 #include "reader_permit.hh"
 #include "sstables/types.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/mx/parsers.hh"
+#include "utils/allocation_strategy.hh"
+#include "utils/managed_ref.hh"
+#include "utils/managed_bytes.hh"
+#include "utils/managed_vector.hh"
 
 #include <seastar/core/fstream.hh>
 
@@ -205,62 +211,53 @@ public:
     virtual future<std::optional<entry_info>> next_entry() = 0;
 };
 
+// Allocated inside LSA.
 class promoted_index {
     deletion_time _del_time;
-    file _index_file;
     uint64_t _promoted_index_start;
     uint32_t _promoted_index_size;
     uint32_t _num_blocks;
-    temporary_buffer<char> _front; // pre-read front of the promoted index.
-    bool _use_binary_search;
 public:
     promoted_index(const schema& s,
         deletion_time del_time,
-        file index_file,
         uint64_t promoted_index_start,
         uint32_t promoted_index_size,
-        uint32_t num_blocks,
-        temporary_buffer<char> front,
-        bool use_binary_search)
+        uint32_t num_blocks)
             : _del_time{del_time}
-            , _index_file(std::move(index_file))
             , _promoted_index_start(promoted_index_start)
             , _promoted_index_size(promoted_index_size)
             , _num_blocks(num_blocks)
-            , _front(std::move(front))
-            , _use_binary_search(use_binary_search)
     { }
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
 
+    // Call under allocating_section.
     std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
         reader_permit,
         tracing::trace_state_ptr,
         file_input_stream_options);
 };
 
+// A partition index element.
+// Allocated inside LSA.
 class index_entry {
 private:
-    std::reference_wrapper<const schema> _s;
-    temporary_buffer<char> _key;
+    managed_bytes _key;
     mutable std::optional<dht::token> _token;
     uint64_t _position;
-    std::unique_ptr<promoted_index> _index;
+    managed_ref<promoted_index> _index;
 
 public:
 
-    bytes_view get_key_bytes() const {
-        return to_bytes_view(_key);
-    }
-
     key_view get_key() const {
-        return key_view{get_key_bytes()};
+        return key_view{_key};
     }
 
-    decorated_key_view get_decorated_key() const {
+    // May allocate so must be called under allocating_section.
+    decorated_key_view get_decorated_key(const schema& s) const {
         if (!_token) {
-            _token.emplace(_s.get().get_partitioner().get_token(get_key()));
+            _token.emplace(s.get_partitioner().get_token(get_key()));
         }
         return decorated_key_view(*_token, get_key());
     }
@@ -275,9 +272,8 @@ public:
         return {};
     }
 
-    index_entry(const schema& s, temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
-        : _s(std::cref(s))
-        , _key(std::move(key))
+    index_entry(managed_bytes&& key, uint64_t position, managed_ref<promoted_index>&& index)
+        : _key(std::move(key))
         , _position(position)
         , _index(std::move(index))
     {}
@@ -286,10 +282,40 @@ public:
     index_entry& operator=(index_entry&&) = default;
 
     // Can be nullptr
-    const std::unique_ptr<promoted_index>& get_promoted_index() const { return _index; }
-    std::unique_ptr<promoted_index>& get_promoted_index() { return _index; }
+    const managed_ref<promoted_index>& get_promoted_index() const { return _index; }
+    managed_ref<promoted_index>& get_promoted_index() { return _index; }
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
+
+    size_t external_memory_usage() const {
+        return _key.external_memory_usage() + _index.external_memory_usage();
+    }
 };
+
+// A partition index page.
+//
+// Allocated in the standard allocator space but with an LSA allocator as the current allocator.
+// So the shallow part is in the standard allocator but all indirect objects are inside LSA.
+class partition_index_page {
+public:
+    lsa::chunked_managed_vector<managed_ref<index_entry>> _entries;
+public:
+    partition_index_page() = default;
+    partition_index_page(partition_index_page&&) noexcept = default;
+    partition_index_page& operator=(partition_index_page&&) noexcept = default;
+
+    bool empty() const { return _entries.empty(); }
+    size_t size() const { return _entries.size(); }
+
+    size_t external_memory_usage() const {
+        size_t size = _entries.external_memory_usage();
+        for (auto&& e : _entries) {
+            size += sizeof(index_entry) + e->external_memory_usage();
+        }
+        return size;
+    }
+};
+
+using index_list = partition_index_page;
 
 }
 

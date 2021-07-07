@@ -44,7 +44,7 @@
 #include <seastar/util/closeable.hh>
 #include "sstables/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
-#include "sstables/shared_index_lists.hh"
+#include "sstables/partition_index_cache.hh"
 #include "linux-perf-event.hh"
 #include <fstream>
 
@@ -84,7 +84,7 @@ struct metrics_snapshot {
     reactor::io_stats io;
     reactor::sched_stats sched;
     memory::statistics mem;
-    sstables::shared_index_lists::stats index;
+    sstables::partition_index_cache::stats index;
     cache_tracker::stats cache;
     uint64_t instructions;
 
@@ -96,7 +96,7 @@ struct metrics_snapshot {
         busy_time = r.total_busy_time();
         idle_time = r.total_idle_time();
         hr_clock = std::chrono::high_resolution_clock::now();
-        index = sstables::shared_index_lists::shard_stats();
+        index = sstables::partition_index_cache::shard_stats();
         cache = cql_env->local_db().row_cache_tracker().get_stats();
         instructions = the_instructions_counter.read();
     }

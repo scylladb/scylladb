@@ -560,6 +560,7 @@ tracker& shard_tracker() {
 
 struct alignas(segment_size) segment {
     static constexpr int size_shift = segment_size_shift;
+    static constexpr int size_mask = segment_size | (segment_size - 1);
     using size_type = std::conditional_t<(size_shift < 16), uint16_t, uint32_t>;
     static constexpr size_t size = segment_size;
 
@@ -600,20 +601,58 @@ static_assert(min_free_space_for_compaction >= max_managed_object_size,
 // everything below that value in the same bucket.
 extern constexpr log_heap_options segment_descriptor_hist_options(min_free_space_for_compaction, 3, segment_size);
 
+enum segment_kind : int {
+    regular = 0, // Holds objects allocated with region_impl::alloc_small()
+    bufs = 1     // Holds objects allocated with region_impl::alloc_buf()
+};
+
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
+    static constexpr segment::size_type free_space_mask = segment::size_mask;
+    static constexpr unsigned bits_for_free_space = segment::size_shift + 1;
+    static constexpr segment::size_type segment_kind_mask = 1 << bits_for_free_space;
+    static constexpr unsigned bits_for_segment_kind = 1;
+    static constexpr unsigned shift_for_segment_kind = bits_for_free_space;
+    static_assert(sizeof(segment::size_type) * 8 >= bits_for_free_space + bits_for_segment_kind);
+
     segment::size_type _free_space;
     region::impl* _region;
+
+    segment::size_type free_space() const {
+        return _free_space & free_space_mask;
+    }
+
+    void set_free_space(segment::size_type free_space) {
+        _free_space = (_free_space & ~free_space_mask) | free_space;
+    }
+
+    segment_kind kind() const {
+        return static_cast<segment_kind>(_free_space >> shift_for_segment_kind);
+    }
+
+    void set_kind(segment_kind kind) {
+        _free_space = (_free_space & ~segment_kind_mask)
+                | static_cast<segment::size_type>(kind) << shift_for_segment_kind;
+    }
+
+    // Valid if kind() == segment_kind::bufs.
+    //
+    // _buf_pointers holds links to lsa_buffer objects (paired with lsa_buffer::_link)
+    // of live objects in the segment. The purpose of this is so that segment compaction
+    // can update the pointers when it moves the objects.
+    // The order of entangled objects in the vector is irrelevant.
+    // Also, not all entangled objects may be engaged.
+    std::vector<entangled> _buf_pointers;
 
     segment_descriptor()
         : _region(nullptr)
     { }
 
     bool is_empty() const {
-        return _free_space == segment::size;
+        return free_space() == segment::size;
     }
 
     occupancy_stats occupancy() const {
-        return { _free_space, segment::size };
+        return { free_space(), segment::size };
     }
 
     void record_alloc(segment::size_type size) {
@@ -823,6 +862,7 @@ public:
 
     struct stats {
         size_t segments_compacted;
+        size_t lsa_buffer_segments;
         uint64_t memory_allocated;
         uint64_t memory_compacted;
     };
@@ -988,7 +1028,8 @@ segment_pool::new_segment(region::impl* r) {
     auto seg = allocate_or_fallback_to_reserve();
     ++_segments_in_use;
     segment_descriptor& desc = descriptor(seg);
-    desc._free_space = segment::size;
+    desc.set_free_space(segment::size);
+    desc.set_kind(segment_kind::regular);
     desc._region = r;
     return seg;
 }
@@ -1080,7 +1121,7 @@ bool segment::is_empty() {
 
 occupancy_stats
 segment::occupancy() {
-    return { shard_segment_pool.descriptor(this)._free_space, segment::size };
+    return { shard_segment_pool.descriptor(this).free_space(), segment::size };
 }
 
 //
@@ -1191,6 +1232,13 @@ class region_impl final : public basic_region_impl {
             }
         }
     };
+private: // lsa_buffer allocator
+    segment* _buf_active = nullptr;
+    size_t _buf_active_offset;
+    static constexpr size_t buf_align = 4096; // All lsa_buffer:s will have addresses aligned to this value.
+    // Emergency storage to ensure forward progress during segment compaction,
+    // by ensuring that _buf_pointers allocation inside new_buf_active() does not fail.
+    std::vector<entangled> _buf_ptrs_for_compact_segment;
 private:
     region* _region = nullptr;
     region_group* _group = nullptr;
@@ -1294,6 +1342,17 @@ private:
         _active = nullptr;
     }
 
+    void close_buf_active() {
+        if (!_buf_active) {
+            return;
+        }
+        llogger.trace("Closing buf segment {}, used={}, waste={} [B]", fmt::ptr(_buf_active), _buf_active->occupancy(), segment::size - _buf_active_offset);
+        _closed_occupancy += _buf_active->occupancy();
+
+        _segment_descs.push(shard_segment_pool.descriptor(_buf_active));
+        _buf_active = nullptr;
+    }
+
     void free_segment(segment_descriptor& desc) noexcept {
         free_segment(shard_segment_pool.segment_from(desc), desc);
     }
@@ -1319,17 +1378,96 @@ private:
         return seg;
     }
 
+    lsa_buffer alloc_buf(size_t buf_size) {
+        static_assert(segment::size % buf_align == 0);
+        if (buf_size > segment::size) {
+            throw_with_backtrace<std::runtime_error>(format("Buffer size {} too large", buf_size));
+        }
+
+        if (_buf_active_offset + buf_size > segment::size) {
+            close_buf_active();
+        }
+
+        if (!_buf_active) {
+            new_buf_active();
+        }
+
+        lsa_buffer ptr;
+        ptr._buf = _buf_active->at<char>(_buf_active_offset);
+        ptr._size = buf_size;
+        unpoison(ptr._buf, buf_size);
+
+        segment_descriptor& desc = shard_segment_pool.descriptor(_buf_active);
+        ptr._desc = &desc;
+        desc._buf_pointers.emplace_back(entangled::make_paired_with(ptr._link));
+        desc.record_alloc(buf_size);
+        _buf_active_offset += align_up(buf_size, buf_align);
+
+        return ptr;
+    }
+
+    void free_buf(lsa_buffer& buf) noexcept {
+        segment_descriptor &desc = *buf._desc;
+        segment *seg = shard_segment_pool.segment_from(desc);
+
+        if (seg != _buf_active) {
+            _closed_occupancy -= seg->occupancy();
+        }
+
+        desc.record_free(buf._size);
+        poison(buf._buf, buf._size);
+
+        // Pack links so that segment compaction only has to walk live objects.
+        // This procedure also ensures that the link for buf is destroyed, either
+        // by replacing it with the last entangled, or by popping it from the back
+        // if it is the last element.
+        // Moving entangled links around is fine so we can move last_link.
+        entangled& last_link = desc._buf_pointers.back();
+        entangled& buf_link = *buf._link.get();
+        std::swap(last_link, buf_link);
+        desc._buf_pointers.pop_back();
+
+        if (seg != _buf_active) {
+            if (desc.is_empty()) {
+                _segment_descs.erase(desc);
+                desc._buf_pointers = std::vector<entangled>();
+                free_segment(seg, desc);
+            } else {
+                _segment_descs.adjust_up(desc);
+                _closed_occupancy += desc.occupancy();
+            }
+        }
+    }
+
     void compact_segment_locked(segment* seg, segment_descriptor& desc) {
         auto seg_occupancy = desc.occupancy();
         llogger.debug("Compacting segment {} from region {}, {}", fmt::ptr(seg), id(), seg_occupancy);
 
         ++_invalidate_counter;
 
-        for_each_live(seg, [this] (const object_descriptor* desc, void* obj, size_t size) {
-            auto dst = alloc_small(*desc, size, desc->alignment());
-            _sanitizer.on_migrate(obj, size, dst);
-            desc->migrator()->migrate(obj, dst, size);
-        });
+        if (desc.kind() == segment_kind::bufs) {
+            // This will free the storage of _buf_ptrs_for_compact_segment
+            // making sure that alloc_buf() makes progress.
+            // Also, empties desc._buf_pointers, making it back a generic segment, which
+            // we need to do before freeing it.
+            _buf_ptrs_for_compact_segment = std::move(desc._buf_pointers);
+            for (entangled& e : _buf_ptrs_for_compact_segment) {
+                if (e) {
+                    lsa_buffer* old_ptr = e.get(&lsa_buffer::_link);
+                    lsa_buffer dst = alloc_buf(old_ptr->_size);
+                    memcpy(dst._buf, old_ptr->_buf, dst._size);
+                    old_ptr->_link = std::move(dst._link);
+                    old_ptr->_buf = dst._buf;
+                    old_ptr->_desc = dst._desc;
+                }
+            }
+        } else {
+            for_each_live(seg, [this](const object_descriptor *desc, void *obj, size_t size) {
+                auto dst = alloc_small(*desc, size, desc->alignment());
+                _sanitizer.on_migrate(obj, size, dst);
+                desc->migrator()->migrate(obj, dst, size);
+            });
+        }
 
         free_segment(seg, desc);
         shard_segment_pool.on_segment_compaction(seg_occupancy.used_space());
@@ -1340,6 +1478,18 @@ private:
         close_active();
         _active = new_active;
         _active_offset = 0;
+    }
+
+    void new_buf_active() {
+        std::vector<entangled> ptrs;
+        ptrs.reserve(segment::size / buf_align);
+        segment* new_active = new_segment();
+        assert((uintptr_t)new_active->at(0) % buf_align == 0);
+        segment_descriptor& desc = shard_segment_pool.descriptor(new_active);
+        desc._buf_pointers = std::move(ptrs);
+        desc.set_kind(segment_kind::bufs);
+        _buf_active = new_active;
+        _buf_active_offset = 0;
     }
 
     static uint64_t next_id() {
@@ -1366,6 +1516,7 @@ public:
     explicit region_impl(region* region, region_group* group = nullptr)
         : _region(region), _group(group), _id(next_id())
     {
+        _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
         _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
         try {
@@ -1395,6 +1546,11 @@ public:
             free_segment(_active);
             _active = nullptr;
         }
+        if (_buf_active) {
+            assert(_buf_active->is_empty());
+            free_segment(_buf_active);
+            _buf_active = nullptr;
+        }
         if (_group) {
             _group->del(this);
         }
@@ -1412,6 +1568,9 @@ public:
         total += _closed_occupancy;
         if (_active) {
             total += _active->occupancy();
+        }
+        if (_buf_active) {
+            total += _buf_active->occupancy();
         }
         return total;
     }
@@ -1443,7 +1602,9 @@ public:
     //
     bool is_compactible() const {
         return _reclaiming_enabled
-            && (_closed_occupancy.free_space() >= 2 * segment::size)
+            // We require 2 segments per allocation segregation group to ensure forward progress during compaction.
+            // There are currently two fixed groups, one for the allocation_strategy implementation and one for lsa_buffer:s.
+            && (_closed_occupancy.free_space() >= 4 * segment::size)
             && _segment_descs.contains_above_min();
     }
 
@@ -1580,6 +1741,7 @@ public:
         } else {
             other.close_active();
         }
+        other.close_buf_active();
 
         for (auto& desc : other._segment_descs) {
             shard_segment_pool.set_region(desc, this);
@@ -1623,6 +1785,7 @@ public:
         compaction_lock _(*this);
         llogger.debug("Full compaction, {}", occupancy());
         close_and_open();
+        close_buf_active();
         segment_descriptor_hist all;
         std::swap(all, _segment_descs);
         _closed_occupancy = {};
@@ -1638,6 +1801,8 @@ public:
         compaction_lock _(*this);
         if (_active == seg) {
             close_active();
+        } else if (_buf_active == seg) {
+            close_buf_active();
         }
         _segment_descs.erase(desc);
         _closed_occupancy -= desc.occupancy();
@@ -1677,9 +1842,16 @@ public:
     }
 
     friend class region;
+    friend class lsa_buffer;
     friend class region_group;
     friend class region_group::region_evictable_occupancy_ascending_less_comparator;
 };
+
+lsa_buffer::~lsa_buffer() {
+    if (_link) {
+        _desc->_region->free_buf(*this);
+    }
+}
 
 inline void
 region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
@@ -1777,6 +1949,10 @@ occupancy_stats region::occupancy() const {
 
 region_group* region::group() {
     return get_impl().group();
+}
+
+lsa_buffer region::alloc_buf(size_t buffer_size) {
+    return get_impl().alloc_buf(buffer_size);
 }
 
 void region::merge(region& other) noexcept {
@@ -2448,5 +2624,5 @@ occupancy_stats lsa_global_occupancy_stats() {
 // This avoids using the occupancy, which entails extra division operations.
 template<>
 size_t hist_key<logalloc::segment_descriptor>(const logalloc::segment_descriptor& desc) {
-    return desc._free_space;
+    return desc.free_space();
 }
