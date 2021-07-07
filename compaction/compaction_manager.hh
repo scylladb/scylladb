@@ -157,7 +157,6 @@ private:
 
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
-    seastar::scheduling_group _scheduling_group;
     size_t _available_memory;
 
     using get_candidates_func = std::function<std::vector<sstables::shared_sstable>(const column_family&)>;

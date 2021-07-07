@@ -262,7 +262,7 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
             return do_with(std::move(user_initiated), [this, cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
                 register_backlog_tracker(bt);
-                return with_scheduling_group(_scheduling_group, [this, cf, descriptor = std::move(descriptor)] () mutable {
+                return with_scheduling_group(_compaction_controller.sg(), [this, cf, descriptor = std::move(descriptor)] () mutable {
                     return cf->compact_sstables(std::move(descriptor));
                 });
             }).then([compacting = std::move(compacting)] {});
@@ -347,7 +347,6 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
         return b;
     })
     , _backlog_manager(_compaction_controller)
-    , _scheduling_group(_compaction_controller.sg())
     , _available_memory(available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
@@ -359,7 +358,6 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
 compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares, abort_source& as)
     : _compaction_controller(sg, iop, shares)
     , _backlog_manager(_compaction_controller)
-    , _scheduling_group(_compaction_controller.sg())
     , _available_memory(available_memory)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
@@ -371,7 +369,6 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
 compaction_manager::compaction_manager()
     : _compaction_controller(seastar::default_scheduling_group(), default_priority_class(), 1)
     , _backlog_manager(_compaction_controller)
-    , _scheduling_group(_compaction_controller.sg())
     , _available_memory(1)
 {
     // No metric registration because this constructor is supposed to be used only by the testing
@@ -565,7 +562,7 @@ void compaction_manager::submit(column_family* cf) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         return with_lock(_compaction_locks[cf].for_read(), [this, task] () mutable {
-          return with_scheduling_group(_scheduling_group, [this, task = std::move(task)] () mutable {
+          return with_scheduling_group(_compaction_controller.sg(), [this, task = std::move(task)] () mutable {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
@@ -722,7 +719,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 task->compaction_running = true;
                 compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
                 return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
-                    return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)]() mutable {
+                    return with_scheduling_group(_compaction_controller.sg(), [this, &cf, descriptor = std::move(descriptor)]() mutable {
                         return cf.run_compaction(std::move(descriptor));
                     });
                 });
