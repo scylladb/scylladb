@@ -431,7 +431,10 @@ private:
             if (ret == consumer_m::row_processing_result::skip_row) {
                 _state = state::FLAGS;
                 auto current_pos = position() - _processing_data->size();
-                co_yield skip(*_processing_data, _next_row_offset - current_pos);
+                auto maybe_skip_bytes = skip(*_processing_data, _next_row_offset - current_pos);
+                if (std::holds_alternative<skip_bytes>(maybe_skip_bytes)) {
+                    co_yield maybe_skip_bytes;
+                }
                 goto flags_label;
             }
           }
