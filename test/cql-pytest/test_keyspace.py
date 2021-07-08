@@ -24,26 +24,26 @@ from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, C
 from threading import Thread
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
-def test_create_and_drop_keyspace(cql):
-    cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+def test_create_and_drop_keyspace(cql, this_dc):
+    cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
 # Trying to create the same keyspace - even if with identical parameters -
 # should result in an AlreadyExists error.
-def test_create_keyspace_twice(cql):
-    cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+def test_create_keyspace_twice(cql, this_dc):
+    cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     with pytest.raises(AlreadyExists):
-        cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+        cql.execute("CREATE KEYSPACE test_create_keyspace_twice WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_twice")
 
 # "IF NOT EXISTS" on CREATE KEYSPACE:
-def test_create_keyspace_if_not_exists(cql):
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+def test_create_keyspace_if_not_exists(cql, this_dc):
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     # A second invocation with IF NOT EXISTS is fine:
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     # It doesn't matter if the second invocation has different parameters,
     # they are ignored.
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 2 }")
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
 # The "WITH REPLICATION" part of CREATE KEYSPACE may not be ommitted - trying
@@ -56,8 +56,8 @@ def test_create_keyspace_missing_with(cql):
 # numeric characters and contain underscores; only letters and numbers are
 # supported as the first character.". This is not accurate. Test what is actually
 # enforced:
-def test_create_keyspace_invalid_name(cql):
-    rep = " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"
+def test_create_keyspace_invalid_name(cql, this_dc):
+    rep = " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }"
     with pytest.raises(InvalidRequest, match='48'):
         cql.execute('CREATE KEYSPACE ' + 'x'*49 + rep)
     # The name xyz!123, unquoted, is a syntax error. With quotes it's valid
@@ -110,13 +110,13 @@ def test_drop_keyspace_nonexistent(cql):
         cql.execute('DROP KEYSPACE nonexistent_keyspace')
 
 # Test trying to ALTER a keyspace.
-def test_alter_keyspace(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }} AND DURABLE_WRITES = false")
+def test_alter_keyspace(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
 
 # Test trying to ALTER a keyspace with invalid options.
-def test_alter_keyspace_invalid(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
+def test_alter_keyspace_invalid(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NoSuchStrategy' }}")
         # SimpleStrategy, if not outright forbidden, requires a
@@ -128,16 +128,16 @@ def test_alter_keyspace_invalid(cql):
 
 # Test trying to ALTER a keyspace with invalid options.
 # Reproduces #7595.
-def test_alter_keyspace_nonexistent_dc(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
+def test_alter_keyspace_nonexistent_dc(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{ 'class' : 'NetworkTopologyStrategy', 'nonexistentdc' : 1 }}")
 
 # Test trying to ALTER a non-existing keyspace
-def test_alter_keyspace_nonexisting(cql):
+def test_alter_keyspace_nonexisting(cql, this_dc):
     cql.execute('DROP KEYSPACE IF EXISTS nonexistent_keyspace')
     with pytest.raises(InvalidRequest):
-        cql.execute("ALTER KEYSPACE nonexistent_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+        cql.execute("ALTER KEYSPACE nonexistent_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
 
 # Test that attempts to reproduce an issue with double WITH keyword in ALTER
 # KEYSPACE statement -- CASSANDRA-9565.
@@ -156,8 +156,8 @@ def test_alter_keyspace_double_with(cql):
 # some valid state - the keyspace should either exist or not exist. It
 # shouldn't be in some broken immortal state as reported in issue #8968.
 @pytest.mark.xfail(reason="issue #8968")
-def test_concurrent_create_and_drop_keyspace(cql):
-    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"
+def test_concurrent_create_and_drop_keyspace(cql, this_dc):
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }"
     cfdef = "(a int PRIMARY KEY)"
     with new_test_keyspace(cql, ksdef) as keyspace:
         # The more iterations we do, the higher the chance of reproducing
