@@ -291,3 +291,23 @@ def test_contains_frozen_collection_ck(cql, test_keyspace):
             "SELECT * FROM " + table + " WHERE a=0 AND c=0 AND b CONTAINS 0 ALLOW FILTERING")))
         assert 1 == len(list(cql.execute(
             "SELECT * FROM " + table + " WHERE a=0 AND c=0 AND b CONTAINS KEY 0 ALLOW FILTERING")))
+
+# table4 contains example table from issue #8991
+@pytest.fixture(scope="module")
+def table4(cql, test_keyspace):
+    table = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {table} (k int, c1 int, c2 int, PRIMARY KEY (k,c1,c2))")
+    cql.execute(f"CREATE INDEX ON {table} (c2)")
+    cql.execute(f"INSERT INTO {table} (k, c1, c2) VALUES (0, 0, 1)")
+    cql.execute(f"INSERT INTO {table} (k, c1, c2) VALUES (0, 1, 1)")
+
+    everything = list(cql.execute(f"SELECT * FROM {table}"))
+    wait_for_index(cql, table, 'c2', everything)
+    yield (table, everything)
+    cql.execute(f"DROP TABLE {table}")
+
+# Selecting from indexed table should using only clustering key should require filtering
+# Variation of #7608 found in #8991
+@pytest.mark.xfail(reason="Select from indexed table using only clustering key should require filtering. Issue #7608")
+def test_select_indexed_cluster(cql, table4):
+    check_af_mandatory(cql, table4, 'c1 = 1 AND c2 = 1', lambda row: row.c1 == 1 and row.c2 == 1)
