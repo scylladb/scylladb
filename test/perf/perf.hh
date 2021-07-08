@@ -29,6 +29,7 @@
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
 #include "linux-perf-event.hh"
+#include "reader_permit.hh"
 
 #include <chrono>
 #include <iosfwd>
@@ -237,3 +238,17 @@ public:
 };
 
 std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& slm);
+
+namespace perf {
+
+// Closes the semaphore in the background when destroyed
+class reader_concurrency_semaphore_wrapper {
+    std::unique_ptr<reader_concurrency_semaphore> _semaphore;
+
+public:
+    explicit reader_concurrency_semaphore_wrapper(sstring name);
+    ~reader_concurrency_semaphore_wrapper();
+    reader_permit make_permit();
+};
+
+} // namespace perf

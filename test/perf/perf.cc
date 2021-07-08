@@ -23,6 +23,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/memory.hh>
 #include "seastarx.hh"
+#include "reader_concurrency_semaphore.hh"
 
 
 uint64_t perf_mallocs() {
@@ -65,3 +66,20 @@ operator<<(std::ostream& os, const perf_result& result) {
             result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op);
     return os;
 }
+
+namespace perf {
+
+reader_concurrency_semaphore_wrapper::reader_concurrency_semaphore_wrapper(sstring name)
+    : _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, std::move(name)))
+{
+}
+
+reader_concurrency_semaphore_wrapper::~reader_concurrency_semaphore_wrapper() {
+    (void)_semaphore->stop().finally([sem = std::move(_semaphore)] { });
+}
+
+reader_permit reader_concurrency_semaphore_wrapper::make_permit() {
+    return _semaphore->make_permit(nullptr, "perf");
+}
+
+} // namespace perf
