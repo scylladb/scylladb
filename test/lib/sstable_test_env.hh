@@ -44,13 +44,17 @@ public:
 class test_env {
     std::unique_ptr<cache_tracker> _cache_tracker;
     std::unique_ptr<test_env_sstables_manager> _mgr;
+    std::unique_ptr<reader_concurrency_semaphore> _semaphore;
 public:
     explicit test_env()
         : _cache_tracker(std::make_unique<cache_tracker>())
-        , _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service, *_cache_tracker)) { }
+        , _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service, *_cache_tracker))
+        , _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")) { }
 
     future<> stop() {
-        return _mgr->close();
+        return _mgr->close().finally([this] {
+            return _semaphore->stop();
+        });
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
@@ -77,6 +81,8 @@ public:
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
 
     test_env_sstables_manager& manager() { return *_mgr; }
+    reader_concurrency_semaphore& semaphore() { return *_semaphore; }
+    reader_permit make_reader_permit(const schema* const s = nullptr, const char* n = "test") { return _semaphore->make_permit(s, n); }
 
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });

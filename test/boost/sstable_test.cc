@@ -81,15 +81,15 @@ template<typename Func>
 inline auto
 test_using_reusable_sst(schema_ptr s, sstring dir, unsigned long gen, Func&& func) {
     return test_env::do_with([s = std::move(s), dir = std::move(dir), gen, func = std::move(func)] (test_env& env) {
-        return env.reusable_sst(std::move(s), std::move(dir), gen).then([func = std::move(func)] (sstable_ptr sst) {
-            return func(std::move(sst));
+        return env.reusable_sst(std::move(s), std::move(dir), gen).then([&env, func = std::move(func)] (sstable_ptr sst) mutable {
+            return func(env, std::move(sst));
         });
     });
 }
 
 future<std::vector<partition_key>> index_read(schema_ptr schema, sstring path) {
-    return test_using_reusable_sst(std::move(schema), std::move(path), 1, [] (sstable_ptr ptr) {
-        return sstables::test(ptr).read_indexes().then([] (auto&& indexes) {
+    return test_using_reusable_sst(std::move(schema), std::move(path), 1, [] (test_env& env, sstable_ptr ptr) {
+        return sstables::test(ptr).read_indexes(env.make_reader_permit()).then([] (auto&& indexes) {
             return boost::copy_range<std::vector<partition_key>>(
                     indexes | boost::adaptors::transformed([] (const sstables::test::index_entry& e) { return e.key; }));
         });
@@ -110,7 +110,7 @@ SEASTAR_TEST_CASE(composite_index_read) {
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
 future<> summary_query(schema_ptr schema, sstring path, int generation) {
-    return test_using_reusable_sst(std::move(schema), path, generation, [] (sstable_ptr ptr) {
+    return test_using_reusable_sst(std::move(schema), path, generation, [] (test_env& env, sstable_ptr ptr) {
         return sstables::test(ptr).read_summary_entry(Position).then([ptr] (auto entry) {
             BOOST_REQUIRE(entry.position == EntryPosition);
             BOOST_REQUIRE(entry.key.size() == EntryKeySize);
@@ -175,7 +175,7 @@ SEASTAR_TEST_CASE(missing_summary_interval_1_query_ok) {
 #endif
 
 SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
-    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 2, [] (shared_sstable ptr) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 2, [] (test_env& env, shared_sstable ptr) {
         auto& summary = sstables::test(ptr).get_summary();
         BOOST_REQUIRE(summary.header.size == 1);
         BOOST_REQUIRE(summary.positions.size() == 1);
@@ -319,10 +319,10 @@ SEASTAR_TEST_CASE(check_toc_func) {
 }
 
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {
-    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [this] (auto& env, auto sstp) {
         // note: it's important to pass on a shared copy of sstp to prevent its
         // destruction until the continuation finishes reading!
-        return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
+        return sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
         });
@@ -331,8 +331,8 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 
 SEASTAR_TEST_CASE(compressed_random_access_read) {
     auto s = make_schema_for_compressed_sstable();
-    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
-        return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
+    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [this] (auto& env, auto sstp) {
+        return sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
         });
@@ -348,8 +348,8 @@ public:
     int count_range_tombstone = 0;
     int count_row_end = 0;
 
-    test_row_consumer(int64_t t)
-        : row_consumer(tests::make_permit(), tracing::trace_state_ptr()
+    test_row_consumer(reader_permit permit, int64_t t)
+        : row_consumer(std::move(permit), tracing::trace_state_ptr()
         , default_priority_class()), desired_timestamp(t) {
     }
 
@@ -428,8 +428,8 @@ public:
 };
 
 SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
-    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
-        return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [this] (auto& env, auto sstp) {
+        return do_with(test_row_consumer(env.make_reader_permit(), 1418656871665302), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c, {0, 95}, 95);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -446,8 +446,8 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
 
 SEASTAR_TEST_CASE(compressed_rows_read_one) {
     auto s = make_schema_for_compressed_sstable();
-    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
-        return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
+    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [this] (auto& env, auto sstp) {
+        return do_with(test_row_consumer(env.make_reader_permit(), 1418654707438005), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c, {0, 95}, 95);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -472,8 +472,8 @@ public:
     int count_row_end = 0;
     int count_range_tombstone = 0;
 
-    count_row_consumer()
-        : row_consumer(tests::make_permit(), tracing::trace_state_ptr(), default_priority_class()) {
+    explicit count_row_consumer(reader_permit permit)
+        : row_consumer(std::move(permit), tracing::trace_state_ptr(), default_priority_class()) {
     }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
@@ -515,8 +515,8 @@ public:
 
 
 SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
-    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
-        return do_with(count_row_consumer(), [sstp] (auto& c) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [this] (auto& env, auto sstp) {
+        return do_with(count_row_consumer(env.make_reader_permit()), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -533,8 +533,8 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
 
 SEASTAR_TEST_CASE(compressed_rows_read_all) {
     auto s = make_schema_for_compressed_sstable();
-    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
-        return do_with(count_row_consumer(), [sstp] (auto& c) {
+    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [this] (auto& env, auto sstp) {
+        return do_with(count_row_consumer(env.make_reader_permit()), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -553,6 +553,7 @@ SEASTAR_TEST_CASE(compressed_rows_read_all) {
 // consume_row_end returning proceed::no message
 class pausable_count_row_consumer : public count_row_consumer {
 public:
+    using count_row_consumer::count_row_consumer;
     virtual proceed consume_row_end() override {
         count_row_consumer::consume_row_end();
         return proceed::no;
@@ -560,8 +561,8 @@ public:
 };
 
 SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
-    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
-        return do_with(pausable_count_row_consumer(), [sstp] (auto& c) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [this] (auto& env, auto sstp) {
+        return do_with(pausable_count_row_consumer(env.make_reader_permit()), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] () mutable {
@@ -591,6 +592,7 @@ SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
 // Test reading range tombstone (which we we have in collections such as set)
 class set_consumer : public count_row_consumer {
 public:
+    using count_row_consumer::count_row_consumer;
     virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
@@ -607,8 +609,8 @@ public:
 };
 
 SEASTAR_TEST_CASE(read_set) {
-    return test_using_reusable_sst(set_schema(), "test/resource/sstables/set", 1, [] (auto sstp) {
-        return do_with(set_consumer(), [sstp] (auto& c) {
+    return test_using_reusable_sst(set_schema(), "test/resource/sstables/set", 1, [this] (auto& env, auto sstp) {
+        return do_with(set_consumer(env.make_reader_permit()), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -626,7 +628,7 @@ SEASTAR_TEST_CASE(read_set) {
 class ttl_row_consumer : public count_row_consumer {
 public:
     const int64_t desired_timestamp;
-    ttl_row_consumer(int64_t t) : desired_timestamp(t) { }
+    ttl_row_consumer(reader_permit permit, int64_t t) : count_row_consumer(std::move(permit)), desired_timestamp(t) { }
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
         BOOST_REQUIRE(key == sstables::key_view(as_bytes("nadav")));
@@ -663,8 +665,8 @@ public:
 };
 
 SEASTAR_TEST_CASE(ttl_read) {
-    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/ttl", 1, [] (auto sstp) {
-        return do_with(ttl_row_consumer(1430151018675502), [sstp] (auto& c) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/ttl", 1, [this] (auto& env, auto sstp) {
+        return do_with(ttl_row_consumer(env.make_reader_permit(), 1430151018675502), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -681,6 +683,7 @@ SEASTAR_TEST_CASE(ttl_read) {
 
 class deleted_cell_row_consumer : public count_row_consumer {
 public:
+    using count_row_consumer::count_row_consumer;
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
         BOOST_REQUIRE(key == key_view(as_bytes("nadav")));
@@ -702,8 +705,8 @@ public:
 };
 
 SEASTAR_TEST_CASE(deleted_cell_read) {
-    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/deleted_cell", 2, [] (auto sstp) {
-        return do_with(deleted_cell_row_consumer(), [sstp] (auto& c) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/deleted_cell", 2, [this] (auto& env, auto sstp) {
+        return do_with(deleted_cell_row_consumer(env.make_reader_permit()), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
@@ -720,7 +723,7 @@ SEASTAR_TEST_CASE(deleted_cell_read) {
 
 
 SEASTAR_TEST_CASE(find_key_map) {
-    return test_using_reusable_sst(map_schema(), "test/resource/sstables/map_pk", 1, [] (auto sstp) {
+    return test_using_reusable_sst(map_schema(), "test/resource/sstables/map_pk", 1, [] (auto& env, auto sstp) {
         schema_ptr s = map_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -742,7 +745,7 @@ SEASTAR_TEST_CASE(find_key_map) {
 }
 
 SEASTAR_TEST_CASE(find_key_set) {
-    return test_using_reusable_sst(set_schema(), "test/resource/sstables/set_pk", 1, [] (auto sstp) {
+    return test_using_reusable_sst(set_schema(), "test/resource/sstables/set_pk", 1, [] (auto& env, auto sstp) {
         schema_ptr s = set_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -764,7 +767,7 @@ SEASTAR_TEST_CASE(find_key_set) {
 }
 
 SEASTAR_TEST_CASE(find_key_list) {
-    return test_using_reusable_sst(list_schema(), "test/resource/sstables/list_pk", 1, [] (auto sstp) {
+    return test_using_reusable_sst(list_schema(), "test/resource/sstables/list_pk", 1, [] (auto& env, auto sstp) {
         schema_ptr s = set_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -787,7 +790,7 @@ SEASTAR_TEST_CASE(find_key_list) {
 
 
 SEASTAR_TEST_CASE(find_key_composite) {
-    return test_using_reusable_sst(composite_schema(), "test/resource/sstables/composite", 1, [] (auto sstp) {
+    return test_using_reusable_sst(composite_schema(), "test/resource/sstables/composite", 1, [] (auto& env, auto sstp) {
         schema_ptr s = composite_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -805,7 +808,7 @@ SEASTAR_TEST_CASE(find_key_composite) {
 }
 
 SEASTAR_TEST_CASE(all_in_place) {
-    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/bigsummary", 76, [] (auto sstp) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/bigsummary", 76, [] (auto& env, auto sstp) {
         auto& summary = sstables::test(sstp)._summary();
 
         int idx = 0;
@@ -818,8 +821,8 @@ SEASTAR_TEST_CASE(all_in_place) {
 }
 
 SEASTAR_TEST_CASE(full_index_search) {
-    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
-        return sstables::test(sstp).read_indexes().then([sstp] (auto&& index_list) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto& env, auto sstp) {
+        return sstables::test(sstp).read_indexes(env.make_reader_permit()).then([sstp] (auto&& index_list) {
             int idx = 0;
             for (auto& e : index_list) {
                 auto key = key::from_partition_key(*sstp->get_schema(), e.key);
@@ -830,7 +833,7 @@ SEASTAR_TEST_CASE(full_index_search) {
 }
 
 SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
-    return test_using_reusable_sst(composite_schema(), "test/resource/sstables/composite", 1, [] (auto sstp) {
+    return test_using_reusable_sst(composite_schema(), "test/resource/sstables/composite", 1, [] (auto& env, auto sstp) {
         schema_ptr s = composite_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -850,10 +853,10 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
-    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto sstp) {
-        return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata")), [sstp] (auto& range) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto& env, auto sstp) {
+        return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata")), [&env, sstp] (auto& range) {
             auto s = columns_schema();
-            return with_closeable(sstp->make_reader(s, tests::make_permit(), range, s->full_slice()), [sstp, s] (flat_mutation_reader& rd) {
+            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), range, s->full_slice()), [sstp, s] (flat_mutation_reader& rd) {
               return read_mutation_from_flat_mutation_reader(rd, db::no_timeout).then([sstp, s] (auto mutation) {
                 return make_ready_future<>();
               });
@@ -957,9 +960,9 @@ static future<shared_sstable> load_large_partition_sst(test_env& env, const ssta
 SEASTAR_TEST_CASE(promoted_index_read) {
   return for_each_sstable_version([] (const sstables::sstable::version_types version) {
     return test_env::do_with([version] (test_env& env) {
-      return load_large_partition_sst(env, version).then([] (auto sstp) {
+      return load_large_partition_sst(env, version).then([&env] (auto sstp) {
         schema_ptr s = large_partition_schema();
-        return sstables::test(sstp).read_indexes().then([sstp] (std::vector<sstables::test::index_entry> vec) {
+        return sstables::test(sstp).read_indexes(env.make_reader_permit()).then([sstp] (std::vector<sstables::test::index_entry> vec) {
             BOOST_REQUIRE(vec.size() == 1);
             BOOST_REQUIRE(vec[0].promoted_index_size > 0);
         });
@@ -986,11 +989,11 @@ static query::partition_slice make_partition_slice(const schema& s, sstring ck1,
 
 // Count the number of CQL rows in one partition between clustering key
 // prefix ck1 to ck2.
-static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstring ck1, sstring ck2) {
-    return seastar::async([sstp, s, key, ck1, ck2] () mutable {
+static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sstring key, sstring ck1, sstring ck2) {
+    return seastar::async([&env, sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
-        auto rd = sstp->make_reader(s, tests::make_permit(), pr, ps);
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, ps);
         auto close_rd = deferred_close(rd);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
@@ -1009,10 +1012,10 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
 }
 
 // Count the number of CQL rows in one partition
-static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
-    return seastar::async([sstp, s, key] () mutable {
+static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sstring key) {
+    return seastar::async([&env, sstp, s, key] () mutable {
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
-        auto rd = sstp->make_reader(s, tests::make_permit(), pr, s->full_slice());
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
         auto close_rd = deferred_close(rd);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
@@ -1032,10 +1035,10 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
 
 // Count the number of CQL rows between clustering key prefix ck1 to ck2
 // in all partitions in the sstable (using sstable::read_range_rows).
-static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
-    return seastar::async([sstp, s, ck1, ck2] () mutable {
+static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
+    return seastar::async([&env, sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto reader = sstp->make_reader(s, tests::make_permit(), query::full_partition_range, ps);
+        auto reader = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, ps);
         auto close_reader = deferred_close(reader);
         int nrows = 0;
         auto mfopt = reader(db::no_timeout).get0();
@@ -1068,66 +1071,66 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstri
 SEASTAR_TEST_CASE(sub_partition_read) {
   schema_ptr s = large_partition_schema();
   return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
-   return test_env::do_with([s, version] (test_env& env) {
-    return load_large_partition_sst(env, version).then([s] (auto sstp) {
-        return count_rows(sstp, s, "v1", "18wX", "18xB").then([] (int nrows) {
+    return test_env::do_with_async([s, version] (test_env& env) {
+        auto sstp = load_large_partition_sst(env, version).get();
+        {
+            auto nrows = count_rows(env, sstp, s, "v1", "18wX", "18xB").get();
             // there should be 5 rows (out of 13520 = 20*26*26) in this range:
             // 18wX, 18wY, 18wZ, 18xA, 18xB.
             BOOST_REQUIRE(nrows == 5);
-        }).then([sstp, s] () {
-            return count_rows(sstp, s, "v1", "13aB", "15aA").then([] (int nrows) {
-                // There should be 26*26*2 rows in this range. It spans two
-                // promoted-index blocks, so we get to test that case.
-                BOOST_REQUIRE(nrows == 2*26*26);
-            });
-        }).then([sstp, s] () {
-            return count_rows(sstp, s, "v1", "10aB", "19aA").then([] (int nrows) {
-                // There should be 26*26*9 rows in this range. It spans many
-                // promoted-index blocks.
-                BOOST_REQUIRE(nrows == 9*26*26);
-            });
-        }).then([sstp, s] () {
-            return count_rows(sstp, s, "v1", "0", "z").then([] (int nrows) {
-                // All rows, 20*26*26 of them, are in this range. It spans all
-                // the promoted-index blocks, but the range is still bounded
-                // on both sides
-                BOOST_REQUIRE(nrows == 20*26*26);
-            });
-        }).then([sstp, s] () {
+        }
+        {
+            auto nrows = count_rows(env, sstp, s, "v1", "13aB", "15aA").get();
+            // There should be 26*26*2 rows in this range. It spans two
+            // promoted-index blocks, so we get to test that case.
+            BOOST_REQUIRE(nrows == 2*26*26);
+        }
+        {
+            auto nrows = count_rows(env, sstp, s, "v1", "10aB", "19aA").get();
+            // There should be 26*26*9 rows in this range. It spans many
+            // promoted-index blocks.
+            BOOST_REQUIRE(nrows == 9*26*26);
+        }
+        {
+            auto nrows = count_rows(env, sstp, s, "v1", "0", "z").get();
+            // All rows, 20*26*26 of them, are in this range. It spans all
+            // the promoted-index blocks, but the range is still bounded
+            // on both sides
+            BOOST_REQUIRE(nrows == 20*26*26);
+        }
+        {
             // range that is outside (after) the actual range of the data.
             // No rows should match.
-            return count_rows(sstp, s, "v1", "y", "z").then([] (int nrows) {
-                BOOST_REQUIRE(nrows == 0);
-            });
-        }).then([sstp, s] () {
+            auto nrows = count_rows(env, sstp, s, "v1", "y", "z").get();
+            BOOST_REQUIRE(nrows == 0);
+        }
+        {
             // range that is outside (before) the actual range of the data.
             // No rows should match.
-            return count_rows(sstp, s, "v1", "_a", "_b").then([] (int nrows) {
-                BOOST_REQUIRE(nrows == 0);
-            });
-        }).then([sstp, s] () {
+            auto nrows = count_rows(env, sstp, s, "v1", "_a", "_b").get();
+            BOOST_REQUIRE(nrows == 0);
+        }
+        {
             // half-infinite range
-            return count_rows(sstp, s, "v1", "", "10aA").then([] (int nrows) {
-                BOOST_REQUIRE(nrows == (1*26*26 + 1));
-            });
-        }).then([sstp, s] () {
+            auto nrows = count_rows(env, sstp, s, "v1", "", "10aA").get();
+            BOOST_REQUIRE(nrows == (1*26*26 + 1));
+        }
+        {
             // half-infinite range
-            return count_rows(sstp, s, "v1", "10aA", "").then([] (int nrows) {
-                BOOST_REQUIRE(nrows == 19*26*26);
-            });
-        }).then([sstp, s] () {
+            auto nrows = count_rows(env, sstp, s, "v1", "10aA", "").get();
+            BOOST_REQUIRE(nrows == 19*26*26);
+        }
+        {
             // count all rows, but giving an explicit all-encompasing filter
-            return count_rows(sstp, s, "v1", "", "").then([] (int nrows) {
-                BOOST_REQUIRE(nrows == 20*26*26);
-            });
-        }).then([sstp, s] () {
+            auto nrows = count_rows(env, sstp, s, "v1", "", "").get();
+            BOOST_REQUIRE(nrows == 20*26*26);
+        }
+        {
             // count all rows, without a filter
-            return count_rows(sstp, s, "v1").then([] (int nrows) {
-                BOOST_REQUIRE(nrows == 20*26*26);
-            });
-        });
+            auto nrows = count_rows(env, sstp, s, "v1").get();
+            BOOST_REQUIRE(nrows == 20*26*26);
+        }
     });
-   });
   });
 }
 
@@ -1137,12 +1140,10 @@ SEASTAR_TEST_CASE(sub_partition_read) {
 SEASTAR_TEST_CASE(sub_partitions_read) {
   schema_ptr s = large_partition_schema();
   return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
-   return test_env::do_with([s, version] (test_env& env) {
-    return load_large_partition_sst(env, version).then([s] (auto sstp) {
-        return count_rows(sstp, s, "18wX", "18xB").then([] (int nrows) {
-            BOOST_REQUIRE(nrows == 5);
-        });
-    });
+   return test_env::do_with_async([s, version] (test_env& env) {
+        auto sstp = load_large_partition_sst(env, version).get();
+        auto nrows = count_rows(env, sstp, s, "18wX", "18xB").get();
+        BOOST_REQUIRE(nrows == 5);
    });
   });
 }

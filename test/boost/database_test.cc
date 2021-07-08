@@ -27,7 +27,6 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
-#include "test/lib/reader_permit.hh"
 #include "test/lib/log.hh"
 
 #include "database.hh"
@@ -163,14 +162,14 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
             cf.flush().get();
             cf.get_row_cache().invalidate(row_cache::external_updater([] {})).get();
             return mutation_source([&] (schema_ptr s,
-                    reader_permit,
+                    reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr) {
-                return cf.make_reader(s, tests::make_permit(), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                return cf.make_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
         });
     }).get();

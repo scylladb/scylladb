@@ -33,7 +33,7 @@
 #include "schema_builder.hh"
 #include "memtable.hh"
 #include "test/perf/perf.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 static const int update_iterations = 16;
 static const int cell_size = 128;
@@ -41,6 +41,7 @@ static bool cancelled = false;
 
 template<typename MutationGenerator>
 void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     cache_tracker tracker;
     row_cache cache(s, make_empty_snapshot_source(), tracker, is_continuous::yes);
 
@@ -80,10 +81,11 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
             float((prev_compacted - prefill_compacted)) / (prev_allocated - prefill_allocated)
         );
 
+        auto permit = semaphore.make_permit();
         // Create a reader which tests the case of memtable snapshots
         // going away after memtable was merged to cache.
         auto rd = std::make_unique<flat_mutation_reader>(
-            make_combined_reader(s, tests::make_permit(), cache.make_reader(s, tests::make_permit()), mt->make_flat_reader(s, tests::make_permit())));
+            make_combined_reader(s, permit, cache.make_reader(s, permit), mt->make_flat_reader(s, permit)));
         auto close_rd = defer([&rd] { rd->close().get(); });
         rd->set_max_buffer_size(1);
         rd->fill_buffer(db::no_timeout).get();

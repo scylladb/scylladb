@@ -46,7 +46,8 @@ write_memtable_to_sstable(flat_mutation_reader reader,
         const seastar::io_priority_class& pc);
 
 seastar::future<>
-write_memtable_to_sstable(memtable& mt,
+write_memtable_to_sstable(reader_permit permit,
+        memtable& mt,
         sstables::shared_sstable sst,
         sstables::write_monitor& mon,
         sstables::sstable_writer_config& cfg,

@@ -23,6 +23,7 @@
 #include "seastar/include/seastar/testing/perf_tests.hh"
 
 #include "test/lib/simple_schema.hh"
+#include "test/perf/perf.hh"
 
 #include "frozen_mutation.hh"
 #include "mutation_partition_view.hh"
@@ -31,18 +32,19 @@ namespace tests {
 
 class frozen_mutation {
     simple_schema _schema;
+    perf::reader_concurrency_semaphore_wrapper _semaphore;
 
     mutation _one_small_row;
     ::frozen_mutation _frozen_one_small_row;
 public:
     frozen_mutation()
-        : _one_small_row(_schema.schema(), _schema.make_pkey(0))
+        : _semaphore(__FILE__)
+        , _one_small_row(_schema.schema(), _schema.make_pkey(0))
         , _frozen_one_small_row(_one_small_row)
     {
-        _one_small_row.apply(_schema.make_row(_schema.make_ckey(0), "value"));
+        _one_small_row.apply(_schema.make_row(_semaphore.make_permit(), _schema.make_ckey(0), "value"));
         _frozen_one_small_row = freeze(_one_small_row);
     }
-
     schema_ptr schema() const { return _schema.schema(); }
 
     const mutation& one_small_row() const { return _one_small_row; }

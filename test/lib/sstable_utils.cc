@@ -31,7 +31,7 @@
 #include <boost/range/algorithm/sort.hpp>
 #include "sstables/version.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
@@ -69,6 +69,8 @@ std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_ke
 }
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
     auto sst = sst_factory();
     schema_ptr s = muts[0].schema();
     auto mt = make_lw_shared<memtable>(s);
@@ -98,7 +100,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
     }
 
     // validate the sstable
-    auto rd = assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit()));
+    auto rd = assert_that(sst->as_mutation_source().make_reader(s, semaphore.make_permit()));
     for (auto&& m : merged) {
         rd.produces(m);
     }
@@ -123,7 +125,9 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
         mt->apply(m);
     }
 
-    sst->write_components(mt->make_flat_reader(s, tests::make_permit()), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    sst->write_components(mt->make_flat_reader(s, semaphore.make_permit()), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
     return sst;

@@ -44,7 +44,6 @@
 #include "query-result-reader.hh"
 #include "partition_slice_builder.hh"
 #include "test/lib/tmpdir.hh"
-#include "test/lib/reader_permit.hh"
 #include "compaction/compaction_manager.hh"
 
 #include <seastar/testing/test_case.hh>
@@ -90,10 +89,10 @@ static atomic_cell make_collection_member(data_type dt, T value) {
     return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)), atomic_cell::collection_member::yes);
 };
 
-static mutation_partition get_partition(memtable& mt, const partition_key& key) {
+static mutation_partition get_partition(reader_permit permit, memtable& mt, const partition_key& key) {
     auto dk = dht::decorate_key(*mt.schema(), key);
     auto range = dht::partition_range::make_singular(dk);
-    auto reader = mt.make_flat_reader(mt.schema(), tests::make_permit(), range);
+    auto reader = mt.make_flat_reader(mt.schema(), std::move(permit), range);
     auto close_reader = deferred_close(reader);
     auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
     BOOST_REQUIRE(bool(mo));
@@ -116,6 +115,8 @@ with_column_family(schema_ptr s, column_family::config cfg, noncopyable_function
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
@@ -130,7 +131,7 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
         m.set_clustered_cell(c_key, r1_col, std::move(c));
         mt->apply(std::move(m));
 
-        auto p = get_partition(*mt, key);
+        auto p = get_partition(semaphore.make_permit(), *mt, key);
         row& r = p.clustered_row(*s, c_key).cells();
         auto i = r.find_cell(r1_col.id);
         BOOST_REQUIRE(i);
@@ -218,6 +219,8 @@ collection_mutation_description make_collection_mutation(tombstone t, bytes key1
 
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type);
@@ -241,7 +244,7 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         m2o.set_static_cell(column, mmut2o.serialize(*my_map_type));
         mt->apply(m2o);
 
-        auto p = get_partition(*mt, key);
+        auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
@@ -254,6 +257,8 @@ SEASTAR_TEST_CASE(test_map_mutations) {
 
 SEASTAR_TEST_CASE(test_set_mutations) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type);
@@ -277,7 +282,7 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         m2o.set_static_cell(column, mmut2o.serialize(*my_set_type));
         mt->apply(m2o);
 
-        auto p = get_partition(*mt, key);
+        auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
@@ -290,6 +295,8 @@ SEASTAR_TEST_CASE(test_set_mutations) {
 
 SEASTAR_TEST_CASE(test_list_mutations) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type);
@@ -314,7 +321,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         m2o.set_static_cell(column, mmut2o.serialize(*my_list_type));
         mt->apply(m2o);
 
-        auto p = get_partition(*mt, key);
+        auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
@@ -326,6 +333,8 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
     // (a int, b text, c long, d text)
     auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
             {to_bytes("a"), to_bytes("b"), to_bytes("c"), to_bytes("d")},
@@ -357,7 +366,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     m3.set_static_cell(column, mut3.serialize(*ut));
     mt->apply(m3);
 
-    auto p = get_partition(*mt, key);
+    auto p = get_partition(semaphore.make_permit(), *mt, key);
     lazy_row& r = p.static_row();
     auto i = r.find_cell(column.id);
     BOOST_REQUIRE(i);
@@ -395,6 +404,8 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 // operations like merging two collections and compaction query results
 // there are no allocations larger than our usual 128KB buffer size.
 SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
     const auto key_type = int32_type;
     const auto value_type = utf8_type;
     const auto collection_type = map_type_impl::get_instance(key_type, value_type, true);
@@ -407,14 +418,14 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
     const std::array sizes_kb{size_t(1), size_t(10), size_t(64)};
     auto mt = make_lw_shared<memtable>(schema);
 
-    auto make_mutation_with_collection = [&schema, collection_type] (partition_key pk, collection_mutation_description cmd) {
+    auto make_mutation_with_collection = [&schema, &semaphore, collection_type] (partition_key pk, collection_mutation_description cmd) {
         const auto& cdef = schema->column_at(column_kind::regular_column, 0);
 
         mutation mut(schema, pk);
 
         row r;
         r.apply(cdef, atomic_cell_or_collection(cmd.serialize(*collection_type)));
-        mut.apply(mutation_fragment(*schema, tests::make_permit(), clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r))));
+        mut.apply(mutation_fragment(*schema, semaphore.make_permit(), clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r))));
 
         return mut;
     };
@@ -441,7 +452,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         mt->apply(make_mutation_with_collection(pk, std::move(cmd1)));
         mt->apply(make_mutation_with_collection(pk, std::move(cmd2))); // this should trigger a merge of the two collections
 
-        auto rd = mt->make_flat_reader(schema, tests::make_permit());
+        auto rd = mt->make_flat_reader(schema, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
         auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
         BOOST_REQUIRE(res_mut_opt);
@@ -487,13 +498,13 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<::cf_stats>();
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, [s] (column_family& cf) {
+    with_column_family(s, cfg, [s, &env] (column_family& cf) {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
@@ -511,7 +522,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
             auto verify_row = [&] (int32_t c1, int32_t r1) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
                 auto p_key = dht::decorate_key(*s, key);
-                auto r = cf.find_row(cf.schema(), tests::make_permit(), p_key, c_key).get0();
+                auto r = cf.find_row(cf.schema(), env.make_reader_permit(), p_key, c_key).get0();
                 {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
@@ -539,15 +550,15 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     auto cf_stats = make_lw_shared<::cf_stats>();
 
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    return with_column_family(s, cfg, [s](column_family& cf) {
-        return seastar::async([s, &cf] {
+    return with_column_family(s, cfg, [&env, s](column_family& cf) {
+        return seastar::async([&env, s, &cf] {
             // populate
             auto new_key = [&] {
                 static thread_local int next = 0;
@@ -570,13 +581,16 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             std::sort(mutations.begin(), mutations.end(), mutation_decorated_key_less_comparator());
 
             // Flush will happen in the middle of reading for this scanner
-            auto assert_that_scanner1 = assert_that(cf.make_reader(s, tests::make_permit(), query::full_partition_range));
+            auto assert_that_scanner1 = assert_that(cf.make_reader(s, env.make_reader_permit(),
+                        query::full_partition_range));
 
             // Flush will happen before it is invoked
-            auto assert_that_scanner2 = assert_that(cf.make_reader(s, tests::make_permit(), query::full_partition_range));
+            auto assert_that_scanner2 = assert_that(cf.make_reader(s, env.make_reader_permit(),
+                        query::full_partition_range));
 
             // Flush will happen after all data was read, but before EOS was consumed
-            auto assert_that_scanner3 = assert_that(cf.make_reader(s, tests::make_permit(), query::full_partition_range));
+            auto assert_that_scanner3 = assert_that(cf.make_reader(s, env.make_reader_permit(),
+                        query::full_partition_range));
 
             assert_that_scanner1.produces(mutations[0]);
             assert_that_scanner1.produces(mutations[1]);
@@ -618,13 +632,13 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
 
     auto cf_stats = make_lw_shared<::cf_stats>();
 
-    column_family::config cfg = column_family_test_config(env.manager());
+    column_family::config cfg = column_family_test_config(env.manager(), env.semaphore());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, [s] (auto& cf) mutable {
+    with_column_family(s, cfg, [s, &env] (auto& cf) mutable {
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -650,8 +664,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
             (void)cf.flush();
         }
 
-        return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
-            return cf.for_all_partitions_slow(s, tests::make_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
+        return do_with(std::move(result), [&cf, s, &env, &r1_col, shadow] (auto& result) {
+            return cf.for_all_partitions_slow(s, env.make_reader_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, nonwrapping_range<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
@@ -1148,6 +1162,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
 SEASTAR_TEST_CASE(test_large_blobs) {
     return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type);
 
@@ -1164,7 +1180,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         m.set_static_cell(s1_col, make_atomic_cell(bytes_type, data_value(blob1)));
         mt->apply(std::move(m));
 
-        auto p = get_partition(*mt, key);
+        auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(s1_col.id);
         BOOST_REQUIRE(i);
@@ -1177,7 +1193,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         m2.set_static_cell(s1_col, atomic_cell::make_live(*bytes_type, 7, bytes_type->decompose(data_value(blob2))));
         mt->apply(std::move(m2));
 
-        auto p2 = get_partition(*mt, key);
+        auto p2 = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r2 = p2.static_row();
         auto i2 = r2.find_cell(s1_col.id);
         BOOST_REQUIRE(i2);
@@ -2946,12 +2962,13 @@ void check_partition_summaries(const schema& schema, const std::vector<partition
     }
 }
 
-void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_point query_time, const std::vector<mutation>& mutations) {
+void run_compaction_data_stream_split_test(const schema& schema, reader_permit permit, gc_clock::time_point query_time,
+        const std::vector<mutation>& mutations) {
     const auto expected_mutations_summary = summarize_mutations(mutations);
 
     testlog.info("Original data: {}", create_stats(expected_mutations_summary));
 
-    auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), std::move(mutations));
+    auto reader = flat_mutation_reader_from_mutations(std::move(permit), std::move(mutations));
     auto close_reader = deferred_close(reader);
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
@@ -2978,6 +2995,8 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
 } // anonymous namespace
 
 SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
     auto spec = tests::make_random_schema_specification(get_name());
 
     tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec);
@@ -3011,7 +3030,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
         };
         const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, exp_gen, partition_count_dist,
                 clustering_row_count_dist).get0();
-        run_compaction_data_stream_split_test(schema, query_time, mutations);
+        run_compaction_data_stream_split_test(schema, semaphore.make_permit(), query_time, mutations);
     }
 
     // All data is purged
@@ -3046,7 +3065,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
         };
         const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, all_purged_exp_gen, partition_count_dist,
                 clustering_row_count_dist).get0();
-        run_compaction_data_stream_split_test(schema, query_time, mutations);
+        run_compaction_data_stream_split_test(schema, semaphore.make_permit(), query_time, mutations);
     }
 
     // No data is purged
@@ -3075,7 +3094,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
         };
         const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, tests::no_expiry_expiry_generator(), partition_count_dist,
                 clustering_row_count_dist).get0();
-        run_compaction_data_stream_split_test(schema, query_time, mutations);
+        run_compaction_data_stream_split_test(schema, semaphore.make_permit(), query_time, mutations);
     }
 }
 

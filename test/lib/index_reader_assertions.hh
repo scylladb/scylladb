@@ -26,7 +26,7 @@
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "sstables/index_reader.hh"
-#include "reader_permit.hh"
+#include "reader_concurrency_semaphore.hh"
 
 class index_reader_assertions {
     std::unique_ptr<sstables::index_reader> _r;
@@ -36,6 +36,7 @@ public:
     { }
 
     index_reader_assertions& has_monotonic_positions(const schema& s) {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
         auto pos_cmp = sstables::promoted_index_block_compare(s);
         auto rp_cmp = dht::ring_position_comparator(s);
         auto prev = dht::ring_position::min();

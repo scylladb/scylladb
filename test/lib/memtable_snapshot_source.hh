@@ -24,7 +24,7 @@
 #include "mutation_reader.hh"
 #include "memtable.hh"
 #include "utils/phased_barrier.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/condition-variable.hh>
@@ -65,10 +65,12 @@ private:
         auto count = _memtables.size();
         auto op = _apply.start();
         auto new_mt = make_lw_shared<memtable>(_s);
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto permit = semaphore.make_permit();
         std::vector<flat_mutation_reader> readers;
         for (auto&& mt : _memtables) {
             readers.push_back(mt->make_flat_reader(new_mt->schema(),
-                 tests::make_permit(),
+                 permit,
                  query::full_partition_range,
                  new_mt->schema()->full_slice(),
                  default_priority_class(),
@@ -77,7 +79,7 @@ private:
                  mutation_reader::forwarding::yes));
         }
         _memtables.push_back(new_memtable());
-        auto&& rd = make_combined_reader(new_mt->schema(), tests::make_permit(), std::move(readers));
+        auto&& rd = make_combined_reader(new_mt->schema(), permit, std::move(readers));
         auto close_rd = deferred_close(rd);
         consume_partitions(rd, [&] (mutation&& m) {
             new_mt->apply(std::move(m));
@@ -133,7 +135,8 @@ public:
     void apply(memtable& mt) {
         auto op = _apply.start();
         auto new_mt = new_memtable();
-        new_mt->apply(mt, tests::make_permit()).get();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        new_mt->apply(mt, semaphore.make_permit()).get();
         _memtables.push_back(new_mt);
     }
     // mt must not change from now on.

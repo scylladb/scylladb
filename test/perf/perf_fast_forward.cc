@@ -29,7 +29,7 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <json/json.h>
 #include "test/lib/cql_test_env.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include "schema_builder.hh"
@@ -790,8 +790,9 @@ static void assert_partition_start(flat_mutation_reader& rd) {
 
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto rd = cf.make_reader(cf.schema(),
-        tests::make_permit(),
+        semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
@@ -832,12 +833,13 @@ std::vector<dht::decorated_key> make_pkeys(schema_ptr s, int n) {
 }
 
 static test_result scan_with_stride_partitions(column_family& cf, int n, int n_read = 1, int n_skip = 0) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto keys = make_pkeys(cf.schema(), n);
 
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
-    auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice());
+    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice());
     auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
@@ -859,8 +861,9 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
 }
 
 static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto rd = cf.make_reader(cf.schema(),
-        tests::make_permit(),
+        semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
@@ -885,19 +888,21 @@ static test_result test_reading_all(flat_mutation_reader& rd) {
 }
 
 static test_result slice_rows_by_ck(column_family& cf, int offset = 0, int n_read = 1) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto slice = partition_slice_builder(*cf.schema())
         .with_range(query::clustering_range::make(
             clustering_key::from_singular(*cf.schema(), offset),
             clustering_key::from_singular(*cf.schema(), offset + n_read - 1)))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, slice);
+    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, slice);
     auto close_rd = deferred_close(rd);
 
     return test_reading_all(rd);
 }
 
 static test_result select_spread_rows(column_family& cf, int stride = 0, int n_read = 1) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto sb = partition_slice_builder(*cf.schema());
     for (int i = 0; i < n_read; ++i) {
         sb.with_range(query::clustering_range::make_singular(clustering_key::from_singular(*cf.schema(), i * stride)));
@@ -905,7 +910,7 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
 
     auto slice = sb.build();
     auto rd = cf.make_reader(cf.schema(),
-        tests::make_permit(),
+        semaphore.make_permit(),
         query::full_partition_range,
         slice);
     auto close_rd = deferred_close(rd);
@@ -914,13 +919,14 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
 }
 
 static test_result test_slicing_using_restrictions(column_family& cf, int_range row_range) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto slice = partition_slice_builder(*cf.schema())
         .with_range(std::move(row_range).transform([&] (int i) -> clustering_key {
             return clustering_key::from_singular(*cf.schema(), i);
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, slice, default_priority_class(), nullptr,
+    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, slice, default_priority_class(), nullptr,
                              streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
@@ -928,8 +934,9 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
 }
 
 static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
@@ -944,12 +951,13 @@ static test_result slice_rows_single_key(column_family& cf, int offset = 0, int 
 
 // cf is for ks.small_part
 static test_result slice_partitions(column_family& cf, const std::vector<dht::decorated_key>& keys, int offset = 0, int n_read = 1) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto pr = dht::partition_range(
         dht::partition_range::bound(keys[offset], true),
         dht::partition_range::bound(keys[std::min<size_t>(keys.size(), offset + n_read) - 1], true)
     );
 
-    auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice());
+    auto rd = cf.make_reader(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice());
     auto close_rd = deferred_close(rd);
     metrics_snapshot before;
 
@@ -1046,6 +1054,7 @@ public:
 };
 
 static test_result test_forwarding_with_restriction(column_family& cf, clustered_ds& ds, table_config& cfg, bool single_partition) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto first_key = ds.n_rows(cfg) / 2;
     auto slice = partition_slice_builder(*cf.schema())
         .with_range(query::clustering_range::make_starting_with(clustering_key::from_singular(*cf.schema(), first_key)))
@@ -1053,7 +1062,7 @@ static test_result test_forwarding_with_restriction(column_family& cf, clustered
 
     auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
     auto rd = cf.make_reader(cf.schema(),
-        tests::make_permit(),
+        semaphore.make_permit(),
         pr,
         slice,
         default_priority_class(),

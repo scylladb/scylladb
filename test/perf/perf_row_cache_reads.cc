@@ -34,7 +34,7 @@
 #include "memtable.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/perf/perf.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "querier.hh"
@@ -73,6 +73,7 @@ void test_scans_with_dummy_entries() {
             .with_column("ck", reversed_type_impl::get_instance(uuid_type), column_kind::clustering_key)
             .with_column("v1", bytes_type, column_kind::regular_column)
             .build();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
 
     auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
                                             serialized(utils::UUID_gen::get_time_UUID())));
@@ -104,7 +105,7 @@ void test_scans_with_dummy_entries() {
                 .with_range(query::clustering_range::make_starting_with(make_random_ck()))
                 .build();
 
-        auto rd = cache.make_reader(s, tests::make_permit(), pr, slice);
+        auto rd = cache.make_reader(s, semaphore.make_permit(), pr, slice);
         auto close_reader = deferred_close(rd);
         rd.set_max_buffer_size(1);
         rd.fill_buffer(db::no_timeout).get();
@@ -119,7 +120,7 @@ void test_scans_with_dummy_entries() {
     std::cout << "Scanning" << std::endl;
 
     auto test_read = [&] {
-        auto rd = cache.make_reader(s, tests::make_permit(), pr);
+        auto rd = cache.make_reader(s, semaphore.make_permit(), pr);
         auto close_reader = deferred_close(rd);
         scheduling_latency_measurer slm;
         slm.start();
@@ -155,6 +156,7 @@ void test_scan_with_range_delete_over_rows() {
 
     simple_schema ss;
     auto s = ss.schema();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
 
     cache_tracker tracker;
     memtable_snapshot_source mss(s);
@@ -202,7 +204,7 @@ void test_scan_with_range_delete_over_rows() {
 
         auto d = duration_in_seconds([&] {
             auto slice = partition_slice_builder(*s).build();
-            auto q = query::querier<emit_only_live_rows::yes>(cache_ms, s, tests::make_permit(), pr, slice,
+            auto q = query::querier<emit_only_live_rows::yes>(cache_ms, s, semaphore.make_permit(), pr, slice,
                                                               default_priority_class(), nullptr);
             auto close_q = deferred_close(q);
             q.consume_page(noop_compacted_fragments_consumer(),

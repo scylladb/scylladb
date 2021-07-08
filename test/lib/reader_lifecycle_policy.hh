@@ -29,6 +29,7 @@ class test_reader_lifecycle_policy
         , public enable_shared_from_this<test_reader_lifecycle_policy> {
     using factory_function = std::function<flat_mutation_reader(
             schema_ptr,
+            reader_permit,
             const dht::partition_range&,
             const query::partition_slice&,
             const io_priority_class&,
@@ -58,7 +59,7 @@ public:
     }
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
-            reader_permit,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -71,7 +72,7 @@ public:
         } else {
             _contexts[shard] = make_foreign(std::make_unique<reader_context>(range, slice));
         }
-        return _factory_function(std::move(schema), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
+        return _factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
     virtual future<> destroy_reader(stopped_reader reader) noexcept override {
         auto& ctx = _contexts[this_shard_id()];
@@ -90,11 +91,14 @@ public:
         } else if (_contexts[shard]->semaphore) {
             return *_contexts[shard]->semaphore;
         }
+        // To support multiple reader life-cycle instances alive at the same
+        // time, incorporate `this` into the name, to make their names unique.
+        auto name = format("tests::reader_lifecycle_policy@{}@shard_id={}", fmt::ptr(this), shard);
         if (_evict_paused_readers) {
             // Create with no memory, so all inactive reads are immediately evicted.
-            _contexts[shard]->semaphore.emplace(1, 0, format("reader_concurrency_semaphore @shard_id={}", shard));
+            _contexts[shard]->semaphore.emplace(1, 0, std::move(name));
         } else {
-            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{});
+            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{}, std::move(name));
         }
         return *_contexts[shard]->semaphore;
     }

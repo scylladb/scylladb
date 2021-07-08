@@ -38,16 +38,19 @@ extern db::nop_large_data_handler nop_lp_handler;
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
 
-column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager);
+column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager, reader_concurrency_semaphore& compaction_semaphore);
 
 struct column_family_for_tests {
     struct data {
         schema_ptr s;
+        reader_concurrency_semaphore semaphore;
         cache_tracker tracker;
         column_family::config cfg;
         cell_locker_stats cl_stats;
         compaction_manager cm;
         lw_shared_ptr<column_family> cf;
+
+        data();
     };
     lw_shared_ptr<data> _data;
 
@@ -61,6 +64,12 @@ struct column_family_for_tests {
 
     column_family& operator*() { return *_data->cf; }
     column_family* operator->() { return _data->cf.get(); }
+
+    future<> stop() { return _data->semaphore.stop(); }
+
+    future<> stop_and_keep_alive() {
+        return stop().finally([cf = *this] {});
+    }
 };
 
 dht::token create_token_from_key(const dht::i_partitioner&, sstring key);

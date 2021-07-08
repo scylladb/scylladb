@@ -178,7 +178,7 @@ public:
                 cache_tracker tracker;
                 cell_locker_stats cl_stats;
                 auto cm = make_lw_shared<compaction_manager>();
-                auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(), *cm, cl_stats, tracker);
+                auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager(), env.semaphore()), column_family::no_commitlog(), *cm, cl_stats, tracker);
 
                 auto start = perf_sstable_test_env::now();
 
@@ -200,10 +200,10 @@ public:
     }
 
     future<double> read_all_indexes(int idx) {
-        return do_with(test(_sst[0]), [] (auto& sst) {
+        return do_with(test(_sst[0]), [this] (auto& sst) {
             const auto start = perf_sstable_test_env::now();
 
-            return sst.read_indexes().then([start] (const auto& indexes) {
+            return sst.read_indexes(_env.make_reader_permit()).then([start] (const auto& indexes) {
                 auto end = perf_sstable_test_env::now();
                 auto duration = std::chrono::duration<double>(end - start).count();
                 return indexes.size() / duration;
@@ -212,7 +212,7 @@ public:
     }
 
     future<double> read_sequential_partitions(int idx) {
-        return with_closeable(_sst[0]->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [this] (flat_mutation_reader& r) {
+        return with_closeable(_sst[0]->make_reader(s, _env.make_reader_permit(), query::full_partition_range, s->full_slice()), [this] (flat_mutation_reader& r) {
             auto start = perf_sstable_test_env::now();
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);

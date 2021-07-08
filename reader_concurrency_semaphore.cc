@@ -409,10 +409,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name)) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
-    // FIXME: assert(_stopped) once all reader_concurrency_semaphore:s
-    // are properly closed (needs de-static-fying tests::the_semaphore)
-    assert(_inactive_reads.empty() && !_close_readers_gate.get_count());
-    broken();
+    assert(_stopped);
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {

@@ -26,7 +26,6 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/cql_assertions.hh"
-#include "test/lib/reader_permit.hh"
 #include "transport/messages/result_message.hh"
 
 #include <boost/range/adaptor/indirected.hpp>
@@ -49,9 +48,8 @@ class enormous_table_reader final : public flat_mutation_reader::impl {
 public:
     static constexpr uint64_t CLUSTERING_ROW_COUNT = 4500ULL * 1000ULL * 1000ULL;
 
-    enormous_table_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice)
-        : impl(schema, tests::make_permit())
-        , _schema(std::move(schema))
+    enormous_table_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& prange, const query::partition_slice& slice)
+        : impl(std::move(schema), std::move(permit))
         , _slice(slice)
     {
         do_fast_forward_to(prange);
@@ -183,14 +181,14 @@ private:
 
 struct enormous_virtual_reader {
     flat_mutation_reader operator()(schema_ptr schema,
-            reader_permit,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        auto reader = make_flat_mutation_reader<enormous_table_reader>(schema, range, slice);
+        auto reader = make_flat_mutation_reader<enormous_table_reader>(schema, permit, range, slice);
         if (fwd == streamed_mutation::forwarding::yes) {
             return make_forwardable(std::move(reader));
         }

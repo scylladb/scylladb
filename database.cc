@@ -338,7 +338,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_memory_streaming_concurrent_reads(),
             "_streaming_concurrency_sem")
     // No limits, just for accounting.
-    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{})
+    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction")
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,

@@ -1742,7 +1742,7 @@ future<> sstable::write_components(
 
 future<> sstable::generate_summary(const io_priority_class& pc) {
     if (_components->summary) {
-        return make_ready_future<>();
+        co_return;
     }
 
     sstlog.info("Summary file {} not found. Generating Summary...", filename(component_type::Summary));
@@ -1773,39 +1773,57 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         }
     };
 
-    return new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro).then([this, &pc] (file index_file) {
-        return do_with(std::move(index_file), std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}),
-                [this, &pc] (file index_file, std::unique_ptr<reader_concurrency_semaphore>& sem) {
-            return index_file.size().then([this, &pc, index_file, &sem] (auto index_size) {
-                // an upper bound. Surely to be less than this.
-                auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
-                prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
+    auto index_file = co_await new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro);
+    auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::generate_summary()");
 
-                file_input_stream_options options;
-                options.buffer_size = sstable_buffer_size;
-                options.io_priority_class = pc;
-                return do_with(summary_generator(_schema->get_partitioner(), _components->summary,
-                                _manager.config().sstable_summary_ratio()),
-                        [this, &pc, options = std::move(options), index_file, index_size, &sem] (summary_generator& s) mutable {
-                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            sem->make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
-                            (_version >= sstable_version_types::mc
-                                ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                                : std::optional<column_values_fixed_lengths>{}));
-                    return ctx->consume_input().finally([ctx] {
-                        return ctx->close();
-                    }).then([this, ctx, &s] {
-                        return seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
-                    });
-                });
-            }).then([index_file] () mutable {
-                return index_file.close().handle_exception([] (auto ep) {
-                    sstlog.warn("sstable close index_file failed: {}", ep);
-                    general_disk_error();
-                });
-            });
-        });
-    });
+    std::exception_ptr ex;
+
+    try {
+        auto index_size = co_await index_file.size();
+        // an upper bound. Surely to be less than this.
+        auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
+        prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
+
+        file_input_stream_options options;
+        options.buffer_size = sstable_buffer_size;
+        options.io_priority_class = pc;
+
+        auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.config().sstable_summary_ratio());
+            auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
+                    sem.make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
+                    (_version >= sstable_version_types::mc
+                        ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
+                        : std::optional<column_values_fixed_lengths>{}));
+
+        try {
+            co_await ctx->consume_input();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        co_await ctx->close();
+
+        if (ex) {
+            std::rethrow_exception(std::exchange(ex, {}));
+        }
+
+        co_await seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await sem.stop();
+
+    try {
+        co_await index_file.close();
+    } catch (...) {
+        sstlog.warn("sstable close index_file failed: {}", std::current_exception());
+        general_disk_error();
+    }
+
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }
 
 bool sstable::is_shared() const {
@@ -2677,15 +2695,22 @@ sstable::compute_shards_for_this_sstable() const {
 future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::decorated_key& dk) {
     shared_sstable s = shared_from_this();
     if (!filter_has_key(hk)) {
-        return make_ready_future<bool>(false);
+        co_return false;
     }
-    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
-    auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem->make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
-    auto& lh_index = *lh_index_ptr;
-    return lh_index.advance_lower_and_check_if_present(dk).then([lh_index_ptr = std::move(lh_index_ptr), s, sem = std::move(sem)] (bool present) mutable {
-        lh_index_ptr.reset(); // destroy before the semaphore
-        return make_ready_future<bool>(present);
-    });
+    bool present;
+    std::exception_ptr ex;
+    auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
+    try {
+        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
+        present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await sem.stop();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+    co_return present;
 }
 
 utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key& key) {

@@ -24,7 +24,7 @@
 
 #include "bytes.hh"
 #include "utils/buffer_input_stream.hh"
-#include "test/lib/reader_permit.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 
 #include <boost/test/unit_test.hpp>
@@ -62,8 +62,8 @@ class test_consumer final : public data_consumer::continuous_data_consumer<test_
     }
 
 public:
-    test_consumer(uint64_t tested_value)
-        : continuous_data_consumer(tests::make_permit(), prepare_stream(tested_value), 0, calculate_length(tested_value))
+    test_consumer(reader_permit permit, uint64_t tested_value)
+        : continuous_data_consumer(std::move(permit), prepare_stream(tested_value), 0, calculate_length(tested_value))
         , _tested_value(tested_value)
     { }
 
@@ -98,6 +98,8 @@ public:
 }
 
 SEASTAR_THREAD_TEST_CASE(test_read_unsigned_vint) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
     auto nr_tests =
 #ifdef SEASTAR_DEBUG
             10
@@ -105,11 +107,11 @@ SEASTAR_THREAD_TEST_CASE(test_read_unsigned_vint) {
             1000
 #endif
             ;
-    test_consumer(0).run();
+    test_consumer(semaphore.make_permit(), 0).run();
     for (int highest_bit = 0; highest_bit < 64; ++highest_bit) {
         uint64_t tested_value = uint64_t{1} << highest_bit;
         for (int i = 0; i < nr_tests; ++i) {
-            test_consumer(tested_value + tests::random::get_int<uint64_t>(tested_value - 1)).run();
+            test_consumer(semaphore.make_permit(), tested_value + tests::random::get_int<uint64_t>(tested_value - 1)).run();
         }
     }
 }

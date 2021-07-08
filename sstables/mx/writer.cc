@@ -42,12 +42,6 @@ logging::logger slogger("mc_writer");
 namespace sstables {
 namespace mc {
 
-namespace {
-
-thread_local reader_concurrency_semaphore reader_semaphore(reader_concurrency_semaphore::no_limits{}, "mx writer");
-
-}
-
 using indexed_columns = std::vector<std::reference_wrapper<const column_definition>>;
 
 // There is a special case when we need to treat a non-full clustering key prefix as a full one
@@ -560,7 +554,8 @@ private:
     std::optional<key> _partition_key;
     std::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
-    range_tombstone_stream _range_tombstones;
+    reader_concurrency_semaphore _semaphore;
+    std::optional<range_tombstone_stream> _range_tombstones; // to be able to destroy before the semaphore is stopped
     bytes_ostream _tmp_bufs;
 
     const sstable_schema _sst_schema;
@@ -761,7 +756,8 @@ public:
         : sstable_writer::writer_impl(sst, s, pc, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
-        , _range_tombstones(_schema, reader_semaphore.make_permit(&s, "mx-writer"))
+        , _semaphore(reader_concurrency_semaphore::no_limits{}, "mx writer")
+        , _range_tombstones(range_tombstone_stream(_schema, _semaphore.make_permit(&s, "mx-writer")))
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
@@ -835,6 +831,8 @@ writer::~writer() {
     };
     close_writer(_index_writer);
     close_writer(_data_writer);
+    _range_tombstones.reset();
+    _semaphore.stop().get();
 }
 
 void writer::maybe_set_pi_first_clustering(const writer::clustering_info& info) {
@@ -917,7 +915,7 @@ void writer::close_data_writer() {
 
 void writer::drain_tombstones(std::optional<position_in_partition_view> pos) {
     auto get_next_rt = [this, &pos] {
-        return pos ? _range_tombstones.get_next(*pos) : _range_tombstones.get_next();
+        return pos ? _range_tombstones->get_next(*pos) : _range_tombstones->get_next();
     };
 
     auto get_rt_start = [] (const range_tombstone& rt) {
@@ -980,7 +978,7 @@ void writer::drain_tombstones(std::optional<position_in_partition_view> pos) {
         }
 
         if (pos && rt.trim_front(_schema, *pos)) {
-            _range_tombstones.apply(std::move(rt));
+            _range_tombstones->apply(std::move(rt));
         }
     }
 
@@ -1443,7 +1441,7 @@ void writer::consume(rt_marker&& marker) {
 
 stop_iteration writer::consume(range_tombstone&& rt) {
     drain_tombstones(rt.position());
-    _range_tombstones.apply(std::move(rt));
+    _range_tombstones->apply(std::move(rt));
     return stop_iteration::no;
 }
 

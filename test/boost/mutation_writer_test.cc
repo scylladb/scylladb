@@ -59,7 +59,7 @@ constexpr unsigned many_partitions() {
 
 SEASTAR_TEST_CASE(test_multishard_writer) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto test_random_streams = [] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
+        auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             for (auto i = 0; i < 3; i++) {
                 auto muts = gen(partition_nr);
                 std::vector<size_t> shards_before(smp::count, 0);
@@ -70,7 +70,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     auto shard = s->get_sharder().shard_of(m.token());
                     shards_before[shard]++;
                 }
-                auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(tests::make_permit(), muts) : make_empty_flat_reader(s, tests::make_permit());
+                auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(make_reader_permit(e), muts) : make_empty_flat_reader(s, make_reader_permit(e));
                 auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s,
@@ -129,10 +129,10 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
 
 SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto test_random_streams = [] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
+        auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
-            auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(tests::make_permit(), muts) : make_empty_flat_reader(s, tests::make_permit());
+            auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(make_reader_permit(e), muts) : make_empty_flat_reader(s, make_reader_permit(e));
             auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             auto& sharder = s->get_sharder();
             try {
                 distribute_reader_and_consume_on_shards(s,
-                    make_generating_reader(s, tests::make_permit(), std::move(get_next_mutation_fragment)),
+                    make_generating_reader(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
                     [&sharder, error] (flat_mutation_reader reader) mutable {
                         if (error) {
                           return reader.close().then([] {
@@ -183,6 +183,7 @@ namespace {
 
 class test_bucket_writer {
     schema_ptr _schema;
+    reader_permit _permit;
     classify_by_timestamp _classify;
     std::unordered_map<int64_t, std::vector<mutation>>& _buckets;
 
@@ -256,8 +257,10 @@ private:
     }
 
 public:
-    test_bucket_writer(schema_ptr schema, classify_by_timestamp classify, std::unordered_map<int64_t, std::vector<mutation>>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
+    test_bucket_writer(schema_ptr schema, reader_permit permit, classify_by_timestamp classify, std::unordered_map<int64_t,
+            std::vector<mutation>>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
         : _schema(std::move(schema))
+        , _permit(std::move(permit))
         , _classify(std::move(classify))
         , _buckets(buckets)
         , _throw_after(throw_after)
@@ -277,21 +280,21 @@ public:
         maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_static_row(sr);
-        _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(sr)));
+        _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(sr)));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr) {
         maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_clustering_row(cr);
-        _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(cr)));
+        _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(cr)));
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone&& rt) {
         maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_range_tombstone(rt);
-        _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(rt)));
+        _current_mutation->apply(mutation_fragment(*_schema, _permit, std::move(rt)));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
@@ -317,6 +320,7 @@ public:
 } // anonymous namespace
 
 SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto random_spec = tests::make_random_schema_specification(
             get_name(),
             std::uniform_int_distribution<size_t>(1, 4),
@@ -350,17 +354,18 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
-            return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets), db::no_timeout);
+            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets), db::no_timeout);
         });
     };
 
-    segregate_by_timestamp(flat_mutation_reader_from_mutations(tests::make_permit(), muts), classify_fn, std::move(consumer)).get();
+    segregate_by_timestamp(flat_mutation_reader_from_mutations(semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
 
     testlog.debug("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
 
+    auto permit = semaphore.make_permit();
     auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader>>(buckets | boost::adaptors::map_values |
-            boost::adaptors::transformed([] (std::vector<mutation> muts) { return flat_mutation_reader_from_mutations(tests::make_permit(), std::move(muts)); }));
-    auto reader = make_combined_reader(random_schema.schema(), tests::make_permit(), std::move(bucket_readers), streamed_mutation::forwarding::no,
+            boost::adaptors::transformed([&permit] (std::vector<mutation> muts) { return flat_mutation_reader_from_mutations(permit, std::move(muts)); }));
+    auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
 
@@ -383,6 +388,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto random_spec = tests::make_random_schema_specification(
             get_name(),
             std::uniform_int_distribution<size_t>(1, 4),
@@ -418,12 +424,12 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
     testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
-            return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets, throw_after), db::no_timeout);
+            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets, throw_after), db::no_timeout);
         });
     };
 
     try {
-        segregate_by_timestamp(flat_mutation_reader_from_mutations(tests::make_permit(), muts), classify_fn, std::move(consumer)).get();
+        segregate_by_timestamp(flat_mutation_reader_from_mutations(semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
     } catch (const test_bucket_writer::expected_exception&) {
         BOOST_TEST_PASSPOINT();
     } catch (const seastar::broken_promise&) {
@@ -434,6 +440,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
 
 // Check that the partition_based_splitting_mutation_writer can fix reordered partitions
 SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
     auto random_spec = tests::make_random_schema_specification(
             get_name(),
             std::uniform_int_distribution<size_t>(1, 2),
@@ -447,7 +454,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     input_mutations.emplace_back(*input_mutations.begin()); // Have a duplicate partition as well.
     std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
 
-    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(tests::make_permit(), std::move(input_mutations)), [] (flat_mutation_reader rd) {
+    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), [] (flat_mutation_reader rd) {
         testlog.info("Checking segregated output stream");
         return async([rd = std::move(rd)] () mutable {
             assert_that(std::move(rd)).has_monotonic_positions();

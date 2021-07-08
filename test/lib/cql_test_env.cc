@@ -52,7 +52,6 @@
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
 #include "test/lib/tmpdir.hh"
-#include "test/lib/reader_permit.hh"
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
@@ -321,7 +320,8 @@ public:
                                       table_name = std::move(table_name)] (database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
-          return cf.find_partition_slow(schema, tests::make_permit(), pkey)
+          auto permit = db.get_reader_concurrency_semaphore().make_permit(schema.get(), "require_column_has_value()");
+          return cf.find_partition_slow(schema, permit, pkey)
                   .then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
             auto row = p->find_row(*schema, ckey);
@@ -781,6 +781,10 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
             return func(e);
         });
     }, std::move(cfg_in));
+}
+
+reader_permit make_reader_permit(cql_test_env& env) {
+    return env.local_db().get_reader_concurrency_semaphore().make_permit(nullptr, "test");
 }
 
 namespace debug {

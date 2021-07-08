@@ -258,7 +258,7 @@ public:
         return make_flat_reader(s, std::move(permit), range, full_slice);
     }
 
-    flat_mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
+    flat_mutation_reader make_flush_reader(schema_ptr, reader_permit permit, const io_priority_class& pc);
 
     mutation_source as_data_source();
 
