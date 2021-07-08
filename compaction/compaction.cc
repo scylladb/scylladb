@@ -48,6 +48,7 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/join.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/algorithm/string/join.hpp>
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
@@ -462,6 +463,35 @@ public:
     }
 };
 
+class formatted_sstables_list {
+    bool _include_origin = true;
+    std::vector<sstring> _ssts;
+public:
+    formatted_sstables_list() = default;
+    explicit formatted_sstables_list(const std::vector<shared_sstable>& ssts, bool include_origin) : _include_origin(include_origin) {
+        _ssts.reserve(ssts.size());
+        for (const auto& sst : ssts) {
+            *this += sst;
+        }
+    }
+    formatted_sstables_list& operator+=(const shared_sstable& sst) {
+        if (_include_origin) {
+            _ssts.emplace_back(format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()));
+        } else {
+            _ssts.emplace_back(format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level()));
+        }
+        return *this;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst);
+};
+
+std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
+    os << "[";
+    os << boost::algorithm::join(lst._ssts, ",");
+    os << "]";
+    return os;
+}
+
 class compaction {
 protected:
     column_family& _cf;
@@ -603,7 +633,7 @@ private:
     requires CompactedFragmentsConsumer<GCConsumer>
     future<> setup(GCConsumer gc_consumer) {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
-        sstring formatted_msg = "{} [";
+        formatted_sstables_list formatted_msg;
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
@@ -616,7 +646,7 @@ private:
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
             _info->total_partitions += sst->get_estimated_key_count();
-            formatted_msg += format("{}:level={:d}:origin={}, ", sst->get_filename(), sst->get_sstable_level(), sst->get_origin());
+            formatted_msg += sst;
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
@@ -640,11 +670,10 @@ private:
             // compacted sstables anyway (CL should be clean by then).
             _rp = std::max(_rp, sst_stats.position);
         }
-        formatted_msg += "]";
         _info->sstables = _sstables.size();
         _info->ks_name = _schema->ks_name();
         _info->cf_name = _schema->cf_name();
-        log_info(formatted_msg, report_start_desc());
+        log_info("{} {}", report_start_desc(), formatted_msg);
         if (ssts->all()->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->all()->size(), _sstables.size());
@@ -685,20 +714,17 @@ private:
         auto ratio = double(_info->end_size) / double(_info->start_size);
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         // Don't report NaN or negative number.
-        sstring new_sstables_msg;
 
         on_end_of_compaction();
 
-        for (auto& newtab : _info->new_sstables) {
-            new_sstables_msg += format("{}:level={:d}, ", newtab->get_filename(), newtab->get_sstable_level());
-        }
+        formatted_sstables_list new_sstables_msg(_info->new_sstables, false);
 
         // FIXME: there is some missing information in the log message below.
         // look at CompactionTask::runMayThrow() in origin for reference.
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        log_info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
+        log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
                 _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
