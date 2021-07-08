@@ -67,7 +67,6 @@
 #include "db/system_keyspace_view_types.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "frozen_mutation.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
@@ -328,49 +327,26 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
                 });
 }
 
-class view_updates final {
-    view_ptr _view;
-    const view_info& _view_info;
-    schema_ptr _base;
-    base_info_ptr _base_info;
-    std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
-public:
-    explicit view_updates(view_and_base vab)
-            : _view(std::move(vab.view))
-            , _view_info(*_view->view_info())
-            , _base(vab.base->base_schema())
-            , _base_info(vab.base)
-            , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
-    }
+void view_updates::move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
+    std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
+        auto mut = mutation(_view, dht::decorate_key(*_view, std::move(m.first)), std::move(m.second));
+        return frozen_mutation_and_schema{freeze(mut), _view};
+    });
+    _updates.clear();
+    _op_count = 0;
+}
 
-    void move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) && {
-        std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
-            auto mut = mutation(_view, dht::decorate_key(*_view, std::move(m.first)), std::move(m.second));
-            return frozen_mutation_and_schema{freeze(mut), std::move(_view)};
-        });
+mutation_partition& view_updates::partition_for(partition_key&& key) {
+    auto it = _updates.find(key);
+    if (it != _updates.end()) {
+        return it->second;
     }
+    return _updates.emplace(std::move(key), mutation_partition(_view)).first->second;
+}
 
-    void generate_update(const partition_key& base_key, const clustering_row& update, const std::optional<clustering_row>& existing, gc_clock::time_point now);
-private:
-    mutation_partition& partition_for(partition_key&& key) {
-        auto it = _updates.find(key);
-        if (it != _updates.end()) {
-            return it->second;
-        }
-        return _updates.emplace(std::move(key), mutation_partition(_view)).first->second;
-    }
-    row_marker compute_row_marker(const clustering_row& base_row) const;
-    deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
-    bool can_skip_view_updates(const clustering_row& update, const clustering_row& existing) const;
-    void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
-    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
-    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
-    void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
-    void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
-        create_entry(base_key, update, now);
-        delete_old_entry(base_key, existing, update, now);
-    }
-};
+size_t view_updates::op_count() const {
+    return _op_count++;;
+}
 
 row_marker view_updates::compute_row_marker(const clustering_row& base_row) const {
     /*
@@ -613,6 +589,7 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
     r.apply(marker);
     r.apply(update.tomb());
     add_cells_to_view(*_base, *_view, row(*_base, column_kind::regular_column, update.cells()), r.cells());
+    _op_count++;
 }
 
 /**
@@ -648,6 +625,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
         add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
     }
     r.apply(update.tomb());
+    _op_count++;
 }
 
 /*
@@ -752,6 +730,7 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
 
     auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
     add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
+    _op_count++;
 }
 
 void view_updates::generate_update(
@@ -831,92 +810,67 @@ void view_updates::generate_update(
     }
 }
 
-class view_update_builder {
-    schema_ptr _schema; // The base schema
-    std::vector<view_updates> _view_updates;
-    flat_mutation_reader _updates;
-    flat_mutation_reader_opt _existings;
-    range_tombstone_accumulator _update_tombstone_tracker;
-    range_tombstone_accumulator _existing_tombstone_tracker;
-    mutation_fragment_opt _update;
-    mutation_fragment_opt _existing;
-    gc_clock::time_point _now;
-    partition_key _key = partition_key::make_empty();
-public:
+future<> view_update_builder::close() noexcept {
+    return when_all_succeed(_updates.close(), _existings->close()).discard_result();
+}
 
-    view_update_builder(schema_ptr s,
-        std::vector<view_updates>&& views_to_update,
-        flat_mutation_reader&& updates,
-        flat_mutation_reader_opt&& existings,
-        gc_clock::time_point now)
-            : _schema(std::move(s))
-            , _view_updates(std::move(views_to_update))
-            , _updates(std::move(updates))
-            , _existings(std::move(existings))
-            , _update_tombstone_tracker(*_schema, false)
-            , _existing_tombstone_tracker(*_schema, false)
-            , _now(now) {
+future<stop_iteration> view_update_builder::advance_all() {
+    auto existings_f = _existings ? (*_existings)(db::no_timeout) : make_ready_future<optimized_optional<mutation_fragment>>();
+    return when_all(_updates(db::no_timeout), std::move(existings_f)).then([this] (auto&& fragments) mutable {
+        _update = std::move(std::get<0>(fragments).get0());
+        _existing = std::move(std::get<1>(fragments).get0());
+        return stop_iteration::no;
+    });
+}
+
+future<stop_iteration> view_update_builder::advance_updates() {
+    return _updates(db::no_timeout).then([this] (auto&& update) mutable {
+        _update = std::move(update);
+        return stop_iteration::no;
+    });
+}
+
+future<stop_iteration> view_update_builder::advance_existings() {
+    if (!_existings) {
+        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
+    return (*_existings)(db::no_timeout).then([this] (auto&& existing) mutable {
+        _existing = std::move(existing);
+        return stop_iteration::no;
+    });
+}
 
-    future<utils::chunked_vector<frozen_mutation_and_schema>> build();
+future<stop_iteration> view_update_builder::stop() const {
+    return make_ready_future<stop_iteration>(stop_iteration::yes);
+}
 
-    future<> close() noexcept {
-        return when_all_succeed(_updates.close(), _existings->close()).discard_result();
-    }
-
-private:
-    void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
-    future<stop_iteration> on_results();
-
-    future<stop_iteration> advance_all() {
-        auto existings_f = _existings ? (*_existings)(db::no_timeout) : make_ready_future<optimized_optional<mutation_fragment>>();
-        return when_all(_updates(db::no_timeout), std::move(existings_f)).then([this] (auto&& fragments) mutable {
-            _update = std::move(std::get<0>(fragments).get0());
-            _existing = std::move(std::get<1>(fragments).get0());
-            return stop_iteration::no;
-        });
-    }
-
-    future<stop_iteration> advance_updates() {
-        return _updates(db::no_timeout).then([this] (auto&& update) mutable {
-            _update = std::move(update);
-            return stop_iteration::no;
-        });
-    }
-
-    future<stop_iteration> advance_existings() {
-        if (!_existings) {
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build_some() {
+    return advance_all().then([this] (stop_iteration ignored) {
+        bool do_advance_updates = false;
+        bool do_advance_existings = false;
+        if (_update && _update->is_partition_start()) {
+            _key = std::move(std::move(_update)->as_partition_start().key().key());
+            _update_tombstone_tracker.set_partition_tombstone(_update->as_partition_start().partition_tombstone());
+            do_advance_updates = true;
         }
-        return (*_existings)(db::no_timeout).then([this] (auto&& existing) mutable {
-            _existing = std::move(existing);
-            return stop_iteration::no;
-        });
-    }
-
-    future<stop_iteration> stop() const {
-        return make_ready_future<stop_iteration>(stop_iteration::yes);
-    }
-};
-
-future<utils::chunked_vector<frozen_mutation_and_schema>> view_update_builder::build() {
-    return advance_all().then([this] (auto&& ignored) {
-        assert(_update && _update->is_partition_start());
-        _key = std::move(std::move(_update)->as_partition_start().key().key());
-        _update_tombstone_tracker.set_partition_tombstone(_update->as_partition_start().partition_tombstone());
         if (_existing && _existing->is_partition_start()) {
             _existing_tombstone_tracker.set_partition_tombstone(_existing->as_partition_start().partition_tombstone());
+            do_advance_existings = true;
         }
-    }).then([this] {
-        return advance_all().then([this] (auto&& ignored) {
-            return repeat([this] {
-                return this->on_results();
-            });
+        if (do_advance_updates) {
+            return do_advance_existings ? advance_all() : advance_updates();
+        } else if (do_advance_existings) {
+            return advance_existings();
+        }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }).then([this] (stop_iteration ignored) {
+        return repeat([this] {
+            return this->on_results();
         });
     }).then([this] {
         utils::chunked_vector<frozen_mutation_and_schema> mutations;
-        for (auto&& update : _view_updates) {
-            std::move(update).move_to(mutations);
+        for (auto& update : _view_updates) {
+            update.move_to(mutations);
         }
         return mutations;
     });
@@ -950,6 +904,12 @@ static void apply_tracked_tombstones(range_tombstone_accumulator& tracker, clust
 }
 
 future<stop_iteration> view_update_builder::on_results() {
+    constexpr size_t max_rows_for_view_updates = 100;
+    size_t rows_for_view_updates = std::accumulate(_view_updates.begin(), _view_updates.end(), 0, [] (size_t acc, const view_updates& vu) {
+        return acc + vu.op_count();
+    });
+    const bool stop_updates = rows_for_view_updates >= max_rows_for_view_updates;
+
     if (_update && !_update->is_end_of_partition() && _existing && !_existing->is_end_of_partition()) {
         auto cmp = position_in_partition::tri_compare(*_schema)(_update->position(), _existing->position());
         if (cmp < 0) {
@@ -965,7 +925,7 @@ future<stop_iteration> view_update_builder::on_results() {
                               : std::nullopt;
                 generate_update(std::move(update), std::move(existing));
             }
-            return advance_updates();
+            return stop_updates ? stop() : advance_updates();
         }
         if (cmp > 0) {
             // We have something existing but no update (which will happen either because it's a range tombstone marker in
@@ -984,7 +944,7 @@ future<stop_iteration> view_update_builder::on_results() {
                     generate_update(std::move(update), { std::move(existing) });
                 }
             }
-            return advance_existings();
+            return stop_updates ? stop () : advance_existings();
         }
         // We're updating a row that had pre-existing data
         if (_update->is_range_tombstone()) {
@@ -1001,7 +961,7 @@ future<stop_iteration> view_update_builder::on_results() {
             });
             generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
         }
-        return advance_all();
+        return stop_updates ? stop() : advance_all();
     }
 
     auto tombstone = _update_tombstone_tracker.current_tombstone();
@@ -1012,7 +972,7 @@ future<stop_iteration> view_update_builder::on_results() {
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
         }
-        return advance_existings();
+        return stop_updates ? stop() : advance_existings();
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
@@ -1027,13 +987,13 @@ future<stop_iteration> view_update_builder::on_results() {
                           : std::nullopt;
             generate_update(std::move(*_update).as_clustering_row(), std::move(existing));
         }
-        return advance_updates();
+        return stop_updates ? stop() : advance_updates();
     }
 
     return stop();
 }
 
-future<utils::chunked_vector<frozen_mutation_and_schema>> generate_view_updates(
+future<view_update_builder> make_view_update_builder(
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader&& updates,
@@ -1047,11 +1007,7 @@ future<utils::chunked_vector<frozen_mutation_and_schema>> generate_view_updates(
         }
         return view_updates(std::move(v));
     }));
-    auto builder = std::make_unique<view_update_builder>(base, std::move(vs), std::move(updates), std::move(existings), now);
-    auto f = builder->build();
-    return f.finally([builder = std::move(builder)] {
-        return builder->close();
-    });
+    return make_ready_future<view_update_builder>(view_update_builder(base, std::move(vs), std::move(updates), std::move(existings), now));
 }
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const schema& base,

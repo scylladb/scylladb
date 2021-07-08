@@ -1666,17 +1666,31 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now) const {
     auto base_token = m.token();
-    return db::view::generate_view_updates(
+    db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
             base,
             std::move(views),
             flat_mutation_reader_from_mutations(std::move(permit), {std::move(m)}),
             std::move(existings),
-            now).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (utils::chunked_vector<frozen_mutation_and_schema>&& updates) mutable {
+            now);
+
+    while (true) {
+        try {
+            auto updates = co_await builder.build_some();
+            if (updates.empty()) {
+                break;
+            }
             tracing::trace(tr_state, "Generated {} view update mutations", updates.size());
-        auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
-        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(tr_state),
+            auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
+            co_await db::view::mutate_MV(base_token, std::move(updates), _view_stats, *_config.cf_stats, tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no).handle_exception([] (auto ignored) { });
-    });
+        } catch (...) {
+            // Ignore exceptions: any individual failure to propagate a view update will be reported
+            // by a separate mechanism in mutate_MV() function. Moreover, we should continue trying
+            // to generate updates even if some of them fail, in order to minimize the potential
+            // inconsistencies caused by not being able to propagate an update
+        }
+    }
+    co_await builder.close();
 }
 
 /**
@@ -1776,25 +1790,37 @@ future<> table::populate_views(
         dht::token base_token,
         flat_mutation_reader&& reader,
         gc_clock::time_point now) {
-    auto& schema = reader.schema();
-    return db::view::generate_view_updates(
+    auto schema = reader.schema();
+    db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
             schema,
             std::move(views),
             std::move(reader),
             { },
-            now).then([base_token = std::move(base_token), this] (utils::chunked_vector<frozen_mutation_and_schema>&& updates) mutable {
-        size_t update_size = memory_usage_of(updates);
-        size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
-        return seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for).then(
-                [base_token = std::move(base_token),
-                 updates = std::move(updates),
-                 units_to_consume = update_size - units_to_wait_for,
-                 this] (db::timeout_semaphore_units&& units) mutable {
-            units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, units_to_consume));
-            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats,
+            now);
+
+    std::exception_ptr err;
+    while (true) {
+        try {
+            auto updates = co_await builder.build_some();
+            if (updates.empty()) {
+                break;
+            }
+            size_t update_size = memory_usage_of(updates);
+            size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
+            auto units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for);
+            units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, update_size - units_to_wait_for));
+            co_await db::view::mutate_MV(base_token, std::move(updates), _view_stats, *_config.cf_stats,
                     tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, db::view::wait_for_all_updates::yes);
-        });
-    });
+        } catch (...) {
+            if (!err) {
+                err = std::current_exception();
+            }
+        }
+    }
+    co_await builder.close();
+    if (err) {
+        std::rethrow_exception(err);
+    }
 }
 
 void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
