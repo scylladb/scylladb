@@ -78,6 +78,8 @@ bool is_timeout_exception(std::exception_ptr e) {
         return true;
     } catch (seastar::semaphore_timed_out& unused) {
         return true;
+    } catch (seastar::timed_out_error& unused) {
+        return true;
     } catch (...) {
     }
     return false;
