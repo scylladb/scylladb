@@ -1,5 +1,6 @@
-Single-node funtional tests for Scylla's CQL features.
-Tests use the Python CQL library and the pytest frameworks.
+Single-node functional tests for Scylla's CQL features.
+
+These tests use the Python CQL library and the pytest frameworks.
 By using an actual CQL library for the tests, they can be run against *any*
 implementation of CQL - both Scylla and Cassandra. Most tests - except in
 rare cases - should pass on both, to ensure that Scylla is compatible with
@@ -14,6 +15,16 @@ More conveniently, we have two scripts - "run" and "run-cassandra" - which
 do all the work necessary to start Scylla or Cassandra (respectively),
 and run the tests on them. The Scylla or Cassandra process is run in a
 temporary directory which is automatically deleted when the test ends.
+
+"run" automatically picks the most recently compiled version of Scylla in
+`build/*/scylla` - but this choice of Scylla executable can be overridden with
+the `SCYLLA` environment variable. "run-cassandra" defaults to running the
+command `cassandra` from the user's path, but this can be overriden by setting
+the `CASSANDRA` environment variable to the path of the `cassandra` script,
+e.g., `export CASSANDRA=$HOME/apache-cassandra-3.11.10/bin/cassandra`.
+A few of the tests also require the `nodetool` when running on Cassandra -
+this tool is again expected to be in the user's path, or be overridden with
+the `NODETOOL` environment variable.
 
 Additional options can be passed to "pytest" or to "run" / "run-cassandra"
 to control which tests to run:
