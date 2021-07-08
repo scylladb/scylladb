@@ -1025,7 +1025,7 @@ invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_
 }
 
 
-mutation_fragment_stream_validator::mutation_fragment_stream_validator(const schema& s)
+mutation_fragment_stream_validator::mutation_fragment_stream_validator(const ::schema& s)
     : _schema(s)
     , _prev_kind(mutation_fragment::kind::partition_end)
     , _prev_pos(position_in_partition::end_of_partition_tag_t{})

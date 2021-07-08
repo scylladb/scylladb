@@ -44,6 +44,8 @@ class mutation_fragment_stream_validator {
 public:
     explicit mutation_fragment_stream_validator(const schema& s);
 
+    const ::schema& schema() const { return _schema; }
+
     /// Validate the monotonicity of the fragment kind.
     ///
     /// Should be used when the full, more heavy-weight position-in-partition
