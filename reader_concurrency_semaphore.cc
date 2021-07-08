@@ -535,7 +535,7 @@ flat_mutation_reader reader_concurrency_semaphore::detach_inactive_reader(inacti
             break;
     }
     --_stats.inactive_reads;
-    return std::move(reader);
+    return reader;
 }
 
 void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {

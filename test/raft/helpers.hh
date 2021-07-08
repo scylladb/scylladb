@@ -92,7 +92,7 @@ raft::command create_command(T val) {
     raft::command command;
     ser::serialize(command, val);
 
-    return std::move(command);
+    return command;
 }
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};

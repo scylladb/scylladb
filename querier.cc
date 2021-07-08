@@ -208,7 +208,7 @@ static std::unique_ptr<querier_base> find_querier(querier_cache::index& index, u
     tracing::trace(trace_state, "Found cached querier for key {} and range(s) {}", key, ranges);
     auto ptr = std::move(it->second);
     index.erase(it);
-    return std::move(ptr);
+    return ptr;
 }
 
 querier_cache::querier_cache(std::chrono::seconds entry_ttl)

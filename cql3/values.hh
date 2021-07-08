@@ -201,10 +201,10 @@ class raw_value {
     {}
 public:
     static raw_value make_null() {
-        return raw_value{std::move(null_value{})};
+        return raw_value{null_value{}};
     }
     static raw_value make_unset_value() {
-        return raw_value{std::move(unset_value{})};
+        return raw_value{unset_value{}};
     }
     static raw_value make_value(const raw_value_view& view);
     static raw_value make_value(managed_bytes&& mb) {

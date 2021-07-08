@@ -754,7 +754,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source)
                     fragments.emplace_back(std::move(mf));
                     return stop_iteration::no;
                 }, db::no_timeout).get();
-                return std::move(fragments);
+                return fragments;
             };
 
             auto rd = make_flat_mutation_reader_from_fragments(schema, tests::make_permit(), get_fragments(), range, slice);

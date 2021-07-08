@@ -91,11 +91,11 @@ int main(int argc, char **argv) {
                     test_key k(key);
 
                     if (rep % 2 != 1) {
-                        auto ir = t->emplace(std::move(copy_key(k)), k);
+                        auto ir = t->emplace(copy_key(k), k);
                         assert(ir.second);
                     } else {
                         auto ir = t->lower_bound(k);
-                        ir.emplace_before(std::move(copy_key(k)), test_key_compare{}, k);
+                        ir.emplace_before(copy_key(k), test_key_compare{}, k);
                     }
                     oracle[key] = key + 10;
 

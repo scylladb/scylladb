@@ -1290,7 +1290,6 @@ warnings = [
     '-Wno-inconsistent-missing-override',
     '-Wno-defaulted-function-deleted',
     '-Wno-redeclared-class-member',
-    '-Wno-pessimizing-move',
     '-Wno-redundant-move',
     '-Wno-unsupported-friend',
     '-Wno-unused-variable',

@@ -452,7 +452,7 @@ function_call::bind_and_get(const query_options& options) {
         if (!val) {
             throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *_fun));
         }
-        buffers.push_back(std::move(to_bytes_opt(val)));
+        buffers.push_back(to_bytes_opt(val));
     }
     auto result = execute_internal(options.get_cql_serialization_format(), *_fun, std::move(buffers));
     return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(result));
@@ -569,7 +569,7 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
     for (auto&& t : parameters) {
         assert(dynamic_cast<terminal*>(t.get()));
         auto&& param = static_cast<terminal*>(t.get())->get(query_options::DEFAULT);
-        buffers.push_back(std::move(to_bytes_opt(param)));
+        buffers.push_back(to_bytes_opt(param));
     }
 
     return execute_internal(cql_serialization_format::internal(), fun, buffers);

@@ -892,7 +892,7 @@ public:
                 _stop_promise->set_value();
             }
         });
-        return std::move(ret);
+        return ret;
     }
 
     static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map();

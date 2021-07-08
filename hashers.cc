@@ -90,7 +90,7 @@ template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(con
     typename cryptopp_hasher<T, size>::impl::impl_type hash;
     unsigned char digest[size];
     hash.CalculateDigest(digest, reinterpret_cast<const unsigned char*>(s.data()), s.size());
-    return std::move(bytes{reinterpret_cast<const int8_t*>(digest), size});
+    return bytes{reinterpret_cast<const int8_t*>(digest), size};
 }
 
 template class cryptopp_hasher<md5_hasher, 16>;

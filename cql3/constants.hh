@@ -198,7 +198,7 @@ public:
             if (bytes.is_unset_value()) {
                 return UNSET_VALUE;
             }
-            return ::make_shared<constants::value>(std::move(cql3::raw_value::make_value(bytes)));
+            return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes));
         }
     };
 

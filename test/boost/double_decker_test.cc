@@ -187,11 +187,11 @@ SEASTAR_THREAD_TEST_CASE(test_self_iterator) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
 
-    c.insert(1, std::move(test_data(1, "a")), cmp);
-    c.insert(1, std::move(test_data(1, "b")), cmp);
-    c.insert(2, std::move(test_data(2, "c")), cmp);
-    c.insert(3, std::move(test_data(3, "d")), cmp);
-    c.insert(3, std::move(test_data(3, "e")), cmp);
+    c.insert(1, test_data(1, "a"), cmp);
+    c.insert(1, test_data(1, "b"), cmp);
+    c.insert(2, test_data(2, "c"), cmp);
+    c.insert(3, test_data(3, "d"), cmp);
+    c.insert(3, test_data(3, "e"), cmp);
 
     auto erase_by_ptr = [&] (int key, std::string sub) {
         test_data* d = &*c.find(compound_key(key, sub), cmp);
@@ -215,7 +215,7 @@ SEASTAR_THREAD_TEST_CASE(test_end_iterator) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
 
-    c.insert(1, std::move(test_data(1, "a")), cmp);
+    c.insert(1, test_data(1, "a"), cmp);
     auto i = std::prev(c.end());
     BOOST_REQUIRE(*i == compound_key(1, "a"));
 
@@ -291,7 +291,7 @@ SEASTAR_THREAD_TEST_CASE(test_insert_and_erase) {
         compound_key k(tests::random::get_int<int>(100), tests::random::get_sstring(3));
 
         if (c.find(k, cmp) == c.end()) {
-            auto it = c.insert(k.key, std::move(test_data(k.key, k.sub_key)), cmp);
+            auto it = c.insert(k.key, test_data(k.key, k.sub_key), cmp);
             BOOST_REQUIRE(*it == k);
             nr++;
         }
@@ -331,7 +331,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction) {
                 compound_key k(tests::random::get_int<int>(400), tests::random::get_sstring(3));
 
                 if (c.find(k, cmp) == c.end()) {
-                    auto it = c.insert(k.key, std::move(test_data(k.key, k.sub_key)), cmp);
+                    auto it = c.insert(k.key, test_data(k.key, k.sub_key), cmp);
                     BOOST_REQUIRE(*it == k);
                     s.insert(std::move(k));
                     nr++;
@@ -368,7 +368,7 @@ SEASTAR_THREAD_TEST_CASE(test_range_erase) {
             collection c(compound_key::less_compare{});
 
             for (auto&& k : keys) {
-                c.insert(k.key, std::move(test_data(k.key, k.sub_key)), cmp);
+                c.insert(k.key, test_data(k.key, k.sub_key), cmp);
             }
 
             auto iter_at = [&c] (size_t at) -> collection::iterator {
