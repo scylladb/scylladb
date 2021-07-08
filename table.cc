@@ -1684,7 +1684,10 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             co_await db::view::mutate_MV(base_token, std::move(updates), _view_stats, *_config.cf_stats, tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no).handle_exception([] (auto ignored) { });
         } catch (...) {
-            // ignore
+            // Ignore exceptions: any individual failure to propagate a view update will be reported
+            // by a separate mechanism in mutate_MV() function. Moreover, we should continue trying
+            // to generate updates even if some of them fail, in order to minimize the potential
+            // inconsistencies caused by not being able to propagate an update
         }
     }
     co_await builder.close();
