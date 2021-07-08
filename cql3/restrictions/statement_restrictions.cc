@@ -1353,7 +1353,6 @@ void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool 
         const auto pos = _schema->position(*col) + 1;
         (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
     }
-    const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::partition_key, 0);
     for (const auto& e : _clustering_prefix_restrictions) {
         if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
@@ -1364,9 +1363,6 @@ void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool 
             break;
         }
         const auto col = std::get<column_value>(*any_binop->lhs).col;
-        if (*col == indexed_column) {
-            continue;
-        }
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
     auto token_column = &idx_tbl_schema.clustering_column_at(0);
