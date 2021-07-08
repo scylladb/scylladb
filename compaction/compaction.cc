@@ -505,7 +505,7 @@ protected:
     lw_shared_ptr<sstable_set> _compacting;
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
-    lw_shared_ptr<compaction_info> _info = make_lw_shared<compaction_info>();
+    lw_shared_ptr<compaction_info> _info;
     uint64_t _estimated_partitions = 0;
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
@@ -521,6 +521,18 @@ protected:
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
+public:
+    static lw_shared_ptr<compaction_info> create_compaction_info(column_family& cf, compaction_descriptor descriptor) {
+        auto info = make_lw_shared<compaction_info>();
+        info->ks_name = cf.schema()->ks_name();
+        info->cf_name = cf.schema()->cf_name();
+        info->type = descriptor.options.type();
+        info->run_identifier = descriptor.run_identifier;
+        info->cf = &cf;
+        info->compaction_uuid = utils::UUID_gen::get_time_UUID();
+        return info;
+    }
+
 protected:
     compaction(column_family& cf, compaction_descriptor descriptor)
         : _cf(cf)
@@ -530,6 +542,7 @@ protected:
         , _sstables(std::move(descriptor.sstables))
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
+        , _info(create_compaction_info(cf, descriptor))
         , _gc_sstable_writer_data(*this)
         , _replacer(std::move(descriptor.replacer))
         , _run_identifier(descriptor.run_identifier)
@@ -538,10 +551,6 @@ protected:
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
     {
-        _info->type = descriptor.options.type();
-        _info->run_identifier = _run_identifier;
-        _info->cf = &cf;
-        _info->compaction_uuid = utils::UUID_gen::get_time_UUID();
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
@@ -671,8 +680,6 @@ private:
             _rp = std::max(_rp, sst_stats.position);
         }
         _info->sstables = _sstables.size();
-        _info->ks_name = _schema->ks_name();
-        _info->cf_name = _schema->cf_name();
         log_info("{} {}", report_start_desc(), formatted_msg);
         if (ssts->all()->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
