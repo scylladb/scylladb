@@ -38,6 +38,7 @@ def run_cassandra_cmd(pid, dir):
               'endpoint_snitch: SimpleSnitch\n' +
               'seed_provider:\n    - class_name: org.apache.cassandra.locator.SimpleSeedProvider\n      parameters:\n          - seeds: "' + ip + '"\n' +
               'listen_address: ' + ip + '\n' +
+              'start_native_transport: true\n' +
               'auto_snapshot: false\n' +
               'enable_sasi_indexes: true\n' +
               'enable_user_defined_functions: true\n' +
