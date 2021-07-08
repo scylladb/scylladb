@@ -143,7 +143,7 @@ class build_progress_virtual_reader {
                         _previous_clustering_key = ck;
                         mf = mutation_fragment(*_schema, _permit, clustering_row(
                                 std::move(ck),
-                                std::move(scylla_in_progress_row.tomb()),
+                                scylla_in_progress_row.tomb(),
                                 std::move(scylla_in_progress_row.marker()),
                                 std::move(legacy_in_progress_row)));
                     } else if (mf.is_range_tombstone()) {

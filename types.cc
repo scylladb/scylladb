@@ -2697,7 +2697,7 @@ struct from_string_visitor {
                 field_len[i] = fields[i].size();
             }
         }
-        return std::move(concat_fields(fields, field_len));
+        return concat_fields(fields, field_len);
     }
     bytes operator()(const collection_type_impl&) {
         // FIXME:

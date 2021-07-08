@@ -4999,7 +4999,7 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
         size_t i = 0;
         for (const auto& segregated_fragment_stream : segregated_fragment_streams) {
             testlog.debug("Checking position monotonicity of segregated stream #{}", i++);
-            assert_that(make_flat_mutation_reader_from_fragments(schema, permit, std::move(copy_fragments(segregated_fragment_stream))))
+            assert_that(make_flat_mutation_reader_from_fragments(schema, permit, copy_fragments(segregated_fragment_stream)))
                     .has_monotonic_positions();
         }
     }
@@ -5010,7 +5010,7 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
         readers.reserve(segregated_fragment_streams.size());
 
         for (const auto& segregated_fragment_stream : segregated_fragment_streams) {
-            readers.emplace_back(make_flat_mutation_reader_from_fragments(schema, permit, std::move(copy_fragments(segregated_fragment_stream))));
+            readers.emplace_back(make_flat_mutation_reader_from_fragments(schema, permit, copy_fragments(segregated_fragment_stream)));
         }
 
         assert_that(make_combined_reader(schema, permit, std::move(readers))).has_monotonic_positions();
@@ -5022,7 +5022,7 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
         readers.reserve(segregated_fragment_streams.size());
 
         for (const auto& segregated_fragment_stream : segregated_fragment_streams) {
-            readers.emplace_back(make_flat_mutation_reader_from_fragments(schema, permit, std::move(copy_fragments(segregated_fragment_stream))));
+            readers.emplace_back(make_flat_mutation_reader_from_fragments(schema, permit, copy_fragments(segregated_fragment_stream)));
         }
 
         auto rd = assert_that(make_combined_reader(schema, permit, std::move(readers)));

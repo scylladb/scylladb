@@ -1244,7 +1244,7 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
             query::result_view::consume(*qr.query_result,
                                         std::move(partition_slice),
                                         cql3::selection::result_set_builder::visitor(builder, *_view_schema, *selection));
-            return ::make_shared<cql_transport::messages::result_message::rows>(std::move(result(builder.build())));
+            return ::make_shared<cql_transport::messages::result_message::rows>(result(builder.build()));
         });
     }
 

@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
             stress_compact_collection(cfg,
                 /* insert */ [&] (int key) {
                     test_key k(key);
-                    auto ti = t->emplace(std::move(copy_key(k)), k);
+                    auto ti = t->emplace(copy_key(k), k);
                     assert(ti.second);
                 },
                 /* erase */ [&] (int key) {

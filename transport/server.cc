@@ -664,7 +664,7 @@ future<> cql_server::connection::process_request() {
             (void)_process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit)
                     .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
-                    write_response(std::move(response_f.get0()), std::move(mem_permit), _compression);
+                    write_response(response_f.get0(), std::move(mem_permit), _compression);
                     _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
                 } catch (...) {
                     clogger.error("request processing failed: {}", std::current_exception());

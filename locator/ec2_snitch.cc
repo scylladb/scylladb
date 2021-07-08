@@ -70,8 +70,8 @@ future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cm
     return connect(socket_address(inet_address{addr}, port))
     .then([this, addr, cmd] (connected_socket fd) {
         _sd = std::move(fd);
-        _in = std::move(_sd.input());
-        _out = std::move(_sd.output());
+        _in = _sd.input();
+        _out = _sd.output();
         _zone_req = sstring("GET ") + cmd +
                     sstring(" HTTP/1.1\r\nHost: ") +addr +
                     sstring("\r\n\r\n");

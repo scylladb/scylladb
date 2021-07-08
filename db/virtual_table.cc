@@ -97,7 +97,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
                     });
                 }
 
-                return std::move(rd);
+                return rd;
             });
         };
 

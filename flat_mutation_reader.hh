@@ -557,7 +557,7 @@ public:
             // most close implementations are expexcted to return a ready future
             // so expedite prcessing it.
             if (f.available() && !f.failed()) {
-                return std::move(f);
+                return f;
             }
             // close must not fail
             return f.handle_exception([i = std::move(i)] (std::exception_ptr ep) mutable {
