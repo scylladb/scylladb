@@ -175,9 +175,12 @@ def wait_for_index(cql, table, column, everything):
         results = []
         for v in column_values:
             results.extend(list(cql.execute(f'SELECT * FROM {table} WHERE {column}={v}')))
-        if set(results) == set(everything):
+
+        if sorted(results) == sorted(everything):
             return
+        
         time.sleep(0.1)
+
     pytest.fail('Timeout waiting for index to become up to date.')
 
 @pytest.fixture(scope="module")
@@ -306,8 +309,50 @@ def table4(cql, test_keyspace):
     yield (table, everything)
     cql.execute(f"DROP TABLE {table}")
 
-# Selecting from indexed table should using only clustering key should require filtering
+# Selecting from indexed table using only clustering key should require filtering
 # Variation of #7608 found in #8991
-@pytest.mark.xfail(reason="Select from indexed table using only clustering key should require filtering. Issue #7608")
 def test_select_indexed_cluster(cql, table4):
     check_af_mandatory(cql, table4, 'c1 = 1 AND c2 = 1', lambda row: row.c1 == 1 and row.c2 == 1)
+
+# table5 contains an indexed table with 3 clustering columns.
+# used to test correct filtering of rows fetched from an index table.
+@pytest.fixture(scope="module")
+def table5(cql, test_keyspace):
+    table = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {table} (p int, c1 frozen<list<int>>, c2 frozen<list<int>>, c3 int, PRIMARY KEY (p,c1,c2,c3))")
+    cql.execute(f"CREATE INDEX ON {table} (c3)")
+    cql.execute(f"INSERT INTO {table} (p, c1, c2, c3) VALUES (0, [1], [2], 0)")
+    cql.execute(f"INSERT INTO {table} (p, c1, c2, c3) VALUES (0, [2], [2], 0)")
+    cql.execute(f"INSERT INTO {table} (p, c1, c2, c3) VALUES (0, [1], [3], 0)")
+    cql.execute(f"INSERT INTO {table} (p, c1, c2, c3) VALUES (0, [1], [2], 1)")
+
+    everything = list(cql.execute(f"SELECT * FROM {table}"))
+    wait_for_index(cql, table, 'c3', everything)
+    yield (table, everything)
+    cql.execute(f"DROP TABLE {table}")
+
+# Test that implementation of filtering for indexes works ok.
+# Current implementation is a bit conservative - it might sometimes state
+# that filtering is needed when it isn't actually required, but at least it's safe.
+def test_select_indexed_cluster_three_keys(cql, table5):
+    def check_good_row(row):
+        return row.p == 0 and row.c1 == [1] and row.c2 == [2] and row.c3 == 0
+    
+    check_af_optional(cql, table5, "c3 = 0", lambda r : r.c3 == 0)
+    check_af_mandatory(cql, table5, "c1 = [1] AND c2 = [2] AND c3 = 0", check_good_row)
+    check_af_mandatory(cql, table5, "p = 0 AND c1 CONTAINS 1 AND c3 = 0", lambda r : r.p == 0 and r.c1 == [1] and r.c3 == 0)
+    check_af_mandatory(cql, table5, "p = 0 AND c1 = [1] AND c2 CONTAINS 2 AND c3 = 0", check_good_row)
+
+    # Doesn't use an index - shouldn't be affected
+    check_af_optional(cql, table5, "p = 0 AND c1 = [1] AND c2 = [2] AND c3 = 0", check_good_row)
+
+# Here are the cases where current implementation of need_filtering() fails
+# By coincidence they also fail on cassandra, it looks like cassandra is buggy
+@pytest.mark.xfail(reason="Too conservative need_filtering() implementation")
+def test_select_indexed_cluster_three_keys_conservative(cql, table5, cassandra_bug):
+    def check_good_row(row):
+        return row.p == 0 and row.c1 == [1] and row.c3 == 0
+
+    # Don't require filtering, but for now we report they do
+    check_af_optional(cql, table5, "p = 0 AND c1 = [1] AND c3 = 0", check_good_row)
+    check_af_optional(cql, table5, "p = 0 AND c1 = [1] AND c2 < [3] AND c3 = 0", lambda r : check_good_row(r) and r.c2 < [3])
