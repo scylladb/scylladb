@@ -123,7 +123,9 @@ future<> db::batchlog_manager::start() {
             (void)do_batch_log_replay().handle_exception([] (auto ep) {
                 blogger.error("Exception in batch replay: {}", ep);
             }).finally([this] {
+              if (!_stop) {
                 _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
+              }
             });
         });
 
