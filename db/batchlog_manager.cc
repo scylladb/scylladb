@@ -144,8 +144,7 @@ future<> db::batchlog_manager::stop() {
     // Although _sem might be held only on shard 0
     // it is safe to wait for it on all shards.
     return _sem.wait().then([this] {
-    // FIXME: indentation
-    return _gate.close();
+        return _gate.close();
     });
 }
 
