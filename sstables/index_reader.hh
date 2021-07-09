@@ -53,21 +53,13 @@ class index_consumer {
     schema_ptr _s;
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
-    size_t _size;
 public:
     index_list indexes;
 
-    index_consumer(logalloc::region& r, schema_ptr s, uint64_t size)
+    index_consumer(logalloc::region& r, schema_ptr s)
         : _s(std::move(s))
         , _region(r)
-        , _size(size)
-    {
-        _alloc_section(_region, [&] {
-            with_allocator(_region.allocator(), [&] {
-                indexes._entries.reserve(_size);
-            });
-        });
-    }
+    { }
 
     ~index_consumer() {
         with_allocator(_region.allocator(), [&] {
@@ -88,6 +80,15 @@ public:
                 }
                 auto key = managed_bytes(reinterpret_cast<const blob_storage::char_type*>(e.key.get()), e.key.size());
                 indexes._entries.emplace_back(make_managed<index_entry>(std::move(key), e.data_file_offset, std::move(pi)));
+            });
+        });
+    }
+
+    void prepare(uint64_t size) {
+        _alloc_section = logalloc::allocating_section();
+        _alloc_section(_region, [&] {
+            with_allocator(_region.allocator(), [&] {
+                indexes._entries.reserve(size);
             });
         });
     }
@@ -291,9 +292,9 @@ public:
     }
 
     index_consume_entry_context(const sstable& sst, reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
-            file index_file, file_input_stream_options options, uint64_t start,
-            uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
-        : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
+            input_stream<char>&& input, uint64_t start, uint64_t maxlen,
+            std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
+        : continuous_data_consumer(std::move(permit), std::move(input), start, maxlen)
         , _sst(sst), _consumer(consumer), _entry_offset(start), _trust_pi(trust_pi)
         , _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _trace_state(std::move(trace_state))
@@ -396,6 +397,8 @@ struct index_bound {
     // Holds the cursor for the current partition. Lazily initialized.
     std::unique_ptr<clustered_index_cursor> clustered_cursor;
 
+    std::unique_ptr<index_consumer> consumer;
+    std::unique_ptr<index_consume_entry_context<index_consumer>> context;
     // Cannot use default implementation because clustered_cursor is non-copyable.
     index_bound(const index_bound& other)
             : current_list(other.current_list)
@@ -432,32 +435,28 @@ class index_reader {
     logalloc::region& _region;
     use_caching _use_caching;
 
-    struct reader {
-        index_consumer _consumer;
-        index_consume_entry_context<index_consumer> _context;
+    std::unique_ptr<index_consume_entry_context<index_consumer>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
+        auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
+        auto input = make_file_input_stream(index_file, begin, _sstable->index_size() - begin,
+                        get_file_input_stream_options(_pc));
+        auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
+        auto ck_values_fixed_lengths = _sstable->get_version() >= sstable_version_types::mc
+                            ? std::make_optional(get_clustering_values_fixed_lengths(_sstable->get_serialization_header()))
+                            : std::optional<column_values_fixed_lengths>{};
+        return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
+                            begin, end - begin, ck_values_fixed_lengths, _trace_state);
+    }
 
-        inline static file_input_stream_options get_file_input_stream_options(shared_sstable sst, const io_priority_class& pc) {
-            file_input_stream_options options;
-            options.buffer_size = sst->sstable_buffer_size;
-            options.read_ahead = 2;
-            options.io_priority_class = pc;
-            options.dynamic_adjustments = sst->_index_history;
-            return options;
+    future<> advance_context(index_bound& bound, uint64_t begin, uint64_t end, int quantity) {
+        if (!bound.context) {
+            bound.consumer = std::make_unique<index_consumer>(_region, _sstable->get_schema());
+            bound.context = make_context(begin, end, *bound.consumer);
+            bound.consumer->prepare(quantity);
+            return make_ready_future<>();
         }
-
-        reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity,
-               use_caching caching)
-            : _consumer(sst->manager().get_cache_tracker().region(), sst->get_schema(), quantity)
-            , _context(*sst, permit, _consumer,
-                       trust_promoted_index(sst->has_correct_promoted_index_entries()),
-                       make_tracked_index_file(*sst, permit, trace_state, caching),
-                       get_file_input_stream_options(sst, pc), begin, end - begin,
-                       (sst->get_version() >= sstable_version_types::mc
-                           ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
-                           : std::optional<column_values_fixed_lengths>{}),
-                       trace_state)
-        { }
-    };
+        bound.consumer->prepare(quantity);
+        return bound.context->fast_forward_to(begin, end);
+    }
 
 private:
     index_bound _lower_bound;
@@ -497,7 +496,7 @@ private:
             sstlog.trace("index {}: eof", fmt::ptr(this));
             return advance_to_end(bound);
         }
-        auto loader = [this] (uint64_t summary_idx) -> future<index_list> {
+        auto loader = [this, &bound] (uint64_t summary_idx) -> future<index_list> {
             auto& summary = _sstable->get_summary();
             uint64_t position = summary.entries[summary_idx].position;
             uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, summary.header.sampling_level,
@@ -510,20 +509,17 @@ private:
                 end = summary.entries[summary_idx + 1].position;
             }
 
-            return do_with(std::make_unique<reader>(_sstable, _permit, _pc, _trace_state, position, end, quantity, _use_caching), [this, summary_idx] (auto& entries_reader) {
-                return entries_reader->_context.consume_input().then_wrapped([this, summary_idx, &entries_reader] (future<> f) {
+            return advance_context(bound, position, end, quantity).then([this, summary_idx, &bound] {
+                return bound.context->consume_input().then_wrapped([this, summary_idx, &bound] (future<> f) {
                     std::exception_ptr ex;
                     if (f.failed()) {
                         ex = f.get_exception();
                         sstlog.error("failed reading index for {}: {}", _sstable->get_filename(), ex);
                     }
-                    return entries_reader->_context.close().then([&entries_reader, ex = std::move(ex)] () mutable {
-                        if (ex) {
-                            return make_exception_future<index_list>(std::move(ex));
-                        }
-                        return make_ready_future<index_list>(std::move(entries_reader->_consumer.indexes));
-                    });
-
+                    if (ex) {
+                        return make_exception_future<index_list>(std::move(ex));
+                    }
+                    return make_ready_future<index_list>(std::move(bound.consumer->indexes));
                 });
             });
         };
@@ -733,7 +729,11 @@ private:
     }
 
     static future<> close(index_bound& b) noexcept {
-        return reset_clustered_cursor(b);
+        auto close_context = make_ready_future<>();
+        if (b.context) {
+            close_context = b.context->close();
+        }
+        return seastar::when_all_succeed(std::move(close_context), reset_clustered_cursor(b)).discard_result();
     }
 public:
     index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
