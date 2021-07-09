@@ -108,7 +108,6 @@ class index_consume_entry_context : public data_consumer::continuous_data_consum
 private:
     const sstable& _sst;
     IndexConsumer& _consumer;
-    file _index_file;
     uint64_t _entry_offset;
 
     enum class state {
@@ -295,8 +294,8 @@ public:
             file index_file, file_input_stream_options options, uint64_t start,
             uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
-        , _sst(sst), _consumer(consumer), _index_file(index_file)
-        , _entry_offset(start), _trust_pi(trust_pi), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
+        , _sst(sst), _consumer(consumer), _entry_offset(start), _trust_pi(trust_pi)
+        , _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _trace_state(std::move(trace_state))
     {}
 };
