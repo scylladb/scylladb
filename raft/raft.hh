@@ -166,6 +166,20 @@ struct configuration {
         return diff;
     }
 
+    bool can_vote(server_id id) const {
+        auto it = current.find(server_address{.id=id});
+        if (it != current.end()) {
+            return it->can_vote;
+        }
+
+        it = previous.find(server_address{.id=id});
+        if (it != previous.end()) {
+            return it->can_vote;
+        }
+
+        return false;
+    }
+
     // Enter a joint configuration given a new set of servers.
     void enter_joint(server_address_set c_new) {
         if (c_new.empty()) {

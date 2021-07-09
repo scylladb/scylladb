@@ -213,6 +213,19 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
     return last_new_idx;
 }
 
+const configuration* log::get_prev_configuration() const {
+    if (_prev_conf_idx) {
+        return &std::get<configuration>(get_entry(_prev_conf_idx)->data);
+    }
+
+    if (_last_conf_idx > _snapshot.idx) {
+        return &_snapshot.config;
+    }
+
+    // _last_conf_idx <= _snapshot.idx means we only have the last configuration (from the snapshot).
+    return nullptr;
+}
+
 size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
     assert (snp.idx > _snapshot.idx);
 

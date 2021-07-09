@@ -181,6 +181,10 @@ public:
     // there is no way in general to learn configurations before the last snapshot.
     const configuration& last_conf_for(index_t idx) const;
 
+    // Return the previous configuration, if available (otherwise return nullptr).
+    // The returned pointer, if not null, is only valid until the next operation on the log.
+    const configuration* get_prev_configuration() const;
+
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
     index_t maybe_append(std::vector<log_entry_ptr>&& entries);

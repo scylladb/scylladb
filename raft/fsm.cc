@@ -203,11 +203,39 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
 
     const auto& voters = votes.voters();
     if (!voters.contains(server_address{_my_id})) {
-        // If the server is not part of the current configuration,
-        // revert to the follower state without increasing
-        // the current term.
-        become_follower(server_id{});
-        return;
+        // We're not a voter in the current configuration (perhaps we completely left it).
+        //
+        // But sometimes, if we're transitioning between configurations
+        // such that we were a voter in the previous configuration, we may still need
+        // to become a candidate: the new configuration may be unable to proceed without us.
+        //
+        // For example, if Cold = {A, B}, Cnew = {B}, A is a leader, switching from Cold to Cnew,
+        // and Cnew wasn't yet received by B, then B won't be able to win an election:
+        // B will ask A for a vote because it is still in the joint configuration
+        // and A won't grant it because B has a shorter log. A is the only node
+        // that can become a leader at this point.
+        //
+        // However we can easily determine when we don't need to become a candidate:
+        // If Cnew is already committed, that means that a quorum in Cnew had to accept
+        // the Cnew entry, so there is a quorum in Cnew that can proceed on their own.
+        //
+        // Ref. Raft PhD 4.2.2.
+        if (_log.last_conf_idx() <= _commit_idx) {
+            // Cnew already committed, no need to become a candidate.
+            become_follower(server_id{});
+            return;
+        }
+
+        // The last configuration is not committed yet.
+        // This means we must still have access to the previous configuration.
+        // Become a candidate only if we were previously a voter.
+        auto prev_cfg = _log.get_prev_configuration();
+        assert(prev_cfg);
+        if (!prev_cfg->can_vote(_my_id)) {
+            // We weren't a voter before.
+            become_follower(server_id{});
+            return;
+        }
     }
 
     term_t term{_current_term + 1};
