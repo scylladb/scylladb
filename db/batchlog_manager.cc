@@ -140,7 +140,13 @@ future<> db::batchlog_manager::stop() {
     }
     _stop = true;
     _timer.cancel();
+    // Synchronize with do_batch_log_replay.
+    // Although _sem might be held only on shard 0
+    // it is safe to wait for it on all shards.
+    return _sem.wait().then([this] {
+    // FIXME: indentation
     return _gate.close();
+    });
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
