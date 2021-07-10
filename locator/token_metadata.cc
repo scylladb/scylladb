@@ -442,7 +442,7 @@ public:
         }
         all_left_metadata.sort_tokens();
 
-        return std::move(all_left_metadata);
+        return all_left_metadata;
       });
     }
 

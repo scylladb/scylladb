@@ -103,7 +103,7 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
         [] (results res, results li_res) {
             res.read += li_res.read;
             res.write += li_res.write;
-            return std::move(res);
+            return res;
         }).get0();
 
     testlog.info("test_data_listeners: rd={} wr={}", res.read, res.write);

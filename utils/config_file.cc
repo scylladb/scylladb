@@ -262,7 +262,7 @@ bpo::options_description utils::config_file::get_options_description() {
 bpo::options_description utils::config_file::get_options_description(boost::program_options::options_description opts) {
     auto init = opts.add_options();
     add_options(init);
-    return std::move(opts);
+    return opts;
 }
 
 bpo::options_description_easy_init&
