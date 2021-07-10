@@ -281,7 +281,7 @@ filter_for_query(consistency_level cl,
     size_t local_count;
 
     if (read_repair == read_repair_decision::GLOBAL) { // take RRD.GLOBAL out of the way
-        return std::move(live_endpoints);
+        return live_endpoints;
     }
 
     if (read_repair == read_repair_decision::DC_LOCAL || is_datacenter_local(cl)) {
@@ -299,7 +299,7 @@ filter_for_query(consistency_level cl,
     }
 
     if (bf >= live_endpoints.size()) { // RRD.DC_LOCAL + CL.LOCAL or CL.ALL
-        return std::move(live_endpoints);
+        return live_endpoints;
     }
 
     inet_address_vector_replica_set selected_endpoints;

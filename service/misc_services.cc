@@ -182,7 +182,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         for (auto& r : b) {
             a[r.first] += r.second;
         }
-        return std::move(a);
+        return a;
     };
 
     return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<utils::UUID, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<utils::UUID, stat> rates) mutable {

@@ -152,7 +152,7 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
     auto reduce = [this] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
         res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
         res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
-        return std::move(res);
+        return res;
     };
     return _query->map_reduce0(map, results{res_size}, reduce)
         .handle_exception([] (auto ep) {

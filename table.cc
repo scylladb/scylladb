@@ -594,7 +594,7 @@ table::seal_active_memtable(flush_permit&& permit) {
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
 
         if (f.failed()) {
-            return std::move(f);
+            return f;
         }
 
         if (_commitlog) {

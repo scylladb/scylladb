@@ -950,7 +950,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
 
     auto result_view = query::result_view(*results);
     if (!results->row_count() || *results->row_count() == 0) {
-        return std::move(paging_state);
+        return paging_state;
     }
 
     auto&& last_partition_and_clustering_key = result_view.get_last_partition_and_clustering_key();
@@ -985,7 +985,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     auto index_ck = clustering_key::from_range(std::move(exploded_index_ck));
     if (partition_key::tri_compare(*_view_schema)(paging_state->get_partition_key(), index_pk) == 0
             && (!paging_state->get_clustering_key() || clustering_key::prefix_equal_tri_compare(*_view_schema)(*paging_state->get_clustering_key(), index_ck) == 0)) {
-        return std::move(paging_state);
+        return paging_state;
     }
 
     auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
