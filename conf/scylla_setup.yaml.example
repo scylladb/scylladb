@@ -1,0 +1,89 @@
+# scylla_setup config file
+
+########################
+# parameters for setup #
+########################
+# specify disks for RAID
+disks: /dev/sda,/dev/sdb
+
+# specify NIC
+nic: eth0
+
+# specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)
+ntp_domain:
+
+# specify swap directory
+swap_directory:
+
+# specify swapfile size in GB
+swap_size:
+
+# enable developer mode
+developer_mode: false
+
+# specify rsyslog server address
+rsyslog_server:
+
+########################
+# enable/disable setup #
+########################
+
+# raid setup
+raid_setup: true
+
+# setup AMI instance
+ami: false
+
+# optimize NIC and disks
+setup_nic_and_disks: false
+
+# EC2 configuration check
+ec2_check: true
+
+# kernel version check
+kernel_check: true
+
+# verifying packages
+verify_package: true
+
+# enabling service
+enable_service: true
+
+# selinux setup
+selinux_setup: true
+
+# bootparam setup
+bootparam_setup: true
+
+# ntp setup
+ntp_setup: true
+
+# coredump setup
+coredump_setup: true
+
+# sysconfig setup
+sysconfig_setup: true
+
+# IO configuration setup
+io_setup: true
+
+# daily version check
+version_check: true
+
+# install the node exporter
+node_exporter: true
+
+# cpu scaling setup
+cpuscaling_setup: true
+
+# fstrim setup
+fstrim_setup: true
+
+# memory setup
+memory_setup: true
+
+# swap setup
+swap_setup: true
+
+# rsyslog setup
+rsyslog_setup: true

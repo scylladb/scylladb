@@ -28,6 +28,8 @@ import shutil
 import io
 import stat
 import distro
+import yaml
+from cerberus import validator
 from scylla_util import *
 from subprocess import run, DEVNULL
 
@@ -180,7 +182,80 @@ def warn_offline(setup):
 def warn_offline_missing_pkg(setup, pkg):
     colorprint('{red}{setup} disabled by default, since {pkg} not available.{nocolor}', setup=setup, pkg=pkg)
 
+def current_umask():
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
+class ConfModeArgumentParserError(Exception):
+    pass
+
+class ConfModeArgumentParser(argparse.ArgumentParser):
+    def __init__(self):
+        super().__init__(add_help=False)
+
+    def error(self, message):
+        raise ConfModeArgumentParserError(message)
+
+class ConfModeValidator(validator.Validator):
+    def _validate_negative(self, negative, field, value):
+        """ Dummy validator for negative field.
+
+        The rule's arguments are validated against this schema:
+        {'type': 'boolean'}
+        """
+        pass
+
+
 if __name__ == '__main__':
+    schema_file = scriptsdir_p() / 'scylla_setup_schema.yaml'
+    schema = yaml.safe_load(open(schema_file))
+    parser = ConfModeArgumentParser()
+    parser.add_argument('--conf')
+    try:
+        args = parser.parse_args()
+        with open(args.conf, 'r') as f:
+            conf = yaml.safe_load(f)
+        if conf == None:
+            conf = {}
+        v = ConfModeValidator(schema)
+        if not v.validate(conf):
+            print('config file {} failed to validate'.format(args.conf))
+            for k in v.errors:
+                for e in v.errors[k]:
+                    print(f"  field '{k}': {e}")
+            sys.exit(1)
+
+        dargs = {}
+        conf = v.normalized(conf)
+        for k in schema:
+            if not k in conf:
+                continue
+            v = conf[k]
+            # XXX: fixup for args.io_setup
+            if k == 'io_setup':
+                dargs[k] = '1' if v else '0'
+                continue
+            if 'negative' in schema[k]:
+                k = f'no_{k}'
+                v = not v
+            dargs[k] = v
+        args = argparse.Namespace(**dargs)
+    except ConfModeArgumentParserError:
+        pass
+    except OSError as e:
+        print('config file {} does not able to access'.format(args.conf))
+        print(e)
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print('config file {} does not able to load'.format(args.conf))
+        print(e)
+        sys.exit(1)
+    except Exception as e:
+        print('unknown error:')
+        print(e)
+        sys.exit(1)
+
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
@@ -287,7 +362,8 @@ if __name__ == '__main__':
         interactive = True
         group.required = False # interactive mode: no option is required.
 
-    args = parser.parse_args()
+    if not args:
+        args = parser.parse_args()
 
     if not interactive:
         if not args.no_sysconfig_setup or (is_ec2() and not args.no_ec2_check):
