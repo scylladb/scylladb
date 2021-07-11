@@ -926,8 +926,7 @@ private:
             }
         }
 
-        template <typename>
-        struct array_of {
+        struct array_of_non_node_head_ptr {
             /*
              * This bismask is the maximum possible, while the array of slots
              * is dynamic. This is to make sure all direct layouts have the
@@ -937,11 +936,11 @@ private:
             std::bitset<node_index_limit> _present;
             Slot _slots[0];
 
-            array_of(const node_head& head) noexcept {
+            array_of_non_node_head_ptr(const node_head& head) noexcept {
                 _present.reset();
             }
 
-            array_of(array_of&& o, const node_head& head) noexcept
+            array_of_non_node_head_ptr(array_of_non_node_head_ptr&& o, const node_head& head) noexcept
                     : _present(std::move(o._present)) {
                 for (unsigned i = 0; i < capacity(head); i++) {
                     if (o.has(i)) {
@@ -951,7 +950,7 @@ private:
                 }
             }
 
-            array_of(const array_of&) = delete;
+            array_of_non_node_head_ptr(const array_of_non_node_head_ptr&) = delete;
 
             bool has(unsigned i) const noexcept { return _present.test(i); }
             bool has(const node_head& h, unsigned i) const noexcept { return has(i); }
@@ -960,24 +959,23 @@ private:
             unsigned count(const node_head& head) const noexcept { return _present.count(); }
         };
 
-        template <>
-        struct array_of<node_head_ptr> {
+        struct array_of_node_head_ptr {
             Slot _slots[0];
 
-            array_of(const node_head& head) noexcept {
+            array_of_node_head_ptr(const node_head& head) noexcept {
                 for (unsigned i = 0; i < capacity(head); i++) {
                     new (&_slots[i]) node_head_ptr(nullptr);
                 }
             }
 
-            array_of(array_of&& o, const node_head& head) noexcept {
+            array_of_node_head_ptr(array_of_node_head_ptr&& o, const node_head& head) noexcept {
                 for (unsigned i = 0; i < capacity(head); i++) {
                     new (&_slots[i]) Slot(std::move(o._slots[i]));
                     o._slots[i].~Slot();
                 }
             }
 
-            array_of(const array_of&) = delete;
+            array_of_node_head_ptr(const array_of_node_head_ptr&) = delete;
 
             bool has(unsigned i) const noexcept { return _slots[i]; }
             bool has(const node_head& h, unsigned i) const noexcept { return check_capacity(h, i) && _slots[i]; }
@@ -986,7 +984,9 @@ private:
             unsigned count(const node_head& head) const noexcept { return head._size; }
         };
 
-        array_of<Slot> _data;
+        using array_of_slot = std::conditional_t<std::is_same_v<Slot, node_head_ptr>, array_of_node_head_ptr, array_of_non_node_head_ptr>;
+
+        array_of_slot _data;
 
         direct_layout(const node_head& head) noexcept : _data(head) {}
         direct_layout(direct_layout&& o, const node_head& head) noexcept : _data(std::move(o._data), head) {}
