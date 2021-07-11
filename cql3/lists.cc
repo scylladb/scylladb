@@ -394,7 +394,7 @@ lists::do_append(shared_ptr<term> value,
                 appended.cells.emplace_back(
                     std::move(uuid),
                     params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
-            } catch (utils::timeuuid_submicro_out_of_range) {
+            } catch (utils::timeuuid_submicro_out_of_range&) {
                 throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
             }
         }
@@ -452,7 +452,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
         try {
             auto uuid = utils::UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(std::chrono::microseconds{micros}, clockseq++);
             mut.cells.emplace_back(bytes(uuid.data(), uuid.size()), params.make_cell(*ltype->value_comparator(), *v, atomic_cell::collection_member::yes));
-        } catch (utils::timeuuid_submicro_out_of_range) {
+        } catch (utils::timeuuid_submicro_out_of_range&) {
             throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
         }
     }
