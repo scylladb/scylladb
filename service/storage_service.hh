@@ -929,4 +929,6 @@ future<> init_storage_service(sharded<abort_source>& abort_sources,
     sharded<raft_group_registry>& raft_gr);
 future<> deinit_storage_service();
 
+future<> generate_data_for_table(sstring ks_name, sstring cf_name, uint64_t start_key, uint64_t end_key, size_t column_size);
+
 }
