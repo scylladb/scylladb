@@ -588,7 +588,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         static size_t node_size(layout lt, uint8_t capacity) noexcept {
-            return lt == Tx::layout ? sizeof(node_head) + Tx::layout_size(capacity) : node_size<Ty, Ts...>(lt, capacity);
+            return lt == Tx::this_layout ? sizeof(node_head) + Tx::layout_size(capacity) : node_size<Ty, Ts...>(lt, capacity);
         }
 
         static size_t node_size(layout lt, uint8_t capacity) noexcept {
@@ -608,7 +608,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         void construct(variadic_union<Tx, Ty, Ts...>& cur) noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 new (&cur._this) Tx(_head);
                 return;
             }
@@ -630,7 +630,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         void move_construct(variadic_union<Tx, Ty, Ts...>& cur, variadic_union<Tx, Ty, Ts...>&& o) noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 new (&cur._this) Tx(std::move(o._this), _head);
                 return;
             }
@@ -649,7 +649,7 @@ private:
 
         template <typename Tx>
         const T* get(const variadic_union<Tx>& cur, key_t key, unsigned depth) const noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.get(_head, key, depth);
             }
 
@@ -658,7 +658,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         const T* get(const variadic_union<Tx, Ty, Ts...>& cur, key_t key, unsigned depth) const noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.get(_head, key, depth);
             }
 
@@ -673,7 +673,7 @@ private:
 
         template <typename Tx>
         lower_bound_res lower_bound(const variadic_union<Tx>& cur, key_t key, unsigned depth) const noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.lower_bound(_head, key, depth);
             }
 
@@ -682,7 +682,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         lower_bound_res lower_bound(const variadic_union<Tx, Ty, Ts...>& cur, key_t key, unsigned depth) const noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.lower_bound(_head, key, depth);
             }
 
@@ -702,7 +702,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         erase_result erase(variadic_union<Tx, Ty, Ts...>& cur, key_t key, unsigned depth, erase_mode erm) noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.erase(_head, key, depth, erm);
             }
 
@@ -722,7 +722,7 @@ private:
 
         template <typename Fn, typename Tx, typename Ty, typename... Ts>
         erase_result weed(variadic_union<Tx, Ty, Ts...>& cur, Fn&& filter, unsigned depth) {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.weed(_head, filter, _head._prefix, depth);
             }
 
@@ -743,7 +743,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         allocate_res alloc(variadic_union<Tx, Ty, Ts...>& cur, key_t key, unsigned depth) {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.alloc(_head, key, depth);
             }
 
@@ -763,7 +763,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         void append(variadic_union<Tx, Ty, Ts...>& cur, node_index_t ni, Slot&& val) noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 cur._this.append(_head, ni, std::move(val));
                 return;
             }
@@ -784,7 +784,7 @@ private:
 
         template <typename Tx, typename Ty, typename... Ts>
         Slot pop(variadic_union<Tx, Ty, Ts...>& cur) noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.pop(_head);
             }
 
@@ -804,7 +804,7 @@ private:
 
         template <typename Visitor, typename Tx, typename Ty, typename... Ts>
         bool visit(const variadic_union<Tx, Ty, Ts...>& cur, Visitor&& v, unsigned depth) const {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.visit(_head, v, depth);
             }
 
@@ -825,7 +825,7 @@ private:
 
         template <typename NT, typename Fn, typename Tx, typename Ty, typename... Ts>
         clone_res clone(const variadic_union<Tx, Ty, Ts...>& cur, Fn&& cloner, unsigned depth) const noexcept {
-            if (_head._base_layout == Tx::layout) {
+            if (_head._base_layout == Tx::this_layout) {
                 return cur._this.template clone<NT, Fn>(_head, cloner, depth);
             }
 
@@ -851,7 +851,7 @@ private:
         template <typename NT, typename Tx, typename Ty, typename... Ts>
         node_head* grow(variadic_union<Tx, Ty, Ts...>& cur, node_index_t want_ni) {
             if constexpr (Tx::growable) {
-                if (_head._base_layout == Tx::layout) {
+                if (_head._base_layout == Tx::this_layout) {
                     return cur._this.template grow<NT>(_head, want_ni);
                 }
             }
@@ -878,7 +878,7 @@ private:
         template <typename NT, typename Tx, typename Ty, typename... Ts>
         node_head* shrink(variadic_union<Tx, Ty, Ts...>& cur) {
             if constexpr (Tx::shrinkable) {
-                if (_head._base_layout == Tx::layout) {
+                if (_head._base_layout == Tx::this_layout) {
                     return cur._this.template shrink<NT>(_head);
                 }
             }
@@ -908,10 +908,10 @@ private:
     struct direct_layout {
         static constexpr bool shrinkable = ShrinkInto != layout::nil;
         static constexpr bool growable = GrowInto != layout::nil;
-        static constexpr layout layout = Layout;
+        static constexpr layout this_layout = Layout;
 
         static bool check_capacity(const node_head& head, node_index_t ni) noexcept {
-            if constexpr (layout == layout::direct_static) {
+            if constexpr (this_layout == layout::direct_static) {
                 return true;
             } else {
                 return ni < head._capacity;
@@ -919,7 +919,7 @@ private:
         }
 
         static unsigned capacity(const node_head& head) noexcept {
-            if constexpr (layout == layout::direct_static) {
+            if constexpr (this_layout == layout::direct_static) {
                 return node_index_limit;
             } else {
                 return head._capacity;
@@ -1151,7 +1151,7 @@ private:
         }
 
         static size_t layout_size(uint8_t capacity) noexcept {
-            if constexpr (layout == layout::direct_static) {
+            if constexpr (this_layout == layout::direct_static) {
                 return sizeof(direct_layout) + node_index_limit * sizeof(Slot);
             } else {
                 assert(capacity != 0);
@@ -1175,7 +1175,7 @@ private:
         static constexpr bool shrinkable = ShrinkInto != layout::nil;
         static constexpr bool growable = GrowInto != layout::nil;
         static constexpr unsigned size = Size;
-        static constexpr layout layout = Layout;
+        static constexpr layout this_layout = Layout;
 
         node_index_t _idx[Size];
         Slot _slots[0];
