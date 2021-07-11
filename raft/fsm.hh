@@ -82,7 +82,7 @@ struct follower {
 };
 struct candidate {
      // Votes received during an election round.
-    votes votes;
+    raft::votes votes;
     // True if the candidate in prevote state
     bool is_prevote;
     candidate(configuration configuration, bool prevote) :
@@ -90,9 +90,9 @@ struct candidate {
 };
 struct leader {
     // A state for each follower
-    tracker tracker;
+    raft::tracker tracker;
     // Used to acces new leader to set semaphore exception
-    const fsm& fsm;
+    const raft::fsm& fsm;
     // Used to limit log size
     seastar::semaphore log_limiter_semaphore;
     // If the leader is in the process of transferring the leadership
