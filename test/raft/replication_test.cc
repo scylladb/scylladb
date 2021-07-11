@@ -286,7 +286,7 @@ class raft_cluster {
     struct test_server {
         std::unique_ptr<raft::server> server;
         state_machine* sm;
-        rpc* rpc;
+        raft_cluster::rpc* rpc;
     };
     std::vector<test_server> _servers;
     std::unique_ptr<connected> _connected;
