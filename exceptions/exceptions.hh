@@ -87,7 +87,7 @@ protected:
     template<typename... Args>
     static inline sstring prepare_message(const char* fmt, Args&&... args) noexcept {
         try {
-            return sprint(fmt, std::forward<Args>(args)...);
+            return format(fmt, std::forward<Args>(args)...);
         } catch (...) {
             return sstring();
         }
@@ -130,7 +130,7 @@ struct unavailable_exception : cassandra_exception {
     {}
 
     unavailable_exception(db::consistency_level cl, int32_t required, int32_t alive) noexcept
-        : unavailable_exception(prepare_message("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive),
+        : unavailable_exception(prepare_message("Cannot achieve consistency level for cl {}. Requires {}, alive {}", cl, required, alive),
                 cl, required, alive)
     {}
 };
@@ -155,7 +155,7 @@ public:
     int32_t block_for;
 
     request_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
-        : cassandra_exception{code, prepare_message("Operation timed out for %s.%s - received only %d responses from %d CL=%s.", ks, cf, received, block_for, consistency)}
+        : cassandra_exception{code, prepare_message("Operation timed out for {}.{} - received only {} responses from {} CL={}.", ks, cf, received, block_for, consistency)}
         , consistency{consistency}
         , received{received}
         , block_for{block_for}
@@ -189,7 +189,7 @@ public:
 
 protected:
     request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
-        : cassandra_exception{code, prepare_message("Operation failed for %s.%s - received %d responses and %d failures from %d CL=%s.", ks, cf, received_, failures_, block_for_, consistency_)}
+        : cassandra_exception{code, prepare_message("Operation failed for {}.{} - received {} responses and {} failures from {} CL={}.", ks, cf, received_, failures_, block_for_, consistency_)}
         , consistency{consistency_}
         , received{received_}
         , failures{failures_}
@@ -229,7 +229,7 @@ struct read_failure_exception : public request_failure_exception {
 
 struct overloaded_exception : public cassandra_exception {
     explicit overloaded_exception(size_t c) noexcept :
-        cassandra_exception(exception_code::OVERLOADED, prepare_message("Too many in flight hints: %lu", c)) {}
+        cassandra_exception(exception_code::OVERLOADED, prepare_message("Too many in flight hints: {}", c)) {}
     explicit overloaded_exception(sstring msg) noexcept :
         cassandra_exception(exception_code::OVERLOADED, std::move(msg)) {}
 };
@@ -286,7 +286,7 @@ public:
     bytes id;
 
     prepared_query_not_found_exception(bytes id) noexcept
-        : request_validation_exception{exception_code::UNPREPARED, prepare_message("No prepared statement with ID %s found.", id)}
+        : request_validation_exception{exception_code::UNPREPARED, prepare_message("No prepared statement with ID {} found.", id)}
         , id{id}
     { }
 };
