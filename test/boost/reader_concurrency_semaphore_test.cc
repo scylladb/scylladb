@@ -554,6 +554,12 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits) {
+    BOOST_TEST_MESSAGE("unused");
+    {
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+        // Checks for stop() should not be triggered.
+    }
+
     BOOST_TEST_MESSAGE("0 permits");
     {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());

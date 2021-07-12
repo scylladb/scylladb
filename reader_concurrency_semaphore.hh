@@ -79,6 +79,10 @@ public:
         // Total number of reads rejected because the admission queue reached its max capacity
         uint64_t total_reads_shed_due_to_overload = 0;
     };
+    struct permit_stats {
+        // Total number of permits created so far.
+        uint64_t total_permits = 0;
+    };
 
     struct permit_list;
 
@@ -281,6 +285,9 @@ public:
     stats& get_stats() {
         return _stats;
     }
+
+    /// Return stats about the currently existing permits.
+    permit_stats get_permit_stats() const;
 
     /// Make a permit
     ///
