@@ -410,6 +410,10 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name)) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
+    if (!_permit_list->stats.total_permits) {
+        // We allow destroy without stop() when the semaphore wasn't used at all yet.
+        return;
+    }
     assert(_stopped);
 }
 
