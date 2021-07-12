@@ -4631,6 +4631,207 @@ std::vector<mutation_fragment> write_corrupt_sstable(test_env& env, sstable& sst
     return corrupt_fragments;
 }
 
+SEASTAR_TEST_CASE(sstable_validation_test) {
+    cql_test_config test_cfg;
+
+    auto& db_cfg = *test_cfg.db_config;
+
+    // Disable cache to filter out its possible "corrections" to the corrupt sstable.
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+
+    return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
+        return test_env::do_with_async([this, &cql_env] (test_env& env) {
+            cell_locker_stats cl_stats;
+
+            auto& db = cql_env.local_db();
+            auto& compaction_manager = db.get_compaction_manager();
+
+            auto schema = schema_builder("ks", get_name())
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("s", int32_type, column_kind::static_column)
+                    .with_column("v", int32_type).build();
+            auto permit = env.make_reader_permit();
+
+            auto tmp = tmpdir();
+            auto sst_gen = [&env, schema, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+                return env.make_sstable(schema, tmp.path().string(), (*gen)++);
+            };
+
+            auto scrubbed_mt = make_lw_shared<memtable>(schema);
+            auto sst = sst_gen();
+
+            testlog.info("Writing sstable {}", sst->get_filename());
+
+            const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&, mut = std::optional<mutation>()] (mutation_fragment&& mf, bool) mutable {
+                if (mf.is_partition_start()) {
+                    mut.emplace(schema, mf.as_partition_start().key());
+                } else if (mf.is_end_of_partition()) {
+                    scrubbed_mt->apply(std::move(*mut));
+                    mut.reset();
+                } else {
+                    mut->apply(std::move(mf));
+                }
+            });
+
+            sst->load().get();
+
+            testlog.info("Loaded sstable {}", sst->get_filename());
+
+            auto cfg = column_family_test_config(env.manager(), env.semaphore());
+            cfg.datadir = tmp.path().string();
+            auto table = make_lw_shared<column_family>(schema, cfg, column_family::no_commitlog(),
+                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+            auto stop_table = defer([table] {
+                table->stop().get();
+            });
+            table->mark_ready_for_writes();
+            table->start();
+
+            table->add_sstable_and_update_cache(sst).get();
+
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+
+            auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment>& mfs) {
+                auto r = assert_that(sst->as_mutation_source().make_reader(schema, env.make_reader_permit()));
+                for (const auto& mf : mfs) {
+                   testlog.trace("Expecting {}", mutation_fragment::printer(*schema, mf));
+                   r.produces(*schema, mf);
+                }
+                r.produces_end_of_stream();
+            };
+
+            testlog.info("Verifying written data...");
+
+            // Make sure we wrote what we though we wrote.
+            verify_fragments(sst, corrupt_fragments);
+
+            testlog.info("Validate");
+
+            // No way to really test validation besides observing the log messages.
+            compaction_manager.perform_sstable_validation(table.get()).get();
+
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+            verify_fragments(sst, corrupt_fragments);
+        });
+    }, test_cfg);
+}
+
+SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
+    auto schema = schema_builder("ks", get_name())
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("s", int32_type, column_kind::static_column)
+            .with_column("v", int32_type).build();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    std::deque<mutation_fragment> frags;
+
+    const auto ts = api::timestamp_type{1};
+    auto local_keys = make_local_keys(5, schema);
+
+    auto make_partition_start = [&, schema] (unsigned pk) {
+        auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
+        auto dkey = dht::decorate_key(*schema, pkey);
+        return mutation_fragment(*schema, permit, partition_start(std::move(dkey), {}));
+    };
+
+    auto make_partition_end = [&, schema] {
+        return mutation_fragment(*schema, permit, partition_end());
+    };
+
+    auto make_static_row = [&, schema, ts] {
+        auto r = row{};
+        auto cdef = schema->static_column_at(0);
+        auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
+        r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
+        return mutation_fragment(*schema, permit, static_row(*schema, std::move(r)));
+    };
+
+    auto make_clustering_row = [&, schema, ts] (unsigned i) {
+        auto r = row{};
+        auto cdef = schema->regular_column_at(0);
+        auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
+        r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
+        return mutation_fragment(*schema, permit,
+                clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r)));
+    };
+
+    auto info = make_lw_shared<compaction_info>();
+
+    BOOST_TEST_MESSAGE("valid");
+    {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_static_row());
+        frags.emplace_back(make_clustering_row(0));
+        frags.emplace_back(make_clustering_row(1));
+        frags.emplace_back(make_partition_end());
+        frags.emplace_back(make_partition_start(2));
+        frags.emplace_back(make_partition_end());
+
+        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        BOOST_REQUIRE(valid);
+    }
+
+    BOOST_TEST_MESSAGE("out-of-order clustering row");
+    {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_clustering_row(1));
+        frags.emplace_back(make_clustering_row(0));
+        frags.emplace_back(make_partition_end());
+
+        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        BOOST_REQUIRE(!valid);
+    }
+
+    BOOST_TEST_MESSAGE("out-of-order static row");
+    {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_clustering_row(0));
+        frags.emplace_back(make_static_row());
+        frags.emplace_back(make_partition_end());
+
+        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        BOOST_REQUIRE(!valid);
+    }
+
+    BOOST_TEST_MESSAGE("out-of-order partition start");
+    {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_clustering_row(1));
+        frags.emplace_back(make_partition_start(2));
+        frags.emplace_back(make_partition_end());
+
+        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        BOOST_REQUIRE(!valid);
+    }
+
+    BOOST_TEST_MESSAGE("out-of-order partition");
+    {
+        frags.emplace_back(make_partition_start(2));
+        frags.emplace_back(make_clustering_row(0));
+        frags.emplace_back(make_partition_end());
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_partition_end());
+
+        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        BOOST_REQUIRE(!valid);
+    }
+
+    BOOST_TEST_MESSAGE("missing end-of-partition at EOS");
+    {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_clustering_row(0));
+
+        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        BOOST_REQUIRE(!valid);
+    }
+}
+
 SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
     cql_test_config test_cfg;
 
