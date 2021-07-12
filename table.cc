@@ -1685,7 +1685,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             tracing::trace(tr_state, "Generated {} view update mutations", updates.size());
             auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
             co_await db::view::mutate_MV(base_token, std::move(updates), _view_stats, *_config.cf_stats, tr_state,
-                std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no).handle_exception([] (auto ignored) { });
+                std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no);
         } catch (...) {
             // Ignore exceptions: any individual failure to propagate a view update will be reported
             // by a separate mechanism in mutate_MV() function. Moreover, we should continue trying
