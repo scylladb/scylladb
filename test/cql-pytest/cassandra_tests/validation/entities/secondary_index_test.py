@@ -1057,7 +1057,7 @@ def testIndexOnPartitionKeyInsertExpiringColumn(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k1, k2, a, b) VALUES (1, 2, 3, 4)")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"), [1, 2, 3, 4])
         execute(cql, table, "UPDATE %s USING TTL 1 SET b = 10 WHERE k1 = 1 AND k2 = 2")
-        time.sleep(1.0)
+        time.sleep(1.1)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"), [1, 2, 3, None])
 
 def testIndexOnClusteringKeyInsertExpiringColumn(cql, test_keyspace):
@@ -1066,7 +1066,7 @@ def testIndexOnClusteringKeyInsertExpiringColumn(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (pk, ck, a, b) VALUES (1, 2, 3, 4)")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"), [1, 2, 3, 4])
         execute(cql, table, "UPDATE %s USING TTL 1 SET b = 10 WHERE pk = 1 AND ck = 2")
-        time.sleep(1.0)
+        time.sleep(1.1)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"), [1, 2, 3, None])
 
 def testIndexOnRegularColumnInsertExpiringColumn(cql, test_keyspace):
@@ -1076,10 +1076,10 @@ def testIndexOnRegularColumnInsertExpiringColumn(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 3"), [1, 2, 3, 4])
 
         execute(cql, table, "UPDATE %s USING TTL 1 SET b = 10 WHERE pk = 1 AND ck = 2")
-        time.sleep(1.0)
+        time.sleep(1.1)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 3"), [1, 2, 3, None])
 
         execute(cql, table, "UPDATE %s USING TTL 1 SET a = 5 WHERE pk = 1 AND ck = 2")
-        time.sleep(1.0)
+        time.sleep(1.1)
         assert_empty(execute(cql, table, "SELECT * FROM %s WHERE a = 3"))
         assert_empty(execute(cql, table, "SELECT * FROM %s WHERE a = 5"))
