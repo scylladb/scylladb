@@ -344,6 +344,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_count_concurrent_reads,
             max_memory_system_concurrent_reads(),
             "_system_read_concurrency_sem")
+    , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _data_query_stage("data_query", &column_family::query)
     , _mutation_query_stage("mutation_query", &column_family::mutation_query)
     , _apply_stage("db_apply", &database::do_apply)

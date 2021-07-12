@@ -52,8 +52,8 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
 
 static thread_local mutation_application_stats dummy_app_stats;
 
-cache_tracker::cache_tracker()
-    : cache_tracker(dummy_app_stats, register_metrics::no)
+cache_tracker::cache_tracker(register_metrics with_metrics)
+    : cache_tracker(dummy_app_stats, with_metrics)
 {}
 
 static thread_local cache_tracker* current_tracker;
