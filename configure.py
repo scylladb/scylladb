@@ -1277,7 +1277,6 @@ warnings = [
     '-Wno-return-stack-address',
     '-Wno-missing-braces',
     '-Wno-unused-lambda-capture',
-    '-Wno-misleading-indentation',
     '-Wno-overflow',
     '-Wno-noexcept-type',
     '-Wno-nonnull-compare',
