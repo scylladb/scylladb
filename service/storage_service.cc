@@ -2026,7 +2026,7 @@ future<> storage_service::decommission() {
             slogger.info("DECOMMISSIONING: stopped transport");
 
             db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
-                return bm.stop();
+                return bm.drain();
             }).get();
             slogger.info("DECOMMISSIONING: stop batchlog_manager done");
 
@@ -2719,7 +2719,7 @@ future<> storage_service::do_drain(bool on_shutdown) {
         flush_column_families();
 
         db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
-            return bm.stop();
+            return bm.drain();
         }).get();
 
         set_mode(mode::DRAINING, "shutting down migration manager", false);

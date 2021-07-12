@@ -1002,7 +1002,6 @@ int main(int ac, char** av) {
 
             db::get_batchlog_manager().start(std::ref(qp), bm_cfg).get();
             // #293 - do not stop anything
-            // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
             sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(qp);
@@ -1281,6 +1280,9 @@ int main(int ac, char** av) {
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();
             }).get();
+            auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [] {
+                db::get_batchlog_manager().invoke_on_all(&db::batchlog_manager::stop).get();
+            });
 
             supervisor::notify("starting load meter");
             load_meter.init(db, gms::get_local_gossiper()).get();
