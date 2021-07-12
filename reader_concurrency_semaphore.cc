@@ -414,7 +414,13 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
         // We allow destroy without stop() when the semaphore wasn't used at all yet.
         return;
     }
-    assert(_stopped);
+    if (!_stopped) {
+        on_internal_error_noexcept(rcslog, format("~reader_concurrency_semaphore(): semaphore {} not stopped before destruction", _name));
+        // With the below conditions, we can get away with the semaphore being
+        // unstopped. In this case don't force an abort.
+        assert(_inactive_reads.empty() && !_close_readers_gate.get_count() && !_permit_gate.get_count());
+        broken();
+    }
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
