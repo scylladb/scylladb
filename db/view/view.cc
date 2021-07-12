@@ -331,6 +331,32 @@ static query::partition_slice make_partition_slice(const schema& s) {
             std::move(opts));
 }
 
+class data_query_result_builder {
+public:
+    using result_type = query::result;
+    static constexpr emit_only_live_rows only_live = emit_only_live_rows::yes;
+
+private:
+    query::result::builder _res_builder;
+    query_result_builder _builder;
+
+public:
+    data_query_result_builder(const schema& s, const query::partition_slice& slice)
+        : _res_builder(slice, query::result_options::only_result(), query::result_memory_accounter{10*1024*1024})
+        , _builder(s, _res_builder) { }
+
+    void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
+    void consume(tombstone t) { _builder.consume(t); }
+    stop_iteration consume(static_row&& sr, tombstone t, bool is_alive) { return _builder.consume(std::move(sr), t, is_alive); }
+    stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) { return _builder.consume(std::move(cr), t, is_alive); }
+    stop_iteration consume(range_tombstone&& rt) { return _builder.consume(std::move(rt)); }
+    stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
+    result_type consume_end_of_stream() {
+        _builder.consume_end_of_stream();
+        return _res_builder.build();
+    }
+};
+
 bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_row& update, gc_clock::time_point now) {
     return clustering_prefix_matches(base, view, key, update.key(), now)
             && boost::algorithm::all_of(
