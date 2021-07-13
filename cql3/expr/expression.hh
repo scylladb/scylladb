@@ -137,12 +137,6 @@ extern bool is_satisfied_by(
         const query::result_row_view& static_row, const query::result_row_view* row,
         const selection::selection&, const query_options&);
 
-/// True iff restr is satisfied with respect to the row provided from a mutation.
-extern bool is_satisfied_by(
-        const expression& restr,
-        const schema& schema, const partition_key& key, const clustering_key_prefix& ckey, const row& cells,
-        const query_options& options, gc_clock::time_point now);
-
 /// Finds the first binary_operator in restr that represents a bound and returns its RHS as a tuple.  If no
 /// such binary_operator exists, returns an empty vector.  The search is depth first.
 extern std::vector<managed_bytes_opt> first_multicolumn_bound(const expression&, const query_options&, statements::bound);
