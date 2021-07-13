@@ -82,6 +82,8 @@ public:
     struct permit_stats {
         // Total number of permits created so far.
         uint64_t total_permits = 0;
+        // Current number of permits.
+        uint64_t current_permits = 0;
     };
 
     struct permit_list;

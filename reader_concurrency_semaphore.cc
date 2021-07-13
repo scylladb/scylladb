@@ -621,11 +621,13 @@ void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit
     _permit_gate.enter();
     _permit_list->permits.push_back(permit);
     ++_permit_list->stats.total_permits;
+    ++_permit_list->stats.current_permits;
 }
 
 void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& permit) noexcept {
     permit.unlink();
     _permit_gate.leave();
+    --_permit_list->stats.current_permits;
 }
 
 reader_concurrency_semaphore::permit_stats reader_concurrency_semaphore::get_permit_stats() const {
