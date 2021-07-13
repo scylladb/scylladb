@@ -152,6 +152,10 @@ future<> db::batchlog_manager::stop() {
     if (!_stop.abort_requested()) {
         _stop.request_abort();
     }
+    if (this_shard_id() == 0) {
+        // Abort do_batch_log_replay if waiting on the semaphore.
+        _sem.broken();
+    }
     return std::exchange(_started, make_ready_future<>()).finally([this] {
         return _gate.close();
     });
