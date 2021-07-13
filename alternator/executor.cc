@@ -897,6 +897,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             }
             std::string vname(lsi_name(table_name, index_name->GetString()));
             elogger.trace("Adding LSI {}", index_name->GetString());
+            if (range_key.empty()) {
+                return make_ready_future<request_return_type>(api_error::validation(
+                        "LocalSecondaryIndex requires that the base table have a range key"));
+            }
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(keyspace_name, vname);

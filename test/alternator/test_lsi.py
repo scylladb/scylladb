@@ -68,15 +68,16 @@ def test_lsi_identical(dynamodb):
         full_scan(table, IndexName='wrong')
     table.delete()
 
-# Checks that providing a hash key different than the base table is not allowed,
-# and so is providing duplicated keys or no sort key at all
-def test_lsi_wrong(dynamodb):
-    with pytest.raises(ClientError, match='ValidationException.*'):
+# Check that providing a hash key different than the base table is not
+# allowed:
+def test_lsi_wrong_different_hash(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*hash key'):
         table = create_test_table(dynamodb,
-            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
             AttributeDefinitions=[
                         { 'AttributeName': 'p', 'AttributeType': 'S' },
-                        { 'AttributeName': 'a', 'AttributeType': 'S' },
+                        { 'AttributeName': 'c', 'AttributeType': 'S' },
                         { 'AttributeName': 'b', 'AttributeType': 'S' }
             ],
             LocalSecondaryIndexes=[
@@ -89,13 +90,17 @@ def test_lsi_wrong(dynamodb):
                 }
             ])
         table.delete()
-    with pytest.raises(ClientError, match='ValidationException.*'):
+
+# Check that it's not allowed to create an LSI without specifying a range
+# key cannot be missing, or (obviously) making it the same as the hash key:
+def test_lsi_wrong_bad_range(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*same'):
         table = create_test_table(dynamodb,
-            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
             AttributeDefinitions=[
                         { 'AttributeName': 'p', 'AttributeType': 'S' },
-                        { 'AttributeName': 'a', 'AttributeType': 'S' },
-                        { 'AttributeName': 'b', 'AttributeType': 'S' }
+                        { 'AttributeName': 'c', 'AttributeType': 'S' }
             ],
             LocalSecondaryIndexes=[
                 {   'IndexName': 'hello',
@@ -109,16 +114,39 @@ def test_lsi_wrong(dynamodb):
         table.delete()
     with pytest.raises(ClientError, match='ValidationException.*'):
         table = create_test_table(dynamodb,
-            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
             AttributeDefinitions=[
                         { 'AttributeName': 'p', 'AttributeType': 'S' },
-                        { 'AttributeName': 'a', 'AttributeType': 'S' },
-                        { 'AttributeName': 'b', 'AttributeType': 'S' }
+                        { 'AttributeName': 'c', 'AttributeType': 'S' },
             ],
             LocalSecondaryIndexes=[
                 {   'IndexName': 'hello',
                     'KeySchema': [
                         { 'AttributeName': 'p', 'KeyType': 'HASH' }
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ])
+        table.delete()
+
+# The purpose of an LSI is to allow an alternative sort key for the
+# existing partitions - the partitions do not change. So it doesn't make
+# sense to create an LSI on a table that did not originally have a sort key
+# (so has only single-item partitions) - and this case is not allowed.
+def test_lsi_wrong_no_sort_key(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*'):
+        table = create_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                        { 'AttributeName': 'p', 'AttributeType': 'S' },
+                        { 'AttributeName': 'c', 'AttributeType': 'S' },
+            ],
+            LocalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' }
                     ],
                     'Projection': { 'ProjectionType': 'ALL' }
                 }
