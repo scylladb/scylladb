@@ -1272,7 +1272,6 @@ warnings = [
     '-Wno-tautological-compare',
     '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
-    '-Wno-c++1z-extensions',
     '-Wno-sometimes-uninitialized',
     '-Wno-return-stack-address',
     '-Wno-missing-braces',
