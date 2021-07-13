@@ -634,8 +634,10 @@ future<> server_impl::applier_fiber() {
                     std::back_inserter(commands));
 
             auto size = commands.size();
-            co_await _state_machine->apply(std::move(commands));
-            _stats.applied_entries += size;
+            if (size) {
+               co_await _state_machine->apply(std::move(commands));
+               _stats.applied_entries += size;
+            }
             notify_waiters(_awaited_applies, batch);
 
             if (applied_since_snapshot >= _config.snapshot_threshold) {
