@@ -835,6 +835,10 @@ int main(int ac, char** av) {
             qos::service_level_options default_service_level_configuration;
             sl_controller.start(std::ref(auth_service), default_service_level_configuration).get();
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
+                sl_controller.stop().get();
+            });
+
             //This starts the update loop - but no real update happens until the data accessor is not initialized.
             sl_controller.local().update_from_distributed_data(std::chrono::seconds(10));
 
@@ -1408,8 +1412,10 @@ int main(int ac, char** av) {
                 repair_shutdown(db).get();
             });
 
-            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
-                sl_controller.stop().get();
+            auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [] {
+                sl_controller.invoke_on_all([] (qos::service_level_controller& slc) {
+                    return slc.drain();
+                }).get();
             });
 
             auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
