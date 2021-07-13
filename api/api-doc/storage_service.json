@@ -766,6 +766,38 @@
          ]
       },
       {
+         "path":"/storage_service/keyspace_validate/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Trigger a validation of sstables on a single keyspace",
+               "type": "long",
+               "nickname":"validate",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to validate",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/keyspace_scrub/{keyspace}",
          "operations":[
             {

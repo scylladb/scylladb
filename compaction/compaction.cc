@@ -48,9 +48,11 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/join.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/algorithm/string/join.hpp>
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
 
 #include "sstables/sstables.hh"
@@ -462,6 +464,35 @@ public:
     }
 };
 
+class formatted_sstables_list {
+    bool _include_origin = true;
+    std::vector<sstring> _ssts;
+public:
+    formatted_sstables_list() = default;
+    explicit formatted_sstables_list(const std::vector<shared_sstable>& ssts, bool include_origin) : _include_origin(include_origin) {
+        _ssts.reserve(ssts.size());
+        for (const auto& sst : ssts) {
+            *this += sst;
+        }
+    }
+    formatted_sstables_list& operator+=(const shared_sstable& sst) {
+        if (_include_origin) {
+            _ssts.emplace_back(format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()));
+        } else {
+            _ssts.emplace_back(format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level()));
+        }
+        return *this;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst);
+};
+
+std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
+    os << "[";
+    os << boost::algorithm::join(lst._ssts, ",");
+    os << "]";
+    return os;
+}
+
 class compaction {
 protected:
     column_family& _cf;
@@ -475,7 +506,7 @@ protected:
     lw_shared_ptr<sstable_set> _compacting;
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
-    lw_shared_ptr<compaction_info> _info = make_lw_shared<compaction_info>();
+    lw_shared_ptr<compaction_info> _info;
     uint64_t _estimated_partitions = 0;
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
@@ -491,6 +522,18 @@ protected:
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
+public:
+    static lw_shared_ptr<compaction_info> create_compaction_info(column_family& cf, compaction_descriptor descriptor) {
+        auto info = make_lw_shared<compaction_info>();
+        info->ks_name = cf.schema()->ks_name();
+        info->cf_name = cf.schema()->cf_name();
+        info->type = descriptor.options.type();
+        info->run_identifier = descriptor.run_identifier;
+        info->cf = &cf;
+        info->compaction_uuid = utils::UUID_gen::get_time_UUID();
+        return info;
+    }
+
 protected:
     compaction(column_family& cf, compaction_descriptor descriptor)
         : _cf(cf)
@@ -500,6 +543,7 @@ protected:
         , _sstables(std::move(descriptor.sstables))
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
+        , _info(create_compaction_info(cf, descriptor))
         , _gc_sstable_writer_data(*this)
         , _replacer(std::move(descriptor.replacer))
         , _run_identifier(descriptor.run_identifier)
@@ -508,10 +552,6 @@ protected:
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
     {
-        _info->type = descriptor.options.type();
-        _info->run_identifier = _run_identifier;
-        _info->cf = &cf;
-        _info->compaction_uuid = utils::UUID_gen::get_time_UUID();
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
@@ -603,7 +643,7 @@ private:
     requires CompactedFragmentsConsumer<GCConsumer>
     future<> setup(GCConsumer gc_consumer) {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
-        sstring formatted_msg = "{} [";
+        formatted_sstables_list formatted_msg;
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
@@ -616,7 +656,7 @@ private:
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
             _info->total_partitions += sst->get_estimated_key_count();
-            formatted_msg += format("{}:level={:d}:origin={}, ", sst->get_filename(), sst->get_sstable_level(), sst->get_origin());
+            formatted_msg += sst;
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
@@ -640,11 +680,8 @@ private:
             // compacted sstables anyway (CL should be clean by then).
             _rp = std::max(_rp, sst_stats.position);
         }
-        formatted_msg += "]";
         _info->sstables = _sstables.size();
-        _info->ks_name = _schema->ks_name();
-        _info->cf_name = _schema->cf_name();
-        log_info(formatted_msg, report_start_desc());
+        log_info("{} {}", report_start_desc(), formatted_msg);
         if (ssts->all()->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->all()->size(), _sstables.size());
@@ -685,20 +722,17 @@ private:
         auto ratio = double(_info->end_size) / double(_info->start_size);
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         // Don't report NaN or negative number.
-        sstring new_sstables_msg;
 
         on_end_of_compaction();
 
-        for (auto& newtab : _info->new_sstables) {
-            new_sstables_msg += format("{}:level={:d}, ", newtab->get_filename(), newtab->get_sstable_level());
-        }
+        formatted_sstables_list new_sstables_msg(_info->new_sstables, false);
 
         // FIXME: there is some missing information in the log message below.
         // look at CompactionTask::runMayThrow() in origin for reference.
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        log_info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
+        log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
                 _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
@@ -1156,6 +1190,66 @@ public:
 };
 
 class scrub_compaction final : public regular_compaction {
+public:
+    static void report_invalid_partition(compaction_type type, mutation_fragment_stream_validator& validator, const dht::decorated_key& new_key,
+            std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& current_key = validator.previous_partition_key();
+        clogger.error("[{} compaction {}.{}] Invalid partition {} ({}), partition is out-of-order compared to previous partition {} ({}){}{}",
+                type,
+                schema.ks_name(),
+                schema.cf_name(),
+                new_key.key().with_schema(schema),
+                new_key,
+                current_key.key().with_schema(schema),
+                current_key,
+                action.empty() ? "" : "; ",
+                action);
+    }
+    static void report_invalid_partition_start(compaction_type type, mutation_fragment_stream_validator& validator, const dht::decorated_key& new_key,
+            std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& current_key = validator.previous_partition_key();
+        clogger.error("[{} compaction {}.{}] Invalid partition start for partition {} ({}), previous partition {} ({}) didn't end with a partition-end fragment{}{}",
+                type,
+                schema.ks_name(),
+                schema.cf_name(),
+                new_key.key().with_schema(schema),
+                new_key,
+                current_key.key().with_schema(schema),
+                current_key,
+                action.empty() ? "" : "; ",
+                action);
+    }
+    static void report_invalid_mutation_fragment(compaction_type type, mutation_fragment_stream_validator& validator, const mutation_fragment& mf,
+            std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& key = validator.previous_partition_key();
+        const auto prev_pos = validator.previous_position();
+        clogger.error("[{} compaction {}.{}] Invalid {} fragment{} ({}) in partition {} ({}),"
+                " fragment is out-of-order compared to previous {} fragment{} ({}){}{}",
+                type,
+                schema.ks_name(),
+                schema.cf_name(),
+                mf.mutation_fragment_kind(),
+                mf.has_key() ? format(" with key {}", mf.key().with_schema(schema)) : "",
+                mf.position(),
+                key.key().with_schema(schema),
+                key,
+                prev_pos.region(),
+                prev_pos.has_key() ? format(" with key {}", prev_pos.key().with_schema(schema)) : "",
+                prev_pos,
+                action.empty() ? "" : "; ",
+                action);
+    }
+    static void report_invalid_end_of_stream(compaction_type type, mutation_fragment_stream_validator& validator, std::string_view action = "") {
+        const auto& schema = validator.schema();
+        const auto& key = validator.previous_partition_key();
+        clogger.error("[{} compaction {}.{}] Invalid end-of-stream, last partition {} ({}) didn't end with a partition-end fragment{}{}",
+                type, schema.ks_name(), schema.cf_name(), key.key().with_schema(schema), key, action.empty() ? "" : "; ", action);
+    }
+
+private:
     class reader : public flat_mutation_reader::impl {
         using skip = bool_class<class skip_tag>;
     private:
@@ -1173,16 +1267,8 @@ class scrub_compaction final : public regular_compaction {
 
         void on_unexpected_partition_start(const mutation_fragment& ps) {
             maybe_abort_scrub();
-            const auto& new_key = ps.as_partition_start().key();
-            const auto& current_key = _validator.previous_partition_key();
-            clogger.error("[scrub compaction {}.{}] Unexpected partition-start for partition {} ({}),"
-                    " rectifying by adding assumed missing partition-end to the current partition {} ({}).",
-                    _schema->ks_name(),
-                    _schema->cf_name(),
-                    new_key.key().with_schema(*_schema),
-                    new_key,
-                    current_key.key().with_schema(*_schema),
-                    current_key);
+            report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(),
+                    "Rectifying by adding assumed missing partition-end");
 
             auto pe = mutation_fragment(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
@@ -1205,27 +1291,13 @@ class scrub_compaction final : public regular_compaction {
 
         skip on_invalid_partition(const dht::decorated_key& new_key) {
             maybe_abort_scrub();
-            const auto& current_key = _validator.previous_partition_key();
             if (_scrub_mode == compaction_options::scrub::mode::segregate) {
-                clogger.error("[scrub compaction {}.{}] Detected out-of-order partition {} ({}) (previous being {} ({}))",
-                        _schema->ks_name(),
-                        _schema->cf_name(),
-                        new_key.key().with_schema(*_schema),
-                        new_key,
-                        current_key.key().with_schema(*_schema),
-                        current_key);
+                report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Detected");
                 _validator.reset(new_key);
                 // Let the segregating interposer consumer handle this.
                 return skip::no;
             }
-            clogger.error("[scrub compaction {}.{}] Skipping invalid partition {} ({}):"
-                    " partition has non-monotonic key compared to current one {} ({})",
-                    _schema->ks_name(),
-                    _schema->cf_name(),
-                    new_key.key().with_schema(*_schema),
-                    new_key,
-                    current_key.key().with_schema(*_schema),
-                    current_key);
+            report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Skipping");
             _skip_to_next_partition = true;
             return skip::yes;
         }
@@ -1239,14 +1311,8 @@ class scrub_compaction final : public regular_compaction {
             // The only case a partition end is invalid is when it comes after
             // another partition end, and we can just drop it in that case.
             if (!mf.is_end_of_partition() && _scrub_mode == compaction_options::scrub::mode::segregate) {
-                clogger.error("[scrub compaction {}.{}] Injecting partition start/end to segregate out-of-order fragment {} (previous position being {}) in partition {} ({}):",
-                        _schema->ks_name(),
-                        _schema->cf_name(),
-                        mf.position(),
-                        _validator.previous_position(),
-                        key.key().with_schema(*_schema),
-                        key);
-
+                report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf,
+                        "Injecting partition start/end to segregate out-of-order fragment");
                 push_mutation_fragment(*_schema, _permit, partition_end{});
 
                 // We loose the partition tombstone if any, but it will be
@@ -1259,16 +1325,8 @@ class scrub_compaction final : public regular_compaction {
                 return skip::no;
             }
 
-            clogger.error("[scrub compaction {}.{}] Skipping invalid {} fragment {}in partition {} ({}):"
-                    " fragment has non-monotonic position {} compared to previous position {}.",
-                    _schema->ks_name(),
-                    _schema->cf_name(),
-                    mf.mutation_fragment_kind(),
-                    mf.has_key() ? format("with key {} ({}) ", mf.key().with_schema(*_schema), mf.key()) : "",
-                    key.key().with_schema(*_schema),
-                    key,
-                    mf.position(),
-                    _validator.previous_position());
+            report_invalid_mutation_fragment(compaction_type::Scrub, _validator, mf, "Skipping");
+
             return skip::yes;
         }
 
@@ -1276,8 +1334,7 @@ class scrub_compaction final : public regular_compaction {
             maybe_abort_scrub();
             // Handle missing partition_end
             push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
-            clogger.error("[scrub compaction {}.{}] Adding missing partition-end to the end of the stream.",
-                    _schema->ks_name(), _schema->cf_name());
+            report_invalid_end_of_stream(compaction_type::Scrub, _validator, "Rectifying by adding missing partition-end to the end of the stream");
         }
 
         void fill_buffer_from_underlying() {
@@ -1533,11 +1590,13 @@ compaction_type compaction_options::type() const {
     static const compaction_type index_to_type[] = {
         compaction_type::Compaction,
         compaction_type::Cleanup,
+        compaction_type::Validation,
         compaction_type::Upgrade,
         compaction_type::Scrub,
         compaction_type::Reshard,
         compaction_type::Reshape,
     };
+    static_assert(std::variant_size_v<compaction_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
 }
 
@@ -1558,6 +1617,9 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
         std::unique_ptr<compaction> operator()(compaction_options::cleanup options) {
             return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(options));
         }
+        std::unique_ptr<compaction> operator()(compaction_options::validation) {
+            return nullptr; // this compaction doesn't go through the regular path
+        }
         std::unique_ptr<compaction> operator()(compaction_options::upgrade options) {
             return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(options));
         }
@@ -1569,11 +1631,99 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
     return descriptor.options.visit(visitor_factory);
 }
 
+future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, const compaction_info& info) {
+    auto schema = reader.schema();
+
+    bool valid = true;
+    std::exception_ptr ex;
+
+    try {
+        auto validator = mutation_fragment_stream_validator(*schema);
+
+        while (auto mf_opt = co_await reader(db::no_timeout)) {
+            if (info.is_stop_requested()) [[unlikely]] {
+                // Compaction manager will catch this exception and re-schedule the compaction.
+                throw compaction_stop_exception(info.ks_name, info.cf_name, info.stop_requested);
+            }
+
+            const auto& mf = *mf_opt;
+
+            if (mf.is_partition_start()) {
+                const auto& ps = mf.as_partition_start();
+                if (!validator(mf)) {
+                    scrub_compaction::report_invalid_partition_start(compaction_type::Validation, validator, ps.key());
+                    validator.reset(mf);
+                    valid = false;
+                }
+                if (!validator(ps.key())) {
+                    scrub_compaction::report_invalid_partition(compaction_type::Validation, validator, ps.key());
+                    validator.reset(ps.key());
+                    valid = false;
+                }
+            } else {
+                if (!validator(mf)) {
+                    scrub_compaction::report_invalid_mutation_fragment(compaction_type::Validation, validator, mf);
+                    validator.reset(mf);
+                    valid = false;
+                }
+            }
+        }
+        if (!validator.on_end_of_stream()) {
+            scrub_compaction::report_invalid_end_of_stream(compaction_type::Validation, validator);
+            valid = false;
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await reader.close();
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    co_return valid;
+}
+
+static future<compaction_info> validate_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
+    auto schema = cf.schema();
+
+    formatted_sstables_list sstables_list_msg;
+    auto sstables = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(schema, make_lw_shared<sstable_list>(sstable_list{}), false));
+    for (const auto& sst : descriptor.sstables) {
+        sstables_list_msg += sst;
+        sstables->insert(sst);
+    }
+
+    auto info = compaction::create_compaction_info(cf, descriptor);
+    info->sstables = descriptor.sstables.size();
+    cf.get_compaction_manager().register_compaction(info);
+    auto deregister_compaction = defer([&cf, info] {
+        cf.get_compaction_manager().deregister_compaction(info);
+    });
+
+    clogger.info("Validating {}", sstables_list_msg);
+
+    auto permit = cf.compaction_concurrency_semaphore().make_permit(schema.get(), "Validation");
+    auto reader = sstables->make_local_shard_sstable_reader(schema, permit, query::full_partition_range, schema->full_slice(), descriptor.io_priority,
+            tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no, default_read_monitor_generator());
+
+    const auto valid = co_await validate_compaction_validate_reader(std::move(reader), *info);
+
+    clogger.info("Validated {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+
+    co_return *info;
+}
+
 future<compaction_info>
 compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
     if (descriptor.sstables.empty()) {
         throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
                 cf.schema()->ks_name(), cf.schema()->cf_name()));
+    }
+    if (descriptor.options.type() == compaction_type::Validation) {
+        // Bypass the usual compaction machinery for validation compaction
+        return validate_sstables(std::move(descriptor), cf);
     }
     auto c = make_compaction(cf, std::move(descriptor));
     if (c->enable_garbage_collected_sstable_writer()) {

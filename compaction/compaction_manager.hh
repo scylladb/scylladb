@@ -57,6 +57,14 @@ public:
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
     };
+    struct compaction_scheduling_group {
+        seastar::scheduling_group cpu;
+        const ::io_priority_class& io;
+    };
+    struct maintenance_scheduling_group {
+        seastar::scheduling_group cpu;
+        const ::io_priority_class& io;
+    };
 private:
     struct task {
         column_family* compacting_cf = nullptr;
@@ -157,7 +165,7 @@ private:
 
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
-    seastar::scheduling_group _scheduling_group;
+    maintenance_scheduling_group _maintenance_sg;
     size_t _available_memory;
 
     using get_candidates_func = std::function<std::vector<sstables::shared_sstable>(const column_family&)>;
@@ -167,8 +175,8 @@ private:
     future<> stop_ongoing_compactions(sstring reason);
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 public:
-    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, abort_source& as);
-    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares, abort_source& as);
+    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
+    compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
     compaction_manager();
     ~compaction_manager();
 
@@ -212,6 +220,13 @@ public:
     // Submit a column family to be scrubbed and wait for its termination.
     future<> perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode);
 
+    // Submit a column family to be validated and wait for its termination.
+    //
+    // Validation compaction reads each sstable individually, passing the
+    // fragment stream through mutation fragment stream validator, logging any
+    // errors found.
+    future<> perform_sstable_validation(column_family* cf);
+
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);
 
@@ -220,8 +235,10 @@ public:
     // it completes when future returned by job is ready or returns immediately
     // if manager was asked to stop.
     //
+    // parameter type is the compaction type the operation can most closely be
+    //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(column_family* cf, sstring name, noncopyable_function<future<>()> job);
+    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>()> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.

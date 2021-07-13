@@ -187,7 +187,9 @@ public:
         return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight == bound_weight::after_all_prefixed);
     }
 
-    // Valid when >= before_all_clustered_rows()
+    bool has_key() const { return bool(_ck); }
+
+    // Valid when has_key() == true
     const clustering_key_prefix& key() const {
         return *_ck;
     }
@@ -343,6 +345,8 @@ public:
             ::feed_hash(hasher, false);
         }
     }
+
+    bool has_key() const { return bool(_ck); }
 
     const clustering_key_prefix& key() const {
         return *_ck;
