@@ -2812,10 +2812,10 @@ public:
         } catch (rpc::timeout_error&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (timed_out_error&) {
+        } catch (semaphore_timed_out&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch (semaphore_timed_out&) {
+        } catch (timed_out_error&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
         } catch(...) {
