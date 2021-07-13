@@ -442,6 +442,7 @@ void write_json_result(std::string result_file, const test_config& cfg, perf_res
     stats["median tps"] = median.throughput;
     stats["allocs_per_op"] = median.mallocs_per_op;
     stats["tasks_per_op"] = median.tasks_per_op;
+    stats["instructions_per_op"] = median.instructions_per_op;
     stats["mad tps"] = mad;
     stats["max tps"] = max;
     stats["min tps"] = min;
