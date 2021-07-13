@@ -93,19 +93,23 @@ future<> db::batchlog_manager::do_batch_log_replay() {
     // Use with_semaphore is much simpler, but nested invoke_on can
     // cause deadlock.
     return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
+        bm._gate.enter();
         return bm._sem.wait().then([&bm] {
             return bm._cpu++ % smp::count;
         });
     }).then([] (auto dest) {
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         return get_batchlog_manager().invoke_on(dest, [] (auto& bm) {
-            return bm.replay_all_failed_batches();
+            return with_gate(bm._gate, [&bm] {
+                return bm.replay_all_failed_batches();
+            });
         }).then([dest] {
             blogger.debug("Batchlog replay on shard {}: done", dest);
         });
     }).finally([] {
         return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
-            return bm._sem.signal();
+            bm._sem.signal();
+            bm._gate.leave();
         });
     });
 }
