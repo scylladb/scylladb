@@ -1419,6 +1419,28 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
     }
 }
 
+void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    simple_schema s;
+    auto pkey = s.make_pkey();
+    const size_t row_count = 100; // Enough to trigger is_buffer_full.
+
+    std::vector<mutation> mutations {{s.schema(), pkey}};
+    mutation &m = mutations.front();
+
+    s.delete_range(m, s.make_ckey_range(0, 100));
+    for (size_t i = 0; i < 100; ++i) {
+        s.add_row(m, s.make_ckey(i), "v");
+    }
+
+    auto ms = populate(s.schema(), mutations, gc_clock::now());
+    auto pr = dht::partition_range::make_singular(pkey);
+
+    assert_that(downgrade_to_v1(ms.make_reader_v2(s.schema(), semaphore.make_permit())))
+            .produces_partition_start(pkey) // Read something.
+            .next_partition()               // Next partition clears buffer.
+            .produces_end_of_stream();      // Expect no active range tombstone change at this point.
+}
+
 void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     simple_schema s;
     auto pkey = s.make_pkey();
@@ -1640,6 +1662,7 @@ void run_mutation_reader_tests(populate_fn_ex populate) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     test_range_tombstones_v2(semaphore, populate);
+    test_downgrade_to_v1_clear_buffer(semaphore, populate);
     test_reader_conversions(semaphore, populate);
     test_slicing_and_fast_forwarding(semaphore, populate);
     test_date_tiered_clustering_slicing(semaphore, populate);

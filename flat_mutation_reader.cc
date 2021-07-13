@@ -37,6 +37,7 @@
 #include "mutation_rebuilder.hh"
 #include "range_tombstone_splitter.hh"
 #include <seastar/core/on_internal_error.hh>
+#include <stdexcept>
 
 #include "clustering_key_filter.hh"
 
@@ -1344,6 +1345,8 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
         }
         virtual future<> next_partition() override {
             clear_buffer_to_next_partition();
+            // The client didn't receive the paired-up range tombstone change and isn't interested.
+            _rt_assembler.reset();
             if (is_buffer_empty()) {
                 _end_of_stream = false;
                 return _reader.next_partition();
@@ -1352,11 +1355,17 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
+            // The client didn't receive the paired-up range tombstone change and isn't interested.
+            _rt_assembler.reset();
             _end_of_stream = false;
             return _reader.fast_forward_to(pr, timeout);
         }
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
+            if (_rt_assembler.needs_flush()) {
+                throw std::logic_error("fast_forward_to in downgrade_to_v1: encountered active range tombstone");
+            }
+
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr), timeout);
         }
