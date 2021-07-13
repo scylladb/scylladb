@@ -989,7 +989,7 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::ref(sl_controller)).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
@@ -1413,9 +1413,7 @@ int main(int ac, char** av) {
             });
 
             auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [] {
-                sl_controller.invoke_on_all([] (qos::service_level_controller& slc) {
-                    return slc.drain();
-                }).get();
+                sl_controller.invoke_on_all(&qos::service_level_controller::drain).get();
             });
 
             auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
