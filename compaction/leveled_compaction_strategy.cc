@@ -22,7 +22,6 @@
 #include "leveled_compaction_strategy.hh"
 #include "leveled_manifest.hh"
 #include <algorithm>
-#include <ranges>
 
 #include <boost/range/algorithm/remove_if.hpp>
 
