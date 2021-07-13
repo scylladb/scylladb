@@ -607,10 +607,11 @@ public:
                 assert(data.size() == 0);
                 _remain -= orig_data_size;
                 if (skip.get_value() >= _remain) {
+                    skip_bytes skip_remaining(_remain);
                     _stream_position.position += _remain;
                     _remain = 0;
                     verify_end_state();
-                    return make_ready_future<consumption_result_type>(stop_consuming<char>{std::move(data)});
+                    return make_ready_future<consumption_result_type>(std::move(skip_remaining));
                 }
                 _stream_position.position += skip.get_value();
                 _remain -= skip.get_value();
