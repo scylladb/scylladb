@@ -19,7 +19,7 @@
 
 import time
 import pytest
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
 
 from util import new_test_table, unique_name
@@ -217,3 +217,13 @@ def test_range_deletion(cql, test_keyspace, scylla_only):
         cql.execute(f"DELETE FROM {table} WHERE p = 1 AND c1 > 5 and c1 < 846")
         res = [row.c1 for row in cql.execute(f"SELECT * FROM {table}_c1_idx_index")]
         assert sorted(res) == [x for x in range(1342) if x <= 5 or x >= 846]
+
+# Test that trying to insert a value for an indexed column that exceeds 64KiB fails,
+# because this value is too large to be written as a key in the underlying index
+def test_too_large_indexed_value(cql, test_keyspace):
+    schema = 'p int, c int, v text, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        big = 'x'*66536
+        with pytest.raises(WriteFailure):
+            cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
