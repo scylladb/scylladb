@@ -29,6 +29,7 @@ fi
 
 debian_base_packages=(
     clang
+    gdb
     liblua5.3-dev
     python3-pyparsing
     python3-colorama
@@ -46,6 +47,7 @@ debian_base_packages=(
 
 fedora_packages=(
     clang
+    gdb
     lua-devel
     yaml-cpp-devel
     thrift-devel
@@ -111,6 +113,7 @@ fedora_python3_packages=(
 )
 
 centos_packages=(
+    gdb
     yaml-cpp-devel
     thrift-devel
     scylla-antlr35-tool
@@ -133,6 +136,7 @@ centos_packages=(
 #
 # aur: antlr3, antlr3-cpp-headers-git
 arch_packages=(
+    gdb
     base-devel
     filesystem
     git
