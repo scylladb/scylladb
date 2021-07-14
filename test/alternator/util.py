@@ -21,6 +21,7 @@ import string
 import random
 import collections
 import time
+from contextlib import contextmanager
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))
@@ -145,6 +146,22 @@ def create_test_table(dynamodb, **kwargs):
     waiter.config.max_attempts = 200
     waiter.wait(TableName=name)
     return table
+
+# A variant of create_test_table() that can be used in a "with" to
+# automatically delete the table when the test ends - as:
+#   with new_test_table(dynamodb, ...) as table:
+# When possible to share the same table between multiple tests, always
+# prefer to use a fixture over using this function directly.
+@contextmanager
+def new_test_table(dynamodb, **kwargs):
+    table = create_test_table(dynamodb, **kwargs)
+    try:
+        yield table
+        # The user's "with" code is running during the yield, so if it
+        # throws an exception, we need the cleanup to be in a finally block:
+    finally:
+        print(f"Deleting table {table.name}")
+        table.delete()
 
 # DynamoDB's ListTables request returns up to a single page of table names
 # (e.g., up to 100) and it is up to the caller to call it again and again
