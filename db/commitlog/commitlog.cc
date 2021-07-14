@@ -950,128 +950,128 @@ public:
         });
     }
 
+    enum class write_result {
+        ok,
+        must_sync,
+        no_space,
+        ok_need_batch_sync,
+    };
+
     /**
      * Add a "mutation" to the segment.
      * Should only be called from "allocate_when_possible". "this" must be secure in a shared_ptr that will not
      * die. We don't keep ourselves alive (anymore)
      */
-    future<> allocate(entry_writer& writer, segment_manager::request_controller_units permit, db::timeout_clock::time_point timeout) {
-        for (;;) {
-            if (must_sync()) {
-                co_await with_timeout(timeout, sync());
-                continue;
-            }
-
-            const auto size = writer.size(*this);
-            const auto s = size + writer.num_entries * entry_overhead_size + (writer.num_entries > 1 ? multi_entry_overhead_size : 0u); // total size
-
-            _segment_manager->sanity_check_size(s);
-
-            if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
-                auto new_seg = co_await finish_and_get_new(timeout);
-                co_await new_seg->allocate(writer, std::move(permit), timeout);
-                break;
-            } else if (!_buffer.empty() && (s > _buffer_ostream.size())) {  // enough data?
-                if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
-                    // TODO: this could cause starvation if we're really unlucky.
-                    // If we run batch mode and find ourselves not fit in a non-empty
-                    // buffer, we must force a cycle and wait for it (to keep flush order)
-                    // This will most likely cause parallel writes, and consecutive flushes.
-                    co_await with_timeout(timeout, sync());
-                    continue;
-                } else {
-                    background_cycle();
-                }
-            }
-
-            size_t buf_memory = s;
-            if (_buffer.empty()) {
-                new_buffer(s);
-                buf_memory += buffer_position();
-            }
-
-            if (_closed) {
-                throw std::runtime_error("commitlog: Cannot add data to a closed segment");
-            }
-
-            buf_memory -= permit.release();
-            _segment_manager->account_memory_usage(buf_memory);
-
-            auto& out = _buffer_ostream;
-
-            std::optional<crc32_nbo> mecrc;
-
-            // if this is multi-entry write, we need to add an extra header + crc
-            // the header and crc formula is:
-            // header:
-            //      magic : uint32_t
-            //      size  : uint32_t
-            //      crc1  : uint32_t - crc of magic, size
-            // -> entries[]
-            // post:
-            //      crc2  : uint32_t - crc1 + each entry crc.
-            if (writer.num_entries > 1) {
-                mecrc.emplace();
-                write<uint32_t>(out, multi_entry_size_magic);
-                write<uint32_t>(out, s);
-                mecrc->process(multi_entry_size_magic);
-                mecrc->process(uint32_t(s));
-                write<uint32_t>(out, mecrc->checksum());
-            }
-
-            for (size_t entry = 0; entry < writer.num_entries; ++entry) {
-                replay_position rp(_desc.id, position());
-                auto id = writer.id(entry);
-                auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
-                auto es = entry_size + entry_overhead_size;
-
-                _cf_dirty[id]++; // increase use count for cf.
-
-                rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
-
-                crc32_nbo crc;
-
-                write<uint32_t>(out, es);
-                crc.process(uint32_t(es));
-                write<uint32_t>(out, crc.checksum());
-
-                // actual data
-                auto entry_out = out.write_substream(entry_size);
-                auto entry_data = entry_out.to_input_stream();
-                writer.write(*this, entry_out, entry);
-                entry_data.with_stream([&] (auto data_str) {
-                    crc.process_fragmented(ser::buffer_view<typename std::vector<temporary_buffer<char>>::iterator>(data_str));
-                });
-
-                auto checksum = crc.checksum();
-                write<uint32_t>(out, checksum);
-                if (mecrc) {
-                    mecrc->process(checksum);
-                }
-
-                writer.result(entry, std::move(h));
-            }
-
-            if (mecrc) {
-                // write the crc of header + all sub-entry crc
-                write<uint32_t>(out, mecrc->checksum());
-            }
-
-            ++_segment_manager->totals.allocation_count;
-            ++_num_allocs;
-
-            if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
-                co_await batch_cycle(timeout).discard_result();
-            } else {
-                // If this buffer alone is too big, potentially bigger than the maximum allowed size,
-                // then no other request will be allowed in to force the cycle()ing of this buffer. We
-                // have to do it ourselves.
-                if ((buffer_position() >= (db::commitlog::segment::default_size))) {
-                    background_cycle();
-                }
-            }
-            break;
+    write_result allocate(entry_writer& writer, segment_manager::request_controller_units& permit, db::timeout_clock::time_point timeout) {
+        if (must_sync()) {
+            return write_result::must_sync;
         }
+
+        const auto size = writer.size(*this);
+        const auto s = size + writer.num_entries * entry_overhead_size + (writer.num_entries > 1 ? multi_entry_overhead_size : 0u); // total size
+
+        _segment_manager->sanity_check_size(s);
+
+        if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
+            return write_result::no_space;
+        } else if (!_buffer.empty() && (s > _buffer_ostream.size())) {  // enough data?
+            if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
+                // TODO: this could cause starvation if we're really unlucky.
+                // If we run batch mode and find ourselves not fit in a non-empty
+                // buffer, we must force a cycle and wait for it (to keep flush order)
+                // This will most likely cause parallel writes, and consecutive flushes.
+                return write_result::must_sync;
+            }
+            background_cycle();
+        }
+
+        size_t buf_memory = s;
+        if (_buffer.empty()) {
+            new_buffer(s);
+            buf_memory += buffer_position();
+        }
+
+        if (_closed) {
+            throw std::runtime_error("commitlog: Cannot add data to a closed segment");
+        }
+
+        buf_memory -= permit.release();
+        _segment_manager->account_memory_usage(buf_memory);
+
+        auto& out = _buffer_ostream;
+
+        std::optional<crc32_nbo> mecrc;
+
+        // if this is multi-entry write, we need to add an extra header + crc
+        // the header and crc formula is:
+        // header:
+        //      magic : uint32_t
+        //      size  : uint32_t
+        //      crc1  : uint32_t - crc of magic, size
+        // -> entries[]
+        // post:
+        //      crc2  : uint32_t - crc1 + each entry crc.
+        if (writer.num_entries > 1) {
+            mecrc.emplace();
+            write<uint32_t>(out, multi_entry_size_magic);
+            write<uint32_t>(out, s);
+            mecrc->process(multi_entry_size_magic);
+            mecrc->process(uint32_t(s));
+            write<uint32_t>(out, mecrc->checksum());
+        }
+
+        for (size_t entry = 0; entry < writer.num_entries; ++entry) {
+            replay_position rp(_desc.id, position());
+            auto id = writer.id(entry);
+            auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
+            auto es = entry_size + entry_overhead_size;
+
+            _cf_dirty[id]++; // increase use count for cf.
+
+            rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
+
+            crc32_nbo crc;
+
+            write<uint32_t>(out, es);
+            crc.process(uint32_t(es));
+            write<uint32_t>(out, crc.checksum());
+
+            // actual data
+            auto entry_out = out.write_substream(entry_size);
+            auto entry_data = entry_out.to_input_stream();
+            writer.write(*this, entry_out, entry);
+            entry_data.with_stream([&] (auto data_str) {
+                crc.process_fragmented(ser::buffer_view<typename std::vector<temporary_buffer<char>>::iterator>(data_str));
+            });
+
+            auto checksum = crc.checksum();
+            write<uint32_t>(out, checksum);
+            if (mecrc) {
+                mecrc->process(checksum);
+            }
+
+            writer.result(entry, std::move(h));
+        }
+
+        if (mecrc) {
+            // write the crc of header + all sub-entry crc
+            write<uint32_t>(out, mecrc->checksum());
+        }
+
+        ++_segment_manager->totals.allocation_count;
+        ++_num_allocs;
+
+        if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
+            return write_result::ok_need_batch_sync;
+        } else {
+            // If this buffer alone is too big, potentially bigger than the maximum allowed size,
+            // then no other request will be allowed in to force the cycle()ing of this buffer. We
+            // have to do it ourselves.
+            if ((buffer_position() >= (db::commitlog::segment::default_size))) {
+                background_cycle();
+            }
+        }
+        return write_result::ok;
     }
 
     position_type position() const {
@@ -1146,8 +1146,31 @@ db::commitlog::segment_manager::allocate_when_possible(entry_writer& writer, db:
     }
 
     auto permit = co_await std::move(fut);
-    auto s = co_await active_segment(timeout);
-    co_await s->allocate(writer, std::move(permit), timeout);
+    sseg_ptr s;
+
+    if (!_segments.empty() && _segments.back()->is_still_allocating()) {
+        s = _segments.back();
+    } else {
+        s = co_await active_segment(timeout);
+    }
+
+    for (;;) {
+        using write_result = segment::write_result;
+
+        switch (s->allocate(writer, permit, timeout)) {
+            case write_result::ok:
+                co_return;
+            case write_result::must_sync:
+                s = co_await with_timeout(timeout, s->sync());
+                continue;
+            case write_result::no_space:
+                s = co_await s->finish_and_get_new(timeout);
+                continue;
+            case write_result::ok_need_batch_sync:
+                s = co_await s->batch_cycle(timeout);
+                co_return;
+        }
+    }
 }
 
 const size_t db::commitlog::segment::default_size;
