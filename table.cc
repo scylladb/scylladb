@@ -865,6 +865,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     };
     auto updater = row_cache::external_updater(sstable_list_updater::make(*this, desc));
 
+    // row_cache's invalidate() guarantees that updates are serialized, so concurrent updates will work as intended.
     _cache.invalidate(std::move(updater), std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference

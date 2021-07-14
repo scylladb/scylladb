@@ -556,6 +556,9 @@ private:
     }
 
     // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
+    // As this function may preempt, its caller must guarantee that concurrent calls will be serialized in order
+    // to avoid corruption of the sstable set.
+    // Today, the serialization is always performed through row_cache's update semaphore.
     future<lw_shared_ptr<sstables::sstable_set>>
     build_new_sstable_list(const sstables::sstable_set& current_sstables,
                         sstables::sstable_set new_sstable_list,
