@@ -372,6 +372,16 @@ private:
     stats _stats;
     gate _closing_gate;
 
+private:
+    template <typename Querier>
+    void insert_querier(
+            utils::UUID key,
+            querier_cache::index& index,
+            querier_cache::stats& stats,
+            Querier&& q,
+            std::chrono::seconds ttl,
+            tracing::trace_state_ptr trace_state);
+
     template <typename Querier>
     std::optional<Querier> lookup_querier(
         querier_cache::index& index,
@@ -458,31 +468,6 @@ public:
     const stats& get_stats() const {
         return _stats;
     }
-};
-
-class querier_cache_context {
-    querier_cache* _cache{};
-    utils::UUID _key;
-    query::is_first_page _is_first_page;
-
-public:
-    querier_cache_context() = default;
-    querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page);
-    void insert(data_querier&& q, tracing::trace_state_ptr trace_state);
-    void insert(mutation_querier&& q, tracing::trace_state_ptr trace_state);
-    void insert(shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
-    std::optional<data_querier> lookup_data_querier(const schema& s,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
-    std::optional<mutation_querier> lookup_mutation_querier(const schema& s,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
-    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(const schema& s,
-            const dht::partition_range_vector& ranges,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
 };
 
 } // namespace query

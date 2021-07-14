@@ -67,7 +67,7 @@ struct table {
     }
 
     reader_permit make_permit() {
-        return semaphore.make_permit(s.schema().get(), "test");
+        return semaphore.make_tracking_only_permit(s.schema().get(), "test");
     }
     future<> stop() noexcept {
         return semaphore.stop();

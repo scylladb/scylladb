@@ -47,10 +47,14 @@ using namespace seastar;
 /// It's also possible to specify the maximum allowed number of waiting
 /// readers by the `max_queue_length` constructor parameter. When the
 /// number of waiting readers becomes equal or greater than
-/// `max_queue_length` (upon calling `wait_admission()`) an exception of
+/// `max_queue_length` (upon calling `obtain_permit()`) an exception of
 /// type `std::runtime_error` is thrown. Optionally, some additional
 /// code can be executed just before throwing (`prethrow_action` 
 /// constructor parameter).
+///
+/// The semaphore also acts as an execution stage for reads. This
+/// functionality is exposed via \ref with_permit() and \ref
+/// with_ready_permit().
 class reader_concurrency_semaphore {
 public:
     using resources = reader_resources;
@@ -78,23 +82,35 @@ public:
         uint64_t total_failed_reads = 0;
         // Total number of reads rejected because the admission queue reached its max capacity
         uint64_t total_reads_shed_due_to_overload = 0;
+        // Total number of reads admitted, via all admission paths.
+        uint64_t reads_admitted = 0;
+        // Total number of reads enqueued to wait for admission.
+        uint64_t reads_enqueued = 0;
     };
     struct permit_stats {
         // Total number of permits created so far.
         uint64_t total_permits = 0;
+        // Current number of permits.
+        uint64_t current_permits = 0;
+        // Current number of used permits.
+        uint64_t used_permits = 0;
+        // Current number of blocked permits.
+        uint64_t blocked_permits = 0;
     };
 
     struct permit_list;
 
     class inactive_read_handle;
 
+    using read_func = noncopyable_function<future<>(reader_permit)>;
+
 private:
     struct entry {
-        promise<reader_permit::resource_units> pr;
+        promise<> pr;
         reader_permit permit;
-        resources res;
-        entry(promise<reader_permit::resource_units>&& pr, reader_permit permit, resources r)
-            : pr(std::move(pr)), permit(std::move(permit)), res(r) {}
+        read_func func;
+        entry(promise<>&& pr, reader_permit permit, read_func func)
+            : pr(std::move(pr)), permit(std::move(permit)), func(std::move(func)) {}
     };
 
     class expiry_handler {
@@ -168,6 +184,7 @@ private:
     resources _resources;
 
     expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
+    queue<entry> _ready_list;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
@@ -178,6 +195,7 @@ private:
     bool _stopped = false;
     gate _close_readers_gate;
     gate _permit_gate;
+    std::optional<future<>> _execution_loop_future;
 
 private:
     [[nodiscard]] flat_mutation_reader detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
@@ -185,19 +203,32 @@ private:
 
     bool has_available_units(const resources& r) const;
 
+    bool all_used_permits_are_stalled() const;
+
+    [[nodiscard]] std::exception_ptr check_queue_size(std::string_view queue_name);
+
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
-    future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
+    future<> enqueue_waiter(reader_permit permit, db::timeout_clock::time_point timeout, read_func func);
     void evict_readers_in_background();
-    future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
+    future<> do_wait_admission(reader_permit permit, db::timeout_clock::time_point timeout, read_func func = {});
+    void maybe_admit_waiters() noexcept;
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
+
+    void on_permit_used() noexcept;
+    void on_permit_unused() noexcept;
+
+    void on_permit_blocked() noexcept;
+    void on_permit_unblocked() noexcept;
 
     std::runtime_error stopped_exception();
 
     // closes reader in the background.
     void close_reader(flat_mutation_reader reader);
+
+    future<> execution_loop() noexcept;
 
 public:
     struct no_limits { };
@@ -289,7 +320,47 @@ public:
     /// Return stats about the currently existing permits.
     permit_stats get_permit_stats() const;
 
-    /// Make a permit
+    /// Make an admitted permit
+    ///
+    /// The permit is already in an admitted state after being created, this
+    /// method includes waiting for admission.
+    /// The permit is associated with a schema, which is the schema of the table
+    /// the read is executed against, and the operation name, which should be a
+    /// name such that we can identify the operation which created this permit.
+    /// Ideally this should be a unique enough name that we not only can identify
+    /// the kind of read, but the exact code-path that was taken.
+    ///
+    /// Some permits cannot be associated with any table, so passing nullptr as
+    /// the schema parameter is allowed.
+    future<reader_permit> obtain_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout);
+    future<reader_permit> obtain_permit(const schema* const schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout);
+
+    /// Make a tracking only permit
+    ///
+    /// The permit is not admitted. It is intended for reads that bypass the
+    /// normal concurrency control, but whose resource usage we still want to
+    /// keep track of, as part of that concurrency control.
+    /// The permit is associated with a schema, which is the schema of the table
+    /// the read is executed against, and the operation name, which should be a
+    /// name such that we can identify the operation which created this permit.
+    /// Ideally this should be a unique enough name that we not only can identify
+    /// the kind of read, but the exact code-path that was taken.
+    ///
+    /// Some permits cannot be associated with any table, so passing nullptr as
+    /// the schema parameter is allowed.
+    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name);
+    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name);
+
+    /// Run the function through the semaphore's execution stage with an admitted permit
+    ///
+    /// First a permit is obtained via the normal admission route, as if
+    /// it was created  with \ref obtain_permit(), then func is enqueued to be
+    /// run by the semaphore's execution loop. This emulates an execution stage,
+    /// as it allows batching multiple funcs to be run together. Unlike an
+    /// execution stage, with_permit() accepts a type-erased function, which
+    /// allows for more flexibility in what functions are batched together.
+    /// Use only functions that share most of their code to benefit from the
+    /// instruction-cache warm-up!
     ///
     /// The permit is associated with a schema, which is the schema of the table
     /// the read is executed against, and the operation name, which should be a
@@ -299,8 +370,16 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    reader_permit make_permit(const schema* const schema, const char* const op_name);
-    reader_permit make_permit(const schema* const schema, sstring&& op_name);
+    future<> with_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, read_func func);
+
+    /// Run the function through the semaphore's execution stage with a pre-admitted permit
+    ///
+    /// Same as \ref with_permit(), but it uses an already admitted
+    /// permit. Should only be used when a permit is already readily
+    /// available, e.g. when resuming a saved read. Using
+    /// \ref obtain_permit(), then \ref with_ready_permit() is less
+    /// optimal then just using \ref with_permit().
+    future<> with_ready_permit(reader_permit permit, read_func func);
 
     const resources initial_resources() const {
         return _initial_resources;
@@ -331,4 +410,8 @@ public:
     /// Use max-lines to cap the number of (permit) lines in the report.
     /// Use 0 for unlimited.
     std::string dump_diagnostics(unsigned max_lines = 0) const;
+
+    void set_max_queue_length(size_t size) {
+        _max_queue_length = size;
+    }
 };

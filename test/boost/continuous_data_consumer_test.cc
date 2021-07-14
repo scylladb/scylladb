@@ -42,6 +42,7 @@ class test_consumer final : public data_consumer::continuous_data_consumer<test_
     uint64_t _tested_value;
     int _state = 0;
     int _count = 0;
+    reader_permit::used_guard _used_guard;
 
     void check(uint64_t got) {
         BOOST_REQUIRE_EQUAL(_tested_value, got);
@@ -65,6 +66,7 @@ public:
     test_consumer(reader_permit permit, uint64_t tested_value)
         : continuous_data_consumer(std::move(permit), prepare_stream(tested_value), 0, calculate_length(tested_value))
         , _tested_value(tested_value)
+        , _used_guard(_permit)
     { }
 
     bool non_consuming() { return false; }

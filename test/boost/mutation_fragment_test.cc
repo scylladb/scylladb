@@ -427,7 +427,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
 
     reader_concurrency_semaphore sem(1, 100, get_name());
     auto stop_sem = deferred_stop(sem);
-    auto permit = sem.make_permit(s.schema().get(), get_name());
+    auto permit = sem.make_tracking_only_permit(s.schema().get(), get_name());
 
     const auto available_res = sem.available_resources();
     const sstring val(1024, 'a');

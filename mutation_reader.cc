@@ -715,123 +715,6 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
     return make_combined_reader(std::move(schema), std::move(permit), std::move(v), fwd_sm, fwd_mr);
 }
 
-const ssize_t new_reader_base_cost{16 * 1024};
-
-class restricting_mutation_reader : public flat_mutation_reader::impl {
-    struct mutation_source_and_params {
-        mutation_source _ms;
-        schema_ptr _s;
-        reader_permit _permit;
-        std::reference_wrapper<const dht::partition_range> _range;
-        std::reference_wrapper<const query::partition_slice> _slice;
-        std::reference_wrapper<const io_priority_class> _pc;
-        tracing::trace_state_ptr _trace_state;
-        streamed_mutation::forwarding _fwd;
-        mutation_reader::forwarding _fwd_mr;
-
-        flat_mutation_reader operator()() {
-            return _ms.make_reader(std::move(_s), std::move(_permit), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
-        }
-    };
-
-    struct pending_state {
-        mutation_source_and_params reader_factory;
-    };
-    struct admitted_state {
-        flat_mutation_reader reader;
-        reader_permit::resource_units units;
-    };
-    std::variant<pending_state, admitted_state> _state;
-
-    template<typename Function>
-    requires std::is_move_constructible<Function>::value
-        && requires(Function fn, flat_mutation_reader& reader) {
-            fn(reader);
-        }
-    decltype(auto) with_reader(Function fn, db::timeout_clock::time_point timeout) {
-        if (auto* state = std::get_if<admitted_state>(&_state)) {
-            return fn(state->reader);
-        }
-
-        return std::get<pending_state>(_state).reader_factory._permit.wait_admission(new_reader_base_cost,
-                timeout).then([this, fn = std::move(fn)] (reader_permit::resource_units units) mutable {
-            auto reader_factory = std::move(std::get<pending_state>(_state).reader_factory);
-            _state.emplace<admitted_state>(admitted_state{reader_factory(), std::move(units)});
-            return fn(std::get<admitted_state>(_state).reader);
-        });
-    }
-public:
-    restricting_mutation_reader(
-            mutation_source ms,
-            schema_ptr s,
-            reader_permit permit,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding fwd,
-            mutation_reader::forwarding fwd_mr)
-        : impl(s, permit)
-        , _state(pending_state{
-                mutation_source_and_params{std::move(ms), std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr}}) {
-    }
-
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-        return with_reader([this, timeout] (flat_mutation_reader& reader) {
-            return reader.fill_buffer(timeout).then([this, &reader] {
-                _end_of_stream = reader.is_end_of_stream();
-                reader.move_buffer_content_to(*this);
-            });
-        }, timeout);
-    }
-    virtual future<> next_partition() override {
-        clear_buffer_to_next_partition();
-        if (!is_buffer_empty()) {
-            return make_ready_future<>();
-        }
-        _end_of_stream = false;
-        if (auto* state = std::get_if<admitted_state>(&_state)) {
-            return state->reader.next_partition();
-        }
-        return make_ready_future<>();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-        clear_buffer();
-        _end_of_stream = false;
-        return with_reader([&pr, timeout] (flat_mutation_reader& reader) {
-            return reader.fast_forward_to(pr, timeout);
-        }, timeout);
-    }
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        forward_buffer_to(pr.start());
-        _end_of_stream = false;
-        return with_reader([pr = std::move(pr), timeout] (flat_mutation_reader& reader) mutable {
-            return reader.fast_forward_to(std::move(pr), timeout);
-        }, timeout);
-    }
-    virtual future<> close() noexcept override {
-        if (auto* state = std::get_if<admitted_state>(&_state)) {
-            return state->reader.close();
-        }
-        return make_ready_future<>();
-    }
-};
-
-flat_mutation_reader
-make_restricted_flat_reader(
-                       mutation_source ms,
-                       schema_ptr s,
-                       reader_permit permit,
-                       const dht::partition_range& range,
-                       const query::partition_slice& slice,
-                       const io_priority_class& pc,
-                       tracing::trace_state_ptr trace_state,
-                       streamed_mutation::forwarding fwd,
-                       mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<restricting_mutation_reader>(std::move(ms), std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
-}
-
-
 snapshot_source make_empty_snapshot_source() {
     return snapshot_source([] {
         return make_empty_mutation_source();
@@ -907,6 +790,7 @@ class foreign_reader : public flat_mutation_reader::impl {
     // we don't have to wait on the remote reader filling its buffer.
     template <typename Operation, typename Result = futurize_t<std::result_of_t<Operation()>>>
     Result forward_operation(db::timeout_clock::time_point timeout, Operation op) {
+        reader_permit::blocked_guard bg{_permit};
         return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
                 timeout,
@@ -933,7 +817,7 @@ class foreign_reader : public flat_mutation_reader::impl {
                 auto result = std::get<1>(std::move(fut_and_result));
                 return make_ready_future<decltype(result)>(std::move(result));
             }
-        });
+        }).finally([bg = std::move(bg)] { });
     }
 public:
     foreign_reader(schema_ptr schema,
@@ -1087,7 +971,7 @@ private:
     void update_next_position(flat_mutation_reader& reader);
     void adjust_partition_slice();
     flat_mutation_reader recreate_reader();
-    flat_mutation_reader resume_or_create_reader();
+    future<flat_mutation_reader> resume_or_create_reader(db::timeout_clock::time_point timeout);
     void maybe_validate_partition_start(const flat_mutation_reader::tracked_buffer& buffer);
     void validate_position_in_partition(position_in_partition_view pos) const;
     bool should_drop_fragment(const mutation_fragment& mf);
@@ -1128,6 +1012,9 @@ public:
         if (_reader) {
             do_pause(std::move(*_reader));
         }
+    }
+    reader_permit permit() {
+        return _permit;
     }
 };
 
@@ -1253,14 +1140,15 @@ flat_mutation_reader evictable_reader::recreate_reader() {
             _fwd_mr);
 }
 
-flat_mutation_reader evictable_reader::resume_or_create_reader() {
+future<flat_mutation_reader> evictable_reader::resume_or_create_reader(db::timeout_clock::time_point timeout) {
     if (_reader) {
-        return std::move(*_reader);
+        co_return std::move(*_reader);
     }
     if (auto reader_opt = try_resume()) {
-        return std::move(*reader_opt);
+        co_return std::move(*reader_opt);
     }
-    return recreate_reader();
+    co_await _permit.maybe_wait_readmission(timeout);
+    co_return recreate_reader();
 }
 
 template <typename... Arg>
@@ -1505,14 +1393,12 @@ evictable_reader::evictable_reader(
 
 future<> evictable_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (is_end_of_stream()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return with_closeable(resume_or_create_reader(), [this, timeout] (flat_mutation_reader& reader) mutable {
-        return fill_buffer(reader, timeout).then([this, &reader] {
-            _end_of_stream = reader.is_end_of_stream() && reader.is_buffer_empty();
-            maybe_pause(std::move(reader));
-        });
-    });
+    _reader = co_await resume_or_create_reader(timeout);
+    co_await fill_buffer(*_reader, timeout);
+    _end_of_stream = _reader->is_end_of_stream() && _reader->is_buffer_empty();
+    maybe_pause(std::move(*_reader));
 }
 
 future<> evictable_reader::next_partition() {
@@ -1521,7 +1407,7 @@ future<> evictable_reader::next_partition() {
     if (!is_buffer_empty()) {
         co_return;
     }
-    auto reader = resume_or_create_reader();
+    auto reader = co_await resume_or_create_reader(db::no_timeout);
     co_await reader.next_partition();
     maybe_pause(std::move(reader));
 }
@@ -1694,7 +1580,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     };
 
     if (!_reader) {
-        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] {
+        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] () -> future<reader_and_buffer_fill_result> {
             auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                         schema_ptr s,
                         reader_permit permit,
@@ -1707,21 +1593,30 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
                 return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
             });
             auto s = gs.get();
+            auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout);
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
-                        s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), *_pr, _ps, _pc, _trace_state, _fwd_mr));
-            tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-            auto f = rreader->fill_buffer(timeout);
-            return f.then([rreader = std::move(rreader)] () mutable {
+                        s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+
+            std::exception_ptr ex;
+            try {
+                tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
+                reader_permit::used_guard ug{rreader->permit()};
+                co_await rreader->fill_buffer(timeout);
                 auto res = remote_fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
-                return make_ready_future<reader_and_buffer_fill_result>(reader_and_buffer_fill_result{std::move(rreader), std::move(res)});
-            });
+                co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await rreader->close();
+            std::rethrow_exception(std::move(ex));
         }).then([this, timeout] (reader_and_buffer_fill_result res) {
             _reader = std::move(res.reader);
             return std::move(res.result);
         });
     } else {
         fill_buf_fut = smp::submit_to(_shard, [this, timeout] () mutable {
-            return _reader->fill_buffer(timeout).then([this] {
+            reader_permit::used_guard ug{_reader->permit()};
+            return _reader->fill_buffer(timeout).then([this, ug = std::move(ug)] {
                 return remote_fill_buffer_result(_reader->detach_buffer(), _reader->is_end_of_stream());
             });
         });
@@ -1736,19 +1631,26 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
 }
 
 future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
+    // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
+    reader_permit::blocked_guard guard(_permit);
     if (_read_ahead) {
-        return *std::exchange(_read_ahead, std::nullopt);
+        co_await *std::exchange(_read_ahead, std::nullopt);
+        co_return;
     }
     if (!is_buffer_empty()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return do_fill_buffer(timeout);
+    co_await do_fill_buffer(timeout);
 }
 
 future<> shard_reader::next_partition() {
     if (!_reader) {
         co_return;
     }
+
+    // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
+    reader_permit::blocked_guard guard(_permit);
+
     if (_read_ahead) {
         co_await *std::exchange(_read_ahead, std::nullopt);
     }
@@ -1767,17 +1669,19 @@ future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeo
     if (!_reader && !_read_ahead) {
         // No need to fast-forward uncreated readers, they will be passed the new
         // range when created.
-        return make_ready_future<>();
+        co_return;
     }
 
-    auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
-    return f.then([this, &pr, timeout] {
-        _end_of_stream = false;
-        clear_buffer();
+    reader_permit::blocked_guard guard(_permit);
 
-        return smp::submit_to(_shard, [this, &pr, timeout] {
-            return _reader->fast_forward_to(pr, timeout);
-        });
+    if (_read_ahead) {
+        co_await *std::exchange(_read_ahead, std::nullopt);
+    }
+    _end_of_stream = false;
+    clear_buffer();
+
+    co_await smp::submit_to(_shard, [this, &pr, timeout] {
+        return _reader->fast_forward_to(pr, timeout);
     });
 }
 

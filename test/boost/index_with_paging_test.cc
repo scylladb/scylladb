@@ -35,6 +35,11 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
             e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
         }
 
+        e.db().invoke_on_all([] (database& db) {
+            // The semaphore's queue has to able to absorb one read / row in this test.
+            db.get_reader_concurrency_semaphore().set_max_queue_length(64 * 1024);
+        }).get();
+
         eventually([&] {
             auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{4321, nullptr, {}, api::new_timestamp()});

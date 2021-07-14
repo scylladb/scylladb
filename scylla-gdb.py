@@ -1744,7 +1744,7 @@ class scylla_memory(gdb.Command):
                         **mem_stats))
 
         gdb.write('  Execution Stages:\n')
-        for es_path in [('_data_query_stage',), ('_mutation_query_stage', '_execution_stage'), ('_apply_stage',)]:
+        for es_path in [('_apply_stage',)]:
             machine_name = es_path[0]
             human_name = machine_name.replace('_', ' ').strip()
             total = 0

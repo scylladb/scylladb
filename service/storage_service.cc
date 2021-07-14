@@ -3260,7 +3260,8 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
         size_t num_partitions_processed = 0;
         size_t num_bytes_read = 0;
         nr_sst_current += sst_processed.size();
-        auto reader = table.make_streaming_reader(s, full_partition_range, sst_set);
+        auto permit = co_await _db.local().obtain_reader_permit(table, "storage_service::load_and_stream()", db::no_timeout);
+        auto reader = table.make_streaming_reader(s, std::move(permit), full_partition_range, sst_set);
         std::exception_ptr eptr;
         bool failed = false;
         try {

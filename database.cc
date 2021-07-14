@@ -272,8 +272,6 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
         writeln("  Execution Stages:\n");
         const std::pair<const char*, inheriting_execution_stage::stats> execution_stage_summaries[] = {
-                {"data query stage", _data_query_stage.get_stats()},
-                {"mutation query stage", _mutation_query_stage.get_stats()},
                 {"apply stage", _apply_stage.get_stats()},
         };
         for (const auto& [name, exec_stage_summary] : execution_stage_summaries) {
@@ -354,8 +352,6 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_memory_system_concurrent_reads(),
             "_system_read_concurrency_sem")
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
-    , _data_query_stage("data_query", &column_family::query)
-    , _mutation_query_stage("mutation_query", &column_family::mutation_query)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
@@ -1411,59 +1407,107 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     column_family& cf = find_column_family(cmd.cf_id);
     auto& semaphore = get_reader_concurrency_semaphore();
     auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
-    query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
-    return _data_query_stage(&cf,
-            std::move(s),
-            seastar::cref(cmd),
-            class_config,
-            opts,
-            seastar::cref(ranges),
-            std::move(trace_state),
-            seastar::ref(get_result_memory_limiter()),
-            timeout,
-            std::move(cache_ctx)).then_wrapped([this, s = _stats, &semaphore, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
-        if (f.failed()) {
-            ++semaphore.get_stats().total_failed_reads;
-            return make_exception_future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>(f.get_exception());
+
+    std::optional<query::data_querier> querier_opt;
+    lw_shared_ptr<query::result> result;
+    std::exception_ptr ex;
+
+    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state);
+    }
+
+    auto read_func = [&, this] (reader_permit permit) {
+        reader_permit::used_guard ug{permit};
+        return cf.query(std::move(s), std::move(permit), cmd, class_config, opts, ranges, trace_state, get_result_memory_limiter(),
+                timeout, &querier_opt).then([&result, ug = std::move(ug)] (lw_shared_ptr<query::result> res) {
+            result = std::move(res);
+        });
+    };
+
+    try {
+        auto op = cf.read_in_progress();
+
+        if (querier_opt) {
+            co_await semaphore.with_ready_permit(querier_opt->permit(), read_func);
         } else {
-            ++semaphore.get_stats().total_successful_reads;
-            auto result = f.get0();
-            s->short_data_queries += bool(result->is_short_read());
-            return make_ready_future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>(std::tuple(std::move(result), hit_rate));
+            co_await semaphore.with_permit(s.get(), "data-query", cf.estimate_read_memory_cost(), timeout, read_func);
         }
-    });
+
+        if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+        }
+    } catch (...) {
+        ++semaphore.get_stats().total_failed_reads;
+        ex = std::current_exception();
+    }
+
+    if (querier_opt) {
+        co_await querier_opt->close();
+    }
+    if(ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    auto hit_rate = cf.get_global_cache_hit_rate();
+    ++semaphore.get_stats().total_successful_reads;
+    _stats->short_data_queries += bool(result->is_short_read());
+    co_return std::tuple(std::move(result), hit_rate);
 }
 
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
-  return get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed).then(
-          [&, s = std::move(s), trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) {
+    auto accounter = co_await get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed);
     column_family& cf = find_column_family(cmd.cf_id);
     auto& semaphore = get_reader_concurrency_semaphore();
     auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
-    query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
-    return _mutation_query_stage(&cf,
-            std::move(s),
-            seastar::cref(cmd),
-            class_config,
-            seastar::cref(range),
-            std::move(trace_state),
-            std::move(accounter),
-            timeout,
-            std::move(cache_ctx)).then_wrapped([this, s = _stats, &semaphore, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
-        if (f.failed()) {
-            ++semaphore.get_stats().total_failed_reads;
-            return make_exception_future<std::tuple<reconcilable_result, cache_temperature>>(f.get_exception());
+
+    std::optional<query::mutation_querier> querier_opt;
+    reconcilable_result result;
+    std::exception_ptr ex;
+
+    if (cmd.query_uuid != utils::UUID{} && !cmd.is_first_page) {
+        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state);
+    }
+
+    auto read_func = [&, this] (reader_permit permit) {
+        reader_permit::used_guard ug{permit};
+        return cf.mutation_query(std::move(s), std::move(permit), cmd, class_config, range,
+                std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ug = std::move(ug)] (reconcilable_result res) {
+            result = std::move(res);
+        });
+    };
+
+    try {
+        auto op = cf.read_in_progress();
+
+        if (querier_opt) {
+            co_await semaphore.with_ready_permit(querier_opt->permit(), read_func);
         } else {
-            ++semaphore.get_stats().total_successful_reads;
-            auto result = f.get0();
-            s->short_mutation_queries += bool(result.is_short_read());
-            return make_ready_future<std::tuple<reconcilable_result, cache_temperature>>(std::tuple(std::move(result), hit_rate));
+            co_await semaphore.with_permit(s.get(), "mutation-query", cf.estimate_read_memory_cost(), timeout, read_func);
         }
-    });
-  });
+
+        if (cmd.query_uuid != utils::UUID{} && querier_opt) {
+            _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
+        }
+
+    } catch (...) {
+        ++semaphore.get_stats().total_failed_reads;
+        ex = std::current_exception();
+    }
+
+    if (querier_opt) {
+        co_await querier_opt->close();
+    }
+    if(ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    auto hit_rate = cf.get_global_cache_hit_rate();
+    ++semaphore.get_stats().total_successful_reads;
+    _stats->short_mutation_queries += bool(result.is_short_read());
+    co_return std::tuple(std::move(result), hit_rate);
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {
@@ -1564,6 +1608,14 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     }
 }
 
+future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout) {
+    return get_reader_concurrency_semaphore().obtain_permit(tbl.schema().get(), op_name, tbl.estimate_read_memory_cost(), timeout);
+}
+
+future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout) {
+    return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout);
+}
+
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     return fmt_print(out, "{{column_family: {}/{}}}", cf._schema->ks_name(), cf._schema->cf_name());
 }
@@ -1620,7 +1672,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             tracing::trace(trace_state, "Reading counter values from the CF");
-            auto permit = get_reader_concurrency_semaphore().make_permit(m_schema.get(), "counter-read-before-write");
+            auto permit = get_reader_concurrency_semaphore().make_tracking_only_permit(m_schema.get(), "counter-read-before-write");
             return counter_write_query(m_schema, cf.as_mutation_source(), std::move(permit), m.decorated_key(), slice, trace_state, timeout)
                     .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
@@ -2285,7 +2337,7 @@ std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema,
+flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator) {
     class streaming_reader_lifecycle_policy
             : public reader_lifecycle_policy
@@ -2303,7 +2355,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
         }
         virtual flat_mutation_reader create_reader(
                 schema_ptr schema,
-                reader_permit,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
@@ -2316,7 +2368,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
             _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
-            return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, slice, fwd_mr);
+            return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
         }
         virtual future<> destroy_reader(stopped_reader reader) noexcept override {
             auto ctx = std::move(_contexts[this_shard_id()]);
@@ -2334,6 +2386,10 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             }
             return *_contexts[shard].semaphore;
         }
+        virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) override {
+            auto& cf = _db.local().find_column_family(_table_id);
+            return semaphore().obtain_permit(schema.get(), description, cf.estimate_read_memory_cost(), timeout);
+        }
     };
     auto ms = mutation_source([&db] (schema_ptr s,
             reader_permit permit,
@@ -2349,7 +2405,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
     });
     auto&& full_slice = schema->full_slice();
     auto& cf = db.local().find_column_family(schema);
-    return make_flat_multi_range_reader(schema, cf.streaming_read_concurrency_semaphore().make_permit(schema.get(), "multishard-streaming-reader"), std::move(ms),
+    return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
             std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
 }
 

@@ -1098,33 +1098,6 @@ sstable_set::make_local_shard_sstable_reader(
             fwd_mr);
 }
 
-flat_mutation_reader make_restricted_range_sstable_reader(
-        lw_shared_ptr<sstable_set> sstables,
-        schema_ptr s,
-        reader_permit permit,
-        const dht::partition_range& pr,
-        const query::partition_slice& slice,
-        const io_priority_class& pc,
-        tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr,
-        read_monitor_generator& monitor_generator)
-{
-    auto ms = mutation_source([sstables=std::move(sstables), &monitor_generator] (
-            schema_ptr s,
-            reader_permit permit,
-            const dht::partition_range& pr,
-            const query::partition_slice& slice,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding fwd,
-            mutation_reader::forwarding fwd_mr) {
-        return sstables->make_range_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
-                std::move(trace_state), fwd, fwd_mr, monitor_generator);
-    });
-    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
-}
-
 unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vector<shared_sstable>& sstables) {
     unsigned overlapping_sstables = 0;
     auto prev_last = dht::ring_position::min();

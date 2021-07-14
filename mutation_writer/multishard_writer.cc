@@ -124,7 +124,7 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
             reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
         auto s = gs.get();
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer");
-        auto permit = semaphore->make_permit(s.get(), "multishard-writer");
+        auto permit = semaphore->make_tracking_only_permit(s.get(), "multishard-writer");
         auto this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
         return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(semaphore), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {

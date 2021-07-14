@@ -79,7 +79,7 @@ reader_concurrency_semaphore_wrapper::~reader_concurrency_semaphore_wrapper() {
 }
 
 reader_permit reader_concurrency_semaphore_wrapper::make_permit() {
-    return _semaphore->make_permit(nullptr, "perf");
+    return _semaphore->make_tracking_only_permit(nullptr, "perf");
 }
 
 } // namespace perf

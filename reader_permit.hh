@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <seastar/util/optimized_optional.hh>
 #include "seastarx.hh"
 
 #include "db/timeout_clock.hh"
@@ -76,26 +77,30 @@ inline bool operator==(const reader_resources& a, const reader_resources& b) {
     return a.count == b.count && a.memory == b.memory;
 }
 
+std::ostream& operator<<(std::ostream& os, const reader_resources& r);
+
 class reader_concurrency_semaphore;
 
 /// A permit for a specific read.
 ///
-/// Used to track the read's resource consumption and wait for admission to read
-/// from the disk.
-/// Use `consume_memory()` to register memory usage. Use `wait_admission()` to
-/// wait for admission, before reading from the disk. Both methods return a
-/// `resource_units` RAII object that should be held onto while the respective
-/// resources are in use.
+/// Used to track the read's resource consumption. Use `consume_memory()` to
+/// register memory usage, which returns a `resource_units` RAII object that
+/// should be held onto while the respective resources are in use.
 class reader_permit {
     friend class reader_concurrency_semaphore;
 
 public:
     class resource_units;
+    class used_guard;
+    class blocked_guard;
 
     enum class state {
         waiting, // waiting for admission
-        active,
+        active_unused,
+        active_used,
+        active_blocked,
         inactive,
+        evicted,
     };
 
     class impl;
@@ -104,11 +109,27 @@ private:
     shared_ptr<impl> _impl;
 
 private:
-    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name);
-    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name);
+    reader_permit() = default;
+    reader_permit(shared_ptr<impl>);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
+            reader_resources base_resources);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
+            reader_resources base_resources);
 
     void on_waiting();
     void on_admission();
+
+    void mark_used() noexcept;
+
+    void mark_unused() noexcept;
+
+    void mark_blocked() noexcept;
+
+    void mark_unblocked() noexcept;
+
+    operator bool() const { return bool(_impl); }
+
+    friend class optimized_optional<reader_permit>;
 
 public:
     ~reader_permit();
@@ -125,7 +146,7 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
-    future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
+    future<> maybe_wait_readmission(db::timeout_clock::time_point timeout);
 
     void consume(reader_resources res);
 
@@ -137,8 +158,12 @@ public:
 
     reader_resources consumed_resources() const;
 
+    reader_resources base_resources() const;
+
     sstring description() const;
 };
+
+using reader_permit_opt = optimized_optional<reader_permit>;
 
 class reader_permit::resource_units {
     reader_permit _permit;
@@ -158,6 +183,55 @@ public:
     void reset(reader_resources res = {});
     reader_permit permit() const { return _permit; }
     reader_resources resources() const { return _resources; }
+};
+
+/// Mark a permit as used.
+///
+/// Conceptually, a permit is considered used, when at least one reader
+/// associated with it has an ongoing foreground operation initiated by
+/// its consumer. E.g. a pending `fill_buffer()` call.
+/// This class is an RAII used marker meant to be used by keeping it alive
+/// until the reader is used.
+class reader_permit::used_guard {
+    reader_permit_opt _permit;
+public:
+    explicit used_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
+        _permit->mark_used();
+    }
+    used_guard(used_guard&&) noexcept = default;
+    used_guard(const used_guard&) = delete;
+    ~used_guard() {
+        if (_permit) {
+            _permit->mark_unused();
+        }
+    }
+    used_guard& operator=(used_guard&&) = delete;
+    used_guard& operator=(const used_guard&) = delete;
+};
+
+/// Mark a permit as blocked.
+///
+/// Conceptually, a permit is considered blocked, when at least one reader
+/// associated with it is waiting on I/O or a remote shard as part of a
+/// foreground operation initiated by its consumer. E.g. an sstable reader
+/// waiting on a disk read as part of its `fill_buffer()` call.
+/// This class is an RAII block marker meant to be used by keeping it alive
+/// until said block resolves.
+class reader_permit::blocked_guard {
+    reader_permit_opt _permit;
+public:
+    explicit blocked_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
+        _permit->mark_blocked();
+    }
+    blocked_guard(blocked_guard&&) noexcept = default;
+    blocked_guard(const blocked_guard&) = delete;
+    ~blocked_guard() {
+        if (_permit) {
+            _permit->mark_unblocked();
+        }
+    }
+    blocked_guard& operator=(blocked_guard&&) = delete;
+    blocked_guard& operator=(const blocked_guard&) = delete;
 };
 
 template <typename Char>

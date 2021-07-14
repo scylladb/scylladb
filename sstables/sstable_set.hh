@@ -158,22 +158,6 @@ public:
     friend class compound_sstable_set;
 };
 
-/// Read a range from the passed-in sstables.
-///
-/// The reader is restricted, that is it will wait for admission on the semaphore
-/// belonging to the passed-in permit, before starting to read.
-flat_mutation_reader make_restricted_range_sstable_reader(
-    lw_shared_ptr<sstable_set> sstables,
-    schema_ptr,
-    reader_permit,
-    const dht::partition_range&,
-    const query::partition_slice&,
-    const io_priority_class&,
-    tracing::trace_state_ptr,
-    streamed_mutation::forwarding,
-    mutation_reader::forwarding,
-    read_monitor_generator& rmg = default_read_monitor_generator());
-
 sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata = true);
 
 sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets);

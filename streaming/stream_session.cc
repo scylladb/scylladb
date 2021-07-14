@@ -146,13 +146,13 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
         }
 
         return mm->get_schema_for_write(schema_id, from, ms).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
+          return get_local_db().obtain_reader_permit(cf, "stream-session", db::no_timeout).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason, s] (reader_permit permit) mutable {
             auto sink = stream_session::ms().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto permit = cf.streaming_read_concurrency_semaphore().make_permit(s.get(), "stream-session");
             auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status, permit] () mutable {
                 return source().then([plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
@@ -215,6 +215,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
             });
             return make_ready_future<rpc::sink<int>>(sink);
         });
+      });
     });
     ms.register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
