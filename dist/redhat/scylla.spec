@@ -30,6 +30,8 @@ partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
 %{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core %{product}-node-exporter.
 
+Dedicated to the memory of Alberto José Araújo, a coworker and a friend.
+
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
 %global __os_install_post    \
