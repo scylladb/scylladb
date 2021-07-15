@@ -830,6 +830,11 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     return it->second.rpc_client;
 }
 
+last_seen_info messaging_service::get_last_seen_info_for(gms::inet_address ep) {
+    auto it = _last_seen.find(ep);
+    return it == _last_seen.end() ? last_seen_info() : it->second;
+}
+
 bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
     if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
@@ -984,6 +989,14 @@ future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_strea
     return unregister_handler(messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM);
 }
 
+void messaging_service::mark_sent(gms::inet_address ep, clock_type::time_point tp) {
+    _last_seen[ep].mark_sent(tp);
+}
+
+void messaging_service::mark_got_response(gms::inet_address ep) {
+    _last_seen[ep].mark_got_response();
+}
+
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
@@ -994,6 +1007,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto& rpc_client = *rpc_client_ptr;
+    ms->mark_sent(id.addr, messaging_service::clock_type::now());
     return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
             if (f.failed()) {
@@ -1001,6 +1015,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
                 f.get();
                 assert(false); // never reached
             }
+            ms->mark_got_response(id.addr);
             return std::move(f);
         } catch (rpc::closed_error&) {
             // This is a transport error
@@ -1023,6 +1038,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto& rpc_client = *rpc_client_ptr;
+    ms->mark_sent(id.addr, messaging_service::clock_type::now());
     return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
             if (f.failed()) {
@@ -1030,6 +1046,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
                 f.get();
                 assert(false); // never reached
             }
+            ms->mark_got_response(id.addr);
             return std::move(f);
         } catch (rpc::closed_error&) {
             // This is a transport error

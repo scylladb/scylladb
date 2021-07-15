@@ -43,6 +43,7 @@
 #include "raft/raft.hh"
 #include "db/hints/messages.hh"
 #include "message/last_seen_info.hh"
+#include "absl-flat_hash_map.hh"
 
 #include <list>
 #include <vector>
@@ -283,6 +284,7 @@ private:
     std::unique_ptr<seastar::tls::credentials_builder> _credentials_builder;
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::vector<clients_map> _clients;
+    absl::flat_hash_map<gms::inet_address, last_seen_info> _last_seen;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _shutting_down = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
@@ -601,6 +603,9 @@ private:
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
+    last_seen_info get_last_seen_info_for(gms::inet_address ep);
+    void mark_sent(gms::inet_address ep, clock_type::time_point);
+    void mark_got_response(gms::inet_address ep);
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_rpc_client(msg_addr id);
     using drop_notifier_handler = decltype(_connection_drop_notifiers)::iterator;
