@@ -1336,7 +1336,7 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
                 return make_ready_future<>();
             }
             return _reader.consume_pausable(consumer{this}, timeout).then([this] {
-                if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
+                if (_reader.is_end_of_stream()) {
                     _rt_assembler.on_end_of_stream();
                     _end_of_stream = true;
                 }

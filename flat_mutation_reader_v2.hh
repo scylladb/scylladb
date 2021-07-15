@@ -180,7 +180,13 @@ public:
         size_t _buffer_size = 0;
     protected:
         size_t max_buffer_size_in_bytes = 8 * 1024;
+
+        // The stream producer should set this to indicate that there are no
+        // more fragments to produce.
+        // Calling fill_buffer() will not add any new fragments
+        // unless the reader is fast-forwarded to a new range.
         bool _end_of_stream = false;
+
         schema_ptr _schema;
         reader_permit _permit;
         friend class flat_mutation_reader_v2;
@@ -601,7 +607,10 @@ public:
         }
         return make_ready_future<>();
     }
-    bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
+    // Returns true iff the stream reached the end.
+    // There are no more fragments in the buffer and calling
+    // fill_buffer() will not add any.
+    bool is_end_of_stream() const { return _impl->is_end_of_stream() && is_buffer_empty(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
     mutation_fragment_v2 pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
@@ -727,7 +736,7 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
                 return make_ready_future<>();
             }
             return _reader.consume_pausable(consumer{this}, timeout).then([this] {
-                if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
+                if (_reader.is_end_of_stream()) {
                     _end_of_stream = true;
                 }
             });
