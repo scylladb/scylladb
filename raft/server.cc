@@ -623,6 +623,7 @@ future<> server_impl::applier_fiber() {
                 commands.reserve(batch.size());
 
                 index_t last_idx = batch.back()->idx;
+                term_t last_term = batch.back()->term;
 
                 boost::range::copy(
                        batch |
@@ -639,7 +640,7 @@ future<> server_impl::applier_fiber() {
 
                if (applied_since_snapshot >= _config.snapshot_threshold) {
                    snapshot snp;
-                   snp.term = get_current_term();
+                   snp.term = last_term;
                    snp.idx = last_idx;
                    logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                    snp.id = co_await _state_machine->take_snapshot();
