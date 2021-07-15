@@ -77,8 +77,6 @@ using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
-lowres_clock::duration tick_delta = 1ms;
-
 auto dummy_command = std::numeric_limits<int>::min();
 
 class hasher_int : public xx_hasher {
@@ -303,11 +301,12 @@ class raft_cluster {
     std::vector<seastar::timer<lowres_clock>> _tickers;
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
+    lowres_clock::duration _tick_delta;
 public:
     raft_cluster(test_case test,
             apply_fn apply,
             size_t apply_entries, size_t first_val, size_t first_leader,
-            bool prevote, bool packet_drops);
+            bool prevote, bool packet_drops, lowres_clock::duration tick_delta);
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
@@ -640,7 +639,7 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
 raft_cluster::raft_cluster(test_case test,
     apply_fn apply,
     size_t apply_entries, size_t first_val, size_t first_leader,
-    bool prevote, bool packet_drops)
+    bool prevote, bool packet_drops, lowres_clock::duration tick_delta)
         : _connected(std::make_unique<struct connected>(test.nodes))
         , _snapshots(std::make_unique<snapshots>())
         , _persisted_snapshots(std::make_unique<persisted_snapshots>())
@@ -649,7 +648,8 @@ raft_cluster::raft_cluster(test_case test,
         , _packet_drops(packet_drops)
         , _prevote(prevote)
         , _apply(apply)
-        , _leader(first_leader) {
+        , _leader(first_leader)
+        , _tick_delta(tick_delta) {
 
     rpc::reset_network();
 
@@ -750,7 +750,7 @@ void raft_cluster::init_raft_tickers() {
     _tickers.resize(_servers.size());
     // Only start tickers for servers in configuration
     for (auto s: _in_configuration) {
-        _tickers[s].arm_periodic(tick_delta);
+        _tickers[s].arm_periodic(_tick_delta);
         _tickers[s].set_callback([&, s] {
             _servers[s].server->tick();
         });
@@ -765,7 +765,7 @@ void raft_cluster::pause_tickers() {
 
 void raft_cluster::restart_tickers() {
     for (auto s: _in_configuration) {
-        _tickers[s].rearm_periodic(tick_delta);
+        _tickers[s].rearm_periodic(_tick_delta);
     }
 }
 
@@ -978,7 +978,7 @@ future<> raft_cluster::change_configuration(set_config sc) {
         if (!_in_configuration.contains(s)) {
             tlogger.debug("Starting node being re-added to configuration {}", s);
             co_await reset_server(s, initial_state{.log = {}});
-            _tickers[s].rearm_periodic(tick_delta);
+            _tickers[s].rearm_periodic(_tick_delta);
         }
     }
 
@@ -1166,10 +1166,12 @@ std::vector<initial_state> raft_cluster::get_states(test_case test, bool prevote
     return states;
 }
 
-future<> run_test(test_case test, bool prevote, bool packet_drops) {
+future<> run_test(test_case test, bool prevote, bool packet_drops,
+        lowres_clock::duration tick_delta) {
 
     raft_cluster rafts(test, apply_changes, test.total_values,
-            test.get_first_val(), test.initial_leader, prevote, packet_drops);
+            test.get_first_val(), test.initial_leader, prevote, packet_drops,
+            tick_delta);
     co_await rafts.start_all();
 
     BOOST_TEST_MESSAGE("Processing updates");
@@ -1240,6 +1242,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     }
 }
 
-void replication_test(struct test_case test, bool prevote, bool packet_drops) {
-    run_test(std::move(test), prevote, packet_drops).get();
+void replication_test(struct test_case test, bool prevote, bool packet_drops,
+        lowres_clock::duration tick_delta) {
+    run_test(std::move(test), prevote, packet_drops, tick_delta).get();
 }
