@@ -250,6 +250,17 @@ rpc::stats messaging_service::shard_info::get_stats() const {
     return rpc_client->get_stats();
 }
 
+void last_seen_info::mark_sent(clock_type::time_point req_time) {
+    last_attempt = req_time;
+    if (last_sent_without_response == last_seen_info::unknown) {
+        last_sent_without_response = req_time;
+    }
+}
+
+void last_seen_info::mark_got_response() {
+    last_sent_without_response = last_seen_info::unknown;
+}
+
 void messaging_service::foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const {
     for (unsigned idx = 0; idx < _clients.size(); idx ++) {
         for (auto i = _clients[idx].cbegin(); i != _clients[idx].cend(); i++) {

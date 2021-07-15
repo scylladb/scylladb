@@ -42,6 +42,7 @@
 #include "service/paxos/prepare_response.hh"
 #include "raft/raft.hh"
 #include "db/hints/messages.hh"
+#include "message/last_seen_info.hh"
 
 #include <list>
 #include <vector>
