@@ -576,7 +576,7 @@ def parse_cmd_line():
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
                         help="number of times to repeat test execution")
-    parser.add_argument('--timeout', action="store", default="12000", type=int,
+    parser.add_argument('--timeout', action="store", default="24000", type=int,
                         help="timeout value for test execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
