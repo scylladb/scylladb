@@ -336,10 +336,17 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
     }
 
     if (sst->get_version() >= sstable_version_types::mc && use_binary_search_in_promoted_index) {
+        seastar::shared_ptr<cached_file> cached_file_ptr = caching
+                ? sst->_cached_index_file
+                : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
+                                                    index_page_cache_metrics,
+                                                    sst->manager().get_cache_tracker().get_lru(),
+                                                    sst->manager().get_cache_tracker().region(),
+                                                    sst->_index_file_size);
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
             _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
-            *ck_values_fixed_lengths, *sst->_cached_index_file, options.io_priority_class, _num_blocks, trace_state);
+            *ck_values_fixed_lengths, cached_file_ptr, options.io_priority_class, _num_blocks, trace_state);
     }
 
     auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);

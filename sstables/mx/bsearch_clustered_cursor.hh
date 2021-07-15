@@ -379,6 +379,7 @@ class bsearch_clustered_cursor : public clustered_index_cursor {
 
     const schema& _s;
     const pi_index_type _blocks_count;
+    seastar::shared_ptr<cached_file> _cached_file;
     cached_promoted_index _promoted_index;
 
     // Points to the block whose start is greater than the position of the cursor (its upper bound).
@@ -453,19 +454,20 @@ public:
             cached_promoted_index::metrics& metrics,
             reader_permit permit,
             column_values_fixed_lengths cvfl,
-            cached_file& f,
+            seastar::shared_ptr<cached_file> f,
             io_priority_class pc,
             pi_index_type blocks_count,
             tracing::trace_state_ptr trace_state)
         : _s(s)
         , _blocks_count(blocks_count)
+        , _cached_file(std::move(f))
         , _promoted_index(s,
             promoted_index_start,
             promoted_index_size,
             metrics,
             std::move(permit),
             std::move(cvfl),
-            f,
+            *_cached_file,
             pc,
             blocks_count)
         , _trace_state(std::move(trace_state))
