@@ -248,7 +248,7 @@ class Test:
     def __init__(self, test_no, shortname, suite, mode, options):
         self.id = test_no
         # Name with test suite name
-        self.name = os.path.join(suite.name, shortname)
+        self.name = os.path.join(suite.name, shortname.split('.')[0])
         # Name within the suite
         self.shortname = shortname
         self.mode = mode
