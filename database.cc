@@ -334,10 +334,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _read_concurrency_sem(max_count_concurrent_reads,
         max_memory_concurrent_reads(),
         "_read_concurrency_sem",
-        max_inactive_queue_length(),
-        [this] {
-            ++_stats->sstable_read_queue_overloaded;
-        })
+        max_inactive_queue_length())
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
@@ -564,7 +561,7 @@ database::setup_metrics() {
         sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
                        sm::description("The number of entries currently in the querier cache.")),
 
-        sm::make_derive("sstable_read_queue_overloads", _stats->sstable_read_queue_overloaded,
+        sm::make_derive("sstable_read_queue_overloads", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 

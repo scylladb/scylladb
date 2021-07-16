@@ -589,15 +589,13 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     maybe_admit_waiters();
 }
 
-reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
-        std::function<void()> prethrow_action)
+reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length)
     : _initial_resources(count, memory)
     , _resources(count, memory)
     , _wait_list(expiry_handler(*this))
     , _ready_list(max_queue_length)
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
-    , _prethrow_action(std::move(prethrow_action))
     , _permit_list(std::make_unique<permit_list>()) {}
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
@@ -776,9 +774,6 @@ bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
     if ((_wait_list.size() + _ready_list.size()) >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
-        if (_prethrow_action) {
-            _prethrow_action();
-        }
         maybe_dump_reader_permit_diagnostics(*this, *_permit_list, fmt::format("{} queue overload", queue_name));
         return std::make_exception_ptr(std::runtime_error(format("{}: {} queue overload", _name, queue_name)));
     }

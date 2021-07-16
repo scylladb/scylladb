@@ -188,7 +188,6 @@ private:
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<void()> _prethrow_action;
     inactive_reads_type _inactive_reads;
     stats _stats;
     std::unique_ptr<permit_list> _permit_list;
@@ -239,8 +238,7 @@ public:
     reader_concurrency_semaphore(int count,
             ssize_t memory,
             sstring name,
-            size_t max_queue_length = std::numeric_limits<size_t>::max(),
-            std::function<void()> prethrow_action = nullptr);
+            size_t max_queue_length = std::numeric_limits<size_t>::max());
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
