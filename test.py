@@ -419,7 +419,7 @@ class TabularConsoleOutput:
 
     def print_start_blurb(self):
         print("="*80)
-        print("{:7s} {:50s} {:^8s} {:8s}".format("[N/TOTAL]", "TEST", "MODE", "RESULT"))
+        print("{:10s} {:^8s} {:^7s} {:8s} {}".format("[N/TOTAL]", "SUITE", "MODE", "RESULT", "TEST"))
         print("-"*78)
 
     def print_end_blurb(self):
@@ -429,10 +429,11 @@ class TabularConsoleOutput:
 
     def print_progress(self, test):
         self.last_test_no += 1
-        msg = "{:9s} {:50s} {:^8s} {:8s}".format(
+        msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
             "[{}/{}]".format(self.last_test_no, self.test_count),
-            test.name, test.mode[:8],
-            palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]")
+            test.suite.name, test.mode[:7],
+            palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]"),
+            test.uname
         )
         if self.verbose is False:
             if test.success:
