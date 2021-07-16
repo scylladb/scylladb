@@ -70,6 +70,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --ring-delay-ms 0 --collectd 0 \
         --smp 2 -m 1G \
         --overprovisioned --unsafe-bypass-fsync 1 --kernel-page-cache 1 \
+        --max-networking-io-control-blocks 100 \
         --api-address $SCYLLA_IP \
         --rpc-address $SCYLLA_IP \
         --listen-address $SCYLLA_IP \
