@@ -28,13 +28,13 @@ lowres_clock::duration tick_delta = 1ms;
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
-        replication_test(test_body, false, false, tick_delta); }  \
+        replication_test<lowres_clock>(test_body, false, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
-        replication_test(test_body, false, true, tick_delta); } \
+        replication_test<lowres_clock>(test_body, false, true, tick_delta); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
-        replication_test(test_body, true, false, tick_delta); }  \
+        replication_test<lowres_clock>(test_body, true, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
-        replication_test(test_body, true, true, tick_delta); }
+        replication_test<lowres_clock>(test_body, true, true, tick_delta); }
 
 // 1 nodes, simple replication, empty, no updates
 RAFT_TEST_CASE(simple_replication, (test_case{
@@ -201,7 +201,7 @@ RAFT_TEST_CASE(drops_04_dueling_repro, (test_case{
 
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
-    replication_test(
+    replication_test<lowres_clock>(
         // Snapshot automatic take and load
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
@@ -223,7 +223,7 @@ RAFT_TEST_CASE(conf_changes_2, (test_case{
 
 // Check removing a node from configuration, adding entries; cycle for all combinations
 SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
-    replication_test(
+    replication_test<lowres_clock>(
         {.nodes = 4,
          .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
                      set_config{1,2,3}, entries{2}, new_leader{2},
@@ -235,7 +235,7 @@ SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
-    replication_test(
+    replication_test<lowres_clock>(
         {.nodes = 3,
          .initial_snapshots  = {{.snap = {.idx = raft::index_t(10),
                                          .term = raft::term_t(1),
@@ -547,4 +547,3 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
             check_rpc_config{{node_id{0},node_id{1},node_id{2}},
                               rpc_address_set{node_id{0},node_id{1},node_id{2}}},
          }}));
-
