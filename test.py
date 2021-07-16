@@ -292,7 +292,8 @@ class Test:
 
 
 class UnitTest(Test):
-    standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 --kernel-page-cache 1 --blocked-reactor-notify-ms 2000000 --collectd 0")
+    standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 --kernel-page-cache 1 --blocked-reactor-notify-ms 2000000 --collectd 0"
+                                " --max-networking-io-control-blocks=100")
 
     def __init__(self, test_no, shortname, args, suite, mode, options):
         super().__init__(test_no, shortname, suite, mode, options)

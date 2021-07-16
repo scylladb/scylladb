@@ -438,6 +438,7 @@ int main(int ac, char** av) {
     app_cfg.name = "Scylla";
     app_cfg.default_task_quota = 500us;
     app_cfg.auto_handle_sigint_sigterm = false;
+    app_cfg.max_networking_aio_io_control_blocks = 50000;
     app_template app(std::move(app_cfg));
 
     auto ext = std::make_shared<db::extensions>();

@@ -185,6 +185,7 @@ def run_scylla_cmd(pid, dir):
         '--smp', '2',
         '-m', '1G',
         '--overprovisioned',
+        '--max-networking-io-control-blocks', '100',
         '--unsafe-bypass-fsync', '1',
         '--kernel-page-cache', '1',
         '--api-address', ip,
