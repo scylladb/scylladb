@@ -134,6 +134,12 @@ struct leader {
 };
 using partition = std::vector<std::variant<leader,int>>;
 
+
+// Disconnect a node from the rest
+struct isolate {
+    size_t id;
+};
+
 // Disconnect 2 servers both ways
 struct two_nodes {
     size_t first;
@@ -205,9 +211,9 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, disconnect, stop, reset, wait_log,
-      set_config, check_rpc_config, check_rpc_added, check_rpc_removed, rpc_reset_counters,
-      tick>;
+using update = std::variant<entries, new_leader, partition, isolate, disconnect,
+      stop, reset, wait_log, set_config, check_rpc_config, check_rpc_added,
+      check_rpc_removed, rpc_reset_counters, tick>;
 
 struct log_entry {
     unsigned term;
@@ -319,6 +325,7 @@ public:
     future<> stop(::stop server);
     future<> reset(::reset server);
     void disconnect(::disconnect nodes);
+    future<> isolate(::isolate node);
     void verify();
 private:
     test_server create_server(size_t id, initial_state state);
@@ -1102,6 +1109,17 @@ void raft_cluster<Clock>::disconnect(::disconnect nodes) {
 }
 
 template <typename Clock>
+future<> raft_cluster<Clock>::isolate(::isolate node) {
+    tlogger.debug("disconnecting {}", to_raft_id(node.id));
+    _connected->disconnect(to_raft_id(node.id));
+    if (node.id == _leader) {
+        _servers[_leader].server->elapse_election();   // make old leader step down
+        co_await free_election();
+    }
+    co_return;
+}
+
+template <typename Clock>
 void raft_cluster<Clock>::verify() {
     BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
     auto expected = hasher_int::hash_range(_apply_entries).finalize_uint64();
@@ -1178,6 +1196,9 @@ struct run_test {
             [&rafts] (disconnect update) -> future<> {
                 rafts.disconnect(update);
                 co_return;
+            },
+            [&rafts] (::isolate update) -> future<> {
+                co_await rafts.isolate(update);
             },
             [&rafts] (partition update) -> future<> {
                 co_await rafts.partition(update);
