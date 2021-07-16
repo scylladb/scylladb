@@ -165,7 +165,7 @@ private:
     seal_immediate_fn_type _seal_immediate_fn;
     std::function<schema_ptr()> _current_schema;
     dirty_memory_manager* _dirty_memory_manager;
-    std::optional<shared_promise<>> _flush_coalescing;
+    std::optional<shared_future<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
     table_stats& _table_stats;
 public:

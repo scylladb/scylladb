@@ -1702,23 +1702,18 @@ future<> memtable_list::flush() {
     if (!may_flush()) {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
-        _flush_coalescing = shared_promise<>();
+        promise<> flushed;
+        future<> ret = _flush_coalescing.emplace(flushed.get_future());
         _dirty_memory_manager->start_extraneous_flush();
-        auto ef = defer([this] { _dirty_memory_manager->finish_extraneous_flush(); });
-        return _dirty_memory_manager->get_flush_permit().then([this, ef = std::move(ef)] (auto permit) mutable {
-            auto current_flush = std::move(*_flush_coalescing);
-            _flush_coalescing = {};
-            return _dirty_memory_manager->flush_one(*this, std::move(permit)).then_wrapped([this, ef = std::move(ef),
-                                                                                            current_flush = std::move(current_flush)] (auto f) mutable {
-                if (f.failed()) {
-                    current_flush.set_exception(f.get_exception());
-                } else {
-                    current_flush.set_value();
-                }
+        _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
+            _flush_coalescing.reset();
+            return _dirty_memory_manager->flush_one(*this, std::move(permit)).finally([this] {
+                _dirty_memory_manager->finish_extraneous_flush();
             });
-        });
+        }).forward_to(std::move(flushed));
+        return ret;
     } else {
-        return _flush_coalescing->get_shared_future();
+        return *_flush_coalescing;
     }
 }
 
