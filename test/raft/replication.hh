@@ -132,7 +132,12 @@ struct new_leader {
 struct leader {
     size_t id;
 };
-using partition = std::vector<std::variant<leader,int>>;
+// Inclusive range
+struct range {
+    size_t start;
+    size_t end;
+};
+using partition = std::vector<std::variant<leader,range,int>>;
 
 
 // Disconnect a node from the rest
@@ -1047,11 +1052,16 @@ future<> raft_cluster<Clock>::partition(::partition p) {
         size_t id;
         if (std::holds_alternative<struct leader>(s)) {
             next_leader = std::get<struct leader>(s).id;
-            id = *next_leader;
+            partition_servers.insert(*next_leader);
+        } else if (std::holds_alternative<struct range>(s)) {
+            auto range = std::get<struct range>(s);
+            for (size_t id = range.start; id <= range.end; id++) {
+                assert(id < _servers.size());
+                partition_servers.insert(id);
+            }
         } else {
-            id = std::get<int>(s);
+            partition_servers.insert(std::get<int>(s));
         }
-        partition_servers.insert(id);
     }
     if (next_leader) {
         // Wait for log to propagate to next leader, before disconnections
