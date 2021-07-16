@@ -213,7 +213,7 @@ class BoostTestSuite(UnitTestSuite):
 
     def create_test(self, shortname, args, suite, mode, options):
         if True:
-            test = BoostTest(self.next_id, shortname, args, suite, mode, options)
+            test = BoostTest(self.next_id, shortname, args, suite, None, mode, options)
             self.tests.append(test)
 
     def junit_tests(self):
@@ -301,9 +301,12 @@ class UnitTest(Test):
 class BoostTest(UnitTest):
     """A unit test which can produce its own XML output"""
 
-    def __init__(self, test_no, shortname, args, suite, mode, options):
-        super().__init__(test_no, shortname, args, suite, mode, options)
+    def __init__(self, test_no, shortname, args, suite, casename, mode, options):
         boost_args = []
+        if casename:
+            shortname += '.' + casename
+            boost_args += ['--run_test=' + casename]
+        super().__init__(test_no, shortname, args, suite, mode, options)
         self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
