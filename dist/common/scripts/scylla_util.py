@@ -367,6 +367,9 @@ class azure_instance:
     GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-azure/"
     ENDPOINT_SNITCH = "GossipingPropertyFileSnitch"
     META_DATA_BASE_URL = "http://169.254.169.254/metadata/instance"
+# as per https://docs.microsoft.com/en-us/azure/virtual-machines/windows/instance-metadata-service?tabs=windows#supported-api-versions
+    API_VERSION = "?api-version=2021-01-01"
+
 
     def __init__(self):
         self.__type = None
@@ -381,14 +384,13 @@ class azure_instance:
     @staticmethod
     def is_azure_instance():
         """Check if it's Azure instance via DNS lookup to metadata server."""
+        p = azure_instance()
         try:
-            addrlist = socket.getaddrinfo('metadata.azure.internal', 80)
-        except socket.gaierror:
+            is_imds = curl(p.META_DATA_BASE_URL + p.API_VERSION, headers = { "Metadata": "True" }, byte=False, timeout=3, max_retries=2, retry_interval=1)
+            return True
+        except urllib.error.HTTPError:
             return False
-        return True
-
-# as per https://docs.microsoft.com/en-us/azure/virtual-machines/windows/instance-metadata-service?tabs=windows#supported-api-versions
-    API_VERSION = "?api-version=2021-01-01"
+        return False
 
     def __instance_metadata(self, path):
         """query Azure metadata server"""
@@ -501,6 +503,8 @@ class azure_instance:
 
     def is_unsupported_instance_class(self):
         """Returns if this instance type belongs to unsupported ones for nvmes"""
+        """Currently, only LSv2 instances support NVMes and we specifically
+           check for those in is_supported_instance_class() method. """
         return False
 
     def is_supported_instance_class(self):
@@ -516,7 +520,7 @@ class azure_instance:
         return False
 
     def is_recommended_instance(self):
-        if self.is_unsupported_instance_class() and self.is_supported_instance_class():
+        if not self.is_unsupported_instance_class() and self.is_supported_instance_class():
             return True
         return False
 
