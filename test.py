@@ -91,6 +91,7 @@ class TestSuite(ABC):
         self.tests = []
 
         self.run_first_tests = set(cfg.get("run_first", []))
+        self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
         disabled = self.cfg.get("disable", [])
         non_debug = self.cfg.get("skip_in_debug_modes", [])
         self.enabled_modes = dict()
@@ -186,8 +187,9 @@ class UnitTestSuite(TestSuite):
         # Map of custom test command line arguments, if configured
         self.custom_args = cfg.get("custom_args", {})
 
-    def create_test(self, *args, **kwargs):
-        return UnitTest(*args, **kwargs)
+    def create_test(self, shortname, args, suite, mode, options):
+        test = UnitTest(self.next_id, shortname, args, suite, mode, options)
+        self.tests.append(test)
 
     def add_test(self, shortname, mode, options):
         """Create a UnitTest class with possibly custom command line
@@ -200,8 +202,7 @@ class UnitTestSuite(TestSuite):
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
-            test = self.create_test(self.next_id, shortname, a, self, mode, options)
-            self.tests.append(test)
+            self.create_test(shortname, a, self, mode, options)
 
     @property
     def pattern(self):
@@ -211,8 +212,24 @@ class UnitTestSuite(TestSuite):
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
 
-    def create_test(self, *args, **kwargs):
-        return BoostTest(*args, **kwargs)
+    def create_test(self, shortname, args, suite, mode, options):
+        if options.parallel_cases and (shortname not in self.no_parallel_cases):
+            cases = subprocess.run([ os.path.join("build", mode, "test", suite.name, shortname), '--list_content' ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True, universal_newlines=True).stderr
+            case_list = [ case[:-1] for case in cases.splitlines() if case.endswith('*')]
+
+            if len(case_list) == 1:
+                test = BoostTest(self.next_id, shortname, args, suite, None, mode, options)
+                self.tests.append(test)
+            else:
+                for case in case_list:
+                    test = BoostTest(self.next_id, shortname, args, suite, case, mode, options)
+                    self.tests.append(test)
+        else:
+            test = BoostTest(self.next_id, shortname, args, suite, None, mode, options)
+            self.tests.append(test)
 
     def junit_tests(self):
         """Boost tests produce an own XML output, so are not included in a junit report"""
@@ -248,7 +265,7 @@ class Test:
     def __init__(self, test_no, shortname, suite, mode, options):
         self.id = test_no
         # Name with test suite name
-        self.name = os.path.join(suite.name, shortname)
+        self.name = os.path.join(suite.name, shortname.split('.')[0])
         # Name within the suite
         self.shortname = shortname
         self.mode = mode
@@ -299,9 +316,12 @@ class UnitTest(Test):
 class BoostTest(UnitTest):
     """A unit test which can produce its own XML output"""
 
-    def __init__(self, test_no, shortname, args, suite, mode, options):
-        super().__init__(test_no, shortname, args, suite, mode, options)
+    def __init__(self, test_no, shortname, args, suite, casename, mode, options):
         boost_args = []
+        if casename:
+            shortname += '.' + casename
+            boost_args += ['--run_test=' + casename]
+        super().__init__(test_no, shortname, args, suite, mode, options)
         self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
@@ -419,7 +439,7 @@ class TabularConsoleOutput:
 
     def print_start_blurb(self):
         print("="*80)
-        print("{:7s} {:50s} {:^8s} {:8s}".format("[N/TOTAL]", "TEST", "MODE", "RESULT"))
+        print("{:10s} {:^8s} {:^7s} {:8s} {}".format("[N/TOTAL]", "SUITE", "MODE", "RESULT", "TEST"))
         print("-"*78)
 
     def print_end_blurb(self):
@@ -429,10 +449,11 @@ class TabularConsoleOutput:
 
     def print_progress(self, test):
         self.last_test_no += 1
-        msg = "{:9s} {:50s} {:^8s} {:8s}".format(
+        msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
             "[{}/{}]".format(self.last_test_no, self.test_count),
-            test.name, test.mode[:8],
-            palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]")
+            test.suite.name, test.mode[:7],
+            palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]"),
+            test.uname
         )
         if self.verbose is False:
             if test.success:
@@ -590,6 +611,8 @@ def parse_cmd_line():
     parser.add_argument('--skip', default="",
                         dest="skip_pattern", action="store",
                         help="Skip tests which match the provided pattern")
+    parser.add_argument('--parallel-cases', dest="parallel_cases", action="store_true", default=False,
+                        help="Run individual test cases in parallel")
     args = parser.parse_args()
 
     if not output_is_a_tty:
