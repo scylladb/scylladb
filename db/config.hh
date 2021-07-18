@@ -408,6 +408,8 @@ public:
     // configuring the Seastar memory subsystem.
     static constexpr size_t wasm_udf_reserved_memory = 50 * 1024 * 1024;
 
+    named_value<unsigned> minimum_keyspace_rf;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
