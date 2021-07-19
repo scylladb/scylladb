@@ -33,6 +33,7 @@
 #include <unordered_set>
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "qos_configuration_change_subscriber.hh"
 
 namespace db {
     class system_distributed_keyspace;
@@ -67,6 +68,7 @@ public:
         virtual future<> drop_service_level(sstring service_level_name) const = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
+
 private:
     struct global_controller_data {
         service_levels_info  static_configurations{};
@@ -93,7 +95,7 @@ private:
     sharded<auth::service>& _auth_service;
     std::chrono::time_point<seastar::lowres_clock> _last_successful_config_update;
     unsigned _logged_intervals;
-
+    atomic_vector<qos_configuration_change_subscriber*> _subscribers;
 public:
     service_level_controller(sharded<auth::service>& auth_service, service_level_options default_service_level_config);
 
@@ -220,11 +222,23 @@ private:
     };
 
     future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type);
-
 public:
+
+    /**
+     *  Register a subscriber for service level configuration changes
+     *  notifications
+     * @param subscriber - a pointer to the subscriber.
+     *
+     * Note: the caller is responsible to keep the pointed to object alive until performing
+     * a call to service_level_controller::unregister_subscriber()).
+     *
+     * Note 2: the subscription is per shard.
+     */
+    void register_subscriber(qos_configuration_change_subscriber* subscriber);
+    future<> unregister_subscriber(qos_configuration_change_subscriber* subscriber);
+
     static sstring default_service_level_name;
 
-public:
     virtual void on_join_cluster(const gms::inet_address& endpoint) override;
     virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
     virtual void on_up(const gms::inet_address& endpoint) override;
