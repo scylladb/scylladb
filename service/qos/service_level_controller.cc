@@ -410,4 +410,16 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
     return make_ready_future();
 }
 
+void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
+
+void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint) {
+    if (this_shard_id() == global_controller && endpoint == utils::fb_utilities::get_broadcast_address()) {
+        _global_controller_db->dist_data_update_aborter.request_abort();
+    }
+}
+
+void service_level_controller::on_up(const gms::inet_address& endpoint) { }
+
+void service_level_controller::on_down(const gms::inet_address& endpoint) { }
+
 }
