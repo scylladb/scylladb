@@ -1286,16 +1286,27 @@ bool statement_restrictions::need_filtering() const {
         // clustering restrictions.  Therefore, a continuous clustering range is guaranteed.
         return false;
     }
-    if (!_clustering_columns_restrictions->needs_filtering(*_schema)) { // Guaranteed continuous clustering range.
-        return false;
-    }
-    // Now we know there are some clustering-column restrictions that are out-of-order or not EQ.  A naive base-table
-    // query must be filtered.  What about an index-table query?  That can only avoid filtering if there is exactly one
-    // EQ supported by an index.
-    return !(_clustering_columns_restrictions->size() == 1 && _has_queriable_ck_index);
 
-    // TODO: it is also possible to avoid filtering here if a non-empty CK prefix is specified and token_known, plus
-    // there's exactly one out-of-order-but-index-supported clustering-column restriction.
+    if (_has_queriable_ck_index && _uses_secondary_indexing) {
+        // In cases where we use an index, clustering column restrictions might cause the need for filtering.
+        // TODO: This is overly conservative, there are some cases when this returns true but filtering
+        // is not needed. Because of that the database will sometimes perform filtering when it's not actually needed.
+        // Query performance shouldn't be affected much, at most we will filter rows that are all correct.
+        // Here are some cases to consider:
+        // On a table with primary key (p, c1, c2, c3) with an index on c3
+        // WHERE c3 = ? - doesn't require filtering
+        // WHERE c1 = ? AND c2 = ? AND c3 = ? - requires filtering
+        // WHERE p = ? AND c1 = ? AND c3 = ? - doesn't require filtering, but we conservatively report it does
+        // WHERE p = ? AND c1 LIKE ? AND c3 = ? - requires filtering
+        // WHERE p = ? AND c1 = ? AND c2 LIKE ? AND c3 = ? - requires filtering
+        // WHERE p = ? AND c1 = ? AND c2 = ? AND c3 = ? - doesn't use an index
+        // WHERE p = ? AND c1 = ? AND c2 < ? AND c3 = ? - doesn't require filtering, but we report it does
+        return _clustering_columns_restrictions->size() > 1;
+    }
+    // Now we know that the query doesn't use an index.
+
+    // The only thing that can cause filtering now are the clustering columns.
+    return _clustering_columns_restrictions->needs_filtering(*_schema);
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
