@@ -4,6 +4,7 @@ This documentation targets developers who are interested in contributing to Scyl
 
 ## Contents
 
+* [Getting Started](/manuals/getting-started/index) - How to Download and Install Scylla
 * [Alternator](alternator/alternator.md) - The open source DynamoDB-compatible API reference.
 * [Design notes](design-notes/index.md) - Explanations describing how new features work for other contributors and exploratory research.
 * [Guides](guides/index.md) - Instructions on how to build, run, test and debug the Scylla codebase.
