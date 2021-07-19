@@ -626,7 +626,7 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     }
 
     segment_kind kind() const {
-        return static_cast<segment_kind>(_free_space >> shift_for_segment_kind);
+        return static_cast<segment_kind>((_free_space & segment_kind_mask) >> shift_for_segment_kind);
     }
 
     void set_kind(segment_kind kind) {
