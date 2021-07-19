@@ -361,6 +361,69 @@ def test_ttl_expiration_gsi_lsi(dynamodb):
             time.sleep(60)
         pytest.fail('base, gsi, or lsi not expired')
 
+# Above in test_ttl_expiration_hash() and test_ttl_expiration_range() we
+# checked the case where TTL's expiration-time attribute is not a regular
+# attribute but one of the two key attributes. Alternator encodes these
+# attributes differently (as a real column in the schema - not a serialized
+# JSON inside a map column), so needed to check that such an attribute is
+# usable as well. LSI (and, currently, also GSI) *also* implement their keys
+# differently (like the base key), so let's check that having the TTL column
+# a GSI or LSI key still works. Even though it is unlikely that any user
+# would want to have such a use case.
+# The following test only tries LSI, which we're sure will always have this
+# special case (for GSI, we are considering changing the implementation
+# and make their keys regular attributes - to support adding GSIs after a
+# table already exists - so after such a change GSIs will no longer be a
+# special case.
+@pytest.mark.veryslow
+@pytest.mark.xfail(reason="TTL not implemented yet #5060")
+def test_ttl_expiration_lsi_key(dynamodb):
+    # In my experiments, a 30-minute (1800 seconds) is the typical delay
+    # for expiration in this test for DynamoDB
+    max_duration = 3600
+    with new_test_table(dynamodb,
+        KeySchema=[
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'l', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' },
+            },
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'l', 'AttributeType': 'N' },
+        ]) as table:
+        # The expiration-time attribute is the LSI key "l":
+        ttl_spec = {'AttributeName': 'l', 'Enabled': True}
+        response = table.meta.client.update_time_to_live(TableName=table.name,
+            TimeToLiveSpecification=ttl_spec)
+        assert 'TimeToLiveSpecification' in response
+        assert response['TimeToLiveSpecification'] == ttl_spec
+        p = random_string()
+        c = random_string()
+        l = random_string()
+        # expiration one minute in the past, so item should expire ASAP.
+        expiration = int(time.time()) - 60
+        table.put_item(Item={'p': p, 'c': c, 'l': expiration})
+        start_time = time.time()
+        gsi_was_alive = False
+        while time.time() < start_time + max_duration:
+            print(f"--- {int(time.time()-start_time)} seconds")
+            if 'Item' in table.get_item(Key={'p': p, 'c': c}):
+                print("base alive")
+            else:
+                # test is done - and successful:
+                return
+            time.sleep(60)
+        pytest.fail('base not expired')
+
 # Check that in the DynamoDB Streams API, an event appears about an item
 # becoming expired. This event should contain be a REMOVE event, contain
 # the appropriate information about the expired item (its key and/or its
