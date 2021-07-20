@@ -176,8 +176,3 @@ When working on DPDK support for Scylla, enable hugepages.
    done
 
 Huge page configuration is written to :code:`/etc/sysconfig/scylla-server` by the script :code:`/usr/lib/scylla/sysconfig_setup`
-
-
-
-
-
