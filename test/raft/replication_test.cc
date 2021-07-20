@@ -24,7 +24,7 @@
 // Test Raft library with declarative test definitions
 
 
-lowres_clock::duration tick_delta = 1ms;
+lowres_clock::duration tick_delta = 10ms; // minimum granularity of lowres_clock
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
