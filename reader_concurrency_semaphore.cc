@@ -303,12 +303,6 @@ public:
     }
 };
 
-struct reader_concurrency_semaphore::permit_list {
-    using list_type = boost::intrusive::list<reader_permit::impl, boost::intrusive::constant_time_size<false>>;
-
-    list_type permits;
-};
-
 reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
 {
 }
@@ -494,10 +488,10 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
 }
 
 static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_concurrency_semaphore& semaphore,
-        const reader_concurrency_semaphore::permit_list& list, std::string_view problem, unsigned max_lines = 20) {
+        const reader_concurrency_semaphore::permit_list_type& list, std::string_view problem, unsigned max_lines = 20) {
     permit_groups permits;
 
-    for (const auto& permit : list.permits) {
+    for (const auto& permit : list) {
         permits[permit_group_key(permit.get_schema(), permit.get_op_name(), permit.get_state())].add(permit);
     }
 
@@ -515,7 +509,7 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
 }
 
-static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list& list,
+static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list_type& list,
         std::string_view problem) {
     static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
 
@@ -531,7 +525,7 @@ static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaph
 void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept {
     e.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
 
-    maybe_dump_reader_permit_diagnostics(_semaphore, *_semaphore._permit_list, "timed out");
+    maybe_dump_reader_permit_diagnostics(_semaphore, _semaphore._permit_list, "timed out");
 }
 
 reader_concurrency_semaphore::inactive_read::~inactive_read() {
@@ -595,7 +589,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t me
     , _ready_list(max_queue_length)
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
-    , _permit_list(std::make_unique<permit_list>()) {}
+{ }
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
     : reader_concurrency_semaphore(
@@ -773,7 +767,7 @@ bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
     if ((_wait_list.size() + _ready_list.size()) >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
-        maybe_dump_reader_permit_diagnostics(*this, *_permit_list, fmt::format("{} queue overload", queue_name));
+        maybe_dump_reader_permit_diagnostics(*this, _permit_list, fmt::format("{} queue overload", queue_name));
         return std::make_exception_ptr(std::runtime_error(format("{}: {} queue overload", _name, queue_name)));
     }
     return {};
@@ -849,7 +843,7 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
 
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
     _permit_gate.enter();
-    _permit_list->permits.push_back(permit);
+    _permit_list.push_back(permit);
     ++_stats.total_permits;
     ++_stats.current_permits;
 }
@@ -933,7 +927,7 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
 
 std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) const {
     std::ostringstream os;
-    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request", max_lines);
+    do_dump_reader_permit_diagnostics(os, *this, _permit_list, "user request", max_lines);
     return os.str();
 }
 

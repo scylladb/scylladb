@@ -96,7 +96,10 @@ public:
         uint64_t blocked_permits = 0;
     };
 
-    struct permit_list;
+    using permit_list_type = bi::list<
+            reader_permit::impl,
+            bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
+            bi::constant_time_size<false>>;
 
     class inactive_read_handle;
 
@@ -188,7 +191,7 @@ private:
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     inactive_reads_type _inactive_reads;
     stats _stats;
-    std::unique_ptr<permit_list> _permit_list;
+    permit_list_type _permit_list;
     bool _stopped = false;
     gate _close_readers_gate;
     gate _permit_gate;
