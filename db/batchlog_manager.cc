@@ -148,7 +148,7 @@ future<> db::batchlog_manager::start() {
     return make_ready_future<>();
 }
 
-future<> db::batchlog_manager::stop() {
+future<> db::batchlog_manager::drain() {
     if (!_stop.abort_requested()) {
         _stop.request_abort();
     }
@@ -156,7 +156,13 @@ future<> db::batchlog_manager::stop() {
         // Abort do_batch_log_replay if waiting on the semaphore.
         _sem.broken();
     }
-    return std::exchange(_started, make_ready_future<>()).finally([this] {
+    return with_gate(_gate, [this] {
+        return std::exchange(_started, make_ready_future<>());
+    });
+}
+
+future<> db::batchlog_manager::stop() {
+    return drain().finally([this] {
         return _gate.close();
     });
 }

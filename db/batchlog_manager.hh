@@ -107,6 +107,8 @@ public:
     batchlog_manager(cql3::query_processor&, batchlog_manager_config config);
 
     future<> start();
+    // abort the replay loop and return its future.
+    future<> drain();
     future<> stop();
 
     future<> do_batch_log_replay();
