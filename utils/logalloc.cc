@@ -1400,8 +1400,9 @@ private:
         segment_descriptor& desc = shard_segment_pool.descriptor(_buf_active);
         ptr._desc = &desc;
         desc._buf_pointers.emplace_back(entangled::make_paired_with(ptr._link));
-        desc.record_alloc(buf_size);
-        _buf_active_offset += align_up(buf_size, buf_align);
+        auto alloc_size = align_up(buf_size, buf_align);
+        desc.record_alloc(alloc_size);
+        _buf_active_offset += alloc_size;
 
         return ptr;
     }
@@ -1414,7 +1415,8 @@ private:
             _closed_occupancy -= seg->occupancy();
         }
 
-        desc.record_free(buf._size);
+        auto alloc_size = align_up(buf._size, buf_align);
+        desc.record_free(alloc_size);
         poison(buf._buf, buf._size);
 
         // Pack links so that segment compaction only has to walk live objects.
