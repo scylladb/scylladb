@@ -7,14 +7,6 @@ import recommonmark
 from recommonmark.transform import AutoStructify
 from sphinx_scylladb_theme.utils import multiversion_regex_builder
 
-import os
-import sys
-from datetime import date
-from sphinx.util import logging
-import recommonmark
-from recommonmark.transform import AutoStructify
-from sphinx_scylladb_theme.utils import multiversion_regex_builder
-
 logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.abspath('../..'))
 
