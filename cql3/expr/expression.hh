@@ -281,6 +281,10 @@ extern bool is_on_collection(const binary_operator&);
 /// column_value.
 extern expression replace_column_def(const expression&, const column_definition*);
 
+// Replaces all occurences of token(p1, p2) on the left hand side with the given colum.
+// For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
+extern expression replace_token(const expression&, const column_definition*);
+
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :
