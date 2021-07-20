@@ -591,7 +591,7 @@ struct serializer<std::optional<T>> {
         std::optional<T> v;
         auto b = deserialize(in, boost::type<bool>());
         if (b) {
-            v = deserialize(in, boost::type<T>());
+            v.emplace(deserialize(in, boost::type<T>()));
         }
         return v;
     }
