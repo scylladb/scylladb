@@ -1,4 +1,3 @@
-
 ==============================
 Scylla in a Shared Environment
 ==============================
@@ -81,5 +80,4 @@ Scylla comes out of the box ready for production use with maximum
 performance but may need to be tuned for development or test uses. This
 tuning is simple to apply and results in a Scylla server that can
 coexist with other processes or a GUI on the system.
-
 
