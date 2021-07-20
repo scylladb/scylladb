@@ -41,7 +41,7 @@ autosectionlabel_prefix_document = True
 # source_encoding = 'utf-8-sig'
 
 # The master toctree document.
-master_doc = 'contents'
+master_doc = 'manuals/getting-started/index.rst'
 
 # General information about the project.
 project = 'Scylla Documentation'
