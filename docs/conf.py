@@ -159,7 +159,7 @@ notfound_urls_prefix = ''
 # -- Options for redirect extension ---------------------------------------
 
 # Read a YAML dictionary of redirections and generate an HTML file for each
-redirects_file = "../_utils/redirections.yaml"
+redirects_file = "_utils/redirections.yaml"
 
 # -- Options for multiversion extension ----------------------------------
 # Whitelist pattern for tags (set to None to ignore all tags)
