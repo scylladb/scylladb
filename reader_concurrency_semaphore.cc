@@ -307,7 +307,6 @@ struct reader_concurrency_semaphore::permit_list {
     using list_type = boost::intrusive::list<reader_permit::impl, boost::intrusive::constant_time_size<false>>;
 
     list_type permits;
-    permit_stats stats;
 };
 
 reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
@@ -605,7 +604,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name)) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
-    if (!_permit_list->stats.total_permits) {
+    if (!_stats.total_permits) {
         // We allow destroy without stop() when the semaphore wasn't used at all yet.
         return;
     }
@@ -768,7 +767,7 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
 }
 
 bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
-    return _permit_list->stats.used_permits == _permit_list->stats.blocked_permits;
+    return _stats.used_permits == _stats.blocked_permits;
 }
 
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
@@ -851,40 +850,36 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
     _permit_gate.enter();
     _permit_list->permits.push_back(permit);
-    ++_permit_list->stats.total_permits;
-    ++_permit_list->stats.current_permits;
+    ++_stats.total_permits;
+    ++_stats.current_permits;
 }
 
 void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& permit) noexcept {
     permit.unlink();
     _permit_gate.leave();
-    --_permit_list->stats.current_permits;
-}
-
-reader_concurrency_semaphore::permit_stats reader_concurrency_semaphore::get_permit_stats() const {
-    return _permit_list->stats;
+    --_stats.current_permits;
 }
 
 void reader_concurrency_semaphore::on_permit_used() noexcept {
-    ++_permit_list->stats.used_permits;
+    ++_stats.used_permits;
 }
 
 void reader_concurrency_semaphore::on_permit_unused() noexcept {
-    assert(_permit_list->stats.used_permits);
-    --_permit_list->stats.used_permits;
-    assert(_permit_list->stats.used_permits >= _permit_list->stats.blocked_permits);
+    assert(_stats.used_permits);
+    --_stats.used_permits;
+    assert(_stats.used_permits >= _stats.blocked_permits);
     maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_blocked() noexcept {
-    ++_permit_list->stats.blocked_permits;
-    assert(_permit_list->stats.used_permits >= _permit_list->stats.blocked_permits);
+    ++_stats.blocked_permits;
+    assert(_stats.used_permits >= _stats.blocked_permits);
     maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
-    assert(_permit_list->stats.blocked_permits);
-    --_permit_list->stats.blocked_permits;
+    assert(_stats.blocked_permits);
+    --_stats.blocked_permits;
 }
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, const char* const op_name, size_t memory,

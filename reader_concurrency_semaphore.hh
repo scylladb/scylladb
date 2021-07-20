@@ -86,8 +86,6 @@ public:
         uint64_t reads_admitted = 0;
         // Total number of reads enqueued to wait for admission.
         uint64_t reads_enqueued = 0;
-    };
-    struct permit_stats {
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -314,9 +312,6 @@ public:
     stats& get_stats() {
         return _stats;
     }
-
-    /// Return stats about the currently existing permits.
-    permit_stats get_permit_stats() const;
 
     /// Make an admitted permit
     ///
