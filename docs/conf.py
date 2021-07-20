@@ -8,7 +8,7 @@ from recommonmark.transform import AutoStructify
 from sphinx_scylladb_theme.utils import multiversion_regex_builder
 
 logger = logging.getLogger(__name__)
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath('..'))
 
 
 # -- General configuration ------------------------------------------------
