@@ -1,5 +1,5 @@
 ==============================
-Air-gapped Server Installtion
+Air-gapped Server Installation
 ==============================
 
 An air-gapped server is a server without any access to external repositories or connections to any network, including the internet.
