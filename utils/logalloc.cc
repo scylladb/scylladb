@@ -2071,6 +2071,10 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
                 llogger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
+            if (shard_segment_pool.total_memory_in_use() <= target_mem_in_use) {
+                llogger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
+                return;
+            }
             if (preempt && need_preempt()) {
                 llogger.debug("reclaim_from_evictable preempted");
                 return;
