@@ -26,7 +26,7 @@
 
 #include <seastar/json/formatter.hh>
 
-#include "base64.hh"
+#include "utils/base64.hh"
 #include "log.hh"
 #include "database.hh"
 #include "db/config.hh"

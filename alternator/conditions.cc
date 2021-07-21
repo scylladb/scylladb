@@ -28,7 +28,7 @@
 #include <unordered_map>
 #include "utils/rjson.hh"
 #include "serialization.hh"
-#include "base64.hh"
+#include "utils/base64.hh"
 #include <stdexcept>
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>

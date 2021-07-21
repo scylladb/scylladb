@@ -21,7 +21,7 @@
 
 #include "expressions.hh"
 #include "serialization.hh"
-#include "base64.hh"
+#include "utils/base64.hh"
 #include "conditions.hh"
 #include "alternator/expressionsLexer.hpp"
 #include "alternator/expressionsParser.hpp"

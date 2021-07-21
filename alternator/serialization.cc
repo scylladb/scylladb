@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "base64.hh"
+#include "utils/base64.hh"
 #include "log.hh"
 #include "serialization.hh"
 #include "error.hh"
