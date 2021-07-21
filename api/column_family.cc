@@ -332,15 +332,15 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], 0, [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], uint64_t{0}, [](column_family& cf) {
             return cf.active_memtable().partition_count();
-        }, std::plus<int>());
+        }, std::plus<>());
     });
 
     cf::get_all_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, 0, [](column_family& cf) {
+        return map_reduce_cf(ctx, uint64_t{0}, [](column_family& cf) {
             return cf.active_memtable().partition_count();
-        }, std::plus<int>());
+        }, std::plus<>());
     });
 
     cf::get_memtable_on_heap_size.set(r, [] (const_req req) {
