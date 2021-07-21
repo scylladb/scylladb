@@ -125,565 +125,6 @@ public:
     }
 };
 
-// data_consume_rows_context_m remembers the context that an ongoing
-// data_consume_rows() future is in for SSTable in 3_x format.
-class data_consume_rows_context_m : public data_consumer::continuous_data_consumer<data_consume_rows_context_m> {
-private:
-    enum class state {
-        PARTITION_START,
-        DELETION_TIME,
-        FLAGS,
-        OTHER,
-    } _state = state::PARTITION_START;
-
-    // becomes false when we yield in the main coroutine, although we don't need to consume
-    // more data buffers to continue, switch back to true afterwards
-    bool _consuming = true;
-    consumer_m& _consumer;
-    shared_sstable _sst;
-    const serialization_header& _header;
-    column_translation _column_translation;
-    const bool _has_shadowable_tombstones;
-
-    temporary_buffer<char> _pk;
-
-    unfiltered_flags_m _flags{0};
-    unfiltered_extended_flags_m _extended_flags{0};
-    uint64_t _next_row_offset;
-    liveness_info _liveness;
-    bool _is_first_unfiltered = true;
-
-    std::vector<fragmented_temporary_buffer> _row_key;
-
-    struct row_schema {
-        using column_range = boost::iterator_range<std::vector<column_translation::column_info>::const_iterator>;
-
-        // All columns for this kind of row inside column_translation of the current sstable
-        column_range _all_columns;
-
-        // Subrange of _all_columns which is yet to be processed for current row
-        column_range _columns;
-
-        // Represents the subset of _all_columns present in current row
-        boost::dynamic_bitset<uint64_t> _columns_selector; // size() == _columns.size()
-    };
-
-    row_schema _regular_row;
-    row_schema _static_row;
-    row_schema* _row;
-
-    uint64_t _missing_columns_to_read;
-
-    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
-
-    tombstone _row_tombstone;
-    tombstone _row_shadowable_tombstone;
-
-    column_flags_m _column_flags{0};
-    api::timestamp_type _column_timestamp;
-    gc_clock::time_point _column_local_deletion_time;
-    gc_clock::duration _column_ttl;
-    fragmented_temporary_buffer _column_value;
-    temporary_buffer<char> _cell_path;
-    uint64_t _ck_blocks_header;
-    uint32_t _ck_blocks_header_offset;
-    bool _null_component_occured;
-    uint64_t _subcolumns_to_read = 0;
-    api::timestamp_type _complex_column_marked_for_delete;
-    tombstone _complex_column_tombstone;
-    bool _reading_range_tombstone_ck = false;
-    bound_kind_m _range_tombstone_kind;
-    uint16_t _ck_size;
-    /*
-     * We need two range tombstones because range tombstone marker can be either a single bound
-     * or a double bound that represents end of one range tombstone and start of another at the same time.
-     * If range tombstone marker is a single bound then only _left_range_tombstone is used.
-     * Otherwise, _left_range_tombstone represents tombstone for a range tombstone that's being closed
-     * and _right_range_tombstone represents a tombstone for a range tombstone that's being opened.
-     */
-    tombstone _left_range_tombstone;
-    tombstone _right_range_tombstone;
-
-    processing_result_generator _gen;
-    temporary_buffer<char>* _processing_data;
-    void start_row(row_schema& rs) {
-        _row = &rs;
-        _row->_columns = _row->_all_columns;
-    }
-    void setup_columns(row_schema& rs, const std::vector<column_translation::column_info>& columns) {
-        rs._all_columns = boost::make_iterator_range(columns);
-        rs._columns_selector = boost::dynamic_bitset<uint64_t>(columns.size());
-    }
-    void skip_absent_columns() {
-        size_t pos = _row->_columns_selector.find_first();
-        if (pos == boost::dynamic_bitset<uint64_t>::npos) {
-            pos = _row->_columns.size();
-        }
-        _row->_columns.advance_begin(pos);
-    }
-    bool no_more_columns() const { return _row->_columns.empty(); }
-    void move_to_next_column() {
-        size_t current_pos = _row->_columns_selector.size() - _row->_columns.size();
-        size_t next_pos = _row->_columns_selector.find_next(current_pos);
-        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _row->_columns.size()
-                                                                                  : next_pos - current_pos;
-        _row->_columns.advance_begin(jump_to_next);
-    }
-    bool is_column_simple() const { return !_row->_columns.front().is_collection; }
-    bool is_column_counter() const { return _row->_columns.front().is_counter; }
-    const column_translation::column_info& get_column_info() const {
-        return _row->_columns.front();
-    }
-    std::optional<uint32_t> get_column_value_length() const {
-        return _row->_columns.front().value_length;
-    }
-    void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
-        _row_key.clear();
-        _row_key.reserve(column_value_fix_lengths.size());
-        if (column_value_fix_lengths.empty()) {
-            _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
-        } else {
-            _ck_column_value_fix_lengths = boost::make_iterator_range(std::begin(column_value_fix_lengths),
-                                                                      std::begin(column_value_fix_lengths) + _ck_size);
-        }
-        _ck_blocks_header_offset = 0u;
-    }
-    bool no_more_ck_blocks() const { return _ck_column_value_fix_lengths.empty(); }
-    void move_to_next_ck_block() {
-        _ck_column_value_fix_lengths.advance_begin(1);
-        ++_ck_blocks_header_offset;
-        if (_ck_blocks_header_offset == 32u) {
-            _ck_blocks_header_offset = 0u;
-        }
-    }
-    std::optional<uint32_t> get_ck_block_value_length() const {
-        return _ck_column_value_fix_lengths.front();
-    }
-    bool is_block_empty() const {
-        return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset))) != 0;
-    }
-    bool is_block_null() const {
-        return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset + 1))) != 0;
-    }
-    bool should_read_block_header() const {
-        return _ck_blocks_header_offset == 0u;
-    }
-public:
-    using consumer = consumer_m;
-    // assumes !primitive_consumer::active()
-    bool non_consuming() const {
-        return !_consuming;
-    }
-
-    data_consumer::processing_result process_state(temporary_buffer<char>& data) {
-        _processing_data = &data;
-        return _gen.generate();
-    }
-private:
-    processing_result_generator do_process_state() {
-        if (_state != state::PARTITION_START) {
-            goto flags_label;
-        }
-        partition_start_label: {
-            _is_first_unfiltered = true;
-            _state = state::DELETION_TIME;
-            co_yield read_short_length_bytes(*_processing_data, _pk);
-            _state = state::OTHER;
-            co_yield read_32(*_processing_data);
-            co_yield read_64(*_processing_data);
-            deletion_time del;
-            del.local_deletion_time = _u32;
-            del.marked_for_delete_at = _u64;
-            auto ret = _consumer.consume_partition_start(key_view(to_bytes_view(_pk)), del);
-            // after calling the consume function, we can release the
-            // buffers we held for it.
-            _pk.release();
-            _state = state::FLAGS;
-            if (ret == consumer_m::proceed::no) {
-                co_yield consumer_m::proceed::no;
-            }
-        }
-        flags_label:
-            _liveness = {};
-            _row_tombstone = {};
-            _row_shadowable_tombstone = {};
-            co_yield read_8(*_processing_data);
-            _flags = unfiltered_flags_m(_u8);
-            _state = state::OTHER;
-            if (_flags.is_end_of_partition()) {
-                _state = state::PARTITION_START;
-                if (_consumer.consume_partition_end() == consumer_m::proceed::no) {
-                    co_yield consumer_m::proceed::no;
-                }
-                goto partition_start_label;
-            } else if (_flags.is_range_tombstone()) {
-                _is_first_unfiltered = false;
-                co_yield read_8(*_processing_data);
-                _range_tombstone_kind = bound_kind_m(_u8);
-                co_yield read_16(*_processing_data);
-                _ck_size = _u16;
-                if (_ck_size == 0) {
-                    _row_key.clear();
-                    _range_tombstone_kind = is_start(_range_tombstone_kind)
-                            ? bound_kind_m::incl_start : bound_kind_m::incl_end;
-                    goto range_tombstone_body_label;
-                } else {
-                    _reading_range_tombstone_ck = true;
-                }
-            } else if (!_flags.has_extended_flags()) {
-                _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
-                start_row(_regular_row);
-                _ck_size = _column_translation.clustering_column_value_fix_legths().size();
-            } else {
-                co_yield read_8(*_processing_data);
-                _extended_flags = unfiltered_extended_flags_m(_u8);
-                if (_extended_flags.has_cassandra_shadowable_deletion()) {
-                    throw std::runtime_error("SSTables with Cassandra-style shadowable deletion cannot be read by Scylla");
-                }
-                if (_extended_flags.is_static()) {
-                    if (_is_first_unfiltered) {
-                        start_row(_static_row);
-                        _is_first_unfiltered = false;
-                        goto row_body_label;
-                    } else {
-                        throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
-                    }
-                }
-                start_row(_regular_row);
-                _ck_size = _column_translation.clustering_column_value_fix_legths().size();
-            }
-            _is_first_unfiltered = false;
-            _null_component_occured = false;
-            setup_ck(_column_translation.clustering_column_value_fix_legths());
-            while (!no_more_ck_blocks()) {
-                if (should_read_block_header()) {
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _ck_blocks_header = _u64;
-                }
-                if (is_block_null()) {
-                    _null_component_occured = true;
-                    move_to_next_ck_block();
-                    continue;
-                }
-                if (_null_component_occured) {
-                    throw malformed_sstable_exception("non-null component after null component");
-                }
-                if (is_block_empty()) {
-                    _row_key.push_back({});
-                    move_to_next_ck_block();
-                    continue;
-                }
-                read_status status = read_status::waiting;
-                if (auto len = get_ck_block_value_length()) {
-                    status = read_bytes(*_processing_data, *len, _column_value);
-                } else {
-                    status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
-                }
-                co_yield status;
-                _row_key.push_back(std::move(_column_value));
-                move_to_next_ck_block();
-            }
-            if (_reading_range_tombstone_ck) {
-                _reading_range_tombstone_ck = false;
-                goto range_tombstone_body_label;
-            }
-        row_body_label: {
-            co_yield read_unsigned_vint(*_processing_data);
-            _next_row_offset = position() - _processing_data->size() + _u64;
-            co_yield read_unsigned_vint(*_processing_data);
-            // Ignore the result
-            consumer_m::row_processing_result ret = _extended_flags.is_static()
-                ? _consumer.consume_static_row_start()
-                : _consumer.consume_row_start(_row_key);
-
-            while (ret == consumer_m::row_processing_result::retry_later) {
-                co_yield consumer_m::proceed::no;
-                ret = _extended_flags.is_static()
-                    ? _consumer.consume_static_row_start()
-                    : _consumer.consume_row_start(_row_key);
-            }
-            if (ret == consumer_m::row_processing_result::skip_row) {
-                _state = state::FLAGS;
-                auto current_pos = position() - _processing_data->size();
-                auto maybe_skip_bytes = skip(*_processing_data, _next_row_offset - current_pos);
-                if (std::holds_alternative<skip_bytes>(maybe_skip_bytes)) {
-                    co_yield maybe_skip_bytes;
-                }
-                goto flags_label;
-            }
-            if (_extended_flags.is_static()) {
-                if (_flags.has_timestamp() || _flags.has_ttl() || _flags.has_deletion()) {
-                    throw malformed_sstable_exception(format("Static row has unexpected flags: timestamp={}, ttl={}, deletion={}",
-                        _flags.has_timestamp(), _flags.has_ttl(), _flags.has_deletion()));
-                }
-            } else {
-                if (_flags.has_timestamp()) {
-                    co_yield read_unsigned_vint(*_processing_data);
-
-                    _liveness.set_timestamp(parse_timestamp(_header, _u64));
-                    if (_flags.has_ttl()) {
-                        co_yield read_unsigned_vint(*_processing_data);
-                        _liveness.set_ttl(parse_ttl(_header, _u64));
-                        co_yield read_unsigned_vint(*_processing_data);
-                        _liveness.set_local_deletion_time(parse_expiry(_header, _u64));
-                    }
-                }
-                if (_flags.has_deletion()) {
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _row_tombstone.timestamp = parse_timestamp(_header, _u64);
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _row_tombstone.deletion_time = parse_expiry(_header, _u64);
-                }
-                if (_extended_flags.has_scylla_shadowable_deletion()) {
-                    if (!_has_shadowable_tombstones) {
-                        throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
-                    }
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
-                }
-                _consumer.consume_row_marker_and_tombstone(
-                        _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone));
-            }
-            if (!_flags.has_all_columns()) {
-                co_yield read_unsigned_vint(*_processing_data);
-                uint64_t missing_column_bitmap_or_count = _u64;
-                if (_row->_columns.size() < 64) {
-                    _row->_columns_selector.clear();
-                    _row->_columns_selector.append(missing_column_bitmap_or_count);
-                    _row->_columns_selector.flip();
-                    _row->_columns_selector.resize(_row->_columns.size());
-                    skip_absent_columns();
-                    goto column_label;
-                }
-                _row->_columns_selector.resize(_row->_columns.size());
-                if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
-                    _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
-                    _row->_columns_selector.reset();
-                } else {
-                    _missing_columns_to_read = missing_column_bitmap_or_count;
-                    _row->_columns_selector.set();
-                }
-                while (_missing_columns_to_read > 0) {
-                    --_missing_columns_to_read;
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _row->_columns_selector.flip(_u64);
-                }
-                skip_absent_columns();
-            } else {
-                _row->_columns_selector.set();
-            }
-        }
-        column_label:
-            if (_subcolumns_to_read == 0) {
-                if (no_more_columns()) {
-                    _state = state::FLAGS;
-                    if (_consumer.consume_row_end() == consumer_m::proceed::no) {
-                        co_yield consumer_m::proceed::no;
-                    }
-                    goto flags_label;
-                }
-                if (!is_column_simple()) {
-                    if (!_flags.has_complex_deletion()) {
-                        _complex_column_tombstone = {};
-                    } else {
-                        co_yield read_unsigned_vint(*_processing_data);
-                        _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
-                        co_yield read_unsigned_vint(*_processing_data);
-                        _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
-                    }
-                    if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
-                        co_yield consumer_m::proceed::no;
-                    }
-                    co_yield read_unsigned_vint(*_processing_data);
-                    _subcolumns_to_read = _u64;
-                    if (_subcolumns_to_read == 0) {
-                        const sstables::column_translation::column_info& column_info = get_column_info();
-                        move_to_next_column();
-                        if (_consumer.consume_complex_column_end(column_info) == consumer_m::proceed::no) {
-                            _consuming = false;
-                            co_yield consumer_m::proceed::no;
-                            _consuming = true;
-                        }
-                    }
-                    goto column_label;
-                }
-                _subcolumns_to_read = 0;
-            }
-            co_yield read_8(*_processing_data);
-            _column_flags = column_flags_m(_u8);
-
-            if (_column_flags.use_row_timestamp()) {
-                _column_timestamp = _liveness.timestamp();
-            } else {
-                co_yield read_unsigned_vint(*_processing_data);
-                _column_timestamp = parse_timestamp(_header, _u64);
-            }
-            if (_column_flags.use_row_ttl()) {
-                _column_local_deletion_time = _liveness.local_deletion_time();
-            } else if (!_column_flags.is_deleted() && ! _column_flags.is_expiring()) {
-                _column_local_deletion_time = gc_clock::time_point::max();
-            } else {
-                co_yield read_unsigned_vint(*_processing_data);
-                _column_local_deletion_time = parse_expiry(_header, _u64);
-            }
-            if (_column_flags.use_row_ttl()) {
-                _column_ttl = _liveness.ttl();
-            } else if (!_column_flags.is_expiring()) {
-                _column_ttl = gc_clock::duration::zero();
-            } else {
-                co_yield read_unsigned_vint(*_processing_data);
-                _column_ttl = parse_ttl(_header, _u64);
-            }
-            if (!is_column_simple()) {
-                co_yield read_unsigned_vint_length_bytes_contiguous(*_processing_data, _cell_path);
-            } else {
-                _cell_path = temporary_buffer<char>(0);
-            }
-            if (!_column_flags.has_value()) {
-                _column_value = fragmented_temporary_buffer();
-            } else {
-                read_status status = read_status::waiting;
-                if (auto len = get_column_value_length()) {
-                    status = read_bytes(*_processing_data, *len, _column_value);
-                } else {
-                    status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
-                }
-                co_yield status;
-            }
-            _consuming = false;
-            if (is_column_counter() && !_column_flags.is_deleted()) {
-                if (_consumer.consume_counter_column(get_column_info(),
-                                                     fragmented_temporary_buffer::view(_column_value),
-                                                     _column_timestamp) == consumer_m::proceed::no) {
-                    co_yield consumer_m::proceed::no;
-                }
-            } else {
-                if (_consumer.consume_column(get_column_info(),
-                                             to_bytes_view(_cell_path),
-                                             fragmented_temporary_buffer::view(_column_value),
-                                             _column_timestamp,
-                                             _column_ttl,
-                                             _column_local_deletion_time,
-                                             _column_flags.is_deleted()) == consumer_m::proceed::no) {
-                    co_yield consumer_m::proceed::no;
-                }
-            }
-            if (!is_column_simple()) {
-                --_subcolumns_to_read;
-                if (_subcolumns_to_read == 0) {
-                    const sstables::column_translation::column_info& column_info = get_column_info();
-                    move_to_next_column();
-                    if (_consumer.consume_complex_column_end(column_info) == consumer_m::proceed::no) {
-                        co_yield consumer_m::proceed::no;
-                    }
-                }
-            } else {
-                move_to_next_column();
-            }
-            _consuming = true;
-            goto column_label;
-        range_tombstone_body_label:
-            co_yield read_unsigned_vint(*_processing_data);
-            // Ignore result
-            co_yield read_unsigned_vint(*_processing_data);
-            // Ignore result
-            co_yield read_unsigned_vint(*_processing_data);
-            _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
-            co_yield read_unsigned_vint(*_processing_data);
-            _left_range_tombstone.deletion_time = parse_expiry(_header, _u64);
-            if (!is_boundary_between_adjacent_intervals(_range_tombstone_kind)) {
-                if (!is_bound_kind(_range_tombstone_kind)) {
-                    throw sstables::malformed_sstable_exception(
-                        format("Corrupted range tombstone: invalid boundary type {}", _range_tombstone_kind));
-                }
-                _sst->get_stats().on_range_tombstone_read();
-                _state = state::FLAGS;
-                if (_consumer.consume_range_tombstone(_row_key,
-                                                      to_bound_kind(_range_tombstone_kind),
-                                                      _left_range_tombstone) == consumer_m::proceed::no) {
-                    _row_key.clear();
-                    co_yield consumer_m::proceed::no;
-                }
-                _row_key.clear();
-                goto flags_label;
-            }
-            co_yield read_unsigned_vint(*_processing_data);
-            _right_range_tombstone.timestamp = parse_timestamp(_header, _u64);
-            co_yield read_unsigned_vint(*_processing_data);
-            _sst->get_stats().on_range_tombstone_read();
-            _right_range_tombstone.deletion_time = parse_expiry(_header, _u64);
-            _state = state::FLAGS;
-            if (_consumer.consume_range_tombstone(_row_key,
-                                                  _range_tombstone_kind,
-                                                  _left_range_tombstone,
-                                                  _right_range_tombstone) == consumer_m::proceed::no) {
-                _row_key.clear();
-                co_yield consumer_m::proceed::no;
-            }
-            _row_key.clear();
-            goto flags_label;
-    }
-public:
-
-    data_consume_rows_context_m(const schema& s,
-                                const shared_sstable& sst,
-                                consumer_m& consumer,
-                                input_stream<char> && input,
-                                uint64_t start,
-                                uint64_t maxlen)
-        : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
-        , _consumer(consumer)
-        , _sst(sst)
-        , _header(sst->get_serialization_header())
-        , _column_translation(sst->get_column_translation(s, _header, sst->features()))
-        , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
-        , _gen(do_process_state())
-    {
-        setup_columns(_regular_row, _column_translation.regular_columns());
-        setup_columns(_static_row, _column_translation.static_columns());
-    }
-
-    void verify_end_state() {
-        // If reading a partial row (i.e., when we have a clustering row
-        // filter and using a promoted index), we may be in FLAGS
-        // state instead of PARTITION_START.
-        if (_state == state::FLAGS) {
-            _consumer.on_end_of_stream();
-            return;
-        }
-
-        // We may end up in state::DELETION_TIME after consuming last partition's end marker
-        // and proceeding to attempt to parse the next partition, since state::DELETION_TIME
-        // is the first state corresponding to the contents of a new partition.
-        if (_state != state::DELETION_TIME
-                && (_state != state::PARTITION_START || primitive_consumer::active())) {
-            throw malformed_sstable_exception("end of input, but not end of partition");
-        }
-    }
-
-    void reset(indexable_element el) {
-        auto reset_to_state = [this, el] (state s) {
-            _state = s;
-            _consumer.reset(el);
-            _gen = do_process_state();
-        };
-        switch (el) {
-            case indexable_element::partition:
-                return reset_to_state(state::PARTITION_START);
-            case indexable_element::cell:
-                return reset_to_state(state::FLAGS);
-        }
-        // We should not get here unless some enum member is not handled by the switch
-        throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
-    }
-
-    reader_permit& permit() {
-        return _consumer.permit();
-    }
-};
-
 class mp_row_consumer_reader_mx : public mp_row_consumer_reader_base, public flat_mutation_reader_v2::impl {
     friend class sstables::mx::mp_row_consumer_m;
 public:
@@ -1249,6 +690,565 @@ public:
             return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
         }
         return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+    }
+};
+
+// data_consume_rows_context_m remembers the context that an ongoing
+// data_consume_rows() future is in for SSTable in 3_x format.
+class data_consume_rows_context_m : public data_consumer::continuous_data_consumer<data_consume_rows_context_m> {
+private:
+    enum class state {
+        PARTITION_START,
+        DELETION_TIME,
+        FLAGS,
+        OTHER,
+    } _state = state::PARTITION_START;
+
+    // becomes false when we yield in the main coroutine, although we don't need to consume
+    // more data buffers to continue, switch back to true afterwards
+    bool _consuming = true;
+    consumer_m& _consumer;
+    shared_sstable _sst;
+    const serialization_header& _header;
+    column_translation _column_translation;
+    const bool _has_shadowable_tombstones;
+
+    temporary_buffer<char> _pk;
+
+    unfiltered_flags_m _flags{0};
+    unfiltered_extended_flags_m _extended_flags{0};
+    uint64_t _next_row_offset;
+    liveness_info _liveness;
+    bool _is_first_unfiltered = true;
+
+    std::vector<fragmented_temporary_buffer> _row_key;
+
+    struct row_schema {
+        using column_range = boost::iterator_range<std::vector<column_translation::column_info>::const_iterator>;
+
+        // All columns for this kind of row inside column_translation of the current sstable
+        column_range _all_columns;
+
+        // Subrange of _all_columns which is yet to be processed for current row
+        column_range _columns;
+
+        // Represents the subset of _all_columns present in current row
+        boost::dynamic_bitset<uint64_t> _columns_selector; // size() == _columns.size()
+    };
+
+    row_schema _regular_row;
+    row_schema _static_row;
+    row_schema* _row;
+
+    uint64_t _missing_columns_to_read;
+
+    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
+
+    tombstone _row_tombstone;
+    tombstone _row_shadowable_tombstone;
+
+    column_flags_m _column_flags{0};
+    api::timestamp_type _column_timestamp;
+    gc_clock::time_point _column_local_deletion_time;
+    gc_clock::duration _column_ttl;
+    fragmented_temporary_buffer _column_value;
+    temporary_buffer<char> _cell_path;
+    uint64_t _ck_blocks_header;
+    uint32_t _ck_blocks_header_offset;
+    bool _null_component_occured;
+    uint64_t _subcolumns_to_read = 0;
+    api::timestamp_type _complex_column_marked_for_delete;
+    tombstone _complex_column_tombstone;
+    bool _reading_range_tombstone_ck = false;
+    bound_kind_m _range_tombstone_kind;
+    uint16_t _ck_size;
+    /*
+     * We need two range tombstones because range tombstone marker can be either a single bound
+     * or a double bound that represents end of one range tombstone and start of another at the same time.
+     * If range tombstone marker is a single bound then only _left_range_tombstone is used.
+     * Otherwise, _left_range_tombstone represents tombstone for a range tombstone that's being closed
+     * and _right_range_tombstone represents a tombstone for a range tombstone that's being opened.
+     */
+    tombstone _left_range_tombstone;
+    tombstone _right_range_tombstone;
+
+    processing_result_generator _gen;
+    temporary_buffer<char>* _processing_data;
+    void start_row(row_schema& rs) {
+        _row = &rs;
+        _row->_columns = _row->_all_columns;
+    }
+    void setup_columns(row_schema& rs, const std::vector<column_translation::column_info>& columns) {
+        rs._all_columns = boost::make_iterator_range(columns);
+        rs._columns_selector = boost::dynamic_bitset<uint64_t>(columns.size());
+    }
+    void skip_absent_columns() {
+        size_t pos = _row->_columns_selector.find_first();
+        if (pos == boost::dynamic_bitset<uint64_t>::npos) {
+            pos = _row->_columns.size();
+        }
+        _row->_columns.advance_begin(pos);
+    }
+    bool no_more_columns() const { return _row->_columns.empty(); }
+    void move_to_next_column() {
+        size_t current_pos = _row->_columns_selector.size() - _row->_columns.size();
+        size_t next_pos = _row->_columns_selector.find_next(current_pos);
+        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _row->_columns.size()
+                                                                                  : next_pos - current_pos;
+        _row->_columns.advance_begin(jump_to_next);
+    }
+    bool is_column_simple() const { return !_row->_columns.front().is_collection; }
+    bool is_column_counter() const { return _row->_columns.front().is_counter; }
+    const column_translation::column_info& get_column_info() const {
+        return _row->_columns.front();
+    }
+    std::optional<uint32_t> get_column_value_length() const {
+        return _row->_columns.front().value_length;
+    }
+    void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
+        _row_key.clear();
+        _row_key.reserve(column_value_fix_lengths.size());
+        if (column_value_fix_lengths.empty()) {
+            _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        } else {
+            _ck_column_value_fix_lengths = boost::make_iterator_range(std::begin(column_value_fix_lengths),
+                                                                      std::begin(column_value_fix_lengths) + _ck_size);
+        }
+        _ck_blocks_header_offset = 0u;
+    }
+    bool no_more_ck_blocks() const { return _ck_column_value_fix_lengths.empty(); }
+    void move_to_next_ck_block() {
+        _ck_column_value_fix_lengths.advance_begin(1);
+        ++_ck_blocks_header_offset;
+        if (_ck_blocks_header_offset == 32u) {
+            _ck_blocks_header_offset = 0u;
+        }
+    }
+    std::optional<uint32_t> get_ck_block_value_length() const {
+        return _ck_column_value_fix_lengths.front();
+    }
+    bool is_block_empty() const {
+        return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset))) != 0;
+    }
+    bool is_block_null() const {
+        return (_ck_blocks_header & (uint64_t(1) << (2 * _ck_blocks_header_offset + 1))) != 0;
+    }
+    bool should_read_block_header() const {
+        return _ck_blocks_header_offset == 0u;
+    }
+public:
+    using consumer = consumer_m;
+    // assumes !primitive_consumer::active()
+    bool non_consuming() const {
+        return !_consuming;
+    }
+
+    data_consumer::processing_result process_state(temporary_buffer<char>& data) {
+        _processing_data = &data;
+        return _gen.generate();
+    }
+private:
+    processing_result_generator do_process_state() {
+        if (_state != state::PARTITION_START) {
+            goto flags_label;
+        }
+        partition_start_label: {
+            _is_first_unfiltered = true;
+            _state = state::DELETION_TIME;
+            co_yield read_short_length_bytes(*_processing_data, _pk);
+            _state = state::OTHER;
+            co_yield read_32(*_processing_data);
+            co_yield read_64(*_processing_data);
+            deletion_time del;
+            del.local_deletion_time = _u32;
+            del.marked_for_delete_at = _u64;
+            auto ret = _consumer.consume_partition_start(key_view(to_bytes_view(_pk)), del);
+            // after calling the consume function, we can release the
+            // buffers we held for it.
+            _pk.release();
+            _state = state::FLAGS;
+            if (ret == consumer_m::proceed::no) {
+                co_yield consumer_m::proceed::no;
+            }
+        }
+        flags_label:
+            _liveness = {};
+            _row_tombstone = {};
+            _row_shadowable_tombstone = {};
+            co_yield read_8(*_processing_data);
+            _flags = unfiltered_flags_m(_u8);
+            _state = state::OTHER;
+            if (_flags.is_end_of_partition()) {
+                _state = state::PARTITION_START;
+                if (_consumer.consume_partition_end() == consumer_m::proceed::no) {
+                    co_yield consumer_m::proceed::no;
+                }
+                goto partition_start_label;
+            } else if (_flags.is_range_tombstone()) {
+                _is_first_unfiltered = false;
+                co_yield read_8(*_processing_data);
+                _range_tombstone_kind = bound_kind_m(_u8);
+                co_yield read_16(*_processing_data);
+                _ck_size = _u16;
+                if (_ck_size == 0) {
+                    _row_key.clear();
+                    _range_tombstone_kind = is_start(_range_tombstone_kind)
+                            ? bound_kind_m::incl_start : bound_kind_m::incl_end;
+                    goto range_tombstone_body_label;
+                } else {
+                    _reading_range_tombstone_ck = true;
+                }
+            } else if (!_flags.has_extended_flags()) {
+                _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
+                start_row(_regular_row);
+                _ck_size = _column_translation.clustering_column_value_fix_legths().size();
+            } else {
+                co_yield read_8(*_processing_data);
+                _extended_flags = unfiltered_extended_flags_m(_u8);
+                if (_extended_flags.has_cassandra_shadowable_deletion()) {
+                    throw std::runtime_error("SSTables with Cassandra-style shadowable deletion cannot be read by Scylla");
+                }
+                if (_extended_flags.is_static()) {
+                    if (_is_first_unfiltered) {
+                        start_row(_static_row);
+                        _is_first_unfiltered = false;
+                        goto row_body_label;
+                    } else {
+                        throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
+                    }
+                }
+                start_row(_regular_row);
+                _ck_size = _column_translation.clustering_column_value_fix_legths().size();
+            }
+            _is_first_unfiltered = false;
+            _null_component_occured = false;
+            setup_ck(_column_translation.clustering_column_value_fix_legths());
+            while (!no_more_ck_blocks()) {
+                if (should_read_block_header()) {
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _ck_blocks_header = _u64;
+                }
+                if (is_block_null()) {
+                    _null_component_occured = true;
+                    move_to_next_ck_block();
+                    continue;
+                }
+                if (_null_component_occured) {
+                    throw malformed_sstable_exception("non-null component after null component");
+                }
+                if (is_block_empty()) {
+                    _row_key.push_back({});
+                    move_to_next_ck_block();
+                    continue;
+                }
+                read_status status = read_status::waiting;
+                if (auto len = get_ck_block_value_length()) {
+                    status = read_bytes(*_processing_data, *len, _column_value);
+                } else {
+                    status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
+                }
+                co_yield status;
+                _row_key.push_back(std::move(_column_value));
+                move_to_next_ck_block();
+            }
+            if (_reading_range_tombstone_ck) {
+                _reading_range_tombstone_ck = false;
+                goto range_tombstone_body_label;
+            }
+        row_body_label: {
+            co_yield read_unsigned_vint(*_processing_data);
+            _next_row_offset = position() - _processing_data->size() + _u64;
+            co_yield read_unsigned_vint(*_processing_data);
+            // Ignore the result
+            consumer_m::row_processing_result ret = _extended_flags.is_static()
+                ? _consumer.consume_static_row_start()
+                : _consumer.consume_row_start(_row_key);
+
+            while (ret == consumer_m::row_processing_result::retry_later) {
+                co_yield consumer_m::proceed::no;
+                ret = _extended_flags.is_static()
+                    ? _consumer.consume_static_row_start()
+                    : _consumer.consume_row_start(_row_key);
+            }
+            if (ret == consumer_m::row_processing_result::skip_row) {
+                _state = state::FLAGS;
+                auto current_pos = position() - _processing_data->size();
+                auto maybe_skip_bytes = skip(*_processing_data, _next_row_offset - current_pos);
+                if (std::holds_alternative<skip_bytes>(maybe_skip_bytes)) {
+                    co_yield maybe_skip_bytes;
+                }
+                goto flags_label;
+            }
+            if (_extended_flags.is_static()) {
+                if (_flags.has_timestamp() || _flags.has_ttl() || _flags.has_deletion()) {
+                    throw malformed_sstable_exception(format("Static row has unexpected flags: timestamp={}, ttl={}, deletion={}",
+                        _flags.has_timestamp(), _flags.has_ttl(), _flags.has_deletion()));
+                }
+            } else {
+                if (_flags.has_timestamp()) {
+                    co_yield read_unsigned_vint(*_processing_data);
+
+                    _liveness.set_timestamp(parse_timestamp(_header, _u64));
+                    if (_flags.has_ttl()) {
+                        co_yield read_unsigned_vint(*_processing_data);
+                        _liveness.set_ttl(parse_ttl(_header, _u64));
+                        co_yield read_unsigned_vint(*_processing_data);
+                        _liveness.set_local_deletion_time(parse_expiry(_header, _u64));
+                    }
+                }
+                if (_flags.has_deletion()) {
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _row_tombstone.timestamp = parse_timestamp(_header, _u64);
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _row_tombstone.deletion_time = parse_expiry(_header, _u64);
+                }
+                if (_extended_flags.has_scylla_shadowable_deletion()) {
+                    if (!_has_shadowable_tombstones) {
+                        throw malformed_sstable_exception("Scylla shadowable tombstone flag is set but not supported on this SSTables");
+                    }
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _row_shadowable_tombstone.timestamp = parse_timestamp(_header, _u64);
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _row_shadowable_tombstone.deletion_time = parse_expiry(_header, _u64);
+                }
+                _consumer.consume_row_marker_and_tombstone(
+                        _liveness, std::move(_row_tombstone), std::move(_row_shadowable_tombstone));
+            }
+            if (!_flags.has_all_columns()) {
+                co_yield read_unsigned_vint(*_processing_data);
+                uint64_t missing_column_bitmap_or_count = _u64;
+                if (_row->_columns.size() < 64) {
+                    _row->_columns_selector.clear();
+                    _row->_columns_selector.append(missing_column_bitmap_or_count);
+                    _row->_columns_selector.flip();
+                    _row->_columns_selector.resize(_row->_columns.size());
+                    skip_absent_columns();
+                    goto column_label;
+                }
+                _row->_columns_selector.resize(_row->_columns.size());
+                if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
+                    _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
+                    _row->_columns_selector.reset();
+                } else {
+                    _missing_columns_to_read = missing_column_bitmap_or_count;
+                    _row->_columns_selector.set();
+                }
+                while (_missing_columns_to_read > 0) {
+                    --_missing_columns_to_read;
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _row->_columns_selector.flip(_u64);
+                }
+                skip_absent_columns();
+            } else {
+                _row->_columns_selector.set();
+            }
+        }
+        column_label:
+            if (_subcolumns_to_read == 0) {
+                if (no_more_columns()) {
+                    _state = state::FLAGS;
+                    if (_consumer.consume_row_end() == consumer_m::proceed::no) {
+                        co_yield consumer_m::proceed::no;
+                    }
+                    goto flags_label;
+                }
+                if (!is_column_simple()) {
+                    if (!_flags.has_complex_deletion()) {
+                        _complex_column_tombstone = {};
+                    } else {
+                        co_yield read_unsigned_vint(*_processing_data);
+                        _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
+                        co_yield read_unsigned_vint(*_processing_data);
+                        _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
+                    }
+                    if (_consumer.consume_complex_column_start(get_column_info(), _complex_column_tombstone) == consumer_m::proceed::no) {
+                        co_yield consumer_m::proceed::no;
+                    }
+                    co_yield read_unsigned_vint(*_processing_data);
+                    _subcolumns_to_read = _u64;
+                    if (_subcolumns_to_read == 0) {
+                        const sstables::column_translation::column_info& column_info = get_column_info();
+                        move_to_next_column();
+                        if (_consumer.consume_complex_column_end(column_info) == consumer_m::proceed::no) {
+                            _consuming = false;
+                            co_yield consumer_m::proceed::no;
+                            _consuming = true;
+                        }
+                    }
+                    goto column_label;
+                }
+                _subcolumns_to_read = 0;
+            }
+            co_yield read_8(*_processing_data);
+            _column_flags = column_flags_m(_u8);
+
+            if (_column_flags.use_row_timestamp()) {
+                _column_timestamp = _liveness.timestamp();
+            } else {
+                co_yield read_unsigned_vint(*_processing_data);
+                _column_timestamp = parse_timestamp(_header, _u64);
+            }
+            if (_column_flags.use_row_ttl()) {
+                _column_local_deletion_time = _liveness.local_deletion_time();
+            } else if (!_column_flags.is_deleted() && ! _column_flags.is_expiring()) {
+                _column_local_deletion_time = gc_clock::time_point::max();
+            } else {
+                co_yield read_unsigned_vint(*_processing_data);
+                _column_local_deletion_time = parse_expiry(_header, _u64);
+            }
+            if (_column_flags.use_row_ttl()) {
+                _column_ttl = _liveness.ttl();
+            } else if (!_column_flags.is_expiring()) {
+                _column_ttl = gc_clock::duration::zero();
+            } else {
+                co_yield read_unsigned_vint(*_processing_data);
+                _column_ttl = parse_ttl(_header, _u64);
+            }
+            if (!is_column_simple()) {
+                co_yield read_unsigned_vint_length_bytes_contiguous(*_processing_data, _cell_path);
+            } else {
+                _cell_path = temporary_buffer<char>(0);
+            }
+            if (!_column_flags.has_value()) {
+                _column_value = fragmented_temporary_buffer();
+            } else {
+                read_status status = read_status::waiting;
+                if (auto len = get_column_value_length()) {
+                    status = read_bytes(*_processing_data, *len, _column_value);
+                } else {
+                    status = read_unsigned_vint_length_bytes(*_processing_data, _column_value);
+                }
+                co_yield status;
+            }
+            _consuming = false;
+            if (is_column_counter() && !_column_flags.is_deleted()) {
+                if (_consumer.consume_counter_column(get_column_info(),
+                                                     fragmented_temporary_buffer::view(_column_value),
+                                                     _column_timestamp) == consumer_m::proceed::no) {
+                    co_yield consumer_m::proceed::no;
+                }
+            } else {
+                if (_consumer.consume_column(get_column_info(),
+                                             to_bytes_view(_cell_path),
+                                             fragmented_temporary_buffer::view(_column_value),
+                                             _column_timestamp,
+                                             _column_ttl,
+                                             _column_local_deletion_time,
+                                             _column_flags.is_deleted()) == consumer_m::proceed::no) {
+                    co_yield consumer_m::proceed::no;
+                }
+            }
+            if (!is_column_simple()) {
+                --_subcolumns_to_read;
+                if (_subcolumns_to_read == 0) {
+                    const sstables::column_translation::column_info& column_info = get_column_info();
+                    move_to_next_column();
+                    if (_consumer.consume_complex_column_end(column_info) == consumer_m::proceed::no) {
+                        co_yield consumer_m::proceed::no;
+                    }
+                }
+            } else {
+                move_to_next_column();
+            }
+            _consuming = true;
+            goto column_label;
+        range_tombstone_body_label:
+            co_yield read_unsigned_vint(*_processing_data);
+            // Ignore result
+            co_yield read_unsigned_vint(*_processing_data);
+            // Ignore result
+            co_yield read_unsigned_vint(*_processing_data);
+            _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
+            co_yield read_unsigned_vint(*_processing_data);
+            _left_range_tombstone.deletion_time = parse_expiry(_header, _u64);
+            if (!is_boundary_between_adjacent_intervals(_range_tombstone_kind)) {
+                if (!is_bound_kind(_range_tombstone_kind)) {
+                    throw sstables::malformed_sstable_exception(
+                        format("Corrupted range tombstone: invalid boundary type {}", _range_tombstone_kind));
+                }
+                _sst->get_stats().on_range_tombstone_read();
+                _state = state::FLAGS;
+                if (_consumer.consume_range_tombstone(_row_key,
+                                                      to_bound_kind(_range_tombstone_kind),
+                                                      _left_range_tombstone) == consumer_m::proceed::no) {
+                    _row_key.clear();
+                    co_yield consumer_m::proceed::no;
+                }
+                _row_key.clear();
+                goto flags_label;
+            }
+            co_yield read_unsigned_vint(*_processing_data);
+            _right_range_tombstone.timestamp = parse_timestamp(_header, _u64);
+            co_yield read_unsigned_vint(*_processing_data);
+            _sst->get_stats().on_range_tombstone_read();
+            _right_range_tombstone.deletion_time = parse_expiry(_header, _u64);
+            _state = state::FLAGS;
+            if (_consumer.consume_range_tombstone(_row_key,
+                                                  _range_tombstone_kind,
+                                                  _left_range_tombstone,
+                                                  _right_range_tombstone) == consumer_m::proceed::no) {
+                _row_key.clear();
+                co_yield consumer_m::proceed::no;
+            }
+            _row_key.clear();
+            goto flags_label;
+    }
+public:
+
+    data_consume_rows_context_m(const schema& s,
+                                const shared_sstable& sst,
+                                consumer_m& consumer,
+                                input_stream<char> && input,
+                                uint64_t start,
+                                uint64_t maxlen)
+        : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
+        , _consumer(consumer)
+        , _sst(sst)
+        , _header(sst->get_serialization_header())
+        , _column_translation(sst->get_column_translation(s, _header, sst->features()))
+        , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
+        , _gen(do_process_state())
+    {
+        setup_columns(_regular_row, _column_translation.regular_columns());
+        setup_columns(_static_row, _column_translation.static_columns());
+    }
+
+    void verify_end_state() {
+        // If reading a partial row (i.e., when we have a clustering row
+        // filter and using a promoted index), we may be in FLAGS
+        // state instead of PARTITION_START.
+        if (_state == state::FLAGS) {
+            _consumer.on_end_of_stream();
+            return;
+        }
+
+        // We may end up in state::DELETION_TIME after consuming last partition's end marker
+        // and proceeding to attempt to parse the next partition, since state::DELETION_TIME
+        // is the first state corresponding to the contents of a new partition.
+        if (_state != state::DELETION_TIME
+                && (_state != state::PARTITION_START || primitive_consumer::active())) {
+            throw malformed_sstable_exception("end of input, but not end of partition");
+        }
+    }
+
+    void reset(indexable_element el) {
+        auto reset_to_state = [this, el] (state s) {
+            _state = s;
+            _consumer.reset(el);
+            _gen = do_process_state();
+        };
+        switch (el) {
+            case indexable_element::partition:
+                return reset_to_state(state::PARTITION_START);
+            case indexable_element::cell:
+                return reset_to_state(state::FLAGS);
+        }
+        // We should not get here unless some enum member is not handled by the switch
+        throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
+    }
+
+    reader_permit& permit() {
+        return _consumer.permit();
     }
 };
 
