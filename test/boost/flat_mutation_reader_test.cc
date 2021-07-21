@@ -840,3 +840,28 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
     test_with_partition(true);
     test_with_partition(false);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
+    struct test_reader_impl : public flat_mutation_reader::impl {
+        using flat_mutation_reader::impl::impl;
+        virtual future<> fill_buffer(db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> next_partition() { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override { return make_ready_future<>(); };
+    };
+    struct test_reader_v2_impl : public flat_mutation_reader_v2::impl {
+        using flat_mutation_reader_v2::impl::impl;
+        virtual future<> fill_buffer(db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> next_partition() { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override { return make_ready_future<>(); };
+    };
+
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    // These readers are not closed, but didn't start any operations, so it's safe for them to be destroyed.
+    auto reader = make_flat_mutation_reader<test_reader_impl>(s.schema(), semaphore.make_permit());
+    auto reader_v2 = make_flat_mutation_reader_v2<test_reader_v2_impl>(s.schema(), semaphore.make_permit());
+}
