@@ -312,18 +312,6 @@ sstables::shared_sstable table::make_sstable() {
     return make_sstable(_config.datadir);
 }
 
-void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
-    if (reset_level) {
-        // When loading a migrated sstable, set level to 0 because
-        // it may overlap with existing tables in levels > 0.
-        // This step is optional, because even if we didn't do this
-        // scylla would detect the overlap, and bring back some of
-        // the sstables to level 0.
-        sst->set_sstable_level(0);
-    }
-    add_sstable(sst);
-}
-
 void table::notify_bootstrap_or_replace_start() {
     _is_bootstrap_or_replace = true;
 }
