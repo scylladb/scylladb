@@ -30,15 +30,12 @@
 namespace sstables {
 namespace kl {
 
-// sstables::data_consume_row feeds the contents of a single row into a
-// row_consumer object:
-//
-// * First, consume_row_start() is called, with some information about the
-//   whole row: The row's key, timestamp, etc.
-// * Next, consume_cell() is called once for every column.
-// * Finally, consume_row_end() is called. A consumer written for a single
-//   column will likely not want to do anything here.
-//
+static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
+    auto b = std::move(vec.back());
+    vec.pop_back();
+    return b;
+}
+
 // Important note: the row key, column name and column value, passed to the
 // consume_* functions, are passed as a "bytes_view" object, which points to
 // internal data held by the feeder. This internal data is only valid for the
@@ -47,7 +44,7 @@ namespace kl {
 // contents. [Note, in reality, because our implementation reads the whole
 // row into one buffer, the byte_views remain valid until consume_row_end()
 // is called.]
-class row_consumer {
+class mp_row_consumer_k_l {
     reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
@@ -60,81 +57,6 @@ public:
      * setting/resetting RT start is not supported.
      */
     constexpr static bool is_setting_range_tombstone_start_supported = false;
-
-    row_consumer(reader_permit permit, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
-        : _permit(std::move(permit))
-        , _trace_state(std::move(trace_state))
-        , _pc(pc) {
-    }
-
-    virtual ~row_consumer() = default;
-
-    // Consume the row's key and deletion_time. The latter determines if the
-    // row is a tombstone, and if so, when it has been deleted.
-    // Note that the key is in serialized form, and should be deserialized
-    // (according to the schema) before use.
-    // As explained above, the key object is only valid during this call, and
-    // if the implementation wishes to save it, it must copy the *contents*.
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) = 0;
-
-    // Consume one cell (column name and value). Both are serialized, and need
-    // to be deserialized according to the schema.
-    // When a cell is set with an expiration time, "ttl" is the time to live
-    // (in seconds) originally set for this cell, and "expiration" is the
-    // absolute time (in seconds since the UNIX epoch) when this cell will
-    // expire. Typical cells, not set to expire, will get expiration = 0.
-    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
-            int64_t timestamp,
-            int64_t ttl, int64_t expiration) = 0;
-
-    // Consume one counter cell. Column name and value are serialized, and need
-    // to be deserialized according to the schema.
-    virtual proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
-            int64_t timestamp) = 0;
-
-    // Consume a deleted cell (i.e., a cell tombstone).
-    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;
-
-    // Consume one row tombstone.
-    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) = 0;
-
-    // Consume one range tombstone.
-    virtual proceed consume_range_tombstone(
-            bytes_view start_col, bytes_view end_col,
-            sstables::deletion_time deltime) = 0;
-
-    // Called at the end of the row, after all cells.
-    // Returns a flag saying whether the sstable consumer should stop now, or
-    // proceed consuming more data.
-    virtual proceed consume_row_end() = 0;
-
-    // Called when the reader is fast forwarded to given element.
-    virtual void reset(sstables::indexable_element) = 0;
-
-    virtual position_in_partition_view position() = 0;
-
-    // Under which priority class to place I/O coming from this consumer
-    const io_priority_class& io_priority() const {
-        return _pc;
-    }
-
-    // The permit for this read
-    reader_permit& permit() {
-        return _permit;
-    }
-
-    tracing::trace_state_ptr trace_state() const {
-        return _trace_state;
-    }
-};
-
-static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
-    auto b = std::move(vec.back());
-    vec.pop_back();
-    return b;
-}
-
-class mp_row_consumer_k_l : public row_consumer {
 private:
     mp_row_consumer_reader_k_l* _reader;
     schema_ptr _schema;
@@ -421,7 +343,9 @@ public:
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-        : row_consumer(std::move(permit), std::move(trace_state), pc)
+        : _permit(std::move(permit))
+        , _trace_state(std::move(trace_state))
+        , _pc(pc) 
         , _reader(reader)
         , _schema(schema)
         , _slice(slice)
@@ -439,7 +363,13 @@ public:
                         const shared_sstable& sst)
         : mp_row_consumer_k_l(reader, schema, std::move(permit), schema->full_slice(), pc, std::move(trace_state), fwd, sst) { }
 
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    // Consume the row's key and deletion_time. The latter determines if the
+    // row is a tombstone, and if so, when it has been deleted.
+    // Note that the key is in serialized form, and should be deserialized
+    // (according to the schema) before use.
+    // As explained above, the key object is only valid during this call, and
+    // if the implementation wishes to save it, it must copy the *contents*.
+    proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) {
         if (!_is_mutation_end) {
             return proceed::yes;
         }
@@ -571,7 +501,9 @@ public:
         return ret;
     }
 
-    virtual proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp) override {
+    // Consume one counter cell. Column name and value are serialized, and need
+    // to be deserialized according to the schema.
+    proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp) {
         return do_consume_cell(col_name, timestamp, 0, 0, [&] (auto&& col) {
             auto ac = make_counter_cell(timestamp, value);
 
@@ -587,7 +519,13 @@ public:
         });
     }
 
-    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp, int64_t ttl, int64_t expiration) override {
+    // Consume one cell (column name and value). Both are serialized, and need
+    // to be deserialized according to the schema.
+    // When a cell is set with an expiration time, "ttl" is the time to live
+    // (in seconds) originally set for this cell, and "expiration" is the
+    // absolute time (in seconds since the UNIX epoch) when this cell will
+    // expire. Typical cells, not set to expire, will get expiration = 0.
+    proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp, int64_t ttl, int64_t expiration) {
         return do_consume_cell(col_name, timestamp, ttl, expiration, [&] (auto&& col) {
             bool is_multi_cell = col.collection_extra_data.size();
             if (is_multi_cell != col.cdef->is_multi_cell()) {
@@ -642,7 +580,8 @@ public:
         });
     }
 
-    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+    // Consume a deleted cell (i.e., a cell tombstone).
+    proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) {
         auto timestamp = deltime.marked_for_delete_at;
         struct column col(*_schema, col_name, timestamp);
         gc_clock::duration secs(deltime.local_deletion_time);
@@ -687,7 +626,10 @@ public:
         }
         return ret;
     }
-    virtual proceed consume_row_end() override {
+    // Called at the end of the row, after all cells.
+    // Returns a flag saying whether the sstable consumer should stop now, or
+    // proceed consuming more data.
+    proceed consume_row_end() {
         if (_in_progress) {
             flush();
         }
@@ -696,7 +638,8 @@ public:
         return proceed::no;
     }
 
-    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) override {
+    // Consume one row tombstone.
+    proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) {
         auto key = composite_view(column::fix_static_name(*_schema, col_name)).explode();
         auto ck = clustering_key_prefix::from_exploded_view(key);
         auto ret = flush_if_needed(std::move(ck));
@@ -738,9 +681,10 @@ public:
         throw malformed_sstable_exception(format("Unexpected end composite marker {:d}", uint16_t(uint8_t(found))));
     }
 
-    virtual proceed consume_range_tombstone(
+    // Consume one range tombstone.
+    proceed consume_range_tombstone(
         bytes_view start_col, bytes_view end_col,
-        sstables::deletion_time deltime) override {
+        sstables::deletion_time deltime) {
         auto compound = _schema->is_compound() || _treat_non_compound_rt_as_compound;
         auto start = composite_view(column::fix_static_name(*_schema, start_col), compound).explode();
 
@@ -816,7 +760,8 @@ public:
         }
     }
 
-    virtual void reset(indexable_element el) override {
+    // Called when the reader is fast forwarded to given element.
+    void reset(indexable_element el) {
         sstlog.trace("mp_row_consumer_k_l {}: reset({})", fmt::ptr(this), static_cast<int>(el));
         _ready = {};
         if (el == indexable_element::partition) {
@@ -830,7 +775,7 @@ public:
         }
     }
 
-    virtual position_in_partition_view position() override {
+    position_in_partition_view position() {
         if (_in_progress) {
             return _in_progress->position();
         }
@@ -920,6 +865,19 @@ public:
         sstlog.trace("mp_row_consumer_k_l {}: advance_context({})", fmt::ptr(this), _ck_ranges_walker->lower_bound());
         return _ck_ranges_walker->lower_bound();
     }
+    // Under which priority class to place I/O coming from this consumer
+    const io_priority_class& io_priority() const {
+        return _pc;
+    }
+
+    // The permit for this read
+    reader_permit& permit() {
+        return _permit;
+    }
+
+    tracing::trace_state_ptr trace_state() const {
+        return _trace_state;
+    }
 };
 
 // data_consume_rows_context remembers the context that an ongoing
@@ -932,7 +890,7 @@ private:
         NOT_CLOSING,
     } _state = state::ROW_START;
 
-    row_consumer& _consumer;
+    mp_row_consumer_k_l& _consumer;
     shared_sstable _sst;
 
     temporary_buffer<char> _key;
@@ -949,7 +907,7 @@ private:
     processing_result_generator _gen;
     temporary_buffer<char>* _processing_data;
 public:
-    using consumer = row_consumer;
+    using consumer = mp_row_consumer_k_l;
      // assumes !primitive_consumer::active()
     bool non_consuming() const {
         return false;
@@ -969,13 +927,13 @@ public:
             for (unsigned i = 0; i < data.size(); i += tiny_chunk) {
                 auto chunk_size = std::min(tiny_chunk, data.size() - i);
                 auto chunk = data.share(i, chunk_size);
-                if (process(chunk) == row_consumer::proceed::no) {
+                if (process(chunk) == mp_row_consumer_k_l::proceed::no) {
                     data.trim_front(i + chunk_size - chunk.size());
-                    return row_consumer::proceed::no;
+                    return mp_row_consumer_k_l::proceed::no;
                 }
             }
             data.trim(0);
-            return row_consumer::proceed::yes;
+            return mp_row_consumer_k_l::proceed::yes;
         }
 #endif
         sstlog.trace("data_consume_row_context {}: state={}, size={}", fmt::ptr(this), static_cast<int>(_state), data.size());
@@ -999,8 +957,8 @@ private:
                 // buffers we held for it.
                 _key.release();
                 _state = state::ATOM_START;
-                if (ret == row_consumer::proceed::no) {
-                    co_yield row_consumer::proceed::no;
+                if (ret == mp_row_consumer_k_l::proceed::no) {
+                    co_yield mp_row_consumer_k_l::proceed::no;
                 }
             }
             while (true) {
@@ -1056,7 +1014,7 @@ private:
                 co_yield read_64(*_processing_data);
                 co_yield read_32(*_processing_data);
                 co_yield read_bytes(*_processing_data, _u32, _val_fragmented);
-                row_consumer::proceed ret;
+                mp_row_consumer_k_l::proceed ret;
                 if (_deleted) {
                     if (_val_fragmented.size_bytes() != 4) {
                         throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
@@ -1089,7 +1047,7 @@ public:
 
     data_consume_rows_context(const schema&,
                               const shared_sstable sst,
-                              row_consumer& consumer,
+                              mp_row_consumer_k_l& consumer,
                               input_stream<char>&& input, uint64_t start, uint64_t maxlen)
                 : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
                 , _consumer(consumer)
