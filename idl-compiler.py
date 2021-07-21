@@ -462,6 +462,7 @@ def namespace_parse_action(tokens):
 
 
 def parse_file(file_name):
+    '''Parse the input from the file using IDL grammar syntax and generate AST'''
 
     number = pp.pyparsing_common.signed_integer
     identifier = pp.pyparsing_common.identifier
@@ -572,6 +573,7 @@ def template_params_str(template_params):
 
 
 def handle_enum(enum, hout, cout):
+    '''Generate serializer declarations and definitions for an IDL enum'''
     temp_def = template_params_str(enum.parent_template_params)
     name = enum.ns_qualified_name()
     declare_methods(hout, name, temp_def)
@@ -1250,6 +1252,9 @@ def add_visitors(cout):
 
 
 def handle_class(cls, hout, cout):
+    '''Generate serializer class declarations and definitions for a class
+    defined in IDL.
+    '''
     if cls.stub:
         return
     is_tpl = cls.template_params is not None
@@ -1273,6 +1278,9 @@ def handle_class(cls, hout, cout):
 
 
 def handle_objects(tree, hout, cout):
+    '''Main generation procedure: traverse AST and generate serializers for
+    classes/enums defined in the current IDL.
+    '''
     for obj in tree:
         if isinstance(obj, ClassDef):
             handle_class(obj, hout, cout)
@@ -1285,6 +1293,9 @@ def handle_objects(tree, hout, cout):
 
 
 def handle_types(tree):
+    '''Traverse AST and record all locally defined types, i.e. defined in
+    the currently processed IDL file.
+    '''
     for obj in tree:
         if isinstance(obj, ClassDef):
             register_local_type(obj)
@@ -1366,6 +1377,7 @@ def load_file(name):
 
 
 def general_include(files):
+    '''Write serialization-related header includes in the generated files'''
     name = config.o if config.o else "serializer.dist.hh"
     # Header file containing implementation of serializers and other supporting classes 
     cout = open(name.replace('.hh', '.impl.hh'), "w+")
