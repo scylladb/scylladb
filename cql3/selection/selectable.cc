@@ -35,6 +35,8 @@ namespace cql3 {
 
 namespace selection {
 
+seastar::logger slogger("cql3_selection");
+
 shared_ptr<selector::factory>
 selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& def = s->get_column_definition(_id->name());
@@ -199,6 +201,69 @@ bool
 selectable::with_cast::raw::processes_selection() const {
     return true;
 }
+
+shared_ptr<selectable>
+selectable::with_expression::raw::prepare(const schema& s) const {
+    return std::visit(overloaded_functor{
+        [&] (bool bool_constant) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "no way to express SELECT TRUE/FALSE in the grammar yet");
+        },
+        [&] (const expr::conjunction& conj) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "no way to express 'SELECT a AND b' in the grammar yet");
+        },
+        [&] (const expr::binary_operator& conj) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
+        },
+        [&] (const expr::column_value& column) -> shared_ptr<selectable> {
+            // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
+            // so bridge them.
+            return ::make_shared<column_identifier>(column.col->name(), column.col->name_as_text());
+        },
+        [&] (const expr::column_value_tuple& conj) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "no way to express 'SELECT (a, b, c)' in the grammar yet");
+        },
+        [&] (const expr::token& tok) -> shared_ptr<selectable> {
+            // expr::token implicitly the partition key as arguments, but
+            // the selectable equivalent (with_function) needs explicit arguments,
+            // so construct them here.
+            auto name = functions::function_name("system", "token");
+            auto args = boost::copy_range<std::vector<shared_ptr<selectable>>>(
+                s.partition_key_columns()
+                | boost::adaptors::transformed([&] (const column_definition& cdef) {
+                    return ::make_shared<column_identifier>(cdef.name(), cdef.name_as_text());
+                }));
+            return ::make_shared<selectable::with_function>(std::move(name), std::move(args));
+        },
+    }, _expr);
+}
+
+bool
+selectable::with_expression::raw::processes_selection() const {
+    return std::visit(overloaded_functor{
+        [&] (bool bool_constant) -> bool {
+            on_internal_error(slogger, "no way to express SELECT TRUE/FALSE in the grammar yet");
+        },
+        [&] (const expr::conjunction& conj) -> bool {
+            on_internal_error(slogger, "no way to express 'SELECT a AND b' in the grammar yet");
+        },
+        [&] (const expr::binary_operator& conj) -> bool {
+            on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
+        },
+        [&] (const expr::column_value& column) -> bool {
+            // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
+            // so bridge them.
+            return false;
+        },
+        [&] (const expr::column_value_tuple& conj) -> bool {
+            on_internal_error(slogger, "no way to express 'SELECT (a, b, c)' in the grammar yet");
+        },
+        [&] (const expr::token&) -> bool {
+            // Arguably, should return false, because it only processes the partition key.
+            // But selectable::with_function considers it true now, so return that.
+            return true;
+        },
+    }, _expr);
+};
 
 std::ostream & operator<<(std::ostream &os, const selectable& s) {
     return os << s.to_string();

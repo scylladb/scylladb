@@ -48,6 +48,7 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function.hh"
 #include "cql3/functions/function_name.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -88,6 +89,7 @@ public:
     class with_field_selection;
 
     class with_cast;
+    class with_expression;
 };
 
 std::ostream & operator<<(std::ostream &os, const selectable& s);
@@ -159,6 +161,18 @@ public:
         }
         virtual shared_ptr<selectable> prepare(const schema& s) const override;
         virtual bool processes_selection() const override;
+    };
+};
+
+class selectable::with_expression {
+public:
+    class raw : public selectable::raw {
+        cql3::expr::expression _expr;
+    public:
+        explicit raw(cql3::expr::expression expr) : _expr(std::move(expr)) {}
+        virtual shared_ptr<selectable> prepare(const schema& s) const override;
+        virtual bool processes_selection() const override;
+        const cql3::expr::expression& expression() const { return _expr; }
     };
 };
 
