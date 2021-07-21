@@ -177,6 +177,7 @@ public:
     private:
         tracked_buffer _buffer;
         size_t _buffer_size = 0;
+        bool _close_required = false;
     protected:
         size_t max_buffer_size_in_bytes = default_max_buffer_size_in_bytes();
 
@@ -216,6 +217,8 @@ public:
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
         bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
+        bool is_close_required() const { return _close_required; }
+        void set_close_required() { _close_required = true; }
         static constexpr size_t default_max_buffer_size_in_bytes() { return 8 * 1024; }
 
         mutation_fragment_v2 pop_mutation_fragment() {
@@ -547,9 +550,15 @@ public:
     //
     // Can be used to skip over entire partitions if interleaved with
     // `operator()()` calls.
-    future<> next_partition() { return _impl->next_partition(); }
+    future<> next_partition() {
+        _impl->set_close_required();
+        return _impl->next_partition();
+    }
 
-    future<> fill_buffer() { return _impl->fill_buffer(); }
+    future<> fill_buffer() {
+        _impl->set_close_required();
+        return _impl->fill_buffer();
+    }
 
     // Changes the range of partitions to pr. The range can only be moved
     // forwards. pr.begin() needs to be larger than pr.end() of the previousl
@@ -558,6 +567,7 @@ public:
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
     // is called again.
     future<> fast_forward_to(const dht::partition_range& pr) {
+        _impl->set_close_required();
         return _impl->fast_forward_to(pr);
     }
     // Skips to a later range of rows.
@@ -587,6 +597,7 @@ public:
     // In particular one must first enter a partition by fetching a `partition_start`
     // fragment before calling `fast_forward_to`.
     future<> fast_forward_to(position_range cr) {
+        _impl->set_close_required();
         return _impl->fast_forward_to(std::move(cr));
     }
     // Closes the reader.
