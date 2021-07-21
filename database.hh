@@ -428,6 +428,8 @@ private:
     // This semaphore ensures that off-strategy compaction will be serialized and also
     // protects against candidates being picked more than once.
     seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
+    // Ensures that concurrent updates to sstable set will work correctly
+    seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
     std::optional<int64_t> _sstable_generation = {};
 
@@ -509,6 +511,25 @@ public:
     void notify_bootstrap_or_replace_start();
 
     void notify_bootstrap_or_replace_end();
+
+    // Ensures that concurrent preemptible mutations to sstable lists will produce correct results.
+    // User will hold this permit until done with all updates. As soon as it's released, another concurrent
+    // attempt to update the lists will be able to proceed.
+    struct sstable_list_builder {
+        using permit_t = semaphore_units<seastar::named_semaphore_exception_factory>;
+        permit_t permit;
+
+        explicit sstable_list_builder(permit_t p) : permit(std::move(p)) {}
+        sstable_list_builder& operator=(const sstable_list_builder&) = delete;
+        sstable_list_builder(const sstable_list_builder&) = delete;
+
+        // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
+        future<lw_shared_ptr<sstables::sstable_set>>
+        build_new_list(const sstables::sstable_set& current_sstables,
+                       sstables::sstable_set new_sstable_list,
+                       const std::vector<sstables::shared_sstable>& new_sstables,
+                       const std::vector<sstables::shared_sstable>& old_sstables);
+    };
 private:
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
@@ -553,16 +574,6 @@ private:
     static int64_t calculate_shard_from_sstable_generation(int64_t sstable_generation) {
         return sstable_generation % smp::count;
     }
-
-    // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
-    // As this function may preempt, its caller must guarantee that concurrent calls will be serialized in order
-    // to avoid corruption of the sstable set.
-    // Today, the serialization is always performed through row_cache's update semaphore.
-    future<lw_shared_ptr<sstables::sstable_set>>
-    build_new_sstable_list(const sstables::sstable_set& current_sstables,
-                        sstables::sstable_set new_sstable_list,
-                        const std::vector<sstables::shared_sstable>& new_sstables,
-                        const std::vector<sstables::shared_sstable>& old_sstables);
 
     future<>
     update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,

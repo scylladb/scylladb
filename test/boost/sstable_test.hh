@@ -53,7 +53,9 @@ public:
     // NOTE: must run in a thread
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove) {
-        _cf->_main_sstables = _cf->build_new_sstable_list(*_cf->_main_sstables, _cf->_compaction_strategy.make_sstable_set(_cf->schema()), new_sstables, sstables_to_remove).get0();
+        auto permit = seastar::get_units(_cf->_sstable_set_mutation_sem, 1).get0();
+        auto builder = table::sstable_list_builder(std::move(permit));
+        _cf->_main_sstables = builder.build_new_list(*_cf->_main_sstables, _cf->_compaction_strategy.make_sstable_set(_cf->schema()), new_sstables, sstables_to_remove).get0();
         _cf->refresh_compound_sstable_set();
     }
 

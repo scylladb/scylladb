@@ -734,7 +734,7 @@ void table::rebuild_statistics() {
 }
 
 future<lw_shared_ptr<sstables::sstable_set>>
-table::build_new_sstable_list(const sstables::sstable_set& current_sstables,
+table::sstable_list_builder::build_new_list(const sstables::sstable_set& current_sstables,
                               sstables::sstable_set new_sstable_list,
                               const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& old_sstables) {
@@ -758,31 +758,33 @@ table::update_sstable_lists_on_off_strategy_completion(const std::vector<sstable
     class sstable_lists_updater : public row_cache::external_updater_impl {
         using sstables_t = std::vector<sstables::shared_sstable>;
         table& _t;
+        sstable_list_builder _builder;
         const sstables_t& _old_maintenance;
         const sstables_t& _new_main;
         lw_shared_ptr<sstables::sstable_set> _new_maintenance_list;
         lw_shared_ptr<sstables::sstable_set> _new_main_list;
     public:
-        explicit sstable_lists_updater(table& t, const sstables_t& old_maintenance, const sstables_t& new_main)
-                : _t(t), _old_maintenance(old_maintenance), _new_main(new_main) {
+        explicit sstable_lists_updater(table& t, sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main)
+                : _t(t), _builder(std::move(permit)), _old_maintenance(old_maintenance), _new_main(new_main) {
         }
         virtual future<> prepare() override {
             sstables_t empty;
             // adding new sstables, created by off-strategy operation, to main set
-            _new_main_list = co_await _t.build_new_sstable_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty);
+            _new_main_list = co_await _builder.build_new_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty);
             // removing old sstables, used as input by off-strategy, from the maintenance set
-            _new_maintenance_list = co_await _t.build_new_sstable_list(*_t._maintenance_sstables, std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance);
+            _new_maintenance_list = co_await _builder.build_new_list(*_t._maintenance_sstables, std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance);
         }
         virtual void execute() override {
             _t._main_sstables = std::move(_new_main_list);
             _t._maintenance_sstables = std::move(_new_maintenance_list);
             _t.refresh_compound_sstable_set();
         }
-        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, const sstables_t& old_maintenance, const sstables_t& new_main) {
-            return std::make_unique<sstable_lists_updater>(t, old_maintenance, new_main);
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
+            return std::make_unique<sstable_lists_updater>(t, std::move(permit), old_maintenance, new_main);
         }
     };
-    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, old_maintenance_sstables, new_main_sstables));
+    auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
+    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, std::move(permit), old_maintenance_sstables, new_main_sstables));
 
     // row_cache::invalidate() is only used to synchronize sstable list updates, to prevent race conditions from occurring,
     // meaning nothing is actually invalidated.
@@ -836,24 +838,25 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 
     class sstable_list_updater : public row_cache::external_updater_impl {
         table& _t;
+        sstable_list_builder _builder;
         const sstables::compaction_completion_desc& _desc;
         lw_shared_ptr<sstables::sstable_set> _new_sstables;
     public:
-        explicit sstable_list_updater(table& t, sstables::compaction_completion_desc& d) : _t(t), _desc(d) {}
+        explicit sstable_list_updater(table& t, sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) : _t(t), _builder(std::move(permit)), _desc(d) {}
         virtual future<> prepare() override {
-            _new_sstables = co_await _t.build_new_sstable_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _desc.new_sstables, _desc.old_sstables);
+            _new_sstables = co_await _builder.build_new_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _desc.new_sstables, _desc.old_sstables);
         }
         virtual void execute() override {
             _t._main_sstables = std::move(_new_sstables);
             _t.refresh_compound_sstable_set();
         }
-        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstables::compaction_completion_desc& d) {
-            return std::make_unique<sstable_list_updater>(t, d);
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
+            return std::make_unique<sstable_list_updater>(t, std::move(permit), d);
         }
     };
-    auto updater = row_cache::external_updater(sstable_list_updater::make(*this, desc));
+    auto permit = seastar::get_units(_sstable_set_mutation_sem, 1).get0();
+    auto updater = row_cache::external_updater(sstable_list_updater::make(*this, std::move(permit), desc));
 
-    // row_cache's invalidate() guarantees that updates are serialized, so concurrent updates will work as intended.
     _cache.invalidate(std::move(updater), std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference
