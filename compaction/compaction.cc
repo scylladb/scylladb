@@ -523,7 +523,7 @@ protected:
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
 public:
-    static lw_shared_ptr<compaction_info> create_compaction_info(column_family& cf, compaction_descriptor descriptor) {
+    static lw_shared_ptr<compaction_info> create_compaction_info(column_family& cf, const compaction_descriptor& descriptor) {
         auto info = make_lw_shared<compaction_info>();
         info->ks_name = cf.schema()->ks_name();
         info->cf_name = cf.schema()->cf_name();
