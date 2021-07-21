@@ -334,7 +334,8 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+                ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard,
+                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
     }
 
     return proxy.cas(s, request, request->read_command(proxy), request->key(),
@@ -474,7 +475,33 @@ modification_statement::prepare(database& db, prepare_context& ctx, cql_stats& s
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->fill_prepare_context(ctx);
 
-    return prepare_internal(db, schema, ctx, std::move(prepared_attributes), stats);
+    auto prepared_stmt = prepare_internal(db, schema, ctx, std::move(prepared_attributes), stats);
+    // At this point the prepare context instance should have a list of
+    // `function_call` AST nodes corresponding to non-pure functions that
+    // evaluate partition key constraints.
+    //
+    // These calls can affect partition key ranges computation and target shard
+    // selection for LWT statements.
+    // For such cases we need to forward the computed execution result of the
+    // function when redirecting the query execution to another shard.
+    // Otherwise, it's possible that we end up bouncing indefinitely between
+    // various shards when evaluating a non-deterministic function each time on
+    // each shard.
+    //
+    // Prepare context is used to keep track of such AST nodes and also modifies
+    // them to include an id, that will be used for caching the results.
+    // At this point we don't yet know if it's an LWT query or not, because the
+    // prepared statement object is constructed later.
+    //
+    // Since this cache is only meaningful for LWT queries, just clear the ids
+    // if it's not a conditional statement so that the AST nodes don't
+    // participate in the caching mechanism later.
+    if (!prepared_stmt->has_conditions()) {
+        for (auto& fn : ctx.pk_function_calls()) {
+            fn->set_id(std::nullopt);
+        }
+    }
+    return prepared_stmt;
 }
 
 void

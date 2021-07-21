@@ -48,6 +48,8 @@
 #include "types/map.hh"
 #include "types/list.hh"
 
+#include <seastar/util/defer.hh>
+
 using namespace cql3::expr;
 
 namespace cql3 {
@@ -68,6 +70,10 @@ single_column_relation::to_term(const std::vector<lw_shared_ptr<column_specifica
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prepare_context& ctx) {
     const column_definition& column_def = to_column_definition(*schema, *_entity);
+    auto reset_processing_pk_column = defer([&ctx] { ctx.set_processing_pk_restrictions(false); });
+    if (column_def.is_partition_key()) {
+        ctx.set_processing_pk_restrictions(true);
+    }
     if (!_map_key) {
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
@@ -87,6 +93,10 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prep
 single_column_relation::new_IN_restriction(database& db, schema_ptr schema, prepare_context& ctx) {
     using namespace restrictions;
     const column_definition& column_def = to_column_definition(*schema, *_entity);
+    auto reset_processing_pk_column = defer([&ctx] { ctx.set_processing_pk_restrictions(false); });
+    if (column_def.is_partition_key()) {
+        ctx.set_processing_pk_restrictions(true);
+    }
     auto receivers = to_receivers(*schema, column_def);
     assert(_in_values.empty() || !_value);
     if (_value) {

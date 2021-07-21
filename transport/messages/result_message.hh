@@ -25,6 +25,7 @@
 #include "cql3/result_set.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/query_options.hh"
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
@@ -107,8 +108,11 @@ std::ostream& operator<<(std::ostream& os, const result_message::void_message& m
 // it is a sure sign of a error.
 class result_message::bounce_to_shard : public result_message {
     unsigned _shard;
+    cql3::computed_function_values _cached_fn_calls;
 public:
-    bounce_to_shard(unsigned shard) : _shard(shard) {}
+    bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls)
+        : _shard(shard), _cached_fn_calls(std::move(cached_fn_calls))
+    {}
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
@@ -116,6 +120,9 @@ public:
         return _shard;
     }
 
+    cql3::computed_function_values&& take_cached_pk_function_calls() {
+        return std::move(_cached_fn_calls);
+    }
 };
 
 std::ostream& operator<<(std::ostream& os, const result_message::bounce_to_shard& msg);

@@ -54,16 +54,28 @@ namespace cql3 {
 
 class column_identifier;
 class column_specification;
+namespace functions { class function_call; }
 
 /**
- * A metadata class currently holding bind variables specifications and 
- * populated at "prepare" step of query execution.
+ * Metadata class currently holding bind variables specifications and
+ * `function_call` AST nodes inside a query partition key restrictions.
+ * Populated and maintained at "prepare" step of query execution.
  */
 class prepare_context final {
 private:
     std::vector<shared_ptr<column_identifier>> _variable_names;
     std::vector<lw_shared_ptr<column_specification>> _specs;
     std::vector<lw_shared_ptr<column_specification>> _target_columns;
+    // A list of pointers to prepared `function_call` AST nodes, that
+    // participate in partition key ranges computation within an LWT statement.
+    using function_calls_t = std::vector<::shared_ptr<cql3::functions::function_call>>;
+    function_calls_t _pk_fn_calls;
+    // The flag denoting whether the context is currently in partition key
+    // processing mode (inside query restrictions AST nodes). If set to true,
+    // then every `function_call` instance will be recorded in the context and
+    // will be assigned an identifier, which will then be used for caching
+    // the function call results.
+    bool _processing_pk_restrictions = false;
 
 public:
 
@@ -83,6 +95,22 @@ public:
     void add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec);
 
     void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& prepare_meta);
+
+    function_calls_t& pk_function_calls();
+
+    // Record a new function call, which evaluates a partition key constraint.
+    // Also automatically assigns an id to the AST node for caching purposes.
+    void add_pk_function_call(::shared_ptr<cql3::functions::function_call> fn);
+
+    // Inform the context object that it has started or ended processing the
+    // partition key part of statement restrictions.
+    void set_processing_pk_restrictions(bool flag) {
+        _processing_pk_restrictions = flag;
+    }
+
+    bool is_processing_pk_restrictions() const {
+        return _processing_pk_restrictions;
+    }
 };
 
 }
