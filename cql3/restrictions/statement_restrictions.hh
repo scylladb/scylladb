@@ -49,7 +49,7 @@
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
 #include "cql3/relation.hh"
-#include "cql3/variable_specifications.hh"
+#include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
 
 namespace cql3 {
@@ -151,7 +151,7 @@ public:
         schema_ptr schema,
         statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
-        variable_specifications& bound_names,
+        prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view = false,
         bool allow_filtering = false);

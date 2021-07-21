@@ -98,25 +98,25 @@ public:
 
     ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db,
             schema_ptr schema,
-            variable_specifications& bound_names) override;
+            prepare_context& ctx) override;
 
     ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db,
             schema_ptr schema,
-            variable_specifications& bound_names) override;
+            prepare_context& ctx) override;
 
     ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db,
             schema_ptr schema,
-            variable_specifications& bound_names,
+            prepare_context& ctx,
             statements::bound bound,
             bool inclusive) override;
 
     ::shared_ptr<restrictions::restriction> new_contains_restriction(
             database& db, schema_ptr schema,
-            variable_specifications& bound_names, bool isKey) override;
+            prepare_context& ctx, bool isKey) override;
 
     ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db,
             schema_ptr schema,
-            variable_specifications& bound_names) override;
+            prepare_context& ctx) override;
 
     ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override;
 
@@ -127,7 +127,7 @@ protected:
                                        const term::raw& raw,
                                        database& db,
                                        const sstring& keyspace,
-                                       variable_specifications& bound_names) const override;
+                                       prepare_context& ctx) const override;
 };
 
 }

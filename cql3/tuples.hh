@@ -153,9 +153,9 @@ public:
             return std::any_of(_elements.begin(), _elements.end(), std::mem_fn(&term::contains_bind_marker));
         }
 
-        virtual void collect_marker_specification(variable_specifications& bound_names) const override {
+        virtual void fill_prepare_context(prepare_context& ctx) const override {
             for (auto&& term : _elements) {
-                term->collect_marker_specification(bound_names);
+                term->fill_prepare_context(ctx);
             }
         }
     private:

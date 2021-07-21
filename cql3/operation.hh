@@ -103,12 +103,12 @@ public:
     /**
      * Collects the column specification for the bind variables of this operation.
      *
-     * @param bound_names the list of column specification where to collect the
+     * @param meta the list of column specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(variable_specifications& bound_names) const {
+    virtual void fill_prepare_context(prepare_context& ctx) const {
         if (_t) {
-            _t->collect_marker_specification(bound_names);
+            _t->fill_prepare_context(ctx);
         }
     }
 

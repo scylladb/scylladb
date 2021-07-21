@@ -433,7 +433,7 @@ namespace raw {
 
 std::unique_ptr<prepared_statement>
 batch_statement::prepare(database& db, cql_stats& stats) {
-    auto&& bound_names = get_bound_variables();
+    auto&& meta = get_prepare_context();
 
     std::optional<sstring> first_ks;
     std::optional<sstring> first_cf;
@@ -449,20 +449,20 @@ batch_statement::prepare(database& db, cql_stats& stats) {
         } else {
             have_multiple_cfs = first_ks.value() != parsed->keyspace() || first_cf.value() != parsed->column_family();
         }
-        statements.emplace_back(parsed->prepare(db, bound_names, stats));
+        statements.emplace_back(parsed->prepare(db, meta, stats));
     }
 
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
-    prep_attrs->collect_marker_specification(bound_names);
+    prep_attrs->fill_prepare_context(meta);
 
-    cql3::statements::batch_statement batch_statement_(bound_names.size(), _type, std::move(statements), std::move(prep_attrs), stats);
+    cql3::statements::batch_statement batch_statement_(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
 
     std::vector<uint16_t> partition_key_bind_indices;
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
-        partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
+        partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
     return std::make_unique<prepared_statement>(make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
-                                                     bound_names.get_specifications(),
+                                                     meta.get_variable_specifications(),
                                                      std::move(partition_key_bind_indices));
 }
 

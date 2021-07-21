@@ -55,7 +55,11 @@ namespace cql3 {
 class column_identifier;
 class column_specification;
 
-class variable_specifications final {
+/**
+ * A metadata class currently holding bind variables specifications and 
+ * populated at "prepare" step of query execution.
+ */
+class prepare_context final {
 private:
     std::vector<shared_ptr<column_identifier>> _variable_names;
     std::vector<lw_shared_ptr<column_specification>> _specs;
@@ -63,26 +67,22 @@ private:
 
 public:
 
-    variable_specifications() = default;
-    variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names);
+    prepare_context() = default;
+    prepare_context(const std::vector<::shared_ptr<column_identifier>>& variable_names);
 
-    /**
-     * Returns an empty instance of <code>VariableSpecifications</code>.
-     * @return an empty instance of <code>VariableSpecifications</code>
-     */
-    static lw_shared_ptr<variable_specifications> empty();
+    static lw_shared_ptr<prepare_context> empty();
 
-    size_t size() const;
+    size_t bound_variables_size() const;
 
-    std::vector<lw_shared_ptr<column_specification>> get_specifications() const &;
+    std::vector<lw_shared_ptr<column_specification>> get_variable_specifications() const &;
 
-    std::vector<lw_shared_ptr<column_specification>> get_specifications() &&;
+    std::vector<lw_shared_ptr<column_specification>> get_variable_specifications() &&;
 
     std::vector<uint16_t> get_partition_key_bind_indexes(const schema& schema) const;
 
-    void add(int32_t bind_index, lw_shared_ptr<column_specification> spec);
+    void add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec);
 
-    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bound_names);
+    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& prepare_meta);
 };
 
 }

@@ -57,7 +57,7 @@ public:
     function_call(shared_ptr<scalar_function> fun, std::vector<shared_ptr<term>> terms)
             : _fun(std::move(fun)), _terms(std::move(terms)) {
     }
-    virtual void collect_marker_specification(variable_specifications& bound_names) const override;
+    virtual void fill_prepare_context(prepare_context& ctx) const override;
     virtual shared_ptr<terminal> bind(const query_options& options) override;
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 private:

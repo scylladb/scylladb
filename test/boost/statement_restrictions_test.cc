@@ -39,13 +39,13 @@ namespace {
 query::clustering_row_ranges slice(
         const std::vector<relation_ptr>& where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
-    variable_specifications bound_names;
+    prepare_context ctx;
     return restrictions::statement_restrictions(
             env.local_db(),
             env.local_db().find_schema(keyspace_name, table_name),
             statements::statement_type::SELECT,
             where_clause,
-            bound_names,
+            ctx,
             /*contains_only_static_columns=*/false,
             /*for_view=*/false,
             /*allow_filtering=*/true)

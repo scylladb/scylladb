@@ -43,7 +43,7 @@
 
 #include "schema_fwd.hh"
 #include "column_identifier.hh"
-#include "variable_specifications.hh"
+#include "prepare_context.hh"
 #include "restrictions/restriction.hh"
 #include "statements/bound.hh"
 #include "term.hh"
@@ -139,29 +139,29 @@ public:
      * @return the <code>Restriction</code> corresponding to this <code>Relation</code>
      * @throws InvalidRequestException if this <code>Relation</code> is not valid
      */
-    virtual ::shared_ptr<restrictions::restriction> to_restriction(database& db, schema_ptr schema, variable_specifications& bound_names) final {
+    virtual ::shared_ptr<restrictions::restriction> to_restriction(database& db, schema_ptr schema, prepare_context& ctx) final {
         if (_relation_type == expr::oper_t::EQ) {
-            return new_EQ_restriction(db, schema, bound_names);
+            return new_EQ_restriction(db, schema, ctx);
         } else if (_relation_type == expr::oper_t::LT) {
-            return new_slice_restriction(db, schema, bound_names, statements::bound::END, false);
+            return new_slice_restriction(db, schema, ctx, statements::bound::END, false);
         } else if (_relation_type == expr::oper_t::LTE) {
-            return new_slice_restriction(db, schema, bound_names, statements::bound::END, true);
+            return new_slice_restriction(db, schema, ctx, statements::bound::END, true);
         } else if (_relation_type == expr::oper_t::GTE) {
-            return new_slice_restriction(db, schema, bound_names, statements::bound::START, true);
+            return new_slice_restriction(db, schema, ctx, statements::bound::START, true);
         } else if (_relation_type == expr::oper_t::GT) {
-            return new_slice_restriction(db, schema, bound_names, statements::bound::START, false);
+            return new_slice_restriction(db, schema, ctx, statements::bound::START, false);
         } else if (_relation_type == expr::oper_t::IN) {
-            return new_IN_restriction(db, schema, bound_names);
+            return new_IN_restriction(db, schema, ctx);
         } else if (_relation_type == expr::oper_t::CONTAINS) {
-            return new_contains_restriction(db, schema, bound_names, false);
+            return new_contains_restriction(db, schema, ctx, false);
         } else if (_relation_type == expr::oper_t::CONTAINS_KEY) {
-            return new_contains_restriction(db, schema, bound_names, true);
+            return new_contains_restriction(db, schema, ctx, true);
         } else if (_relation_type == expr::oper_t::IS_NOT) {
             // This case is not supposed to happen: statement_restrictions
             // constructor does not call this function for views' IS_NOT.
             throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {}", to_string()));
         } else if (_relation_type == expr::oper_t::LIKE) {
-            return new_LIKE_restriction(db, schema, bound_names);
+            return new_LIKE_restriction(db, schema, ctx);
         } else {
             throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {}", to_string()));
         }
@@ -182,31 +182,31 @@ public:
      * @throws InvalidRequestException if the relation cannot be converted into an EQ restriction.
      */
     virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
-        variable_specifications& bound_names) = 0;
+        prepare_context& ctx) = 0;
 
     /**
      * Creates a new IN restriction instance.
      *
      * @param cfm the Column Family meta data
-     * @param bound_names the variables specification where to collect the bind variables
+     * @param meta the variables specification where to collect the bind variables
      * @return a new IN restriction instance
      * @throws InvalidRequestException if the relation cannot be converted into an IN restriction.
      */
     virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
-        variable_specifications& bound_names) = 0;
+        prepare_context& ctx) = 0;
 
     /**
      * Creates a new Slice restriction instance.
      *
      * @param cfm the Column Family meta data
-     * @param bound_names the variables specification where to collect the bind variables
+     * @param meta the variables specification where to collect the bind variables
      * @param bound the slice bound
      * @param inclusive <code>true</code> if the bound is included.
      * @return a new slice restriction instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
     virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
-        variable_specifications& bound_names,
+        prepare_context& ctx,
         statements::bound bound,
         bool inclusive) = 0;
 
@@ -214,19 +214,19 @@ public:
      * Creates a new Contains restriction instance.
      *
      * @param cfm the Column Family meta data
-     * @param bound_names the variables specification where to collect the bind variables
+     * @param meta the variables specification where to collect the bind variables
      * @param isKey <code>true</code> if the restriction to create is a CONTAINS KEY
      * @return a new Contains <code>::shared_ptr<restrictions::restriction></code> instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
     virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
-        variable_specifications& bound_names, bool isKey) = 0;
+        prepare_context& ctx, bool isKey) = 0;
 
     /**
      * Creates a new LIKE restriction instance.
      */
     virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db, schema_ptr schema,
-        variable_specifications& bound_names) = 0;
+        prepare_context& ctx) = 0;
 
     /**
      * Renames an identifier in this Relation, if applicable.
@@ -253,7 +253,7 @@ protected:
                                        const term::raw& raw,
                                        database& db,
                                        const sstring& keyspace,
-                                       variable_specifications& boundNames) const = 0;
+                                       prepare_context& ctx) const = 0;
 
     /**
      * Converts the specified <code>Raw</code> terms into a <code>Term</code>s.
@@ -269,10 +269,10 @@ protected:
                                              const std::vector<::shared_ptr<term::raw>>& raws,
                                              database& db,
                                              const sstring& keyspace,
-                                             variable_specifications& boundNames) const {
+                                             prepare_context& ctx) const {
         std::vector<::shared_ptr<term>> terms;
         for (const auto& r : raws) {
-            terms.emplace_back(to_term(receivers, *r, db, keyspace, boundNames));
+            terms.emplace_back(to_term(receivers, *r, db, keyspace, ctx));
         }
         return terms;
     }

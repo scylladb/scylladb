@@ -48,7 +48,7 @@
 namespace cql3 {
 
 class terminal;
-class variable_specifications;
+class prepare_context;
 
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
@@ -68,7 +68,7 @@ public:
      * @param boundNames the variables specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(variable_specifications& bound_names) const = 0;
+    virtual void fill_prepare_context(prepare_context& ctx) const = 0;
 
     /**
      * Bind the values in this term to the values contained in {@code values}.
@@ -161,7 +161,7 @@ public:
  */
 class terminal : public term {
 public:
-    virtual void collect_marker_specification(variable_specifications& bound_names) const {
+    virtual void fill_prepare_context(prepare_context& ctx) const {
     }
 
     virtual ::shared_ptr<terminal> bind(const query_options& options) override {

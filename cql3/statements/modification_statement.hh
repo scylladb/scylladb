@@ -194,7 +194,7 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    void process_where_clause(database& db, std::vector<relation_ptr> where_clause, variable_specifications& names);
+    void process_where_clause(database& db, std::vector<relation_ptr> where_clause, prepare_context& ctx);
 
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.

@@ -185,9 +185,9 @@ bool user_types::delayed_value::contains_bind_marker() const {
     return boost::algorithm::any_of(_values, std::mem_fn(&term::contains_bind_marker));
 }
 
-void user_types::delayed_value::collect_marker_specification(variable_specifications& bound_names) const {
+void user_types::delayed_value::fill_prepare_context(prepare_context& ctx) const {
     for (auto&& v : _values) {
-        v->collect_marker_specification(bound_names);
+        v->fill_prepare_context(ctx);
     }
 }
 

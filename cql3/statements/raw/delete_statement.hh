@@ -69,7 +69,7 @@ public:
            bool if_exists);
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
-        variable_specifications& bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
+        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
 };
 
 }
