@@ -356,10 +356,6 @@ private:
 public:
     void enable_all_features();
 
-    void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
-
-    future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
-
     // should only be called via JMX
     future<> stop_gossiping();
 

@@ -1340,19 +1340,9 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
-{
-    _lifecycle_notifier.register_subscriber(subscriber);
-}
-
 void endpoint_lifecycle_notifier::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
 {
     _subscribers.add(subscriber);
-}
-
-future<> storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept
-{
-    return _lifecycle_notifier.unregister_subscriber(subscriber);
 }
 
 future<> endpoint_lifecycle_notifier::unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept
