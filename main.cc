@@ -1132,14 +1132,14 @@ int main(int ac, char** av) {
             }
             view_hints_dir_initializer.ensure_rebalanced().get();
 
-            proxy.invoke_on_all([&ss] (service::storage_proxy& local_proxy) {
-                ss.local().register_subscriber(&local_proxy);
+            proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) {
+                lifecycle_notifier.local().register_subscriber(&local_proxy);
                 return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this());
             }).get();
 
-            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &ss] {
-                proxy.invoke_on_all([&ss] (service::storage_proxy& local_proxy) mutable {
-                    return ss.local().unregister_subscriber(&local_proxy).finally([&local_proxy] {
+            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {
+                proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) mutable {
+                    return lifecycle_notifier.local().unregister_subscriber(&local_proxy).finally([&local_proxy] {
                         return local_proxy.drain_on_shutdown();
                     });
                 }).get();
@@ -1234,10 +1234,10 @@ int main(int ac, char** av) {
                 return ss.local().join_cluster();
             }).get();
 
-            sl_controller.invoke_on_all([&ss] (qos::service_level_controller& controller) {
+            sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                 controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
                         ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));
-                ss.local().register_subscriber(&controller);
+                lifecycle_notifier.local().register_subscriber(&controller);
             }).get();
 
             supervisor::notify("starting tracing");
@@ -1421,9 +1421,9 @@ int main(int ac, char** av) {
                 repair_shutdown(db).get();
             });
 
-            auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&ss] {
-                sl_controller.invoke_on_all([&ss] (qos::service_level_controller& controller) {
-                    return ss.local().unregister_subscriber(&controller);
+            auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&lifecycle_notifier] {
+                sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
+                    return lifecycle_notifier.local().unregister_subscriber(&controller);
                 }).get();
                 sl_controller.invoke_on_all(&qos::service_level_controller::drain).get();
             });
