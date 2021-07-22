@@ -20,11 +20,12 @@
  */
 
 #include <algorithm>
+#include <seastar/core/sleep.hh>
 #include "service_level_controller.hh"
-#include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "utils/fb_utilities.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");

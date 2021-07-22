@@ -64,7 +64,6 @@
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
-#include "service/storage_service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
