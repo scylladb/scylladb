@@ -3825,35 +3825,55 @@ future<> deinit_storage_service() {
     return service::get_storage_service().stop();
 }
 
+future<> storage_service::do_notify_down(inet_address endpoint) {
+    return seastar::async([this, endpoint] {
+        _lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_down(endpoint);
+            } catch (...) {
+                slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
+            }
+        });
+    });
+}
+
 void storage_service::notify_down(inet_address endpoint) {
     container().invoke_on_all([endpoint] (auto&& ss) {
         ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0});
-        return seastar::async([&ss, endpoint] {
-            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
-                try {
-                    subscriber->on_down(endpoint);
-                } catch (...) {
-                    slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
-                }
-            });
-        });
+        return ss.do_notify_down(endpoint);
     }).get();
     slogger.debug("Notify node {} has been down", endpoint);
 }
 
+future<> storage_service::do_notify_left(inet_address endpoint) {
+    return seastar::async([this, endpoint] {
+        _lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_leave_cluster(endpoint);
+            } catch (...) {
+                slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
+            }
+        });
+    });
+}
+
 void storage_service::notify_left(inet_address endpoint) {
     container().invoke_on_all([endpoint] (auto&& ss) {
-        return seastar::async([&ss, endpoint] {
-            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
-                try {
-                    subscriber->on_leave_cluster(endpoint);
-                } catch (...) {
-                    slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
-                }
-            });
-        });
+        return ss.do_notify_left(endpoint);
     }).get();
     slogger.debug("Notify node {} has left the cluster", endpoint);
+}
+
+future<> storage_service::do_notify_up(inet_address endpoint) {
+    return seastar::async([this, endpoint] {
+        _lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_up(endpoint);
+            } catch (...) {
+                slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
+            }
+        });
+    });
 }
 
 void storage_service::notify_up(inet_address endpoint)
@@ -3862,17 +3882,21 @@ void storage_service::notify_up(inet_address endpoint)
         return;
     }
     container().invoke_on_all([endpoint] (auto&& ss) {
-        return seastar::async([&ss, endpoint] {
-            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
-                try {
-                    subscriber->on_up(endpoint);
-                } catch (...) {
-                    slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
-                }
-            });
-        });
+        return ss.do_notify_up(endpoint);
     }).get();
     slogger.debug("Notify node {} has been up", endpoint);
+}
+
+future<> storage_service::do_notify_joined(inet_address endpoint) {
+    return seastar::async([this, endpoint] {
+        _lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_join_cluster(endpoint);
+            } catch (...) {
+                slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
+            }
+        });
+    });
 }
 
 void storage_service::notify_joined(inet_address endpoint)
@@ -3882,15 +3906,7 @@ void storage_service::notify_joined(inet_address endpoint)
     }
 
     container().invoke_on_all([endpoint] (auto&& ss) {
-        return seastar::async([&ss, endpoint] {
-            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
-                try {
-                    subscriber->on_join_cluster(endpoint);
-                } catch (...) {
-                    slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
-                }
-            });
-        });
+        return ss.do_notify_joined(endpoint);
     }).get();
     slogger.debug("Notify node {} has joined the cluster", endpoint);
 }

@@ -904,6 +904,10 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
+    future<> do_notify_down(inet_address endpoint);
+    future<> do_notify_left(inet_address endpoint);
+    future<> do_notify_up(inet_address endpoint);
+    future<> do_notify_joined(inet_address endpoint);
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
     void notify_up(inet_address endpoint);
