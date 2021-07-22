@@ -22,7 +22,6 @@
 #include "transport/controller.hh"
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
-#include "service/storage_service.hh" // temporary
 #include "db/config.hh"
 #include "gms/gossiper.hh"
 #include "log.hh"
@@ -47,7 +46,6 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _sl_controller(sl_controller)
     , _config(cfg)
 {
-    (void)_lifecycle_notifier;
 }
 
 future<> controller::start_server() {
@@ -220,7 +218,7 @@ future<> controller::do_stop_server() {
 future<> controller::subscribe_server(sharded<cql_server>& server) {
     return server.invoke_on_all([this] (cql_server& server) {
         _mnotifier.local().register_listener(server.get_migration_listener());
-        service::get_local_storage_service().register_subscriber(server.get_lifecycle_listener());
+        _lifecycle_notifier.local().register_subscriber(server.get_lifecycle_listener());
         return make_ready_future<>();
     });
 }
@@ -228,7 +226,7 @@ future<> controller::subscribe_server(sharded<cql_server>& server) {
 future<> controller::unsubscribe_server(sharded<cql_server>& server) {
     return server.invoke_on_all([this] (cql_server& server) {
         return _mnotifier.local().unregister_listener(server.get_migration_listener()).then([this, &server]{
-            return service::get_local_storage_service().unregister_subscriber(server.get_lifecycle_listener());
+            return _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
         });
     });
 }
