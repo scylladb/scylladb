@@ -1643,7 +1643,7 @@ future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, co
         while (auto mf_opt = co_await reader(db::no_timeout)) {
             if (info.is_stop_requested()) [[unlikely]] {
                 // Compaction manager will catch this exception and re-schedule the compaction.
-                throw compaction_stop_exception(info.ks_name, info.cf_name, info.stop_requested);
+                co_return coroutine::make_exception(compaction_stop_exception(info.ks_name, info.cf_name, info.stop_requested));
             }
 
             const auto& mf = *mf_opt;
@@ -1679,7 +1679,7 @@ future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, co
     co_await reader.close();
 
     if (ex) {
-        std::rethrow_exception(std::move(ex));
+        co_return coroutine::exception(std::move(ex));
     }
 
     co_return valid;
@@ -1718,8 +1718,8 @@ static future<compaction_info> validate_sstables(sstables::compaction_descriptor
 future<compaction_info>
 compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
     if (descriptor.sstables.empty()) {
-        throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
-                cf.schema()->ks_name(), cf.schema()->cf_name()));
+        return make_exception_future<compaction_info>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
+                compaction_name(descriptor.options.type()), cf.schema()->ks_name(), cf.schema()->cf_name())));
     }
     if (descriptor.options.type() == compaction_type::Validation) {
         // Bypass the usual compaction machinery for validation compaction
