@@ -569,7 +569,7 @@ public:
     // The coroutine must be resumed with the region being unlocked.
     //
     // The coroutine cannot run concurrently with other apply() calls.
-    coroutine apply_to_incomplete(const schema& s,
+    utils::coroutine apply_to_incomplete(const schema& s,
         partition_entry&& pe,
         mutation_cleaner& pe_cleaner,
         logalloc::allocating_section&,

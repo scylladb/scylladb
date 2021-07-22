@@ -953,7 +953,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
         });
-        coroutine update; // Destroy before cleanup to release snapshots before invalidating.
+        utils::coroutine update; // Destroy before cleanup to release snapshots before invalidating.
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
             with_allocator(_tracker.allocator(), [&] () {
@@ -1043,7 +1043,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else {
-            return make_empty_coroutine();
+            return utils::make_empty_coroutine();
         }
     });
 }
@@ -1063,7 +1063,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             _tracker.clear_continuity(*cache_i);
         }
         // FIXME: subtract gradually from acc.
-        return make_empty_coroutine();
+        return utils::make_empty_coroutine();
     });
 }
 
