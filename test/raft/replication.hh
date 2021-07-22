@@ -1088,9 +1088,11 @@ future<> raft_cluster<Clock>::partition(::partition p) {
         co_await elect_new_leader(*next_leader);
     } else if (partition_servers.find(_leader) == partition_servers.end() && p.size() > 0) {
         // Old leader disconnected and not specified new, free election
+        restart_tickers();
         co_await free_election();
+    } else {
+        restart_tickers();
     }
-    restart_tickers();
 }
 
 template <typename Clock>
