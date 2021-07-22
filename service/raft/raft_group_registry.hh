@@ -53,16 +53,20 @@ struct raft_group_not_found: public raft::error {
     {}
 };
 
+// An entry in the group registry
+struct raft_server_for_group {
+    raft::group_id gid;
+    std::unique_ptr<raft::server> server;
+    std::unique_ptr<raft_ticker_type> ticker;
+    raft_rpc& rpc;
+};
+
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
 //
 // `peering_sharded_service` inheritance is used to forward requests
 // to the owning shard for a given raft group_id.
 class raft_group_registry : public seastar::peering_sharded_service<raft_group_registry> {
-public:
-    using ticker_type = seastar::timer<lowres_clock>;
-    // TODO: should be configurable.
-    static constexpr ticker_type::duration tick_interval = std::chrono::milliseconds(100);
 private:
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
@@ -70,15 +74,9 @@ private:
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
 
-    struct server_for_group {
-        raft::group_id gid;
-        std::unique_ptr<raft::server> server;
-        std::unique_ptr<ticker_type> ticker;
-        raft_rpc& rpc;
-    };
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
-    std::unordered_map<raft::group_id, server_for_group> _servers;
+    std::unordered_map<raft::group_id, raft_server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
     raft_address_map<> _srv_address_mappings;
 
@@ -86,9 +84,9 @@ private:
     seastar::future<> uninit_rpc_verbs();
     seastar::future<> stop_servers();
 
-    server_for_group create_server_for_group(raft::group_id id);
+    raft_server_for_group create_server_for_group(raft::group_id id);
 
-    server_for_group& get_server_for_group(raft::group_id id);
+    raft_server_for_group& server_for_group(raft::group_id id);
 public:
 
     raft_group_registry(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp);
@@ -114,17 +112,9 @@ public:
 
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
-    future<> start_server_for_group(server_for_group grp);
+    future<> start_server_for_group(raft_server_for_group grp);
     unsigned shard_for_group(const raft::group_id& gid) const;
-
-    // Map raft server_id to inet_address to be consumed by `messaging_service`
-    gms::inet_address get_inet_address(raft::server_id id) const;
-    // Update inet_address mapping for a raft server with a given id.
-    // In case a mapping exists for a given id, it should be equal to the supplied `addr`
-    // otherwise the function will throw.
-    void update_address_mapping(raft::server_id id, gms::inet_address addr, bool expiring);
-    // Remove inet_address mapping for a raft server
-    void remove_address_mapping(raft::server_id);
+    raft_address_map<>& address_map() { return _srv_address_mappings; }
 };
 
 } // end of namespace service

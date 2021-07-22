@@ -21,7 +21,7 @@
  */
 #pragma once
 
-#include "raft/raft.hh"
+#include "raft_address_map.hh"
 
 namespace gms {
 class gossiper;
@@ -29,18 +29,16 @@ class gossiper;
 
 namespace service {
 
-class raft_group_registry;
-
 // Scylla-specific implementation of raft failure detector module.
 //
 // Currently uses gossiper as underlying implementation to test for `is_alive(gms::inet_address)`.
 // Gets the mapping from server id to gms::inet_address from RPC module.
 class raft_gossip_failure_detector : public raft::failure_detector {
     gms::gossiper& _gossip;
-    raft_group_registry& _raft_gr;
+    raft_address_map<>& _address_map;
 
 public:
-    raft_gossip_failure_detector(gms::gossiper& gs, raft_group_registry& raft_gr);
+    raft_gossip_failure_detector(gms::gossiper& gs, raft_address_map<>& address_map);
 
     bool is_alive(raft::server_id server) override;
 };

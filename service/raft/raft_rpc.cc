@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_group_registry.hh"
 #include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
 #include "serializer_impl.hh"
@@ -31,23 +30,23 @@ namespace service {
 
 static seastar::logger rlogger("raft_rpc");
 
-raft_rpc::raft_rpc(netw::messaging_service& ms, raft_group_registry& raft_gr, raft::group_id gid, raft::server_id srv_id)
-    : _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _raft_gr(raft_gr)
+raft_rpc::raft_rpc(netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id)
+    : _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _address_map(address_map)
 {}
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
     return _messaging.send_raft_snapshot(
-        netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, snap);
+        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, snap);
 }
 
 future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_request& append_request) {
     return _messaging.send_raft_append_entries(
-        netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, append_request);
+        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, append_request);
 }
 
 void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
     (void)with_gate(_shutdown_gate, [this, id, &reply] {
-        return _messaging.send_raft_append_entries_reply(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, reply)
+        return _messaging.send_raft_append_entries_reply(netw::msg_addr(_address_map.get_inet_address(id)), timeout(), _group_id, _server_id, id, reply)
             .handle_exception([id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -61,7 +60,7 @@ void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_
 
 void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
     (void)with_gate(_shutdown_gate, [this, id, vote_request] {
-        return _messaging.send_raft_vote_request(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, vote_request)
+        return _messaging.send_raft_vote_request(netw::msg_addr(_address_map.get_inet_address(id)), timeout(), _group_id, _server_id, id, vote_request)
             .handle_exception([id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -75,7 +74,7 @@ void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& v
 
 void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
     (void)with_gate(_shutdown_gate, [this, id, vote_reply] {
-        return _messaging.send_raft_vote_reply(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, vote_reply)
+        return _messaging.send_raft_vote_reply(netw::msg_addr(_address_map.get_inet_address(id)), timeout(), _group_id, _server_id, id, vote_reply)
             .handle_exception([id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -89,7 +88,7 @@ void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_
 
 void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
     (void)with_gate(_shutdown_gate, [this, id, timeout_now] {
-        return _messaging.send_raft_timeout_now(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, timeout_now)
+        return _messaging.send_raft_timeout_now(netw::msg_addr(_address_map.get_inet_address(id)), timeout(), _group_id, _server_id, id, timeout_now)
             .handle_exception([id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -103,7 +102,7 @@ void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& tim
 
 void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
     (void)with_gate(_shutdown_gate, [&] {
-        return _messaging.send_raft_read_quorum(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, read_quorum)
+        return _messaging.send_raft_read_quorum(netw::msg_addr(_address_map.get_inet_address(id)), timeout(), _group_id, _server_id, id, read_quorum)
             .handle_exception([id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -117,7 +116,7 @@ void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& rea
 
 void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& check_quorum_reply) {
     (void)with_gate(_shutdown_gate, [&] {
-        return _messaging.send_raft_read_quorum_reply(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, check_quorum_reply)
+        return _messaging.send_raft_read_quorum_reply(netw::msg_addr(_address_map.get_inet_address(id)), timeout(), _group_id, _server_id, id, check_quorum_reply)
             .handle_exception([id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -131,18 +130,18 @@ void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quoru
 
 future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {
     return _messaging.send_raft_add_entry(
-        netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd);
+        netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd);
 }
 
 future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
     const std::vector<raft::server_address>& add,
     const std::vector<raft::server_id>& del) {
-   return _messaging.send_raft_modify_config(netw::msg_addr(_raft_gr.get_inet_address(id)),
+   return _messaging.send_raft_modify_config(netw::msg_addr(_address_map.get_inet_address(id)),
        db::no_timeout, _group_id, _server_id, id, add, del);
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
-   return _messaging.send_raft_execute_read_barrier_on_leader(netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id);
+   return _messaging.send_raft_execute_read_barrier_on_leader(netw::msg_addr(_address_map.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id);
 }
 
 void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
@@ -150,11 +149,11 @@ void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
     auto in = ser::as_input_stream(bytes_view(info));
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
-    _raft_gr.update_address_mapping(id, ser::deserialize(in, boost::type<gms::inet_address>()), false);
+    _address_map.set(id, ser::deserialize(in, boost::type<gms::inet_address>()), false);
 }
 
 void raft_rpc::remove_server(raft::server_id id) {
-    _raft_gr.remove_address_mapping(id);
+    _address_map.erase(id);
 }
 
 future<> raft_rpc::abort() {

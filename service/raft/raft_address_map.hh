@@ -21,6 +21,7 @@
 #pragma once
 
 #include "gms/inet_address.hh"
+#include "gms/inet_address_serializer.hh"
 #include "raft/raft.hh"
 
 #include <seastar/core/lowres_clock.hh>
@@ -37,6 +38,10 @@ namespace bi = boost::intrusive;
 namespace service {
 
 extern seastar::logger rslog;
+
+using raft_ticker_type = seastar::timer<lowres_clock>;
+// TODO: should be configurable.
+static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::milliseconds(100);
 
 // This class provides an abstraction of expirable server address mappings
 // used by the raft rpc module to store connection info for servers in a raft group.
@@ -333,6 +338,20 @@ public:
         }
         // Erase both from LRU list and base storage
         unlink_and_dispose(set_it);
+    }
+
+    // Map raft server_id to inet_address to be consumed by `messaging_service`
+    gms::inet_address get_inet_address(raft::server_id id) const {
+        auto it = find(id);
+        if (!it) {
+            on_internal_error(rslog, format("Destination raft server not found with id {}", id));
+        }
+        return *it;
+    }
+    raft::server_address get_server_address(raft::server_id id) const {
+        return raft::server_address{.id = id,
+                .info = ser::serialize_to_buffer<bytes>(get_inet_address(id))
+        };
     }
 };
 
