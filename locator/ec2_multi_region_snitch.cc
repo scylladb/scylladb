@@ -39,7 +39,6 @@
 #include "locator/ec2_multi_region_snitch.hh"
 #include "locator/reconnectable_snitch_helper.hh"
 #include "gms/gossiper.hh"
-#include "service/storage_service.hh"
 
 static constexpr const char* PUBLIC_IP_QUERY_REQ  = "/latest/meta-data/public-ipv4";
 static constexpr const char* PRIVATE_IP_QUERY_REQ = "/latest/meta-data/local-ipv4";

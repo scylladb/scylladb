@@ -25,11 +25,11 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "database.hh"
-#include "service/storage_service.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include "sstables/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "utils/fb_utilities.hh"
 #include <cmath>
 
 static logging::logger cmlog("compaction_manager");

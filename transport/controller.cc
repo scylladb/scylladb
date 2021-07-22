@@ -34,10 +34,12 @@ static logging::logger logger("cql_server_controller");
 
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         gms::gossiper& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
-        sharded<qos::service_level_controller>& sl_controller, const db::config& cfg)
+        sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
+        const db::config& cfg)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
+    , _lifecycle_notifier(elc_notif)
     , _gossiper(gossiper)
     , _qp(qp)
     , _mem_limiter(ml)
@@ -62,7 +64,7 @@ future<> controller::do_start_server() {
     }
 
     return seastar::async([this] {
-        auto cserver = std::make_unique<distributed<cql_transport::cql_server>>();
+        auto cserver = std::make_unique<sharded<cql_server>>();
 
         auto& cfg = _config;
         auto addr = cfg.rpc_address();
@@ -70,7 +72,7 @@ future<> controller::do_start_server() {
         auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
-        cql_transport::cql_server_config cql_server_config;
+        cql_server_config cql_server_config;
         cql_server_config.timeout_config = make_timeout_config(cfg);
         cql_server_config.max_request_size = _mem_limiter.local().total_memory();
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
@@ -149,11 +151,16 @@ future<> controller::do_start_server() {
             }
         }
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller)).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller)).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
+        subscribe_server(*cserver).get();
+        auto on_error_unsub = defer([this, &cserver] {
+            unsubscribe_server(*cserver).get();
+        });
+
         parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
-            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
+            return cserver->invoke_on_all(&cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
                 logger.info("Starting listening for CQL clients on {} ({}, {})"
                         , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
                 );
@@ -163,6 +170,7 @@ future<> controller::do_start_server() {
         set_cql_ready(true).get();
 
         on_error.cancel();
+        on_error_unsub.cancel();
         _server = std::move(cserver);
     });
 }
@@ -192,16 +200,34 @@ future<> controller::stop_server() {
 }
 
 future<> controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
+    return do_with(std::move(_server), [this] (std::unique_ptr<sharded<cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).finally([&cserver] {
-                return cserver->stop().then([] {
-                    logger.info("CQL server stopped");
+            return set_cql_ready(false).finally([this, &cserver] {
+                return unsubscribe_server(*cserver).then([&cserver] {
+                    return cserver->stop().then([] {
+                        logger.info("CQL server stopped");
+                    });
                 });
             });
         }
         return make_ready_future<>();
+    });
+}
+
+future<> controller::subscribe_server(sharded<cql_server>& server) {
+    return server.invoke_on_all([this] (cql_server& server) {
+        _mnotifier.local().register_listener(server.get_migration_listener());
+        _lifecycle_notifier.local().register_subscriber(server.get_lifecycle_listener());
+        return make_ready_future<>();
+    });
+}
+
+future<> controller::unsubscribe_server(sharded<cql_server>& server) {
+    return server.invoke_on_all([this] (cql_server& server) {
+        return _mnotifier.local().unregister_listener(server.get_migration_listener()).then([this, &server]{
+            return _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
+        });
     });
 }
 

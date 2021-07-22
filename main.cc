@@ -79,6 +79,7 @@
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
 #include "service/memory_limiter.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 
 #include "redis/service.hh"
 #include "cdc/log.hh"
@@ -487,6 +488,7 @@ int main(int ac, char** av) {
 
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
+    sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
@@ -534,7 +536,7 @@ int main(int ac, char** av) {
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &ss] {
+                &repair, &ss, &lifecycle_notifier] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -746,6 +748,13 @@ int main(int ac, char** av) {
                 mm_notifier.stop().get();
             });
 
+            supervisor::notify("starting lifecycle notifier");
+            lifecycle_notifier.start().get();
+            // storage_service references this notifier and is not stopped yet
+            // auto stop_lifecycle_notifier = defer_verbose_shutdown("lifecycle notifier", [ &lifecycle_notifier ] {
+            //     lifecycle_notifier.stop().get();
+            // });
+
             supervisor::notify("creating tracing");
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
@@ -883,7 +892,7 @@ int main(int ac, char** av) {
                 db, gossiper, sys_dist_ks, view_update_generator,
                 feature_service, sscfg, mm, token_metadata,
                 messaging, cdc_generation_service, repair,
-                raft_gr).get();
+                raft_gr, lifecycle_notifier).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -1122,14 +1131,14 @@ int main(int ac, char** av) {
             }
             view_hints_dir_initializer.ensure_rebalanced().get();
 
-            proxy.invoke_on_all([&ss] (service::storage_proxy& local_proxy) {
-                ss.local().register_subscriber(&local_proxy);
+            proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) {
+                lifecycle_notifier.local().register_subscriber(&local_proxy);
                 return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this());
             }).get();
 
-            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &ss] {
-                proxy.invoke_on_all([&ss] (service::storage_proxy& local_proxy) mutable {
-                    return ss.local().unregister_subscriber(&local_proxy).finally([&local_proxy] {
+            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {
+                proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) mutable {
+                    return lifecycle_notifier.local().unregister_subscriber(&local_proxy).finally([&local_proxy] {
                         return local_proxy.drain_on_shutdown();
                     });
                 }).get();
@@ -1224,10 +1233,10 @@ int main(int ac, char** av) {
                 return ss.local().join_cluster();
             }).get();
 
-            sl_controller.invoke_on_all([&ss] (qos::service_level_controller& controller) {
+            sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                 controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
                         ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));
-                ss.local().register_subscriber(&controller);
+                lifecycle_notifier.local().register_subscriber(&controller);
             }).get();
 
             supervisor::notify("starting tracing");
@@ -1339,7 +1348,7 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller, *cfg);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg);
 
             ss.local().register_client_shutdown_hook("native transport", [&cql_server_ctl] {
                 cql_server_ctl.stop().get();
@@ -1414,9 +1423,9 @@ int main(int ac, char** av) {
                 repair_shutdown(db).get();
             });
 
-            auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&ss] {
-                sl_controller.invoke_on_all([&ss] (qos::service_level_controller& controller) {
-                    return ss.local().unregister_subscriber(&controller);
+            auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&lifecycle_notifier] {
+                sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
+                    return lifecycle_notifier.local().unregister_subscriber(&controller);
                 }).get();
                 sl_controller.invoke_on_all(&qos::service_level_controller::drain).get();
             });

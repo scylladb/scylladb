@@ -41,6 +41,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/config.hh"
 #include "compaction/compaction_manager.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 
 namespace db::view {
 class view_update_generator;
@@ -65,6 +66,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<service::migration_manager> migration_manager;
         sharded<cql3::query_processor> qp;
         sharded<service::raft_group_registry> raft_gr;
+        sharded<service::endpoint_lifecycle_notifier> elc_notif;
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
@@ -93,6 +95,9 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         raft_gr.start(std::ref(_messaging), std::ref(gms::get_gossiper()), std::ref(qp)).get();
         auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
+        elc_notif.start().get();
+        auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
+
         service::get_storage_service().start(std::ref(abort_sources),
             std::ref(db), std::ref(gms::get_gossiper()),
             std::ref(sys_dist_ks),
@@ -101,7 +106,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             std::ref(migration_manager), std::ref(token_metadata),
             std::ref(_messaging),
             std::ref(cdc_generation_service), std::ref(repair),
-            std::ref(raft_gr),
+            std::ref(raft_gr), std::ref(elc_notif),
             true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 

@@ -24,7 +24,6 @@
 #include "database.hh"
 #include "db/config.hh"
 #include "log.hh"
-#include "service/storage_service.hh"
 
 static logging::logger clogger("thrift_controller");
 

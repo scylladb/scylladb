@@ -22,31 +22,12 @@
 #include "transport/server.hh"
 #include <seastar/core/gate.hh>
 #include "service/migration_listener.hh"
-#include "service/storage_service.hh"
 #include "transport/response.hh"
+#include "gms/gossiper.hh"
 
 namespace cql_transport {
 
 static logging::logger elogger("event_notifier");
-
-cql_server::event_notifier::event_notifier(service::migration_notifier& mn) : _mnotifier(mn)
-{
-    _mnotifier.register_listener(this);
-    service::get_local_storage_service().register_subscriber(this);
-}
-
-cql_server::event_notifier::~event_notifier()
-{
-    assert(_stopped);
-}
-
-future<> cql_server::event_notifier::stop() {
-    return _mnotifier.unregister_listener(this).then([this]{
-      return service::get_local_storage_service().unregister_subscriber(this).finally([this] {
-        _stopped = true;
-      });
-    });
-}
 
 void cql_server::event_notifier::register_event(event::event_type et, cql_server::connection* conn)
 {
