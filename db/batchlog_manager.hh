@@ -47,6 +47,7 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/abort_source.hh>
 
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
@@ -89,12 +90,12 @@ private:
     cql3::query_processor& _qp;
     db_clock::duration _write_request_timeout;
     uint64_t _replay_rate;
-    timer<clock_type> _timer;
+    future<> _started;
     std::chrono::milliseconds _delay;
     semaphore _sem{1};
     seastar::gate _gate;
     unsigned _cpu = 0;
-    bool _stop = false;
+    seastar::abort_source _stop;
 
     std::default_random_engine _e1{std::random_device{}()};
 
@@ -106,6 +107,8 @@ public:
     batchlog_manager(cql3::query_processor&, batchlog_manager_config config);
 
     future<> start();
+    // abort the replay loop and return its future.
+    future<> drain();
     future<> stop();
 
     future<> do_batch_log_replay();
@@ -119,6 +122,8 @@ public:
     db_clock::duration get_batch_log_timeout() const;
 
     inet_address_vector_replica_set endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
+private:
+    future<> batchlog_replay_loop();
 };
 
 extern distributed<batchlog_manager> _the_batchlog_manager;

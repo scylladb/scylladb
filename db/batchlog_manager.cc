@@ -43,6 +43,8 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
@@ -79,6 +81,7 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manag
         : _qp(qp)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
+        , _started(make_ready_future<>())
         , _delay(config.delay) {
     namespace sm = seastar::metrics;
 
@@ -93,52 +96,75 @@ future<> db::batchlog_manager::do_batch_log_replay() {
     // Use with_semaphore is much simpler, but nested invoke_on can
     // cause deadlock.
     return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
+        bm._gate.enter();
         return bm._sem.wait().then([&bm] {
             return bm._cpu++ % smp::count;
         });
     }).then([] (auto dest) {
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         return get_batchlog_manager().invoke_on(dest, [] (auto& bm) {
-            return bm.replay_all_failed_batches();
+            return with_gate(bm._gate, [&bm] {
+                return bm.replay_all_failed_batches();
+            });
         }).then([dest] {
             blogger.debug("Batchlog replay on shard {}: done", dest);
         });
     }).finally([] {
         return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
-            return bm._sem.signal();
+            bm._sem.signal();
+            bm._gate.leave();
         });
     });
+}
+
+future<> db::batchlog_manager::batchlog_replay_loop() {
+    assert (this_shard_id() == 0);
+    auto delay = _delay;
+    while (!_stop.abort_requested()) {
+        try {
+            co_await sleep_abortable(delay, _stop);
+        } catch (sleep_aborted&) {
+            co_return;
+        }
+        try {
+            co_await do_batch_log_replay();
+        } catch (...) {
+            blogger.error("Exception in batch replay: {}", std::current_exception());
+        }
+        delay = std::chrono::milliseconds(replay_interval);
+    }
 }
 
 future<> db::batchlog_manager::start() {
     // Since replay is a "node global" operation, we should not attempt to do
     // it in parallel on each shard. It will just overlap/interfere.  To
-    // simplify syncing between the timer and user initiated replay operations,
-    // we use the _timer and _sem on shard zero only. Replaying batchlog can
+    // simplify syncing between batchlog_replay_loop and user initiated replay operations,
+    // we use the _sem on shard zero only. Replaying batchlog can
     // generate a lot of work, so we distrute the real work on all cpus with
     // round-robin scheduling.
     if (this_shard_id() == 0) {
-        _timer.set_callback([this] {
-            // Do it in the background.
-            (void)do_batch_log_replay().handle_exception([] (auto ep) {
-                blogger.error("Exception in batch replay: {}", ep);
-            }).finally([this] {
-                _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
-            });
-        });
-
-        _timer.arm(lowres_clock::now() + _delay);
+        _started = batchlog_replay_loop();
     }
     return make_ready_future<>();
 }
 
-future<> db::batchlog_manager::stop() {
-    if (_stop) {
-        return make_ready_future<>();
+future<> db::batchlog_manager::drain() {
+    if (!_stop.abort_requested()) {
+        _stop.request_abort();
     }
-    _stop = true;
-    _timer.cancel();
-    return _gate.close();
+    if (this_shard_id() == 0) {
+        // Abort do_batch_log_replay if waiting on the semaphore.
+        _sem.broken();
+    }
+    return with_gate(_gate, [this] {
+        return std::exchange(_started, make_ready_future<>());
+    });
+}
+
+future<> db::batchlog_manager::stop() {
+    return drain().finally([this] {
+        return _gate.close();
+    });
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
