@@ -862,7 +862,12 @@ indexed_table_select_statement::prepare(database& db,
     const auto& im = index_opt->metadata();
     sstring index_table_name = im.name() + "_index";
     schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
-    restrictions->prepare_indexed(*view_schema, im.local());
+
+    if (im.local()) {
+        restrictions->prepare_indexed_local(*view_schema);
+    } else {
+        restrictions->prepare_indexed_global(*view_schema);
+    }
 
     return ::make_shared<cql3::statements::indexed_table_select_statement>(
             schema,
@@ -1172,32 +1177,8 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
 query::partition_slice indexed_table_select_statement::get_partition_slice_for_local_index_posting_list(const query_options& options) const {
     partition_slice_builder partition_slice_builder{*_view_schema};
 
-    ::shared_ptr<restrictions::single_column_clustering_key_restrictions> clustering_restrictions;
-    // For local indexes, the first clustering key is the indexed column itself, followed by base clustering key
-    clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, true);
-    const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
-
-    bytes_opt value = _used_index_restrictions->value_for(*cdef, options);
-    if (value) {
-        const column_definition* view_cdef = _view_schema->get_column_definition(to_bytes(_index.target_column()));
-        auto index_eq_restriction = ::make_shared<restrictions::single_column_restriction>(*view_cdef);
-        index_eq_restriction->expression = expr::binary_operator{
-                view_cdef, expr::oper_t::EQ, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(*value))};
-        clustering_restrictions->merge_with(index_eq_restriction);
-    }
-
-    if (_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
-        auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_clustering_key_restrictions>(_restrictions->get_clustering_columns_restrictions());
-        if (single_ck_restrictions) {
-            auto prefix_restrictions = single_ck_restrictions->get_longest_prefix_restrictions();
-            auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *prefix_restrictions);
-            for (auto restriction_it : clustering_restrictions_from_base->restrictions()) {
-                clustering_restrictions->merge_with(restriction_it.second);
-            }
-        }
-    }
-
-    partition_slice_builder.with_ranges(clustering_restrictions->bounds_ranges(options));
+    partition_slice_builder.with_ranges(
+        _restrictions->get_local_index_clustering_ranges(options, *_view_schema));
 
     return partition_slice_builder.build();
 }
