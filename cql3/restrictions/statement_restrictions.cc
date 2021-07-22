@@ -63,7 +63,6 @@ public:
         : _allow_filtering(allow_filtering) {
         this->expression = true;
     }
-    using bounds_range_type = typename primary_key_restrictions<T>::bounds_range_type;
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
         return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(schema, restriction);
@@ -78,10 +77,6 @@ public:
         throw exceptions::unsupported_operation_exception();
     }
     bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
-        return {};
-    }
-    std::vector<bounds_range_type> bounds_ranges(const query_options&) const override {
-        // throw? should not reach?
         return {};
     }
     std::vector<const column_definition*> get_column_defs() const override {

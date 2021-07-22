@@ -205,11 +205,6 @@ public:
         throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
             get_columns_in_commons(other)));
     }
-
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
-        return { bounds_range_type::make_singular(composite_value(options)) };
-    }
-
 #if 0
     @Override
     protected boolean isSupportedBy(SecondaryIndex index)
@@ -262,28 +257,6 @@ public:
         }
         return false;
     }
-
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
-        auto split_in_values = split_values(options);
-        std::vector<bounds_range_type> bounds;
-        for (auto&& components : split_in_values) {
-            for (unsigned i = 0; i < components.size(); i++) {
-                statements::request_validations::check_not_null(components[i], "Invalid null value in condition for column %s", _column_defs.at(i)->name_as_text());
-            }
-            auto prefix = clustering_key_prefix::from_optional_exploded(*_schema, components);
-            bounds.emplace_back(bounds_range_type::make_singular(prefix));
-        }
-        auto less_cmp = clustering_key_prefix::less_compare(*_schema);
-        std::sort(bounds.begin(), bounds.end(), [&] (bounds_range_type& x, bounds_range_type& y) {
-            return less_cmp(x.start()->value(), y.start()->value());
-        });
-        auto eq_cmp = clustering_key_prefix::equality(*_schema);
-        bounds.erase(std::unique(bounds.begin(), bounds.end(), [&] (bounds_range_type& x, bounds_range_type& y) {
-            return eq_cmp(x.start()->value(), y.start()->value());
-        }), bounds.end());
-        return bounds;
-    }
-
 #if 0
     @Override
     public void addIndexExpressionTo(List<IndexExpression> expressions,
@@ -313,8 +286,6 @@ public:
         return index.supportsOperator(Operator.IN);
     }
 #endif
-protected:
-    virtual utils::chunked_vector<std::vector<managed_bytes_opt>> split_values(const query_options& options) const = 0;
 };
 
 /**
@@ -335,16 +306,6 @@ public:
             oper_t::IN,
             ::make_shared<lists::delayed_value>(_values)};
     }
-
-protected:
-    virtual utils::chunked_vector<std::vector<managed_bytes_opt>> split_values(const query_options& options) const override {
-        utils::chunked_vector<std::vector<managed_bytes_opt>> buffers(_values.size());
-        std::transform(_values.begin(), _values.end(), buffers.begin(), [&] (const ::shared_ptr<term>& value) {
-            auto term = static_pointer_cast<multi_item_terminal>(value->bind(options));
-            return term->copy_elements();
-        });
-        return buffers;
-    }
 };
 
 
@@ -363,14 +324,6 @@ public:
             column_value_tuple(_column_defs),
             oper_t::IN,
             std::move(marker)};
-    }
-
-protected:
-    virtual utils::chunked_vector<std::vector<managed_bytes_opt>> split_values(const query_options& options) const override {
-        auto in_marker = static_pointer_cast<tuples::in_marker>(_marker);
-        auto in_value = static_pointer_cast<tuples::in_value>(in_marker->bind(options));
-        statements::request_validations::check_not_null(in_value, "Invalid null value for IN restriction");
-        return in_value->get_split_values();
     }
 };
 
@@ -403,14 +356,6 @@ public:
             }
         }
         return false;
-    }
-
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
-        if (_mode == mode::clustering || !is_mixed_order()) {
-            return bounds_ranges_unified_order(options);
-        } else {
-            return bounds_ranges_mixed_order(options);
-        }
     }
 #if 0
         @Override
@@ -470,57 +415,6 @@ private:
             statements::request_validations::check_not_null(vals[i], "Invalid null value in condition for column %s", _column_defs.at(i)->name_as_text());
         }
         return vals;
-    }
-
-    /**
-     * Retrieve the bounds for the case that all clustering columns have the same order.
-     * Having the same order implies we can do a prefix search on the data.
-     * @param options the query options
-     * @return the vector of ranges for the restriction
-     */
-    std::vector<bounds_range_type> bounds_ranges_unified_order(const query_options& options) const {
-        std::optional<bounds_range_type::bound> start_bound;
-        std::optional<bounds_range_type::bound> end_bound;
-        auto start_components = read_bound_components(options, statements::bound::START);
-        if (!start_components.empty()) {
-            auto start_prefix = clustering_key_prefix::from_optional_exploded(*_schema, start_components);
-            start_bound = bounds_range_type::bound(std::move(start_prefix), _slice.is_inclusive(statements::bound::START));
-        }
-        auto end_components = read_bound_components(options, statements::bound::END);
-        if (!end_components.empty()) {
-            auto end_prefix = clustering_key_prefix::from_optional_exploded(*_schema, end_components);
-            end_bound = bounds_range_type::bound(std::move(end_prefix), _slice.is_inclusive(statements::bound::END));
-        }
-        if (_mode == mode::cql && !is_asc_order()) {
-            std::swap(start_bound, end_bound);
-        }
-        auto range = bounds_range_type(start_bound, end_bound);
-        auto bounds = bound_view::from_range(range);
-        if (bound_view::compare(*_schema)(bounds.second, bounds.first)) {
-            return { };
-        }
-        return { std::move(range) };
-    }
-
-    /**
-     * Retrieve the bounds when clustering columns are mixed order
-     * (contains ASC and DESC together).
-     * Having mixed order implies that a prefix search can't take place,
-     * instead, the bounds have to be broken down to separate prefix serchable
-     * ranges such that their combination is equivalent to the original range.
-     * @param options the query options
-     * @return the vector of ranges for the restriction
-     */
-    std::vector<bounds_range_type> bounds_ranges_mixed_order(const query_options& options) const {
-        std::vector<bounds_range_type> ret_ranges;
-        auto mixed_order_restrictions = build_mixed_order_restriction_set(options);
-        ret_ranges.reserve(mixed_order_restrictions.size());
-        for (auto r : mixed_order_restrictions) {
-            for (auto&& range : r->bounds_ranges(options)) {
-                ret_ranges.emplace_back(std::move(range));
-            }
-        }
-        return ret_ranges;
     }
 
     /**
