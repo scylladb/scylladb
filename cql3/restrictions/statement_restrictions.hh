@@ -208,6 +208,10 @@ public:
         return _clustering_columns_restrictions;
     }
 
+    bool has_token_restrictions() const {
+        return has_token(_partition_key_restrictions->expression);
+    }
+
     /**
      * Builds a possibly empty collection of column definitions that will be used for filtering
      * @param db - the database context
@@ -445,7 +449,16 @@ public:
     }
 
     bool ck_restrictions_need_filtering() const {
-        return _partition_key_restrictions->has_unrestricted_components(*_schema) || _clustering_columns_restrictions->needs_filtering(*_schema);
+        if (_clustering_columns_restrictions->empty()) {
+            return false;
+        }
+
+        return _partition_key_restrictions->has_unrestricted_components(*_schema)
+        || _clustering_columns_restrictions->needs_filtering(*_schema)
+        // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
+        // A single token restriction can have multiple matching partition key values.
+        // Because of this we can't create a clustering prefix with more than token restriction.
+        || (_uses_secondary_indexing && has_token(_partition_key_restrictions->expression));
     }
 
     /**
@@ -483,6 +496,10 @@ public:
 
     /// Calculates clustering ranges for querying a global-index table.
     std::vector<query::clustering_range> get_global_index_clustering_ranges(
+            const query_options& options, const schema& idx_tbl_schema) const;
+
+    /// Calculates clustering ranges for querying a global-index table for queries with token restrictions present.
+    std::vector<query::clustering_range> get_global_index_token_clustering_ranges(
             const query_options& options, const schema& idx_tbl_schema) const;
 };
 

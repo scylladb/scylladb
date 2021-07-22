@@ -1158,6 +1158,10 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
         if (single_pk_restrictions && single_pk_restrictions->is_all_eq()) {
             partition_slice_builder.with_ranges(
                     _restrictions->get_global_index_clustering_ranges(options, *_view_schema));
+        } else if (_restrictions->has_token_restrictions()) {
+            // Restrictions like token(p1, p2) < 0 have all partition key components restricted, but require special handling.
+            partition_slice_builder.with_ranges(
+                    _restrictions->get_global_index_token_clustering_ranges(options, *_view_schema));
         }
     }
 

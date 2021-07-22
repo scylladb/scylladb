@@ -1068,6 +1068,112 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     return ck_ranges;
 }
 
+// In old v1 indexes the token column was of type blob.
+// This causes problems because blobs are sorted differently than the bigint token values that they represent.
+// Tokens are encoded as 8 byte big endian two's complement signed integers,
+// which with blob sorting makes them ordered like this:
+// 0, 1, 2, 3, 4, 5, ..., bigint_max, bigint_min, ...., -5, -4, -3, -2, -1
+// Because of this clustering restrictions like token(p) > -4 and token(p) < 4 need to be translated
+// to two clustering ranges on the old index.
+// All binary_operators in token_restriction must have column_value{token_column} as their LHS.
+static std::vector<query::clustering_range> get_index_v1_token_range_clustering_bounds(
+        const query_options& options,
+        const column_definition& token_column,
+        const expression& token_restriction) {
+
+    // A workaround in order to make possible_lhs_values work properly.
+    // possible_lhs_values looks at the column type and uses this type's comparator.
+    // This is a problem because when using blob's comparator, -4 is greater than 4.
+    // This makes possible_lhs_values think that an expression like token(p) > -4 and token(p) < 4
+    // is impossible to fulfill.
+    // Create a fake token column with the type set to bigint, translate the restriction to use this column
+    // and use this restriction to calculate possible lhs values.
+    column_definition token_column_bigint = token_column;
+    token_column_bigint.type = long_type;
+    expression new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
+
+    std::variant<value_list, nonwrapping_range<managed_bytes>> values =
+        possible_lhs_values(&token_column_bigint, new_token_restrictions, options);
+
+    return std::visit(overloaded_functor {
+        [](const value_list& list) {
+            std::vector<query::clustering_range> ck_ranges;
+            ck_ranges.reserve(list.size());
+
+            for (auto&& value : list) {
+                ck_ranges.emplace_back(query::clustering_range::make_singular(std::vector<managed_bytes>{value}));
+            }
+
+            return ck_ranges;
+        },
+        [](const nonwrapping_interval<managed_bytes>& range) {
+            auto int64_from_be_bytes = [](const managed_bytes& int_bytes) -> int64_t {
+                if (int_bytes.size() != 8) {
+                    throw std::runtime_error("token restriction value should be 8 bytes");
+                }
+
+                return read_be<int64_t>((const char*)&int_bytes[0]);
+            };
+
+            auto int64_to_be_bytes = [](int64_t int_val) -> managed_bytes {
+                managed_bytes int_bytes(managed_bytes::initialized_later{}, 8);
+                write_be((char*)&int_bytes[0], int_val);
+                return int_bytes;
+            };
+
+            int64_t token_low = std::numeric_limits<int64_t>::min();
+            int64_t token_high = std::numeric_limits<int64_t>::max();
+            bool low_inclusive = true, high_inclusive = true;
+
+            const std::optional<interval_bound<managed_bytes>>& start = range.start();
+            const std::optional<interval_bound<managed_bytes>>& end = range.end();
+
+            if (start.has_value()) {
+                token_low = int64_from_be_bytes(start->value());
+                low_inclusive = start->is_inclusive();
+            }
+
+            if (end.has_value()) {
+                token_high = int64_from_be_bytes(end->value());
+                high_inclusive = end->is_inclusive();
+            }
+
+            query::clustering_range::bound lower_bound(std::vector{int64_to_be_bytes(token_low)}, low_inclusive);
+            query::clustering_range::bound upper_bound(std::vector{int64_to_be_bytes(token_high)}, high_inclusive);
+
+            std::vector<query::clustering_range> ck_ranges;
+
+            if (token_high < token_low) {
+                // Impossible range, return empty clustering ranges
+                return ck_ranges;
+            }
+
+            // Blob encoded tokens are sorted like this:
+            // 0, 1, 2, 3, 4, 5, ..., bigint_max, bigint_min, ...., -5, -4, -3, -2, -1
+            // This means that in cases where low >= 0 or high < 0 we can simply use the whole range.
+            // In other cases we have to take two ranges: (low, -1] and [0, high).
+            if (token_low >= 0 || token_high < 0) {
+                ck_ranges.emplace_back(std::move(lower_bound), std::move(upper_bound));
+            } else {
+                query::clustering_range::bound zero_bound(std::vector{int64_to_be_bytes(0)});
+                query::clustering_range::bound min1_bound(std::vector{int64_to_be_bytes(-1)});
+
+                ck_ranges.reserve(2);
+
+                if (!(token_high == 0 && !high_inclusive)) {
+                    ck_ranges.emplace_back(std::move(zero_bound), std::move(upper_bound));
+                }
+
+                if (!(token_low == -1 && !low_inclusive)) {
+                    ck_ranges.emplace_back(std::move(lower_bound), std::move(min1_bound));
+                }
+            }
+
+            return ck_ranges;
+        }
+    }, values);
+}
+
 using opt_bound = std::optional<query::clustering_range::bound>;
 
 /// Makes a partial bound out of whole_bound's prefix.  If the partial bound is strictly shorter than the whole, it is
@@ -1253,6 +1359,18 @@ bool token_known(const statement_restrictions& r) {
 bool statement_restrictions::need_filtering() const {
     using namespace expr;
 
+    if (_uses_secondary_indexing && has_token(_partition_key_restrictions->expression)) {
+        // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
+        // All other restrictions must be on clustering or regular columns.
+        int64_t non_pk_restrictions_count = _clustering_columns_restrictions->size();
+        non_pk_restrictions_count += _nonprimary_key_restrictions->size();
+
+        // We are querying using an index, one restriction goes to the index restriction.
+        // If there are some restrictions other than token() and index column then we need to do filtering.
+        // p1, p2 can have many different values, so clustering prefix breaks.
+        return non_pk_restrictions_count > 1;
+    }
+
     const auto npart = _partition_key_restrictions->size();
     if (npart > 0 && npart < _schema->partition_key_size()) {
         // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
@@ -1355,6 +1473,19 @@ void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool 
     if (is_local || !_partition_range_is_simple) {
         return;
     }
+
+    const column_definition* token_column = &idx_tbl_schema.clustering_column_at(0);
+
+    if (has_token(_partition_key_restrictions->expression)) {
+        // When there is a token(p1, p2) >/</= ? restriction, it is not allowed to have restrictions on p1 or p2.
+        // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
+        // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
+        expr::expression token_restriction = replace_token(_partition_key_restrictions->expression, token_column);
+        _idx_tbl_ck_prefix = std::vector{std::move(token_restriction)};
+
+        return;
+    }
+
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
     _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
@@ -1376,7 +1507,6 @@ void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool 
         const auto col = std::get<column_value>(*any_binop->lhs).col;
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
-    auto token_column = &idx_tbl_schema.clustering_column_at(0);
     (*_idx_tbl_ck_prefix)[0] = binary_operator(
             column_value(token_column),
             oper_t::EQ,
@@ -1416,6 +1546,26 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     // overwritten.
     const_cast<::shared_ptr<term>&>(std::get<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
             ::make_shared<constants::value>(raw_value::make_value(*token_bytes));
+    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
+}
+
+std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
+    const query_options& options,
+    const schema& idx_tbl_schema
+) const {
+    if (!_idx_tbl_ck_prefix.has_value()) {
+        on_internal_error(
+                rlogger, "statement_restrictions::get_global_index_token_clustering_ranges called with unprepared index");
+    }
+
+    const column_definition& token_column = idx_tbl_schema.clustering_column_at(0);
+
+    // In old indexes the token column was of type blob.
+    // This causes problems with sorting and must be handled separately.
+    if (token_column.type != long_type) {
+        return get_index_v1_token_range_clustering_bounds(options, token_column, _idx_tbl_ck_prefix->at(0));
+    }
+
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
 }
 

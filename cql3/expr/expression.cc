@@ -903,6 +903,27 @@ expression replace_column_def(const expression& expr, const column_definition* n
         }, expr);
 }
 
+expression replace_token(const expression& expr, const column_definition* new_cdef) {
+    return std::visit(overloaded_functor{
+            [] (bool b) { return expression(b); },
+            [&] (const conjunction& conj) {
+                const auto applied = conj.children | transformed(
+                        std::bind(replace_token, std::placeholders::_1, new_cdef));
+                return expression(conjunction{std::vector(applied.begin(), applied.end())});
+            },
+            [&] (const binary_operator& oper) {
+                return expression(binary_operator(replace_token(*oper.lhs, new_cdef), oper.op, oper.rhs));
+            },
+            [&] (const column_value&) {
+                return expr;
+            },
+            [&] (const column_value_tuple&) -> expression {
+                throw std::logic_error(format("replace_token invalid with column tuple: {}", to_string(expr)));
+            },
+            [&] (const token&) -> expression { return column_value{new_cdef}; }
+        }, expr);
+}
+
 std::ostream& operator<<(std::ostream& s, oper_t op) {
     switch (op) {
     case oper_t::EQ:
