@@ -22,6 +22,7 @@
 #include "transport/controller.hh"
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
+#include "service/storage_service.hh" // temporary
 #include "db/config.hh"
 #include "gms/gossiper.hh"
 #include "log.hh"
@@ -152,6 +153,11 @@ future<> controller::do_start_server() {
         cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller)).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
+        subscribe_server(*cserver).get();
+        auto on_error_unsub = defer([this, &cserver] {
+            unsubscribe_server(*cserver).get();
+        });
+
         parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
             return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
                 logger.info("Starting listening for CQL clients on {} ({}, {})"
@@ -163,6 +169,7 @@ future<> controller::do_start_server() {
         set_cql_ready(true).get();
 
         on_error.cancel();
+        on_error_unsub.cancel();
         _server = std::move(cserver);
     });
 }
@@ -195,13 +202,31 @@ future<> controller::do_stop_server() {
     return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).finally([&cserver] {
-                return cserver->stop().then([] {
-                    logger.info("CQL server stopped");
+            return set_cql_ready(false).finally([this, &cserver] {
+                return unsubscribe_server(*cserver).then([&cserver] {
+                    return cserver->stop().then([] {
+                        logger.info("CQL server stopped");
+                    });
                 });
             });
         }
         return make_ready_future<>();
+    });
+}
+
+future<> controller::subscribe_server(sharded<cql_server>& server) {
+    return server.invoke_on_all([this] (cql_server& server) {
+        _mnotifier.local().register_listener(server.get_migration_listener());
+        service::get_local_storage_service().register_subscriber(server.get_lifecycle_listener());
+        return make_ready_future<>();
+    });
+}
+
+future<> controller::unsubscribe_server(sharded<cql_server>& server) {
+    return server.invoke_on_all([this] (cql_server& server) {
+        return _mnotifier.local().unregister_listener(server.get_migration_listener()).then([this, &server]{
+            return service::get_local_storage_service().unregister_subscriber(server.get_lifecycle_listener());
+        });
     });
 }
 

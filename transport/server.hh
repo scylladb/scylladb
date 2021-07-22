@@ -171,6 +171,8 @@ public:
             qos::service_level_controller& sl_controller);
 public:
     using response = cql_transport::response;
+    service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
+    service::migration_listener* get_migration_listener() const noexcept;
 private:
     class fmt_visitor;
     friend class connection;
@@ -328,4 +330,6 @@ public:
     virtual void on_down(const gms::inet_address& endpoint) override;
 };
 
+inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }
+inline service::migration_listener* cql_server::get_migration_listener() const noexcept { return _notifier.get(); }
 }

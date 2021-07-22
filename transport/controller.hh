@@ -57,6 +57,9 @@ class controller {
     future<> do_start_server();
     future<> do_stop_server();
 
+    future<> subscribe_server(sharded<cql_server>& server);
+    future<> unsubscribe_server(sharded<cql_server>& server);
+
 public:
     controller(sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&,
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
