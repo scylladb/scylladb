@@ -91,7 +91,7 @@ private:
     std::optional<promise<>> _stepdown_promise;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
-    queue<std::vector<log_entry_ptr>> _apply_entries = queue<std::vector<log_entry_ptr>>(10);
+    queue<std::variant<std::vector<log_entry_ptr>, snapshot>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot>>(10);
 
     struct stats {
         uint64_t add_command = 0;
@@ -488,13 +488,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 // If this is locally generated snapshot there is no need to
                 // load it.
                 if (_last_loaded_snapshot_id != batch.snp->id) {
-                    // Apply it to the state machine
-                    logger.trace("[{}] io_fiber applying snapshot {}", _id, batch.snp->id);
-                    co_await _state_machine->load_snapshot(batch.snp->id);
-                    _state_machine->drop_snapshot(_last_loaded_snapshot_id);
-                    drop_waiters(batch.snp->idx);
-                    _last_loaded_snapshot_id = batch.snp->id;
-                    _stats.sm_load_snapshot++;
+                    co_await _apply_entries.push_eventually(std::move(*batch.snp));
                 }
             }
 
@@ -618,38 +612,51 @@ future<> server_impl::applier_fiber() {
 
     try {
         while (true) {
-            auto batch = co_await _apply_entries.pop_eventually();
+            auto v = co_await _apply_entries.pop_eventually();
 
-            applied_since_snapshot += batch.size();
+            if (std::holds_alternative<std::vector<log_entry_ptr>>(v)) {
+                auto& batch = std::get<0>(v);
 
-            std::vector<command_cref> commands;
-            commands.reserve(batch.size());
+                applied_since_snapshot += batch.size();
 
-            index_t last_idx = batch.back()->idx;
+                std::vector<command_cref> commands;
+                commands.reserve(batch.size());
 
-            boost::range::copy(
-                    batch |
-                    boost::adaptors::filtered([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
-                    boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
-                    std::back_inserter(commands));
+                index_t last_idx = batch.back()->idx;
 
-            auto size = commands.size();
-            if (size) {
-               co_await _state_machine->apply(std::move(commands));
-               _stats.applied_entries += size;
-            }
-            notify_waiters(_awaited_applies, batch);
+                boost::range::copy(
+                       batch |
+                       boost::adaptors::filtered([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
+                       boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
+                       std::back_inserter(commands));
 
-            if (applied_since_snapshot >= _config.snapshot_threshold) {
-                snapshot snp;
-                snp.term = get_current_term();
-                snp.idx = last_idx;
-                logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
-                snp.id = co_await _state_machine->take_snapshot();
+               auto size = commands.size();
+                if (size) {
+                  co_await _state_machine->apply(std::move(commands));
+                  _stats.applied_entries += size;
+                }
+               notify_waiters(_awaited_applies, batch);
+
+               if (applied_since_snapshot >= _config.snapshot_threshold) {
+                   snapshot snp;
+                   snp.term = get_current_term();
+                   snp.idx = last_idx;
+                   logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                   snp.id = co_await _state_machine->take_snapshot();
+                   _last_loaded_snapshot_id = snp.id;
+                   _fsm->apply_snapshot(snp, _config.snapshot_trailing);
+                   applied_since_snapshot = 0;
+                   _stats.snapshots_taken++;
+               }
+            } else {
+                snapshot& snp = std::get<1>(v);
+                // Apply snapshot it to the state machine
+                logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
+                co_await _state_machine->load_snapshot(snp.id);
+                _state_machine->drop_snapshot(_last_loaded_snapshot_id);
+                drop_waiters(snp.idx);
                 _last_loaded_snapshot_id = snp.id;
-                _fsm->apply_snapshot(snp, _config.snapshot_trailing);
-                applied_since_snapshot = 0;
-                _stats.snapshots_taken++;
+                _stats.sm_load_snapshot++;
             }
         }
     } catch(stop_apply_fiber& ex) {
