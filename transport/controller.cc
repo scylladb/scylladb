@@ -64,7 +64,7 @@ future<> controller::do_start_server() {
     }
 
     return seastar::async([this] {
-        auto cserver = std::make_unique<distributed<cql_transport::cql_server>>();
+        auto cserver = std::make_unique<sharded<cql_server>>();
 
         auto& cfg = _config;
         auto addr = cfg.rpc_address();
@@ -72,7 +72,7 @@ future<> controller::do_start_server() {
         auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
-        cql_transport::cql_server_config cql_server_config;
+        cql_server_config cql_server_config;
         cql_server_config.timeout_config = make_timeout_config(cfg);
         cql_server_config.max_request_size = _mem_limiter.local().total_memory();
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
@@ -160,7 +160,7 @@ future<> controller::do_start_server() {
         });
 
         parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
-            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
+            return cserver->invoke_on_all(&cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
                 logger.info("Starting listening for CQL clients on {} ({}, {})"
                         , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
                 );
@@ -200,7 +200,7 @@ future<> controller::stop_server() {
 }
 
 future<> controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
+    return do_with(std::move(_server), [this] (std::unique_ptr<sharded<cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
             return set_cql_ready(false).finally([this, &cserver] {

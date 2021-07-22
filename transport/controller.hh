@@ -22,12 +22,11 @@
 #pragma once
 
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
 using namespace seastar;
 
-namespace cql_transport { class cql_server; }
 namespace auth { class service; }
 namespace service {
     class migration_notifier;
@@ -41,8 +40,9 @@ namespace db { class config; }
 
 namespace cql_transport {
 
+class cql_server;
 class controller {
-    std::unique_ptr<distributed<cql_transport::cql_server>> _server;
+    std::unique_ptr<sharded<cql_server>> _server;
     semaphore _ops_sem; /* protects start/stop operations on _server */
     bool _stopped = false;
 
