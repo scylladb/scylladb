@@ -367,6 +367,7 @@ class index_reader {
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
     shared_index_lists _index_lists;
+    future<> _background_closes = make_ready_future<>();
 
     struct reader {
         index_consumer _consumer;
@@ -472,6 +473,16 @@ private:
         };
 
         return _index_lists.get_or_load(summary_idx, loader).then([this, &bound, summary_idx] (shared_index_lists::list_ptr ref) {
+            // to make sure list is not closed when another bound is still using it, index list will only be closed when there's only one owner holding it
+            if (bound.current_list && bound.current_list.use_count() == 1) {
+                // a new background close will only be initiated when previous ones terminate, so as to limit the concurrency.
+                _background_closes = _background_closes.then_wrapped([current_list = std::move(bound.current_list)] (future<>&& f) mutable {
+                    f.ignore_ready_future();
+                    return do_with(std::move(current_list), [] (shared_index_lists::list_ptr& current_list) mutable {
+                        return close_index_list(current_list);
+                    });
+                });
+            }
             bound.current_list = std::move(ref);
             bound.current_summary_idx = summary_idx;
             bound.current_index_idx = 0;
@@ -841,6 +852,8 @@ public:
                 return close_index_list(_upper_bound->current_list);
             }
             return make_ready_future<>();
+        }).then([this] () mutable {
+            return std::move(_background_closes);
         });
     }
 };

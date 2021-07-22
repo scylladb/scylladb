@@ -173,6 +173,10 @@ public:
             return res;
         }
 
+        long use_count() const noexcept {
+            return _e ? _e.use_count() : 0;
+        }
+
         friend class loading_shared_values;
     };
 
