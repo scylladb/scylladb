@@ -324,7 +324,6 @@ public:
     future<> start_all();
     future<> stop_all();
     future<> wait_all();
-    void tick_all();
     void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
     void connect_all();
     void elapse_elections();
@@ -811,13 +810,6 @@ template <typename Clock>
 future<> raft_cluster<Clock>::wait_all() {
     for (auto s: _in_configuration) {
         co_await _servers[s].sm->done();
-    }
-}
-
-template <typename Clock>
-void raft_cluster<Clock>::tick_all() {
-    for (auto s: _in_configuration) {
-        _servers[s].server->tick();
     }
 }
 
