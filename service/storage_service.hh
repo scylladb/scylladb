@@ -333,7 +333,7 @@ private:
     drain_progress _drain_progress{};
 
 
-    atomic_vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
+    endpoint_lifecycle_notifier _lifecycle_notifier;
 
     std::unordered_set<token> _bootstrap_tokens;
 
@@ -904,10 +904,6 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    future<> do_notify_down(inet_address endpoint);
-    future<> do_notify_left(inet_address endpoint);
-    future<> do_notify_up(inet_address endpoint);
-    future<> do_notify_joined(inet_address endpoint);
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
     void notify_up(inet_address endpoint);
