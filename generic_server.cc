@@ -123,8 +123,6 @@ future<> server::stop() {
             _logger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
-        return on_stop();
-    }).then([this] {
         return std::move(_stopped);
     });
 }
@@ -202,11 +200,6 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             return stop_iteration::no;
         });
     });
-}
-
-future<>
-server::on_stop() {
-    return make_ready_future<>();
 }
 
 future<>

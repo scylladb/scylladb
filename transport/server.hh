@@ -165,7 +165,7 @@ private:
     qos::service_level_controller& _sl_controller;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
-            service::migration_notifier& mn, service::memory_limiter& ml,
+            service::memory_limiter& ml,
             cql_server_config config,
             const db::config& db_cfg,
             qos::service_level_controller& sl_controller);
@@ -274,7 +274,6 @@ private:
 
 private:
     shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
-    future<> on_stop() override;
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
@@ -288,8 +287,6 @@ class cql_server::event_notifier : public service::migration_listener,
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
-    service::migration_notifier& _mnotifier;
-    bool _stopped = false;
 
     // We want to delay sending NEW_NODE CQL event to clients until the new node
     // has started listening for CQL requests.
@@ -297,9 +294,6 @@ class cql_server::event_notifier : public service::migration_listener,
 
     void send_join_cluster(const gms::inet_address& endpoint);
 public:
-    future<> stop();
-    event_notifier(service::migration_notifier& mn);
-    ~event_notifier();
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 

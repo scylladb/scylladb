@@ -152,14 +152,14 @@ event::event_type parse_event_type(const sstring& value)
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        service::migration_notifier& mn, service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg, qos::service_level_controller& sl_controller)
+        service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg, qos::service_level_controller& sl_controller)
     : server("CQLServer", clogger)
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
     , _max_concurrent_requests(db_cfg.max_concurrent_requests_per_shard)
     , _memory_available(ml.get_semaphore())
-    , _notifier(std::make_unique<event_notifier>(mn))
+    , _notifier(std::make_unique<event_notifier>())
     , _auth_service(auth_service)
     , _sl_controller(sl_controller)
 {
@@ -237,10 +237,6 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     }
 
     _metrics.add_group("transport", std::move(transport_metrics));
-}
-
-future<> cql_server::on_stop() {
-    return _notifier->stop();
 }
 
 shared_ptr<generic_server::connection>

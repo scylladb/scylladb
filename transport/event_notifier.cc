@@ -29,21 +29,6 @@ namespace cql_transport {
 
 static logging::logger elogger("event_notifier");
 
-cql_server::event_notifier::event_notifier(service::migration_notifier& mn) : _mnotifier(mn)
-{
-    (void)_mnotifier;
-}
-
-cql_server::event_notifier::~event_notifier()
-{
-    assert(_stopped);
-}
-
-future<> cql_server::event_notifier::stop() {
-    _stopped = true;
-    return make_ready_future<>();
-}
-
 void cql_server::event_notifier::register_event(event::event_type et, cql_server::connection* conn)
 {
     switch (et) {
