@@ -35,16 +35,19 @@ static logging::logger logger("cql_server_controller");
 
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         gms::gossiper& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
-        sharded<qos::service_level_controller>& sl_controller, const db::config& cfg)
+        sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
+        const db::config& cfg)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
+    , _lifecycle_notifier(elc_notif)
     , _gossiper(gossiper)
     , _qp(qp)
     , _mem_limiter(ml)
     , _sl_controller(sl_controller)
     , _config(cfg)
 {
+    (void)_lifecycle_notifier;
 }
 
 future<> controller::start_server() {

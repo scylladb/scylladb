@@ -31,6 +31,7 @@ namespace cql_transport { class cql_server; }
 namespace auth { class service; }
 namespace service {
     class migration_notifier;
+    class endpoint_lifecycle_notifier;
     class memory_limiter;
 }
 namespace gms { class gossiper; }
@@ -47,6 +48,7 @@ class controller {
 
     sharded<auth::service>& _auth_service;
     sharded<service::migration_notifier>& _mnotifier;
+    sharded<service::endpoint_lifecycle_notifier>& _lifecycle_notifier;
     gms::gossiper& _gossiper;
     sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _mem_limiter;
@@ -63,7 +65,8 @@ class controller {
 public:
     controller(sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&,
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
-            sharded<qos::service_level_controller>&, const db::config& cfg);
+            sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
+            const db::config& cfg);
     future<> start_server();
     future<> stop_server();
     future<> stop();
