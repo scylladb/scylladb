@@ -263,8 +263,10 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
         if (is_prevote) {
+            logger.trace("become_candidate[{}] won prevote", _my_id);
             become_candidate(false);
         } else {
+            logger.trace("become_candidate[{}] won vote", _my_id);
             become_leader();
         }
     }
@@ -770,8 +772,10 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
         break;
     case vote_result::WON:
         if (state.is_prevote) {
+            logger.trace("request_vote_reply[{}] won prevote", _my_id);
             become_candidate(false);
         } else {
+            logger.trace("request_vote_reply[{}] won vote", _my_id);
             become_leader();
         }
         break;
