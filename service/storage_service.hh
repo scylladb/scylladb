@@ -229,6 +229,7 @@ public:
         sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
         raft_group_registry& raft_gr,
+        endpoint_lifecycle_notifier& elc_notif,
         /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
@@ -333,7 +334,7 @@ private:
     drain_progress _drain_progress{};
 
 
-    endpoint_lifecycle_notifier _lifecycle_notifier;
+    endpoint_lifecycle_notifier& _lifecycle_notifier;
 
     std::unordered_set<token> _bootstrap_tokens;
 
@@ -926,7 +927,8 @@ future<> init_storage_service(sharded<abort_source>& abort_sources,
     sharded<netw::messaging_service>& ms,
     sharded<cdc::generation_service>&,
     sharded<repair_service>& repair,
-    sharded<raft_group_registry>& raft_gr);
+    sharded<raft_group_registry>& raft_gr,
+    sharded<endpoint_lifecycle_notifier>& elc_notif);
 future<> deinit_storage_service();
 
 }

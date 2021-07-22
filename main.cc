@@ -79,6 +79,7 @@
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
 #include "service/memory_limiter.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 
 #include "redis/service.hh"
 #include "cdc/log.hh"
@@ -487,6 +488,7 @@ int main(int ac, char** av) {
 
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
+    sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
@@ -534,7 +536,7 @@ int main(int ac, char** av) {
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &ss] {
+                &repair, &ss, &lifecycle_notifier] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -746,6 +748,13 @@ int main(int ac, char** av) {
                 mm_notifier.stop().get();
             });
 
+            supervisor::notify("starting lifecycle notifier");
+            lifecycle_notifier.start().get();
+            // storage_service references this notifier and is not stopped yet
+            // auto stop_lifecycle_notifier = defer_verbose_shutdown("lifecycle notifier", [ &lifecycle_notifier ] {
+            //     lifecycle_notifier.stop().get();
+            // });
+
             supervisor::notify("creating tracing");
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
@@ -883,7 +892,7 @@ int main(int ac, char** av) {
                 db, gossiper, sys_dist_ks, view_update_generator,
                 feature_service, sscfg, mm, token_metadata,
                 messaging, cdc_generation_service, repair,
-                raft_gr).get();
+                raft_gr, lifecycle_notifier).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();

@@ -46,6 +46,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 #include "auth/service.hh"
 #include "auth/common.hh"
 #include "db/config.hh"
@@ -485,6 +486,10 @@ public:
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
 
+            sharded<service::endpoint_lifecycle_notifier> elc_notif;
+            elc_notif.start().get();
+            auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
+
             sharded<auth::service> auth_service;
 
             set_abort_on_internal_error(true);
@@ -549,7 +554,7 @@ public:
                 std::ref(token_metadata), std::ref(ms),
                 std::ref(cdc_generation_service),
                 std::ref(repair),
-                std::ref(raft_gr),
+                std::ref(raft_gr), std::ref(elc_notif),
                 true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 

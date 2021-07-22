@@ -115,6 +115,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<cdc::generation_service>& cdc_gen_service,
     sharded<repair_service>& repair,
     raft_group_registry& raft_gr,
+    endpoint_lifecycle_notifier& elc_notif,
     bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -128,6 +129,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
         , _cdc_gen_service(cdc_gen_service)
+        , _lifecycle_notifier(elc_notif)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
@@ -3818,7 +3820,8 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
         sharded<netw::messaging_service>& ms,
         sharded<cdc::generation_service>& cdc_gen_service,
         sharded<repair_service>& repair,
-        sharded<service::raft_group_registry>& raft_gr) {
+        sharded<service::raft_group_registry>& raft_gr,
+        sharded<service::endpoint_lifecycle_notifier>& elc_notif) {
     return
         service::get_storage_service().start(std::ref(abort_source),
             std::ref(db), std::ref(gossiper),
@@ -3828,7 +3831,8 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
             std::ref(stm), std::ref(ms),
             std::ref(cdc_gen_service),
             std::ref(repair),
-            std::ref(raft_gr));
+            std::ref(raft_gr),
+            std::ref(elc_notif));
 }
 
 future<> deinit_storage_service() {
