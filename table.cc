@@ -2010,7 +2010,7 @@ table::query(schema_ptr s,
             querier_opt = {};
         }
         if (ex) {
-            std::rethrow_exception(std::move(ex));
+            co_return coroutine::exception(std::move(ex));
         }
     }
 
@@ -2067,7 +2067,7 @@ table::mutation_query(schema_ptr s,
     ex = std::current_exception();
   }
     co_await q.close();
-    std::rethrow_exception(std::move(ex));
+    co_return coroutine::exception(std::move(ex));
 }
 
 mutation_source
