@@ -38,6 +38,7 @@
 #include "range_tombstone_splitter.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <stdexcept>
+#include <seastar/core/coroutine.hh>
 
 #include "clustering_key_filter.hh"
 
@@ -970,6 +971,104 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
         }
     }
     return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
+}
+
+flat_mutation_reader
+make_slicing_filtering_reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice) {
+    class reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _rd;
+        const dht::partition_range* _pr;
+        const query::partition_slice* _slice;
+        dht::ring_position_comparator _cmp;
+        std::optional<clustering_ranges_walker> _ranges_walker;
+        std::optional<range_tombstone_splitter> _splitter;
+
+    public:
+        reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice)
+            : flat_mutation_reader::impl(rd.schema(), rd.permit())
+            , _rd(std::move(rd))
+            , _pr(&pr)
+            , _slice(&slice)
+            , _cmp(*_schema) {
+        }
+
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            const auto consume_fn = [this] (mutation_fragment mf) {
+                push_mutation_fragment(std::move(mf));
+            };
+
+            while (!is_buffer_full() && !is_end_of_stream()) {
+                co_await _rd.fill_buffer(timeout);
+                while (!_rd.is_buffer_empty()) {
+                    auto mf = _rd.pop_mutation_fragment();
+                    switch (mf.mutation_fragment_kind()) {
+                    case mutation_fragment::kind::partition_start: {
+                        auto& dk = mf.as_partition_start().key();
+                        if (!_pr->contains(dk, _cmp)) {
+                            co_return co_await _rd.next_partition();
+                        } else {
+                            _ranges_walker.emplace(*_schema, _slice->row_ranges(*_schema, dk.key()), false);
+                            _splitter.emplace(*_schema, _permit, *_ranges_walker);
+                        }
+                        // fall-through
+                    }
+
+                    case mutation_fragment::kind::static_row:
+                        consume_fn(std::move(mf));
+                        break;
+
+                    case mutation_fragment::kind::partition_end:
+                        _splitter->flush(position_in_partition::after_all_clustered_rows(), consume_fn);
+                        consume_fn(std::move(mf));
+                        break;
+
+                    case mutation_fragment::kind::clustering_row:
+                        _splitter->flush(mf.position(), consume_fn);
+                        if (_ranges_walker->advance_to(mf.position())) {
+                            consume_fn(std::move(mf));
+                        }
+                        break;
+
+                    case mutation_fragment::kind::range_tombstone:
+                        auto&& rt = mf.as_range_tombstone();
+                        _splitter->consume(rt, consume_fn);
+                        break;
+                    }
+                }
+                
+                _end_of_stream = _rd.is_end_of_stream();
+                co_return;
+            }
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _end_of_stream = false;
+                return _rd.next_partition();
+            }
+
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _rd.fast_forward_to(pr, timeout);
+        }
+
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            forward_buffer_to(pr.start());
+            _end_of_stream = false;
+            return _rd.fast_forward_to(std::move(pr), timeout);
+        }
+
+        virtual future<> close() noexcept override {
+            return _rd.close();
+        }
+    };
+
+    return make_flat_mutation_reader<reader>(std::move(rd), pr, slice);
 }
 
 /*

@@ -618,8 +618,8 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
     }
 }
 
-future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
-    return seastar::async([&db] {
+future<> distributed_loader::init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss) {
+    return seastar::async([&db, &ss] {
         // We need to init commitlog on shard0 before it is inited on other shards
         // because it obtains the list of pre-existing segments for replay, which must
         // not include reserve segments created by active commitlogs.
@@ -633,8 +633,8 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
             return db.init_commitlog();
         }).get();
 
-        db.invoke_on_all([] (database& db) {
-            return db::system_keyspace::make(db);
+        db.invoke_on_all([&ss] (database& db) {
+            return db::system_keyspace::make(db, ss.local());
         }).get();
 
         const auto& cfg = db.local().get_config();

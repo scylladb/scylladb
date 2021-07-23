@@ -24,10 +24,11 @@
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
+#include "gms/inet_address.hh"
 
 namespace dht {
 struct endpoint_details {
-    sstring _host;
+    gms::inet_address _host;
     sstring _datacenter;
     sstring _rack;
 };

@@ -947,7 +947,7 @@ int main(int ac, char** av) {
             // Iteration through column family directory for sstable loading is
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
-            distributed_loader::init_system_keyspace(db).get();
+            distributed_loader::init_system_keyspace(db, ss).get();
 
             supervisor::notify("starting gossip");
             // Moved local parameters here, esp since with the

@@ -80,7 +80,7 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     r.rpc_endpoints = d._rpc_endpoints;
     for (auto det : d._endpoint_details) {
         ss::endpoint_detail ed;
-        ed.host = det._host;
+        ed.host = boost::lexical_cast<std::string>(det._host);
         ed.datacenter = det._datacenter;
         if (det._rack != "") {
             ed.rack = det._rack;
