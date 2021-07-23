@@ -35,6 +35,7 @@
 #include "range.hh"
 #include "seastarx.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/variant_element.hh"
 
 class row;
 
@@ -72,6 +73,9 @@ class unresolved_identifier;
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier>;
 
+template <typename T>
+concept ExpressionElement = utils::VariantElement<T, expression>;
+
 // An expression variant element can't contain an expression by value, since the size of the variant
 // will be infinite. `nested_expression` contains an expression indirectly, but has value semantics and
 // is copyable.
@@ -80,6 +84,8 @@ class nested_expression {
 public:
     // not explicit, an expression _is_ a nested expression
     nested_expression(expression e);
+    // not explicit, an ExpressionElement _is_ an expression
+    nested_expression(ExpressionElement auto e);
     nested_expression(const nested_expression&);
     nested_expression(nested_expression&&) = default;
     nested_expression& operator=(const nested_expression&);
@@ -331,6 +337,9 @@ column_value_tuple::column_value_tuple(Range r)
         : column_value_tuple(std::vector<column_value>(r.begin(), r.end())) {
 }
 
+nested_expression::nested_expression(ExpressionElement auto e)
+        : nested_expression(expression(std::move(e))) {
+}
 
 } // namespace expr
 
