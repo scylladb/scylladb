@@ -70,22 +70,10 @@ nested_expression::operator=(const nested_expression& o) {
 }
 
 binary_operator::binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order)
-            : lhs(std::make_unique<expression>(std::move(lhs)))
+            : lhs(std::move(lhs))
             , op(op)
             , rhs(std::move(rhs))
             , order(order) {
-}
-
-binary_operator::binary_operator(const binary_operator& x) : binary_operator(*x.lhs, x.op, x.rhs, x.order) {
-}
-
-binary_operator&
-binary_operator::operator=(const binary_operator& x) {
-    *lhs = *x.lhs;
-    op = x.op;
-    rhs = x.rhs;
-    order = x.order;
-    return *this;
 }
 
 // Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
@@ -913,7 +901,7 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = std::get_if<column_value_tuple>(b.lhs.get())) {
+    if (auto tuple = std::get_if<column_value_tuple>(&*b.lhs)) {
         return boost::algorithm::any_of(tuple->elements, [] (const column_value& v) { return v.sub; });
     }
     return false;

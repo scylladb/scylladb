@@ -127,17 +127,12 @@ enum class comparison_order : char {
 
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
-    std::unique_ptr<expression> lhs;
+    nested_expression lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
     comparison_order order;
 
     binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order = comparison_order::cql);
-
-    binary_operator(const binary_operator& x);
-    binary_operator& operator=(const binary_operator&);
-    binary_operator(binary_operator&& x) = default;
-    binary_operator& operator=(binary_operator&& x) = default;
 };
 
 /// A conjunction of restrictions.

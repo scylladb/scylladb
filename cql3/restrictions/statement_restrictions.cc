@@ -690,7 +690,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     size_t product_size = 1;
     for (const auto& e : expressions) {
         if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
-            if (auto cv = std::get_if<expr::column_value>(arbitrary_binop->lhs.get())) {
+            if (auto cv = std::get_if<expr::column_value>(&*arbitrary_binop->lhs)) {
                 const value_set vals = possible_lhs_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
