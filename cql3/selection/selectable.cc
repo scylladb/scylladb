@@ -125,19 +125,6 @@ selectable::with_field_selection::to_string() const {
     return format("{}.{}", _selected->to_string(), _field->to_string());
 }
 
-shared_ptr<selectable>
-selectable::with_field_selection::raw::prepare(const schema& s) const {
-    // static_pointer_cast<> needed due to lack of covariant return type
-    // support with smart pointers
-    return make_shared<with_field_selection>(_selected->prepare(s),
-            static_pointer_cast<column_identifier>(_field->prepare(s)));
-}
-
-bool
-selectable::with_field_selection::raw::processes_selection() const {
-    return true;
-}
-
 shared_ptr<selector::factory>
 selectable::with_cast::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     std::vector<shared_ptr<selectable>> args{_arg};
@@ -210,6 +197,12 @@ selectable::with_expression::raw::prepare(const schema& s) const {
         [&] (const expr::cast& c) -> shared_ptr<selectable> {
             return ::make_shared<selectable::with_cast>(c.arg->prepare(s), c.type);
         },
+        [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
+            // static_pointer_cast<> needed due to lack of covariant return type
+            // support with smart pointers
+            return make_shared<with_field_selection>(fs.structure->prepare(s),
+                    static_pointer_cast<column_identifier>(fs.field->prepare(s)));
+        },
     }, _expr);
 }
 
@@ -248,6 +241,9 @@ selectable::with_expression::raw::processes_selection() const {
             return true;
         },
         [&] (const expr::cast& c) -> bool {
+            return true;
+        },
+        [&] (const expr::field_selection& fs) -> bool {
             return true;
         },
     }, _expr);

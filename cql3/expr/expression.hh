@@ -80,10 +80,12 @@ class unresolved_identifier;
 class column_mutation_attribute;
 class function_call;
 class cast;
+class field_selection;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
-                                unresolved_identifier, column_mutation_attribute, function_call, cast>;
+                                unresolved_identifier, column_mutation_attribute, function_call, cast,
+                                field_selection>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -185,6 +187,11 @@ struct cast {
     cql3_type type;
 };
 
+struct field_selection {
+    shared_ptr<selection::selectable_raw> structure;
+    shared_ptr<column_identifier_raw> field;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -264,6 +271,7 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
             [] (const function_call&) -> const binary_operator* { return nullptr; },
             [] (const cast&) -> const binary_operator* { return nullptr; },
+            [] (const field_selection&) -> const binary_operator* { return nullptr; },
         }, e);
 }
 
@@ -285,6 +293,7 @@ size_t count_if(const expression& e, Fn f) {
             [] (const column_mutation_attribute&) -> size_t { return 0; },
             [] (const function_call&) -> size_t { return 0; },
             [] (const cast&) -> size_t { return 0; },
+            [] (const field_selection&) -> size_t { return 0; },
         }, e);
 }
 

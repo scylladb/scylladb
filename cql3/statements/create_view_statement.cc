@@ -203,9 +203,6 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         }
 
         auto selectable = selector->selectable_;
-        if (dynamic_pointer_cast<selection::selectable::with_field_selection::raw>(selectable)) {
-            throw exceptions::invalid_request_exception(format("Cannot select out a part of type when defining a materialized view"));
-        }
         shared_ptr<column_identifier::raw> identifier;
         if (auto e = dynamic_pointer_cast<selection::selectable::with_expression::raw>(selectable)) {
             std::visit(overloaded_functor{

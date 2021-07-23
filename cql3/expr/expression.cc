@@ -547,6 +547,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const cast&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: cast cannot serve as the LHS of a binary expression");
             },
+            [] (const field_selection&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: field_selection cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -579,6 +582,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const cast&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a a type cast cannot serve as a restriction by itself");
+            },
+            [] (const field_selection&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a field selection cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -813,6 +819,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const cast&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: typecasts are not supported as the LHS of a binary expression");
                         },
+                        [] (const field_selection&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: field selections are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -835,6 +844,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const cast&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a typecast cannot serve as a restriction by itself");
+            },
+            [] (const field_selection&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a field selection cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -890,6 +902,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const cast&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: typecasts are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const field_selection&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: field selections are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -952,6 +967,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const cast& c)  {
                 fmt::print(os, "(<selectable> AS {})", c.type);
             },
+            [&] (const field_selection& fs)  {
+                fmt::print(os, "(<selectable>.{})", fs.field);
+            },
         }, expr);
     return os;
 }
@@ -992,6 +1010,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const column_mutation_attribute&) { return expr; },
             [&] (const function_call&) { return expr; },
             [&] (const cast&) { return expr; },
+            [&] (const field_selection&) { return expr; },
         }, expr);
 }
 
@@ -1027,6 +1046,9 @@ expression replace_token(const expression& expr, const column_definition* new_cd
             [&] (const cast&) -> expression {
                 // A token function could be what's being casted, but it doesn't help the caller to replace it
                 // since we can't index function of the token function.
+                return expr;
+            },
+            [&] (const field_selection&) -> expression {
                 return expr;
             },
         }, expr);
