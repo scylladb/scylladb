@@ -2435,7 +2435,8 @@ void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const no
 }
 
 future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
-    return get_storage_service().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
+    auto& ss = *this;
+
         return seastar::async([&ss, coordinator, req = std::move(req)] () mutable {
             auto ops_uuid = req.ops_uuid;
             slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", uint32_t(req.cmd), ops_uuid);
@@ -2651,7 +2652,6 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_cmd_response resp(ok);
             return resp;
         });
-    });
 }
 
 // Runs inside seastar::async context
@@ -3612,7 +3612,9 @@ void storage_service::init_messaging_service() {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
-            return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
+            return get_storage_service().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
+                return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
+            });
         });
     });
 }
