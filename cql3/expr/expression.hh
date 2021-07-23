@@ -268,9 +268,20 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [] (const token&) -> const binary_operator* { return nullptr; },
             [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
             [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
-            [] (const function_call&) -> const binary_operator* { return nullptr; },
-            [] (const cast&) -> const binary_operator* { return nullptr; },
-            [] (const field_selection&) -> const binary_operator* { return nullptr; },
+            [&] (const function_call& fc) -> const binary_operator* {
+                for (auto& arg : fc.args) {
+                    if (auto found = find_atom(arg, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
+            [&] (const cast& c) -> const binary_operator* {
+                return find_atom(*c.arg, f);
+            },
+            [&] (const field_selection& fs) -> const binary_operator* {
+                return find_atom(*fs.structure, f);
+            },
         }, e);
 }
 
@@ -290,9 +301,15 @@ size_t count_if(const expression& e, Fn f) {
             [] (const token&) -> size_t { return 0; },
             [] (const unresolved_identifier&) -> size_t { return 0; },
             [] (const column_mutation_attribute&) -> size_t { return 0; },
-            [] (const function_call&) -> size_t { return 0; },
-            [] (const cast&) -> size_t { return 0; },
-            [] (const field_selection&) -> size_t { return 0; },
+            [&] (const function_call& fc) -> size_t {
+                return std::accumulate(fc.args.cbegin(), fc.args.cend(), size_t{0},
+                                       [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
+            },
+            [&] (const cast& c) -> size_t {
+                return count_if(*c.arg, f); },
+            [&] (const field_selection& fs) -> size_t {
+                return count_if(*fs.structure, f);
+            },
         }, e);
 }
 
