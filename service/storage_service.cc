@@ -3606,10 +3606,10 @@ void storage_service::init_messaging_service() {
         return get_local_storage_service().confirm_replication(from);
     });
 
-    _messaging.local().register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
+    _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return get_storage_service().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
-            return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
+        return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
+            return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
 }
