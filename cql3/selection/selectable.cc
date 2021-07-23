@@ -62,16 +62,6 @@ selectable::writetime_or_ttl::to_string() const {
     return format("{}({})", _is_writetime ? "writetime" : "ttl", _id->to_string());
 }
 
-shared_ptr<selectable>
-selectable::writetime_or_ttl::raw::prepare(const schema& s) const {
-    return make_shared<writetime_or_ttl>(_id->prepare_column_identifier(s), _is_writetime);
-}
-
-bool
-selectable::writetime_or_ttl::raw::processes_selection() const {
-    return true;
-}
-
 shared_ptr<selector::factory>
 selectable::with_function::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
@@ -237,6 +227,11 @@ selectable::with_expression::raw::prepare(const schema& s) const {
         [&] (const expr::unresolved_identifier& ui) -> shared_ptr<selectable> {
             return ui.ident->prepare(s);
         },
+        [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
+            auto unresolved_id = std::get<expr::unresolved_identifier>(*cma.column);
+            bool is_writetime = cma.kind == expr::column_mutation_attribute::attribute_kind::writetime;
+            return make_shared<writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
+        },
     }, _expr);
 }
 
@@ -267,6 +262,9 @@ selectable::with_expression::raw::processes_selection() const {
         },
         [&] (const expr::unresolved_identifier& ui) -> bool {
             return ui.ident->processes_selection();
+        },
+        [&] (const expr::column_mutation_attribute& cma) -> bool {
+            return true;
         },
     }, _expr);
 };

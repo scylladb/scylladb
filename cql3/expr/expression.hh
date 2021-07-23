@@ -68,10 +68,11 @@ struct column_value;
 struct column_value_tuple;
 struct token;
 class unresolved_identifier;
+class column_mutation_attribute;
 
-/// A restriction expression -- union of all possible restriction types.  bool means a Boolean constant.
+/// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
-                                unresolved_identifier>;
+                                unresolved_identifier, column_mutation_attribute>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -153,6 +154,16 @@ struct unresolved_identifier {
     ~unresolved_identifier();
 };
 
+// An attribute attached to a column mutation: writetime or ttl
+struct column_mutation_attribute {
+    enum class attribute_kind { writetime, ttl };
+
+    attribute_kind kind;
+    // note: only unresolved_identifier is legal here now. One day, when prepare()
+    // on expressions yields expressions, column_value will also be legal here.
+    nested_expression column;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -229,6 +240,7 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [] (const column_value_tuple&) -> const binary_operator* { return nullptr; },
             [] (const token&) -> const binary_operator* { return nullptr; },
             [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
+            [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
         }, e);
 }
 
@@ -247,6 +259,7 @@ size_t count_if(const expression& e, Fn f) {
             [] (const column_value_tuple&) -> size_t { return 0; },
             [] (const token&) -> size_t { return 0; },
             [] (const unresolved_identifier&) -> size_t { return 0; },
+            [] (const column_mutation_attribute&) -> size_t { return 0; },
         }, e);
 }
 

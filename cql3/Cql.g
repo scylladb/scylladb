@@ -448,8 +448,12 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
     @init { shared_ptr<selectable::raw> tmp; }
     :  ( c=cident                                  { tmp = make_shared<selectable::with_expression::raw>(cql3::expr::unresolved_identifier{std::move(c)}); }
        | K_COUNT '(' countArgument ')'             { tmp = selectable::with_function::raw::make_count_rows_function(); }
-       | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, true); }
-       | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, false); }
+       | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::with_expression::raw>(
+                                                        cql3::expr::column_mutation_attribute{cql3::expr::column_mutation_attribute::attribute_kind::writetime,
+                                                                                              cql3::expr::unresolved_identifier{std::move(c)}}); }
+       | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::with_expression::raw>(
+                                                        cql3::expr::column_mutation_attribute{cql3::expr::column_mutation_attribute::attribute_kind::ttl,
+                                                                                              cql3::expr::unresolved_identifier{std::move(c)}}); }
        | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
        | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = ::make_shared<selectable::with_cast::raw>(std::move(arg), std::move(t)); }
        )
