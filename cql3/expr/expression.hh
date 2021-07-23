@@ -72,6 +72,24 @@ class unresolved_identifier;
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier>;
 
+// An expression variant element can't contain an expression by value, since the size of the variant
+// will be infinite. `nested_expression` contains an expression indirectly, but has value semantics and
+// is copyable.
+class nested_expression {
+    std::unique_ptr<expression> _e;
+public:
+    // not explicit, an expression _is_ a nested expression
+    nested_expression(expression e);
+    nested_expression(const nested_expression&);
+    nested_expression(nested_expression&&) = default;
+    nested_expression& operator=(const nested_expression&);
+    nested_expression& operator=(nested_expression&&) = default;
+    const expression* operator->() const { return _e.get(); }
+    expression* operator->() { return _e.get(); }
+    const expression& operator*() const { return *_e.get(); }
+    expression& operator*() { return *_e.get(); }
+};
+
 /// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
 struct column_value {
     const column_definition* col;

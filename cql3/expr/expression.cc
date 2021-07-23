@@ -53,6 +53,22 @@ using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
 
+nested_expression::nested_expression(expression e)
+        : _e(std::make_unique<expression>(std::move(e))) {
+}
+
+nested_expression::nested_expression(const nested_expression& o)
+        : nested_expression(*o._e) {
+}
+
+nested_expression&
+nested_expression::operator=(const nested_expression& o) {
+    if (this != &o) {
+        _e = std::make_unique<expression>(*o._e);
+    }
+    return *this;
+}
+
 binary_operator::binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order)
             : lhs(std::make_unique<expression>(std::move(lhs)))
             , op(op)
