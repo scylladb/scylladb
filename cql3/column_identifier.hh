@@ -51,6 +51,8 @@
 
 namespace cql3 {
 
+class column_identifier_raw;
+
 /**
  * Represents an identifer for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned
@@ -96,7 +98,7 @@ public:
     virtual ::shared_ptr<selection::selector::factory> new_selector_factory(database& db, schema_ptr schema,
         std::vector<const column_definition*>& defs) override;
 
-    class raw;
+    using raw = column_identifier_raw;
 };
 
 /**
@@ -105,28 +107,28 @@ public:
  * once the comparator is known with prepare(). This should only be used with identifiers that are actual
  * column names. See CASSANDRA-8178 for more background.
  */
-class column_identifier::raw final : public selectable::raw {
+class column_identifier_raw final : public selection::selectable::raw {
 private:
     const sstring _raw_text;
     sstring _text;
 public:
-    raw(sstring raw_text, bool keep_case);
+    column_identifier_raw(sstring raw_text, bool keep_case);
 
-    virtual ::shared_ptr<selectable> prepare(const schema& s) const override;
+    virtual ::shared_ptr<selection::selectable> prepare(const schema& s) const override;
 
     ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s) const;
 
     virtual bool processes_selection() const override;
 
-    bool operator==(const raw& other) const;
+    bool operator==(const column_identifier_raw& other) const;
 
-    bool operator!=(const raw& other) const;
+    bool operator!=(const column_identifier_raw& other) const;
 
     virtual sstring to_string() const;
     sstring to_cql_string() const;
 
-    friend std::hash<column_identifier::raw>;
-    friend std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id);
+    friend std::hash<column_identifier_raw>;
+    friend std::ostream& operator<<(std::ostream& out, const column_identifier_raw& id);
 };
 
 static inline
@@ -151,7 +153,7 @@ struct hash<cql3::column_identifier> {
 };
 
 template<>
-struct hash<cql3::column_identifier::raw> {
+struct hash<cql3::column_identifier_raw> {
     size_t operator()(const cql3::column_identifier::raw& r) const {
         return std::hash<sstring>()(r._text);
     }
