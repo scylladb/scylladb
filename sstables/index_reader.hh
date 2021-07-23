@@ -434,10 +434,11 @@ class index_reader {
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
     use_caching _use_caching;
+    bool _single_page_read;
 
     std::unique_ptr<index_consume_entry_context<index_consumer>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
         auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
-        auto input = make_file_input_stream(index_file, begin, _sstable->index_size() - begin,
+        auto input = make_file_input_stream(index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin,
                         get_file_input_stream_options(_pc));
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
         auto ck_values_fixed_lengths = _sstable->get_version() >= sstable_version_types::mc
@@ -518,6 +519,12 @@ private:
                     }
                     if (ex) {
                         return make_exception_future<index_list>(std::move(ex));
+                    }
+                    if (_single_page_read) {
+                        // if the associated reader is forwarding despite having singular range, we prepare for that
+                        _single_page_read = false;
+                        auto& ctx = *bound.context;
+                        return ctx.close().then([bc = std::move(bound.context), &bound, this] { return std::move(bound.consumer->indexes); });
                     }
                     return make_ready_future<index_list>(std::move(bound.consumer->indexes));
                 });
@@ -737,7 +744,7 @@ private:
     }
 public:
     index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
-                 use_caching caching)
+                 use_caching caching, bool single_partition_read = false)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _pc(pc)
@@ -748,6 +755,7 @@ public:
         , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
         , _use_caching(caching)
+        , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
     {
         sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
     }

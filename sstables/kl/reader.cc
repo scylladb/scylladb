@@ -1144,7 +1144,7 @@ private:
         if (!_index_reader) {
             auto caching = use_caching(!_slice.options.contains(query::partition_slice::option::bypass_cache));
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(), _consumer.io_priority(),
-                                                           _consumer.trace_state(), caching);
+                                                           _consumer.trace_state(), caching, _single_partition_read);
         }
         return *_index_reader;
     }
