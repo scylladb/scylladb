@@ -446,7 +446,7 @@ selector returns [shared_ptr<raw_selector> s]
 
 unaliasedSelector returns [shared_ptr<selectable::raw> s]
     @init { shared_ptr<selectable::raw> tmp; }
-    :  ( c=cident                                  { tmp = c; }
+    :  ( c=cident                                  { tmp = make_shared<selectable::with_expression::raw>(cql3::expr::unresolved_identifier{std::move(c)}); }
        | K_COUNT '(' countArgument ')'             { tmp = selectable::with_function::raw::make_count_rows_function(); }
        | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, false); }

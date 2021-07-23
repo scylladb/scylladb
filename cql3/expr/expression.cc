@@ -72,6 +72,9 @@ binary_operator::operator=(const binary_operator& x) {
     return *this;
 }
 
+// Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
+unresolved_identifier::~unresolved_identifier() = default;
+
 namespace {
 
 using children_t = std::vector<expression>; // conjunction's children.
@@ -528,6 +531,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const binary_operator&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: binary operators cannot be nested");
             },
+            [] (const unresolved_identifier&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -548,6 +554,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const token&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
+            },
+            [] (const unresolved_identifier&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
             },
         }, restr);
 }
@@ -770,6 +779,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [&] (bool) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
                         },
+                        [] (const unresolved_identifier&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: unresolved identifiers are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -780,6 +792,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const token&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
+            },
+            [] (const unresolved_identifier&) -> value_set {
+                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
             },
         }, expr);
 }
@@ -824,6 +839,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (bool) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: constants are not supported as the LHS of a binary expression");
                         },
+                        [] (const unresolved_identifier&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: an unresolved identifier is not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const auto& default_case) { return false; }
@@ -864,6 +882,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const column_value_tuple& tuple) {
                 fmt::print(os, "({})", fmt::join(tuple.elements, ","));
             },
+            [&] (const unresolved_identifier& ui) {
+                fmt::print(os, "unresolved({})", *ui.ident);
+            },
         }, expr);
     return os;
 }
@@ -900,6 +921,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
                 throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
             },
             [&] (const token&) { return expr; },
+            [&] (const unresolved_identifier&) { return expr; },
         }, expr);
 }
 
@@ -920,7 +942,10 @@ expression replace_token(const expression& expr, const column_definition* new_cd
             [&] (const column_value_tuple&) -> expression {
                 throw std::logic_error(format("replace_token invalid with column tuple: {}", to_string(expr)));
             },
-            [&] (const token&) -> expression { return column_value{new_cdef}; }
+            [&] (const token&) -> expression { return column_value{new_cdef}; },
+            [&] (const unresolved_identifier&) -> expression {
+                throw std::logic_error(format("replace_token invalid with unresolved identifier: {}", to_string(expr)));
+            },
         }, expr);
 }
 

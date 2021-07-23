@@ -49,6 +49,7 @@ namespace query {
 
 namespace cql3 {
 
+class column_identifier_raw;
 class query_options;
 
 namespace selection {
@@ -65,9 +66,11 @@ class conjunction;
 struct column_value;
 struct column_value_tuple;
 struct token;
+class unresolved_identifier;
 
 /// A restriction expression -- union of all possible restriction types.  bool means a Boolean constant.
-using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token>;
+using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
+                                unresolved_identifier>;
 
 /// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
 struct column_value {
@@ -122,6 +125,13 @@ struct binary_operator {
 /// A conjunction of restrictions.
 struct conjunction {
     std::vector<expression> children;
+};
+
+// Gets resolved eventually into a column_value.
+struct unresolved_identifier {
+    ::shared_ptr<column_identifier_raw> ident;
+
+    ~unresolved_identifier();
 };
 
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
@@ -199,6 +209,7 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [] (const column_value&) -> const binary_operator* { return nullptr; },
             [] (const column_value_tuple&) -> const binary_operator* { return nullptr; },
             [] (const token&) -> const binary_operator* { return nullptr; },
+            [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
         }, e);
 }
 
@@ -216,6 +227,7 @@ size_t count_if(const expression& e, Fn f) {
             [] (const column_value&) -> size_t { return 0; },
             [] (const column_value_tuple&) -> size_t { return 0; },
             [] (const token&) -> size_t { return 0; },
+            [] (const unresolved_identifier&) -> size_t { return 0; },
         }, e);
 }
 

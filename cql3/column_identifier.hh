@@ -107,18 +107,20 @@ public:
  * once the comparator is known with prepare(). This should only be used with identifiers that are actual
  * column names. See CASSANDRA-8178 for more background.
  */
-class column_identifier_raw final : public selection::selectable::raw {
+class column_identifier_raw final {
 private:
     const sstring _raw_text;
     sstring _text;
 public:
     column_identifier_raw(sstring raw_text, bool keep_case);
 
-    virtual ::shared_ptr<selection::selectable> prepare(const schema& s) const override;
+    // for selectable::with_expression::raw:
+    ::shared_ptr<selection::selectable> prepare(const schema& s) const;
 
     ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s) const;
 
-    virtual bool processes_selection() const override;
+    // for selectable::with_expression::raw:
+    bool processes_selection() const;
 
     bool operator==(const column_identifier_raw& other) const;
 

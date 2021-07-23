@@ -212,15 +212,15 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         if (dynamic_pointer_cast<selection::selectable::writetime_or_ttl::raw>(selectable)) {
             throw exceptions::invalid_request_exception(format("Cannot use function when defining a materialized view"));
         }
+        shared_ptr<column_identifier::raw> identifier;
         if (auto e = dynamic_pointer_cast<selection::selectable::with_expression::raw>(selectable)) {
             std::visit(overloaded_functor{
+                [&] (const expr::unresolved_identifier& ui) { identifier = ui.ident; },
                 [] (const auto& default_case) -> void { throw exceptions::invalid_request_exception(format("Cannot use general expressions when defining a materialized view")); },
             },
             e->expression());
         }
 
-        assert(dynamic_pointer_cast<column_identifier::raw>(selectable));
-        auto identifier = static_pointer_cast<column_identifier::raw>(selectable);
         auto* def = get_column_definition(*schema, *identifier);
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));

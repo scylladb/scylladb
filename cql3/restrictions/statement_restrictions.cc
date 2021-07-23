@@ -210,6 +210,10 @@ static std::vector<expr::expression> extract_partition_range(
         }
 
         void operator()(bool) {}
+
+        void operator()(const unresolved_identifier&) {
+            on_internal_error(rlogger, "extract_partition_range(unresolved_identifier)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -275,6 +279,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         }
 
         void operator()(bool) {}
+
+        void operator()(const unresolved_identifier&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(unresolved_identifier)");
+        }
     } v;
     std::visit(v, where_clause);
 
@@ -946,6 +954,10 @@ struct multi_column_range_accumulator {
 
     void operator()(const token&) {
         on_internal_error(rlogger, "Token encountered outside binary operator");
+    }
+
+    void operator()(const unresolved_identifier&) {
+        on_internal_error(rlogger, "Unresolved identifier encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

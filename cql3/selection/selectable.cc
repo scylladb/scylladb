@@ -234,6 +234,9 @@ selectable::with_expression::raw::prepare(const schema& s) const {
                 }));
             return ::make_shared<selectable::with_function>(std::move(name), std::move(args));
         },
+        [&] (const expr::unresolved_identifier& ui) -> shared_ptr<selectable> {
+            return ui.ident->prepare(s);
+        },
     }, _expr);
 }
 
@@ -261,6 +264,9 @@ selectable::with_expression::raw::processes_selection() const {
             // Arguably, should return false, because it only processes the partition key.
             // But selectable::with_function considers it true now, so return that.
             return true;
+        },
+        [&] (const expr::unresolved_identifier& ui) -> bool {
+            return ui.ident->processes_selection();
         },
     }, _expr);
 };
