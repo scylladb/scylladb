@@ -3607,12 +3607,9 @@ void storage_service::init_messaging_service() {
     });
 
     _messaging.local().register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
-            return get_storage_service().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
-                return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
-            });
+        return get_storage_service().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
+            return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
 }
