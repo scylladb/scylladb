@@ -3607,10 +3607,21 @@ void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([] (gms::inet_address from) {
         return get_local_storage_service().confirm_replication(from);
     });
+
+    _messaging.local().register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
+            return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
+        });
+    });
 }
 
 future<> storage_service::uninit_messaging_service() {
-    return _messaging.local().unregister_replication_finished();
+    return when_all_succeed(
+        _messaging.local().unregister_replication_finished(),
+        _messaging.local().unregister_node_ops_cmd()
+    ).discard_result();
 }
 
 void storage_service::do_isolate_on_error(disk_error type)
