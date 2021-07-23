@@ -56,18 +56,6 @@ namespace selection {
 
 class selectable;
 
-class selectable_raw {
-public:
-    virtual ~selectable_raw() {}
-
-    virtual ::shared_ptr<selectable> prepare(const schema& s) const = 0;
-
-    /**
-     * Returns true if any processing is performed on the selected column.
-     **/
-    virtual bool processes_selection() const = 0;
-};
-
 class selectable {
 public:
     virtual ~selectable() {}
@@ -83,8 +71,6 @@ protected:
         return defs.size() - 1;
     }
 public:
-    using raw = selectable_raw;
-
     class writetime_or_ttl;
 
     class with_function;
@@ -93,7 +79,6 @@ public:
     class with_field_selection;
 
     class with_cast;
-    class with_expression;
 };
 
 std::ostream & operator<<(std::ostream &os, const selectable& s);
@@ -139,17 +124,8 @@ public:
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 };
 
-class selectable::with_expression {
-public:
-    class raw : public selectable::raw {
-        cql3::expr::expression _expr;
-    public:
-        explicit raw(cql3::expr::expression expr) : _expr(std::move(expr)) {}
-        virtual shared_ptr<selectable> prepare(const schema& s) const override;
-        virtual bool processes_selection() const override;
-        const cql3::expr::expression& expression() const { return _expr; }
-    };
-};
+shared_ptr<selectable> prepare_selectable(const schema& s, const expr::expression& raw_selectable);
+bool selectable_processes_selection(const expr::expression& raw_selectable);
 
 }
 

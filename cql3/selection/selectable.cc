@@ -87,7 +87,7 @@ expr::expression
 make_count_rows_function_expression() {
     return expr::function_call{
             cql3::functions::function_name::native_function(cql3::functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME),
-                    std::vector<shared_ptr<cql3::selection::selectable::raw>>()};
+                    std::vector<cql3::expr::expression>()};
 }
 
 shared_ptr<selector::factory>
@@ -140,7 +140,7 @@ selectable::with_cast::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::with_expression::raw::prepare(const schema& s) const {
+prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> shared_ptr<selectable> {
             on_internal_error(slogger, "no way to express SELECT TRUE/FALSE in the grammar yet");
@@ -177,37 +177,37 @@ selectable::with_expression::raw::prepare(const schema& s) const {
         [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
             auto unresolved_id = std::get<expr::unresolved_identifier>(*cma.column);
             bool is_writetime = cma.kind == expr::column_mutation_attribute::attribute_kind::writetime;
-            return make_shared<writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
+            return make_shared<selectable::writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
         },
         [&] (const expr::function_call& fc) -> shared_ptr<selectable> {
             std::vector<shared_ptr<selectable>> prepared_args;
             prepared_args.reserve(fc.args.size());
             for (auto&& arg : fc.args) {
-                prepared_args.push_back(arg->prepare(s));
+                prepared_args.push_back(prepare_selectable(s, arg));
             }
             return std::visit(overloaded_functor{
                 [&] (const functions::function_name& named) -> shared_ptr<selectable> {
-                    return ::make_shared<with_function>(named, std::move(prepared_args));
+                    return ::make_shared<selectable::with_function>(named, std::move(prepared_args));
                 },
                 [&] (const shared_ptr<functions::function>& anon) -> shared_ptr<selectable> {
-                    return ::make_shared<with_anonymous_function>(anon, std::move(prepared_args));
+                    return ::make_shared<selectable::with_anonymous_function>(anon, std::move(prepared_args));
                 },
             }, fc.func);
         },
         [&] (const expr::cast& c) -> shared_ptr<selectable> {
-            return ::make_shared<selectable::with_cast>(c.arg->prepare(s), c.type);
+            return ::make_shared<selectable::with_cast>(prepare_selectable(s, *c.arg), c.type);
         },
         [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
-            return make_shared<with_field_selection>(fs.structure->prepare(s),
+            return make_shared<selectable::with_field_selection>(prepare_selectable(s, *fs.structure),
                     static_pointer_cast<column_identifier>(fs.field->prepare(s)));
         },
-    }, _expr);
+    }, raw_selectable);
 }
 
 bool
-selectable::with_expression::raw::processes_selection() const {
+selectable_processes_selection(const expr::expression& raw_selectable) {
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> bool {
             on_internal_error(slogger, "no way to express SELECT TRUE/FALSE in the grammar yet");
@@ -246,7 +246,7 @@ selectable::with_expression::raw::processes_selection() const {
         [&] (const expr::field_selection& fs) -> bool {
             return true;
         },
-    }, _expr);
+    }, raw_selectable);
 };
 
 std::ostream & operator<<(std::ostream &os, const selectable& s) {

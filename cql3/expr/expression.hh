@@ -57,7 +57,6 @@ class query_options;
 
 namespace selection {
     class selection;
-    class selectable_raw;
 } // namespace selection
 
 namespace functions {
@@ -179,16 +178,16 @@ struct column_mutation_attribute {
 
 struct function_call {
     std::variant<functions::function_name, shared_ptr<functions::function>> func;
-    std::vector<shared_ptr<selection::selectable_raw>> args;
+    std::vector<expression> args;
 };
 
 struct cast {
-    shared_ptr<selection::selectable_raw> arg;
+    nested_expression arg;
     cql3_type type;
 };
 
 struct field_selection {
-    shared_ptr<selection::selectable_raw> structure;
+    nested_expression structure;
     shared_ptr<column_identifier_raw> field;
 };
 

@@ -441,30 +441,25 @@ selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
 
 selector returns [shared_ptr<raw_selector> s]
     @init{ shared_ptr<cql3::column_identifier> alias; }
-    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = make_shared<raw_selector>(us, alias); }
+    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = ::make_shared<raw_selector>(us, alias); }
     ;
 
-unaliasedSelector returns [shared_ptr<selectable::raw> s]
-    @init { shared_ptr<selectable::raw> tmp; }
-    :  ( c=cident                                  { tmp = make_shared<selectable::with_expression::raw>(cql3::expr::unresolved_identifier{std::move(c)}); }
-       | K_COUNT '(' countArgument ')'             { tmp = ::make_shared<selectable::with_expression::raw>(make_count_rows_function_expression()); }
-       | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::with_expression::raw>(
-                                                        cql3::expr::column_mutation_attribute{cql3::expr::column_mutation_attribute::attribute_kind::writetime,
-                                                                                              cql3::expr::unresolved_identifier{std::move(c)}}); }
-       | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::with_expression::raw>(
-                                                        cql3::expr::column_mutation_attribute{cql3::expr::column_mutation_attribute::attribute_kind::ttl,
-                                                                                              cql3::expr::unresolved_identifier{std::move(c)}}); }
-       | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_expression::raw>(
-                                                        cql3::expr::function_call{std::move(f), std::move(args)}); }
-       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = ::make_shared<selectable::with_expression::raw>(
-                                                        cql3::expr::cast{std::move(arg), std::move(t)}); }
+unaliasedSelector returns [cql3::expr::expression s]
+    @init { cql3::expr::expression tmp; }
+    :  ( c=cident                                  { tmp = cql3::expr::unresolved_identifier{std::move(c)}; }
+       | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
+       | K_WRITETIME '(' c=cident ')'              { tmp = cql3::expr::column_mutation_attribute{cql3::expr::column_mutation_attribute::attribute_kind::writetime,
+                                                                                              cql3::expr::unresolved_identifier{std::move(c)}}; }
+       | K_TTL       '(' c=cident ')'              { tmp = cql3::expr::column_mutation_attribute{cql3::expr::column_mutation_attribute::attribute_kind::ttl,
+                                                                                              cql3::expr::unresolved_identifier{std::move(c)}}; }
+       | f=functionName args=selectionFunctionArgs { tmp = cql3::expr::function_call{std::move(f), std::move(args)}; }
+       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cql3::expr::cast{std::move(arg), std::move(t)}; }
        )
-       ( '.' fi=cident { tmp = make_shared<selectable::with_expression::raw>(
-                                cql3::expr::field_selection{std::move(tmp), std::move(fi)}); } )*
+       ( '.' fi=cident { tmp = cql3::expr::field_selection{std::move(tmp), std::move(fi)}; } )*
     { $s = tmp; }
     ;
 
-selectionFunctionArgs returns [std::vector<shared_ptr<selectable::raw>> a]
+selectionFunctionArgs returns [std::vector<cql3::expr::expression> a]
     : '(' ')'
     | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
           ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
