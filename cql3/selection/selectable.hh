@@ -137,16 +137,6 @@ public:
     virtual sstring to_string() const override;
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
-    class raw : public selectable::raw {
-        ::shared_ptr<selectable::raw> _arg;
-        cql3_type _type;
-    public:
-        raw(shared_ptr<selectable::raw> arg, cql3_type type)
-                : _arg(std::move(arg)), _type(std::move(type)) {
-        }
-        virtual shared_ptr<selectable> prepare(const schema& s) const override;
-        virtual bool processes_selection() const override;
-    };
 };
 
 class selectable::with_expression {

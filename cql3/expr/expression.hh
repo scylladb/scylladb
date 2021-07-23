@@ -30,6 +30,7 @@
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
 #include "cql3/term.hh"
+#include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
 #include "database_fwd.hh"
 #include "gc_clock.hh"
@@ -78,10 +79,11 @@ struct token;
 class unresolved_identifier;
 class column_mutation_attribute;
 class function_call;
+class cast;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
-                                unresolved_identifier, column_mutation_attribute, function_call>;
+                                unresolved_identifier, column_mutation_attribute, function_call, cast>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -178,6 +180,11 @@ struct function_call {
     std::vector<shared_ptr<selection::selectable_raw>> args;
 };
 
+struct cast {
+    shared_ptr<selection::selectable_raw> arg;
+    cql3_type type;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -256,6 +263,7 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
             [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
             [] (const function_call&) -> const binary_operator* { return nullptr; },
+            [] (const cast&) -> const binary_operator* { return nullptr; },
         }, e);
 }
 
@@ -276,6 +284,7 @@ size_t count_if(const expression& e, Fn f) {
             [] (const unresolved_identifier&) -> size_t { return 0; },
             [] (const column_mutation_attribute&) -> size_t { return 0; },
             [] (const function_call&) -> size_t { return 0; },
+            [] (const cast&) -> size_t { return 0; },
         }, e);
 }
 

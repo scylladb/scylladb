@@ -153,16 +153,6 @@ selectable::with_cast::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::with_cast::raw::prepare(const schema& s) const {
-    return ::make_shared<selectable::with_cast>(_arg->prepare(s), _type);
-}
-
-bool
-selectable::with_cast::raw::processes_selection() const {
-    return true;
-}
-
-shared_ptr<selectable>
 selectable::with_expression::raw::prepare(const schema& s) const {
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> shared_ptr<selectable> {
@@ -217,6 +207,9 @@ selectable::with_expression::raw::prepare(const schema& s) const {
                 },
             }, fc.func);
         },
+        [&] (const expr::cast& c) -> shared_ptr<selectable> {
+            return ::make_shared<selectable::with_cast>(c.arg->prepare(s), c.type);
+        },
     }, _expr);
 }
 
@@ -252,6 +245,9 @@ selectable::with_expression::raw::processes_selection() const {
             return true;
         },
         [&] (const expr::function_call& fc) -> bool {
+            return true;
+        },
+        [&] (const expr::cast& c) -> bool {
             return true;
         },
     }, _expr);

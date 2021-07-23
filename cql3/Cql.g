@@ -456,7 +456,8 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
                                                                                               cql3::expr::unresolved_identifier{std::move(c)}}); }
        | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_expression::raw>(
                                                         cql3::expr::function_call{std::move(f), std::move(args)}); }
-       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = ::make_shared<selectable::with_cast::raw>(std::move(arg), std::move(t)); }
+       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = ::make_shared<selectable::with_expression::raw>(
+                                                        cql3::expr::cast{std::move(arg), std::move(t)}); }
        )
        ( '.' fi=cident { tmp = make_shared<selectable::with_field_selection::raw>(std::move(tmp), std::move(fi)); } )*
     { $s = tmp; }
