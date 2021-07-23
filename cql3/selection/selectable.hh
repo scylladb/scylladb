@@ -54,6 +54,20 @@ namespace cql3 {
 
 namespace selection {
 
+class selectable;
+
+class selectable_raw {
+public:
+    virtual ~selectable_raw() {}
+
+    virtual ::shared_ptr<selectable> prepare(const schema& s) const = 0;
+
+    /**
+     * Returns true if any processing is performed on the selected column.
+     **/
+    virtual bool processes_selection() const = 0;
+};
+
 class selectable {
 public:
     virtual ~selectable() {}
@@ -69,17 +83,7 @@ protected:
         return defs.size() - 1;
     }
 public:
-    class raw {
-    public:
-        virtual ~raw() {}
-
-        virtual ::shared_ptr<selectable> prepare(const schema& s) const = 0;
-
-        /**
-         * Returns true if any processing is performed on the selected column.
-         **/
-        virtual bool processes_selection() const = 0;
-    };
+    using raw = selectable_raw;
 
     class writetime_or_ttl;
 
