@@ -3032,27 +3032,18 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 }
 
 future<> repair_service::start() {
-    return when_all_succeed(
-            init_metrics(),
-            init_ms_handlers(),
-            init_row_level_ms_handlers()
-    ).discard_result();
+    co_await init_metrics();
+    co_await init_ms_handlers();
+    co_await init_row_level_ms_handlers();
 }
 
 future<> repair_service::stop() {
-    return when_all_succeed(
-            uninit_ms_handlers(),
-            uninit_row_level_ms_handlers()
-    ).discard_result().then([this] {
-        if (this_shard_id() != 0) {
-            _stopped = true;
-            return make_ready_future<>();
-        }
-
-        return _gossiper.local().unregister_(_gossip_helper).then([this] {
-            _stopped = true;
-        });
-    });
+    co_await uninit_ms_handlers();
+    co_await uninit_row_level_ms_handlers();
+    if (this_shard_id() == 0) {
+        co_await _gossiper.local().unregister_(_gossip_helper);
+    }
+    _stopped = true;
 }
 
 repair_service::~repair_service() {
