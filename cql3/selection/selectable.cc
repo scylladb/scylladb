@@ -101,21 +101,6 @@ selectable::with_anonymous_function::to_string() const {
     return format("{}({})", _function->name().name, join(", ", _args));
 }
 
-shared_ptr<selectable>
-selectable::with_anonymous_function::raw::prepare(const schema& s) const {
-        std::vector<shared_ptr<selectable>> prepared_args;
-        prepared_args.reserve(_args.size());
-        for (auto&& arg : _args) {
-            prepared_args.push_back(arg->prepare(s));
-        }
-        return ::make_shared<with_anonymous_function>(_function, std::move(prepared_args));
-    }
-
-bool
-selectable::with_anonymous_function::raw::processes_selection() const {
-    return true;
-}
-
 shared_ptr<selector::factory>
 selectable::with_field_selection::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factory = _selected->new_selector_factory(db, s, defs);
@@ -223,7 +208,14 @@ selectable::with_expression::raw::prepare(const schema& s) const {
             for (auto&& arg : fc.args) {
                 prepared_args.push_back(arg->prepare(s));
             }
-            return ::make_shared<with_function>(fc.func, std::move(prepared_args));
+            return std::visit(overloaded_functor{
+                [&] (const functions::function_name& named) -> shared_ptr<selectable> {
+                    return ::make_shared<with_function>(named, std::move(prepared_args));
+                },
+                [&] (const shared_ptr<functions::function>& anon) -> shared_ptr<selectable> {
+                    return ::make_shared<with_anonymous_function>(anon, std::move(prepared_args));
+                },
+            }, fc.func);
         },
     }, _expr);
 }

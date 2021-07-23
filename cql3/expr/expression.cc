@@ -925,7 +925,14 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                         *cma.column);
             },
             [&] (const function_call& fc)  {
-                fmt::print(os, "{}(args)", fc.func);
+                std::visit(overloaded_functor{
+                    [&] (const functions::function_name& named) {
+                        fmt::print(os, "{}(args)", named);
+                    },
+                    [&] (const shared_ptr<functions::function>& anon) {
+                        fmt::print(os, "<anonymous function>(args)");
+                    },
+                }, fc.func);
             },
         }, expr);
     return os;

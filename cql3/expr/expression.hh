@@ -59,6 +59,12 @@ namespace selection {
     class selectable_raw;
 } // namespace selection
 
+namespace functions {
+
+class function;
+
+}
+
 namespace expr {
 
 struct allow_local_index_tag {};
@@ -168,7 +174,7 @@ struct column_mutation_attribute {
 };
 
 struct function_call {
-    functions::function_name func;
+    std::variant<functions::function_name, shared_ptr<functions::function>> func;
     std::vector<shared_ptr<selection::selectable_raw>> args;
 };
 

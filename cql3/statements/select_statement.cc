@@ -1400,7 +1400,7 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
         }
         auto as_json = ::make_shared<functions::as_json_function>(std::move(selector_names), std::move(selector_types));
         auto as_json_selector = ::make_shared<selection::raw_selector>(
-                ::make_shared<selection::selectable::with_anonymous_function::raw>(as_json, std::move(raw_selectables)), nullptr);
+                ::make_shared<selection::selectable::with_expression::raw>(expr::function_call{as_json, std::move(raw_selectables)}), nullptr);
         _select_clause.clear();
         _select_clause.push_back(as_json_selector);
     }
