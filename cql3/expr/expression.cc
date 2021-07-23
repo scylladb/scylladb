@@ -957,18 +957,18 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const function_call& fc)  {
                 std::visit(overloaded_functor{
                     [&] (const functions::function_name& named) {
-                        fmt::print(os, "{}(args)", named);
+                        fmt::print(os, "{}({})", named, fmt::join(fc.args, ", "));
                     },
                     [&] (const shared_ptr<functions::function>& anon) {
-                        fmt::print(os, "<anonymous function>(args)");
+                        fmt::print(os, "<anonymous function>({})", fmt::join(fc.args, ", "));
                     },
                 }, fc.func);
             },
             [&] (const cast& c)  {
-                fmt::print(os, "(<selectable> AS {})", c.type);
+                fmt::print(os, "({} AS {})", *c.arg, c.type);
             },
             [&] (const field_selection& fs)  {
-                fmt::print(os, "(<selectable>.{})", fs.field);
+                fmt::print(os, "({}.{})", *fs.structure, fs.field);
             },
         }, expr);
     return os;
