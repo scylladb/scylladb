@@ -1919,11 +1919,3 @@ future<> repair_service::init_metrics() {
     _node_ops_metrics.init();
     return make_ready_future<>();
 }
-
-future<> repair_service::init_ms_handlers() {
-    return make_ready_future<>();
-}
-
-future<> repair_service::uninit_ms_handlers() {
-    return make_ready_future<>();
-}

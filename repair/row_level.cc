@@ -2322,7 +2322,7 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
-future<> repair_service::init_row_level_ms_handlers() {
+future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
     ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
@@ -2490,7 +2490,7 @@ future<> repair_service::init_row_level_ms_handlers() {
     return make_ready_future<>();
 }
 
-future<> repair_service::uninit_row_level_ms_handlers() {
+future<> repair_service::uninit_ms_handlers() {
     auto& ms = this->_messaging;
 
     return when_all_succeed(
@@ -3034,12 +3034,10 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 future<> repair_service::start() {
     co_await init_metrics();
     co_await init_ms_handlers();
-    co_await init_row_level_ms_handlers();
 }
 
 future<> repair_service::stop() {
     co_await uninit_ms_handlers();
-    co_await uninit_row_level_ms_handlers();
     if (this_shard_id() == 0) {
         co_await _gossiper.local().unregister_(_gossip_helper);
     }
