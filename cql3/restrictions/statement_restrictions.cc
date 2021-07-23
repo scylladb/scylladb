@@ -218,6 +218,10 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const column_mutation_attribute&) {
             on_internal_error(rlogger, "extract_partition_range(column_mutation_attribute)");
         }
+
+        void operator()(const function_call&) {
+            on_internal_error(rlogger, "extract_partition_range(function_call)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -290,6 +294,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const column_mutation_attribute&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(column_mutation_attribute)");
+        }
+
+        void operator()(const function_call&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(function_call)");
         }
     } v;
     std::visit(v, where_clause);
@@ -970,6 +978,10 @@ struct multi_column_range_accumulator {
 
     void operator()(const column_mutation_attribute&) {
         on_internal_error(rlogger, "writetime/ttl encountered outside binary operator");
+    }
+
+    void operator()(const function_call&) {
+        on_internal_error(rlogger, "function call encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

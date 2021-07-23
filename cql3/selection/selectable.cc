@@ -83,26 +83,11 @@ selectable::with_function::to_string() const {
     return format("{}({})", _function_name.name, join(", ", _args));
 }
 
-shared_ptr<selectable>
-selectable::with_function::raw::prepare(const schema& s) const {
-        std::vector<shared_ptr<selectable>> prepared_args;
-        prepared_args.reserve(_args.size());
-        for (auto&& arg : _args) {
-            prepared_args.push_back(arg->prepare(s));
-        }
-        return ::make_shared<with_function>(_function_name, std::move(prepared_args));
-    }
-
-bool
-selectable::with_function::raw::processes_selection() const {
-    return true;
-}
-
-shared_ptr<selectable::with_function::raw>
-selectable::with_function::raw::make_count_rows_function() {
-    return ::make_shared<cql3::selection::selectable::with_function::raw>(
+expr::expression
+make_count_rows_function_expression() {
+    return expr::function_call{
             cql3::functions::function_name::native_function(cql3::functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME),
-                    std::vector<shared_ptr<cql3::selection::selectable::raw>>());
+                    std::vector<shared_ptr<cql3::selection::selectable::raw>>()};
 }
 
 shared_ptr<selector::factory>
@@ -232,6 +217,14 @@ selectable::with_expression::raw::prepare(const schema& s) const {
             bool is_writetime = cma.kind == expr::column_mutation_attribute::attribute_kind::writetime;
             return make_shared<writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
         },
+        [&] (const expr::function_call& fc) -> shared_ptr<selectable> {
+            std::vector<shared_ptr<selectable>> prepared_args;
+            prepared_args.reserve(fc.args.size());
+            for (auto&& arg : fc.args) {
+                prepared_args.push_back(arg->prepare(s));
+            }
+            return ::make_shared<with_function>(fc.func, std::move(prepared_args));
+        },
     }, _expr);
 }
 
@@ -264,6 +257,9 @@ selectable::with_expression::raw::processes_selection() const {
             return ui.ident->processes_selection();
         },
         [&] (const expr::column_mutation_attribute& cma) -> bool {
+            return true;
+        },
+        [&] (const expr::function_call& fc) -> bool {
             return true;
         },
     }, _expr);

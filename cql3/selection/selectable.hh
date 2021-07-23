@@ -109,18 +109,9 @@ public:
     virtual sstring to_string() const override;
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
-    class raw : public selectable::raw {
-        functions::function_name _function_name;
-        std::vector<shared_ptr<selectable::raw>> _args;
-    public:
-        raw(functions::function_name function_name, std::vector<shared_ptr<selectable::raw>> args)
-                : _function_name(std::move(function_name)), _args(std::move(args)) {
-        }
-        virtual shared_ptr<selectable> prepare(const schema& s) const override;
-        virtual bool processes_selection() const override;
-        static ::shared_ptr<selectable::with_function::raw> make_count_rows_function();
-    };
 };
+
+expr::expression make_count_rows_function_expression();
 
 class selectable::with_anonymous_function : public selectable {
     shared_ptr<functions::function> _function;

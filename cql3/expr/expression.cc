@@ -541,6 +541,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const column_mutation_attribute&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: column_mutation_attribute cannot serve as the LHS of a binary expression");
             },
+            [] (const function_call&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: function_call cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -567,6 +570,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const column_mutation_attribute&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: the writetime/ttl cannot serve as a restriction by itself");
+            },
+            [] (const function_call&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a function call cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -795,6 +801,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const column_mutation_attribute&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: writetime/ttl are not supported as the LHS of a binary expression");
                         },
+                        [] (const function_call&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -811,6 +820,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const column_mutation_attribute&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: the writetime/ttl functions cannot serve as a restriction by itself");
+            },
+            [] (const function_call&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a function call cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -861,6 +873,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (const column_mutation_attribute&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: writetime/ttl are not supported as the LHS of a binary expression");
                         },
+                        [&] (const function_call&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: function calls are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const auto& default_case) { return false; }
@@ -909,6 +924,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                         cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
                         *cma.column);
             },
+            [&] (const function_call& fc)  {
+                fmt::print(os, "{}(args)", fc.func);
+            },
         }, expr);
     return os;
 }
@@ -947,6 +965,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const token&) { return expr; },
             [&] (const unresolved_identifier&) { return expr; },
             [&] (const column_mutation_attribute&) { return expr; },
+            [&] (const function_call&) { return expr; },
         }, expr);
 }
 
@@ -972,6 +991,11 @@ expression replace_token(const expression& expr, const column_definition* new_cd
                 throw std::logic_error(format("replace_token invalid with unresolved identifier: {}", to_string(expr)));
             },
             [&] (const column_mutation_attribute&) -> expression {
+                return expr;
+            },
+            [&] (const function_call&) -> expression {
+                // A token function could be one of the arguments, but it doesn't help the caller to replace it
+                // since we can't index function of the token function.
                 return expr;
             },
         }, expr);
