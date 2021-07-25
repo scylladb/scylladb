@@ -725,7 +725,7 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     BOOST_CHECK(fsm1.get_current_term() == 3);
 
     // pretend [id2's] an old leader trying to make progress; this entry is expected to be ignored.
-    fsm1.step(id2, raft::append_request{term_t{2}, id2, index_t{2}, term_t{2}});
+    fsm1.step(id2, raft::append_request{term_t{2}, index_t{2}, term_t{2}});
 
     raft::command cmd = create_command(4);
     fsm1.add_entry(std::move(cmd));

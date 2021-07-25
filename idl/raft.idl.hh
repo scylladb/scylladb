@@ -105,7 +105,6 @@ struct log_entry {
 
 struct append_request {
     raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::internal::tagged_id<raft::server_id_tag> leader_id;
     raft::internal::tagged_uint64<raft::index_tag> prev_log_idx;
     raft::internal::tagged_uint64<raft::term_tag> prev_log_term;
     raft::internal::tagged_uint64<raft::index_tag> leader_commit_idx;

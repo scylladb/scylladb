@@ -819,7 +819,6 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         append_request req = {
             .current_term = _current_term,
-            .leader_id = _my_id,
             .prev_log_idx = prev_idx,
             .prev_log_term = prev_term.value(),
             .leader_commit_idx = _commit_idx,
