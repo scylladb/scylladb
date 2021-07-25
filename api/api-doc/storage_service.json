@@ -766,6 +766,38 @@
          ]
       },
       {
+         "path":"/storage_service/keyspace_offstrategy_compaction/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Perform offstrategy compaction, if needed, in a single keyspace",
+               "type":"boolean",
+               "nickname":"perform_keyspace_offstrategy_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to operate on",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma-seperated table names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/keyspace_scrub/{keyspace}",
          "operations":[
             {
