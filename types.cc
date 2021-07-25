@@ -2194,19 +2194,29 @@ int32_t compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, cons
 }
 
 namespace {
+
 struct compare_visitor {
     managed_bytes_view v1;
     managed_bytes_view v2;
-    template <typename T> int32_t operator()(const simple_type_impl<T>&) {
+
+    template <std::invocable<> Func>
+    requires std::same_as<int32_t, std::invoke_result_t<Func>>
+    int32_t with_empty_checks(Func func) {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
         }
         if (v2.empty()) {
             return 1;
         }
+        return func();
+    }
+
+    template <typename T> int32_t operator()(const simple_type_impl<T>&) {
+      return with_empty_checks([&] {
         T a = simple_type_traits<T>::read_nonempty(v1);
         T b = simple_type_traits<T>::read_nonempty(v2);
         return a == b ? 0 : a < b ? -1 : 1;
+      });
     }
     int32_t operator()(const string_type_impl&) { return compare_unsigned(v1, v2); }
     int32_t operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2); }
@@ -2217,17 +2227,13 @@ struct compare_visitor {
         return compare_unsigned(v1, v2);
     }
     int32_t operator()(const timeuuid_type_impl&) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+      return with_empty_checks([&] {
         return with_linearized(v1, [&] (bytes_view v1) {
             return with_linearized(v2, [&] (bytes_view v2) {
                 return utils::timeuuid_tri_compare(v1, v2);
             });
         });
+      });
     }
     int32_t operator()(const listlike_collection_type_impl& l) {
         using llpdi = listlike_partial_deserializing_iterator;
@@ -2272,34 +2278,21 @@ struct compare_visitor {
         return a == b ? 0 : a < b ? -1 : 1;
     }
     int32_t operator()(const decimal_type_impl& d) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+      return with_empty_checks([&] {
         auto a = deserialize_value(d, v1);
         auto b = deserialize_value(d, v2);
         return a.compare(b);
+      });
     }
     int32_t operator()(const varint_type_impl& v) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+      return with_empty_checks([&] {
         auto a = deserialize_value(v, v1);
         auto b = deserialize_value(v, v2);
         return a == b ? 0 : a < b ? -1 : 1;
+      });
     }
     template <typename T> int32_t operator()(const floating_type_impl<T>&) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+      return with_empty_checks([&] {
         T a = simple_type_traits<T>::read_nonempty(v1);
         T b = simple_type_traits<T>::read_nonempty(v2);
 
@@ -2318,6 +2311,7 @@ struct compare_visitor {
             return 1;
         }
         return a == b ? 0 : a < b ? -1 : 1;
+      });
     }
     int32_t operator()(const reversed_type_impl& r) { return r.underlying_type()->compare(v2, v1); }
 };
