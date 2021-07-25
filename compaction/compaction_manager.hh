@@ -203,6 +203,7 @@ public:
     void submit(column_family* cf);
 
     // Submit a column family to be off-strategy compacted.
+    future<> perform_offstrategy(column_family* cf);
     void submit_offstrategy(column_family* cf);
 
     // Submit a column family to be cleaned up and wait for its termination.

@@ -623,7 +623,7 @@ void compaction_manager::submit(column_family* cf) {
     });
 }
 
-void compaction_manager::submit_offstrategy(column_family* cf) {
+future<> compaction_manager::perform_offstrategy(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     task->type = sstables::compaction_type::Reshape;
@@ -666,6 +666,14 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
             });
         });
     });
+    return task->compaction_done.get_future().finally([task] {});
+}
+
+void compaction_manager::submit_offstrategy(column_family* cf) {
+    // Run in background.
+    // This is safe since the compaction task is tracked
+    // by the compaction_manager until stop()
+    (void)perform_offstrategy(cf);
 }
 
 inline bool compaction_manager::check_for_cleanup(column_family* cf) {
