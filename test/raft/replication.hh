@@ -77,7 +77,7 @@ using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
-auto dummy_command = std::numeric_limits<int>::min();
+const auto dummy_command = std::numeric_limits<int>::min();
 
 class hasher_int : public xx_hasher {
 public:
