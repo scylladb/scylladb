@@ -50,7 +50,8 @@ namespace sstables {
  */
 template <typename T>
 int binary_search(const dht::i_partitioner& partitioner, const T& entries, const key& sk, const dht::token& token) {
-    int low = 0, mid = entries.size(), high = mid - 1, result = -1;
+    int low = 0, mid = entries.size(), high = mid - 1;
+    std::strong_ordering result = std::strong_ordering::less;
 
     while (low <= high) {
         // The token comparison should yield the right result most of the time.
@@ -64,7 +65,7 @@ int binary_search(const dht::i_partitioner& partitioner, const T& entries, const
         if (token == mid_token) {
             result = sk.tri_compare(mid_key);
         } else {
-            result = token < mid_token ? -1 : 1;
+            result = token < mid_token ? std::strong_ordering::less : std::strong_ordering::greater;
         }
 
         if (result > 0) {
