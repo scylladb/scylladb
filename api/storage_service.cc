@@ -501,13 +501,18 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
+        auto offstrategy = req_param<bool>(*req, "offstrategy", false);
+        return ctx.db.invoke_on_all([keyspace, column_families, offstrategy] (database& db) {
             std::vector<column_family*> column_families_vec;
             for (auto cf : column_families) {
                 column_families_vec.push_back(&db.find_column_family(keyspace, cf));
             }
-            return parallel_for_each(column_families_vec, [] (column_family* cf) {
+            return parallel_for_each(column_families_vec, [offstrategy] (column_family* cf) {
+                if (offstrategy) {
+                    return cf->perform_offstrategy_compaction();
+                } else {
                     return cf->compact_all_sstables();
+                }
             });
         }).then([]{
                 return make_ready_future<json::json_return_type>(json_void());
