@@ -322,7 +322,7 @@ std::strong_ordering ring_position_comparator_for_sstables::operator()(ring_posi
     }
     if (lh._key) {
         auto rel = rh.key().tri_compare(s, *lh._key);
-        if (rel) {
+        if (rel != std::strong_ordering::equal) {
             return 0 <=> rel;
         }
     }
