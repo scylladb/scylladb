@@ -365,7 +365,7 @@ class azure_instance:
     EPHEMERAL = "ephemeral"
     ROOT = "root"
     GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-azure/"
-    ENDPOINT_SNITCH = "GossipingPropertyFileSnitch"
+    ENDPOINT_SNITCH = "AzureSnitch"
     META_DATA_BASE_URL = "http://169.254.169.254/metadata/instance"
 
     def __init__(self):
