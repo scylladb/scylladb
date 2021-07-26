@@ -509,6 +509,7 @@ scylla_tests = set([
     'test/boost/stall_free_test',
     'test/boost/sstable_set_test',
     'test/boost/reader_concurrency_semaphore_test',
+    'test/boost/service_level_controller_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
