@@ -541,21 +541,64 @@ partition_snapshot_ptr partition_entry::read(logalloc::region& r,
 }
 
 partition_snapshot::range_tombstone_result
-partition_snapshot::range_tombstones(position_in_partition_view start, position_in_partition_view end)
+partition_snapshot::range_tombstones(position_in_partition_view start, position_in_partition_view end) {
+    range_tombstone_result rts;
+    range_tombstones(start, end, [&] (range_tombstone rt) {
+        rts.emplace_back(std::move(rt));
+        return stop_iteration::no;
+    });
+    return rts;
+}
+
+stop_iteration
+partition_snapshot::range_tombstones(position_in_partition_view start, position_in_partition_view end,
+                                     std::function<stop_iteration(range_tombstone)> callback)
 {
     partition_version* v = &*version();
-    if (!v->next()) {
-        return boost::copy_range<range_tombstone_result>(
-            v->partition().row_tombstones().slice(*_schema, start, end));
-    }
-    range_tombstone_list list(*_schema);
-    while (v) {
+
+    if (!v->next()) { // Optimization for single-version snapshots
         for (auto&& rt : v->partition().row_tombstones().slice(*_schema, start, end)) {
-            list.apply(*_schema, rt);
+            if (callback(rt) == stop_iteration::yes) {
+                return stop_iteration::no;
+            }
+        }
+        return stop_iteration::yes;
+    }
+
+    std::vector<range_tombstone_list::iterator_range> streams; // contains only non-empty ranges
+    position_in_partition::less_compare less(*_schema);
+
+    // Sorts ranges by first range_tombstone's starting position
+    // in descending order.
+    auto stream_less = [&] (range_tombstone_list::iterator_range left, range_tombstone_list::iterator_range right) {
+        return less(right.begin()->position(), left.begin()->position());
+    };
+
+    while (v) {
+        auto&& range = v->partition().row_tombstones().slice(*_schema, start, end);
+        if (!range.empty()) {
+            streams.emplace_back(std::move(range));
         }
         v = v->next();
     }
-    return boost::copy_range<range_tombstone_result>(list.slice(*_schema, start, end));
+
+    std::make_heap(streams.begin(), streams.end(), stream_less);
+
+    while (!streams.empty()) {
+        std::pop_heap(streams.begin(), streams.end(), stream_less);
+        range_tombstone_list::iterator_range& stream = streams.back();
+        if (callback(*stream.begin()) == stop_iteration::yes) {
+            return stop_iteration::no;
+        }
+        stream.advance_begin(1);
+        if (!stream.empty()) {
+            std::push_heap(streams.begin(), streams.end(), stream_less);
+        } else {
+            streams.pop_back();
+        }
+    }
+
+    return stop_iteration::yes;
 }
 
 partition_snapshot::range_tombstone_result
