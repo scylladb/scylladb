@@ -48,6 +48,8 @@ if __name__ == '__main__':
                         help='specify how will this device be used (data, commitlog, or all)')
     parser.add_argument('--force-raid', action='store_true', default=False,
                         help='force constructing RAID when only one disk is specified')
+    parser.add_argument('--raid-level', default='0',
+                        help='specify RAID level')
 
     args = parser.parse_args()
 
@@ -120,7 +122,7 @@ if __name__ == '__main__':
     except SystemdException:
         md_service = systemd_unit('mdadm.service')
 
-    print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='RAID0' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
+    print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='fRAID{args.raid_level}' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
     procs=[]
     for disk in disks:
         d = disk.replace('/dev/', '')
@@ -135,7 +137,7 @@ if __name__ == '__main__':
         proc.wait()
     if raid:
         run('udevadm settle', shell=True, check=True)
-        run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
+        run('mdadm --create --verbose --force --run {raid} --level={level} -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, level=args.raid_level, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
         run('udevadm settle', shell=True, check=True)
 
     major_minor = os.stat(fsdev).st_rdev
