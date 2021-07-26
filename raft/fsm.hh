@@ -345,6 +345,15 @@ public:
     term_t log_last_term() const {
         return _log.last_term();
     }
+    index_t log_last_snapshot_idx() const {
+        return _log.get_snapshot().idx;
+    }
+
+    // Return the last configuration entry with index smaller than or equal to `idx`.
+    // Precondition: `log_last_idx()` >= `idx` >= `log_last_snapshot_idx()`.
+    const configuration& log_last_conf_for(index_t idx) const {
+        return _log.last_conf_for(idx);
+    }
 
     // Call this function to wait for the number of log entries to
     // go below  max_log_size.

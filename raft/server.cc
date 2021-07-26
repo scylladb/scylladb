@@ -608,7 +608,6 @@ future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snaps
 
 future<> server_impl::applier_fiber() {
     logger.trace("applier_fiber start");
-    size_t applied_since_snapshot = 0;
 
     try {
         while (true) {
@@ -616,8 +615,6 @@ future<> server_impl::applier_fiber() {
 
             if (std::holds_alternative<std::vector<log_entry_ptr>>(v)) {
                 auto& batch = std::get<0>(v);
-
-                applied_since_snapshot += batch.size();
 
                 std::vector<command_cref> commands;
                 commands.reserve(batch.size());
@@ -638,15 +635,25 @@ future<> server_impl::applier_fiber() {
                 }
                notify_waiters(_awaited_applies, batch);
 
-               if (applied_since_snapshot >= _config.snapshot_threshold) {
+               // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
+               // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
+               // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
+               auto last_snap_idx = _fsm->log_last_snapshot_idx();
+               if (last_idx >= last_snap_idx && last_idx - last_snap_idx >= _config.snapshot_threshold) {
                    snapshot snp;
                    snp.term = last_term;
                    snp.idx = last_idx;
-                   logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                   snp.config = _fsm->log_last_conf_for(last_idx);
+                   logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                    snp.id = co_await _state_machine->take_snapshot();
                    _last_loaded_snapshot_id = snp.id;
-                   _fsm->apply_snapshot(snp, _config.snapshot_trailing, true);
-                   applied_since_snapshot = 0;
+                   // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
+                   // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
+                   // a later snapshot from the queue.
+                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, true)) {
+                       logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
+                              " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+                   }
                    _stats.snapshots_taken++;
                }
             } else {

@@ -77,6 +77,7 @@ private:
     // log after it's been loaded from disk.
     void init_last_conf_idx();
     log_entry_ptr& get_entry(index_t);
+    const log_entry_ptr& get_entry(index_t) const;
 public:
     explicit log(snapshot snp, log_entries log = {})
             : _snapshot(std::move(snp)), _log(std::move(log)) {
@@ -174,6 +175,11 @@ public:
     // The returned reference is only valid until the next
     // operation on the log.
     const configuration& get_configuration() const;
+
+    // Return the last configuration entry with index smaller than or equal to `idx`.
+    // Precondition: `last_idx()` >= `idx` >= `get_snapshot().idx`;
+    // there is no way in general to learn configurations before the last snapshot.
+    const configuration& last_conf_for(index_t idx) const;
 
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
