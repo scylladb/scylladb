@@ -595,6 +595,8 @@ public:
     // Returns next fragment with position before upper_bound or disengaged optional if no such fragments are left.
     mutation_fragment_opt get_next(position_in_partition_view upper_bound);
     mutation_fragment_opt get_next();
+    // Precondition: !empty()
+    const range_tombstone& peek_next() const;
     // Forgets all tombstones which are not relevant for any range starting at given position.
     void forward_to(position_in_partition_view);
 
