@@ -239,9 +239,7 @@ int main(int argc, char** argv) {
             test_small_partitions();
             test_partition_with_few_small_rows();
             test_partition_with_lots_of_small_rows();
-            // Takes a huge amount of time due to https://github.com/scylladb/scylla/issues/2581#issuecomment-398030186,
-            // disable until fixed.
-            // test_partition_with_lots_of_range_tombstones();
+            test_partition_with_lots_of_range_tombstones();
         });
     });
 }
