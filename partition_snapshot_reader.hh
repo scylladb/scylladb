@@ -245,11 +245,16 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 const std::optional<position_in_partition>& last_row,
                 const std::optional<position_in_partition>& last_rts,
                 position_in_partition_view pos) {
+            if (!_rt_stream.empty()) {
+                return _rt_stream.get_next(std::move(pos));
+            }
             return in_alloc_section([&] () -> mutation_fragment_opt {
                 maybe_refresh_state(ck_range, last_row, last_rts);
 
                 position_in_partition::less_compare rt_less(_schema);
-                while (has_more_range_tombstones() && !rt_less(pos, peek_range_tombstone().position())) {
+                while (has_more_range_tombstones()
+                        && !rt_less(pos, peek_range_tombstone().position())
+                        && (_rt_stream.empty() || !rt_less(_rt_stream.peek_next().position(), peek_range_tombstone().position()))) {
                     range_tombstone rt = pop_range_tombstone();
                     if (rt.trim(_schema,
                                 position_in_partition_view::for_range_start(ck_range),
