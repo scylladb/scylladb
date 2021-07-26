@@ -259,6 +259,11 @@ extern raft::snapshot_id delay_apply_snapshot;
 // sending of a snaphot with that id will be delayed until snapshot_sync is signaled
 extern raft::snapshot_id delay_send_snapshot;
 
+// Test connectivity configuration
+struct rpc_config {
+    bool drops = false;
+};
+
 template <typename Clock>
 class raft_cluster {
     using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
@@ -279,7 +284,7 @@ class raft_cluster {
     std::unique_ptr<persisted_snapshots> _persisted_snapshots;
     size_t _apply_entries;
     size_t _next_val;
-    bool _packet_drops;
+    rpc_config _rpc_config;
     bool _prevote;
     apply_fn _apply;
     std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
@@ -292,8 +297,8 @@ public:
     raft_cluster(test_case test,
             apply_fn apply,
             size_t apply_entries, size_t first_val, size_t first_leader,
-            bool prevote, bool packet_drops,
-            typename Clock::duration tick_delta);
+            bool prevote, typename Clock::duration tick_delta,
+            rpc_config rpc_config);
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
@@ -500,18 +505,18 @@ class raft_cluster<Clock>::rpc : public raft::rpc {
     connected* _connected;
     snapshots* _snapshots;
     rpc_net& _net;
-    bool _packet_drops;
+    rpc_config _rpc_config;
     raft::server_address_set _known_peers;
     uint32_t _servers_added = 0;
     uint32_t _servers_removed = 0;
 public:
     rpc(raft::server_id id, connected* connected, snapshots* snapshots,
-        rpc_net& net, bool packet_drops)
+        rpc_net& net, rpc_config rpc_config)
             : _id(id)
             , _connected(connected)
             , _snapshots(snapshots)
             , _net(net)
-            , _packet_drops(packet_drops)
+            , _rpc_config(rpc_config)
     {
         _net[_id] = this;
     }
@@ -537,7 +542,7 @@ public:
         if (!(*_connected)(id, _id)) {
             return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
-        if (!_packet_drops || (rand() % 5)) {
+        if (!_rpc_config.drops || (rand() % 5)) {
             _net[id]->_client->append_entries(_id, append_request);
         }
         return make_ready_future<>();
@@ -549,7 +554,7 @@ public:
         if (!(*_connected)(id, _id)) {
             return;
         }
-        if (!_packet_drops || (rand() % 5)) {
+        if (!_rpc_config.drops || (rand() % 5)) {
             _net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
     }
@@ -613,7 +618,7 @@ typename raft_cluster<Clock>::test_server raft_cluster<Clock>::create_server(siz
     auto& rsm = *sm;
 
     auto mrpc = std::make_unique<raft_cluster::rpc>(uuid, _connected.get(),
-            _snapshots.get(), _rpc_net, _packet_drops);
+            _snapshots.get(), _rpc_net, _rpc_config);
     auto& rpc_ref = *mrpc;
 
     auto mpersistence = std::make_unique<persistence>(uuid, state,
@@ -634,14 +639,14 @@ template <typename Clock>
 raft_cluster<Clock>::raft_cluster(test_case test,
     apply_fn apply,
     size_t apply_entries, size_t first_val, size_t first_leader,
-    bool prevote, bool packet_drops,
-    typename Clock::duration tick_delta)
-        : _connected(std::make_unique<struct connected>(test.nodes))
-        , _snapshots(std::make_unique<snapshots>())
+    bool prevote, typename Clock::duration tick_delta,
+    rpc_config rpc_config)
+        : _connected(std::make_unique<struct connected>(test.nodes)),
+        _snapshots(std::make_unique<snapshots>())
         , _persisted_snapshots(std::make_unique<persisted_snapshots>())
         , _apply_entries(apply_entries)
         , _next_val(first_val)
-        , _packet_drops(packet_drops)
+        , _rpc_config(rpc_config)
         , _prevote(prevote)
         , _apply(apply)
         , _leader(first_leader)
@@ -1185,12 +1190,12 @@ std::vector<initial_state> raft_cluster<Clock>::get_states(test_case test, bool 
 
 template <typename Clock>
 struct run_test {
-    future<> operator() (test_case test, bool prevote, bool packet_drops,
-            typename Clock::duration tick_delta) {
+    future<> operator() (test_case test, bool prevote, typename Clock::duration tick_delta,
+            rpc_config rpc_config) {
 
         raft_cluster<Clock> rafts(test, ::apply_changes, test.total_values,
-                test.get_first_val(), test.initial_leader, prevote, packet_drops,
-                tick_delta);
+                test.get_first_val(), test.initial_leader, prevote,
+                tick_delta, rpc_config);
         co_await rafts.start_all();
 
         BOOST_TEST_MESSAGE("Processing updates");
@@ -1266,7 +1271,8 @@ struct run_test {
 };
 
 template <typename Clock>
-void replication_test(struct test_case test, bool prevote, bool packet_drops,
-        typename Clock::duration tick_delta) {
-    run_test<Clock>{}(std::move(test), prevote, packet_drops, tick_delta).get();
+void replication_test(struct test_case test, bool prevote,
+        typename Clock::duration tick_delta,
+        rpc_config rpc_config = {}) {
+    run_test<Clock>{}(std::move(test), prevote, tick_delta, rpc_config).get();
 }

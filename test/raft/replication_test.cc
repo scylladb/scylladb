@@ -28,13 +28,13 @@ lowres_clock::duration tick_delta = 10ms; // minimum granularity of lowres_clock
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
-        replication_test<lowres_clock>(test_body, false, false, tick_delta); }  \
+        replication_test<lowres_clock>(test_body, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
-        replication_test<lowres_clock>(test_body, false, true, tick_delta); } \
+        replication_test<lowres_clock>(test_body, false, tick_delta, {.drops = true}); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
-        replication_test<lowres_clock>(test_body, true, false, tick_delta); }  \
+        replication_test<lowres_clock>(test_body, true, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
-        replication_test<lowres_clock>(test_body, true, true, tick_delta); }
+        replication_test<lowres_clock>(test_body, true, tick_delta, {.drops = true}); }
 
 // 1 nodes, simple replication, empty, no updates
 RAFT_TEST_CASE(simple_replication, (test_case{
@@ -206,7 +206,7 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
-    , false, false, tick_delta);
+    , false, tick_delta);
 }
 
 // Check removing all followers, add entry, bring back one follower and make it leader
@@ -231,7 +231,7 @@ SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
                      // TODO: find out why it breaks in release mode
                      // set_config{3,0,1}, entries{2}, new_leader{0}
                      }}
-    , false, false, tick_delta);
+    ,false, tick_delta);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
@@ -244,7 +244,7 @@ SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
                                          .term = raft::term_t(1),
                                          .id = delay_apply_snapshot}}},
          .updates = {tick{10} /* ticking starts snapshot transfer */, new_leader{1}, entries{10}}}
-    , false, false, tick_delta);
+    , false, tick_delta);
 }
 
 // verifies that each node in a cluster can campaign
