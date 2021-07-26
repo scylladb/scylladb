@@ -64,7 +64,7 @@ void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_to
         if (!less(position_in_partition::for_range_start(range), rt.end_position())) {
             BOOST_FAIL(format("Range tombstone out of range: {}, range: {}", rt, range));
         }
-        if (!less(prev_pos, rt.position())) {
+        if (less(rt.position(), prev_pos)) {
             BOOST_FAIL(format("Range tombstone breaks position monotonicity: {}, list: {}", rt, list));
         }
         prev_pos = position_in_partition(rt.position());
