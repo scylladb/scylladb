@@ -64,7 +64,7 @@ public:
     class literal : public term::multi_column_raw {
         std::vector<shared_ptr<term::raw>> _elements;
     public:
-        literal(std::vector<shared_ptr<raw>> elements)
+        literal(std::vector<shared_ptr<term::raw>> elements)
                 : _elements(std::move(elements)) {
         }
         virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
