@@ -117,6 +117,10 @@ def assert_invalid_message(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=re.escape(message)):
         execute(cql, table, cmd, *args)
 
+def assert_invalid_message_re(cql, table, message, cmd, *args):
+    with pytest.raises(InvalidRequest, match=message):
+        execute(cql, table, cmd, *args)
+
 def assert_invalid_throw_message(cql, table, message, typ, cmd, *args):
     with pytest.raises(typ, match=re.escape(message)):
         execute(cql, table, cmd, *args)
