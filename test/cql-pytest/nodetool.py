@@ -71,3 +71,10 @@ def flush(cql, table):
         requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_flush/{ks}', params={'cf' : cf})
     else:
         run_nodetool(cql, "flush", ks, cf)
+
+def refreshsizeestimates(cql):
+    if has_rest_api(cql):
+        # The "nodetool refreshsizeestimates" is not available, or needed, in Scylla
+        pass
+    else:
+        run_nodetool(cql, "refreshsizeestimates")
