@@ -27,6 +27,7 @@
 #include <optional>
 #include <iosfwd>
 #include <functional>
+#include <compare>
 #include "utils/mutable_view.hh"
 #include <xxhash.h>
 
@@ -112,13 +113,13 @@ struct hash<bytes_view> {
 };
 } // namespace std
 
-inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
+inline std::strong_ordering compare_unsigned(bytes_view v1, bytes_view v2) {
   auto size = std::min(v1.size(), v2.size());
   if (size) {
     auto n = memcmp(v1.begin(), v2.begin(), size);
     if (n) {
-        return n;
+        return n <=> 0;
     }
   }
-    return (int32_t) (v1.size() - v2.size());
+    return v1.size() <=> v2.size();
 }
