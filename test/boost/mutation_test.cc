@@ -2283,7 +2283,7 @@ public:
     }
 };
 
-using collection_element_tri_cmp_type = std::function<int(const std::pair<bytes, cell_summary>&, const std::pair<bytes, cell_summary>&)>;
+using collection_element_tri_cmp_type = std::function<std::strong_ordering(const std::pair<bytes, cell_summary>&, const std::pair<bytes, cell_summary>&)>;
 
 collection_element_tri_cmp_type
 collection_element_tri_cmp(const abstract_type& type) {
@@ -2298,13 +2298,7 @@ collection_element_tri_cmp(const abstract_type& type) {
             return [] (const std::pair<bytes, cell_summary>& a, const std::pair<bytes, cell_summary>& b) {
                 auto ai = deserialize_field_index(a.first);
                 auto bi = deserialize_field_index(b.first);
-                if (ai < bi) {
-                    return -1;
-                }
-                if (ai == bi) {
-                    return 0;
-                }
-                return 1;
+                return ai <=> bi;
             };
         },
         [] (const abstract_type& o) -> collection_element_tri_cmp_type {
