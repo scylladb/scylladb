@@ -111,22 +111,38 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
         return;
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        testlog.info("run_mutation_source_tests(evict_readers=false, single_fragment_buffer=false)");
         run_mutation_source_tests(make_populate(false, false));
+        return make_ready_future<>();
+    }).get();
+}
 
-        testlog.info("run_mutation_source_tests(evict_readers=true, single_fragment_buffer=false)");
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         run_mutation_source_tests(make_populate(true, false));
+        return make_ready_future<>();
+    }).get();
+}
 
-        testlog.info("run_mutation_source_tests(evict_readers=true, single_fragment_buffer=true)");
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         run_mutation_source_tests(make_populate(true, true));
-
         return make_ready_future<>();
     }).get();
 }
