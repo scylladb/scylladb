@@ -392,6 +392,11 @@ mutation_fragment_opt range_tombstone_stream::get_next()
     return { };
 }
 
+const range_tombstone& range_tombstone_stream::peek_next() const
+{
+    return *_list.begin();
+}
+
 void range_tombstone_stream::forward_to(position_in_partition_view pos) {
     _list.erase_where([this, &pos] (const range_tombstone& rt) {
         return !_cmp(pos, rt.end_position());
