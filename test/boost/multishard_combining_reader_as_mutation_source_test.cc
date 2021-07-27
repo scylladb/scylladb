@@ -41,18 +41,10 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 
-// Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
-        return;
-    }
+// It has to be a container that does not invalidate pointers
+static std::list<dummy_sharder> keep_alive_sharder;
 
-    // It has to be a container that does not invalidate pointers
-    std::list<dummy_sharder> keep_alive_sharder;
-
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        auto make_populate = [&] (bool evict_paused_readers, bool single_fragment_buffer) {
+static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer) {
             return [&, evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
                 // We need to group mutations that have the same token so they land on the same shard.
                 std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
@@ -116,8 +108,16 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     return mr;
                 });
             };
-        };
+}
 
+// Best run with SMP >= 2
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         testlog.info("run_mutation_source_tests(evict_readers=false, single_fragment_buffer=false)");
         run_mutation_source_tests(make_populate(false, false));
 
