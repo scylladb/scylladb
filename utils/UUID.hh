@@ -27,6 +27,7 @@
 #include <cassert>
 #include <array>
 #include <iosfwd>
+#include <compare>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
@@ -141,8 +142,8 @@ public:
 
 UUID make_random_uuid();
 
-inline int uint64_t_tri_compare(uint64_t a, uint64_t b) {
-    return a < b ? -1 : a > b;
+inline std::strong_ordering uint64_t_tri_compare(uint64_t a, uint64_t b) {
+    return a <=> b;
 }
 
 // Read 8 most significant bytes of timeuuid from serialized bytes
@@ -178,11 +179,11 @@ inline uint64_t uuid_read_lsb(const int8_t *b) {
 // To avoid breaking ordering in existing sstables, Scylla preserves
 // Cassandra compare order.
 //
-inline int timeuuid_tri_compare(bytes_view o1, bytes_view o2) {
+inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) {
     auto timeuuid_read_lsb = [](bytes_view o) -> uint64_t {
         return uuid_read_lsb(o.begin()) ^ 0x8080808080808080;
     };
-    int res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
+    auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
     if (res == 0) {
         res = uint64_t_tri_compare(timeuuid_read_lsb(o1), timeuuid_read_lsb(o2));
     }
@@ -196,8 +197,8 @@ inline int timeuuid_tri_compare(bytes_view o1, bytes_view o2) {
 // which is both faster and monotonic, so should be preferred
 // to @timeuuid_tri_compare() used for all new features.
 //
-inline int uuid_tri_compare_timeuuid(bytes_view o1, bytes_view o2) {
-    int res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
+inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view o2) {
+    auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
     if (res == 0) {
         res = uint64_t_tri_compare(uuid_read_lsb(o1.begin()), uuid_read_lsb(o2.begin()));
     }
