@@ -89,17 +89,6 @@ enum class lexicographical_relation : int8_t {
     after_all_prefixed
 };
 
-// temporary adaptor to support migration to std::strong_ordering
-inline int strong_ordering_to_int(std::strong_ordering z) {
-    if (z == std::strong_ordering::greater) {
-        return 1;
-    } else if (z == std::strong_ordering::less) {
-        return -1;
-    } else {
-        return 0;
-    }
-}
-
 // Like std::lexicographical_compare but injects values from shared sequence (types) to the comparator
 // Compare is an abstract_type-aware less comparator, which takes the type as first argument.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
@@ -155,33 +144,6 @@ std::strong_ordering lexicographical_tri_compare(TypesIterator types_first, Type
     }
 }
 
-// Like std::lexicographical_compare but injects values from shared sequence
-// (types) to the comparator. Compare is an abstract_type-aware trichotomic
-// comparator, which takes the type as first argument.
-//
-// A trichotomic comparator returns an integer which is less, equal or greater
-// than zero when the first value is respectively smaller, equal or greater
-// than the second value.
-template <std::input_iterator TypesIterator, std::input_iterator InputIt1, std::input_iterator InputIt2, typename Compare>
-requires requires (TypesIterator types, InputIt1 i1, InputIt2 i2, Compare cmp) {
-    { cmp(*types, *i1, *i2) } -> std::same_as<int>;
-}
-int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_last,
-        InputIt1 first1, InputIt1 last1,
-        InputIt2 first2, InputIt2 last2,
-        Compare comp,
-        lexicographical_relation relation1 = lexicographical_relation::before_all_strictly_prefixed,
-        lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
-    return strong_ordering_to_int(
-        lexicographical_tri_compare(
-            std::move(types_first), std::move(types_last),
-            std::move(first1), std::move(last1),
-            std::move(first2), std::move(last2),
-            [comp = std::move(comp)] (const auto& t, const auto& v1, const auto& v2) { return comp(t, v1, v2) <=> 0; },
-            relation1,
-            relation2));
-}
-
 // Trichotomic version of std::lexicographical_compare()
 template <typename InputIt1, typename InputIt2, typename Compare>
 requires requires (InputIt1 i1, InputIt2 i2, Compare c) {
@@ -212,25 +174,6 @@ std::strong_ordering lexicographical_tri_compare(InputIt1 first1, InputIt1 last1
     }
 }
 
-// Trichotomic version of std::lexicographical_compare()
-//
-// Returns an integer which is less, equal or greater than zero when the first value
-// is respectively smaller, equal or greater than the second value.
-template <typename InputIt1, typename InputIt2, typename Compare>
-requires requires (InputIt1 i1, InputIt2 i2, Compare c) {
-    { c(*i1, *i2) } -> std::same_as<int>;
-}
-int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
-        InputIt2 first2, InputIt2 last2,
-        Compare comp,
-        lexicographical_relation relation1 = lexicographical_relation::before_all_strictly_prefixed,
-        lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
-    return strong_ordering_to_int(
-        lexicographical_tri_compare(first1, last1, first2, last2,
-            [comp] (const auto& v1, const auto& v2) { return comp(v1, v2) <=> 0; },
-            relation1, relation2));
-}
-
 // A trichotomic comparator for prefix equality total ordering.
 // In this ordering, two sequences are equal iff any of them is a prefix
 // of the another. Otherwise, lexicographical ordering determines the order.
@@ -254,24 +197,6 @@ std::strong_ordering prefix_equality_tri_compare(TypesIterator types, InputIt1 f
         ++types;
     }
     return std::strong_ordering::equal;
-}
-
-// A trichotomic comparator for prefix equality total ordering.
-// In this ordering, two sequences are equal iff any of them is a prefix
-// of the another. Otherwise, lexicographical ordering determines the order.
-//
-// 'comp' is an abstract_type-aware trichotomic comparator, which takes the
-// type as first argument.
-//
-template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
-requires requires (TypesIterator ti, InputIt1 i1, InputIt2 i2, Compare c) {
-    { c(*ti, *i1, *i2) } -> std::same_as<int>;
-}
-int prefix_equality_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
-        InputIt2 first2, InputIt2 last2, Compare comp) {
-    return strong_ordering_to_int(
-            prefix_equality_tri_compare(types, first1, last1, first2, last2,
-            [comp] (const auto& t, const auto& v1, const auto& v2) { return comp(t, v1, v2) <=> 0; }));
 }
 
 // Returns true iff the second sequence is a prefix of the first sequence
