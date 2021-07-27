@@ -66,7 +66,7 @@ public:
             auto lf = other.legacy_form(s);
             return lexicographical_tri_compare(
                     v.begin(), v.end(), lf.begin(), lf.end(),
-                    [](uint8_t b1, uint8_t b2) { return (int) b1 - b2; }) <=> 0;
+                    [](uint8_t b1, uint8_t b2) { return  b1 <=> b2; });
         });
     }
 };
