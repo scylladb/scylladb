@@ -37,7 +37,7 @@ enum class mutation_fragment_stream_validation_level {
 /// can be used, but what is used have to be consistent across the entire
 /// stream.
 class mutation_fragment_stream_validator {
-    const schema& _schema;
+    const ::schema& _schema;
     mutation_fragment::kind _prev_kind;
     position_in_partition _prev_pos;
     dht::decorated_key _prev_partition_key;
