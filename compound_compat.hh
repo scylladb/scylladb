@@ -23,6 +23,7 @@
 
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <compare>
 #include "compound.hh"
 #include "schema.hh"
 #include "sstables/version.hh"
@@ -148,18 +149,18 @@ public:
         { }
 
         // @k1 and @k2 must be serialized using @type, which was passed to the constructor.
-        int operator()(managed_bytes_view k1, managed_bytes_view k2) const {
+        std::strong_ordering operator()(managed_bytes_view k1, managed_bytes_view k2) const {
             if (_type.is_singular()) {
-                return compare_unsigned(*_type.begin(k1), *_type.begin(k2));
+                return compare_unsigned(*_type.begin(k1), *_type.begin(k2)) <=> 0;
             }
             return lexicographical_tri_compare(
                 _type.begin(k1), _type.end(k1),
                 _type.begin(k2), _type.end(k2),
-                [] (const managed_bytes_view& c1, const managed_bytes_view& c2) -> int {
+                [] (const managed_bytes_view& c1, const managed_bytes_view& c2) -> std::strong_ordering {
                     if (c1.size() != c2.size() || !c1.size()) {
-                        return c1.size() < c2.size() ? -1 : c1.size() ? 1 : 0;
+                        return c1.size() < c2.size() ? std::strong_ordering::less : c1.size() ? std::strong_ordering::greater : std::strong_ordering::equal;
                     }
-                    return compare_unsigned(c1, c2);
+                    return compare_unsigned(c1, c2) <=> 0;
                 });
         }
     };
@@ -523,8 +524,8 @@ public:
     struct tri_compare {
         const std::vector<data_type>& _types;
         tri_compare(const std::vector<data_type>& types) : _types(types) {}
-        int operator()(const composite&, const composite&) const;
-        int operator()(composite_view, composite_view) const;
+        std::strong_ordering operator()(const composite&, const composite&) const;
+        std::strong_ordering operator()(composite_view, composite_view) const;
     };
 };
 
@@ -640,31 +641,31 @@ std::ostream& operator<<(std::ostream& os, const composite& v) {
 }
 
 inline
-int composite::tri_compare::operator()(const composite& v1, const composite& v2) const {
+std::strong_ordering composite::tri_compare::operator()(const composite& v1, const composite& v2) const {
     return (*this)(composite_view(v1), composite_view(v2));
 }
 
 inline
-int composite::tri_compare::operator()(composite_view v1, composite_view v2) const {
+std::strong_ordering composite::tri_compare::operator()(composite_view v1, composite_view v2) const {
     // See org.apache.cassandra.db.composites.AbstractCType#compare
     if (v1.empty()) {
-        return v2.empty() ? 0 : -1;
+        return v2.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
     }
     if (v2.empty()) {
-        return 1;
+        return std::strong_ordering::greater;
     }
     if (v1.is_static() != v2.is_static()) {
-        return v1.is_static() ? -1 : 1;
+        return v1.is_static() ? std::strong_ordering::less : std::strong_ordering::greater;
     }
     auto a_values = v1.components();
     auto b_values = v2.components();
     auto cmp = [&](const data_type& t, component_view c1, component_view c2) {
         // First by value, then by EOC
-        auto r = t->compare(c1.first, c2.first);
-        if (r) {
+        auto r = t->compare(c1.first, c2.first) <=> 0;
+        if (r != 0) {
             return r;
         }
-        return static_cast<int>(c1.second) - static_cast<int>(c2.second);
+        return (static_cast<int>(c1.second) - static_cast<int>(c2.second)) <=> 0;
     };
     return lexicographical_tri_compare(_types.begin(), _types.end(),
         a_values.begin(), a_values.end(),
