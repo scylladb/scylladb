@@ -199,19 +199,19 @@ public:
         end_kind = new_end.kind();
     }
 
-    size_t external_memory_usage(const schema&) const {
+    size_t external_memory_usage(const schema&) const noexcept {
         return start.external_memory_usage() + end.external_memory_usage();
     }
 
-    size_t minimal_external_memory_usage(const schema&) const {
+    size_t minimal_external_memory_usage(const schema&) const noexcept {
         return start.minimal_external_memory_usage() + end.minimal_external_memory_usage();
     }
 
-    size_t memory_usage(const schema& s) const {
+    size_t memory_usage(const schema& s) const noexcept {
         return sizeof(range_tombstone) + external_memory_usage(s);
     }
 
-    size_t minimal_memory_usage(const schema& s) const {
+    size_t minimal_memory_usage(const schema& s) const noexcept {
         return sizeof(range_tombstone) + minimal_external_memory_usage(s);
     }
 private:

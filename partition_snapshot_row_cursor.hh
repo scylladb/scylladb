@@ -76,7 +76,7 @@ public:
         rows_entry::tri_compare cmp(*snp.schema());
         _in_latest = true;
         for (auto&& v : snp.versions()) {
-            auto& rows = v.partition().clustered_rows();
+            auto rows = v.partition().clustered_rows();
             _it = rows.find(_pos, cmp);
             if (_it != rows.end()) {
                 return true;
@@ -176,7 +176,7 @@ class partition_snapshot_row_cursor final {
         bool first = true;
         for (auto&& v : _snp.versions()) {
             unique_owner = unique_owner && (first || !v.is_referenced());
-            auto& rows = v.partition().clustered_rows();
+            auto rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, cmp);
             if (first) {
                 _latest_it = pos;
@@ -202,7 +202,8 @@ class partition_snapshot_row_cursor final {
         assert(iterators_valid());
         for (auto&& curr : _current_row) {
             if (!keep && curr.unique_owner) {
-                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
+                mutation_partition::rows_type::key_grabber kg(curr.it);
+                kg.release(current_deleter<rows_entry>());
             } else {
                 ++curr.it;
             }
@@ -271,7 +272,7 @@ public:
         if (!is_in_latest_version()) {
             rows_entry::tri_compare cmp(_schema);
             position_in_version::less_compare heap_less(_schema);
-            auto& rows = _snp.version()->partition().clustered_rows();
+            auto rows = _snp.version()->partition().clustered_rows();
             bool match;
             auto it = rows.lower_bound(_position, match, cmp);
             _latest_it = it;
@@ -399,7 +400,7 @@ public:
     // Can be called only when cursor is valid and pointing at a row.
     // The cursor remains valid after the call and points at the same row as before.
     ensure_result ensure_entry_in_latest() {
-        auto&& rows = _snp.version()->partition().clustered_rows();
+        auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         rows_entry& latest = *latest_i;
         if (is_in_latest_version()) {
@@ -444,7 +445,7 @@ public:
                 return std::nullopt;
             }
         }
-        auto&& rows = _snp.version()->partition().clustered_rows();
+        auto&& rows = _snp.version()->partition().mutable_clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
             is_continuous(latest_i && latest_i->continuous()));

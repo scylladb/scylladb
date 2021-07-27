@@ -177,7 +177,7 @@ struct expected_tombstone {
 };
 
 static void assert_cached_tombstones(partition_snapshot_ptr snp, std::deque<range_tombstone> expected, const query::clustering_row_ranges& ck_ranges) {
-    range_tombstone_list rts = snp->version()->partition().row_tombstones();
+    range_tombstone_list rts = snp->version()->partition().mutable_row_tombstones();
     rts.trim(*SCHEMA, ck_ranges);
 
     range_tombstone_list expected_list(*SCHEMA);

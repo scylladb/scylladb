@@ -437,12 +437,12 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
                         }
                     }
                     dirty_size += current->partition().row_tombstones().external_memory_usage(s);
-                    range_tombstone_list& tombstones = dst.partition().row_tombstones();
+                    range_tombstone_list& tombstones = dst.partition().mutable_row_tombstones();
                     // FIXME: defer while applying range tombstones
                     if (can_move) {
-                        tombstones.apply_monotonically(s, std::move(current->partition().row_tombstones()));
+                        tombstones.apply_monotonically(s, std::move(current->partition().mutable_row_tombstones()));
                     } else {
-                        tombstones.apply_monotonically(s, current->partition().row_tombstones());
+                        tombstones.apply_monotonically(s, const_cast<const mutation_partition&>(current->partition()).row_tombstones());
                     }
                     current = current->next();
                     can_move &= current && !current->is_referenced();

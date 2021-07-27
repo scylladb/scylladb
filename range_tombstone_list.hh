@@ -107,34 +107,34 @@ public:
     range_tombstone_list(range_tombstone_list&&) = default;
     range_tombstone_list& operator=(range_tombstone_list&&) = default;
     ~range_tombstone_list();
-    size_t size() const {
+    size_t size() const noexcept {
         return _tombstones.size();
     }
-    bool empty() const {
+    bool empty() const noexcept {
         return _tombstones.empty();
     }
-    auto begin() {
+    auto begin() noexcept {
         return _tombstones.begin();
     }
-    auto begin() const {
+    auto begin() const noexcept {
         return _tombstones.begin();
     }
-    auto rbegin() {
+    auto rbegin() noexcept {
         return _tombstones.rbegin();
     }
-    auto rbegin() const {
+    auto rbegin() const noexcept {
         return _tombstones.rbegin();
     }
-    auto end() {
+    auto end() noexcept {
         return _tombstones.end();
     }
-    auto end() const {
+    auto end() const noexcept {
         return _tombstones.end();
     }
-    auto rend() {
+    auto rend() noexcept {
         return _tombstones.rend();
     }
-    auto rend() const {
+    auto rend() const noexcept {
         return _tombstones.rend();
     }
     void apply(const schema& s, const bound_view& start_bound, const bound_view& end_bound, tombstone tomb) {
@@ -219,7 +219,7 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_list&);
     bool equal(const schema&, const range_tombstone_list&) const;
-    size_t external_memory_usage(const schema& s) const {
+    size_t external_memory_usage(const schema& s) const noexcept {
         size_t result = 0;
         for (auto& rtb : _tombstones) {
             result += rtb.memory_usage(s);

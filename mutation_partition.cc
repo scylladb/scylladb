@@ -1136,7 +1136,7 @@ bool mutation_partition::equal_continuity(const schema& s, const mutation_partit
 
 mutation_partition mutation_partition::sliced(const schema& s, const query::clustering_row_ranges& ranges) const {
     auto p = mutation_partition(*this, s, ranges);
-    p.row_tombstones().trim(s, ranges);
+    p._row_tombstones.trim(s, ranges);
     return p;
 }
 

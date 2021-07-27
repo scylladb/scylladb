@@ -3191,7 +3191,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
     BOOST_REQUIRE(!m->partition().partition_tombstone());
-    auto& rows = m->partition().clustered_rows();
+    auto rows = m->partition().clustered_rows();
     BOOST_REQUIRE(rows.calculate_size() == 1);
     auto& row = rows.begin()->row();
     BOOST_REQUIRE(row.deleted_at());
@@ -3263,7 +3263,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
     BOOST_REQUIRE(!m->partition().partition_tombstone());
-    auto& rows = m->partition().clustered_rows();
+    auto rows = m->partition().clustered_rows();
     BOOST_REQUIRE(rows.calculate_size() == 1);
     auto& row = rows.begin()->row();
     BOOST_REQUIRE(row.is_live(*s));
