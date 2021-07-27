@@ -32,12 +32,10 @@ namespace functions {
 extern logging::logger log;
 
 user_function::user_function(function_name name, std::vector<data_type> arg_types, std::vector<sstring> arg_names,
-        sstring body, sstring language, data_type return_type, bool called_on_null_input, sstring bitcode,
-        lua::runtime_config cfg)
+        sstring body, sstring language, data_type return_type, bool called_on_null_input, context ctx)
     : abstract_function(std::move(name), std::move(arg_types), std::move(return_type)),
       _arg_names(std::move(arg_names)), _body(std::move(body)), _language(std::move(language)),
-      _called_on_null_input(called_on_null_input), _bitcode(std::move(bitcode)),
-      _cfg(std::move(cfg)) {}
+      _called_on_null_input(called_on_null_input), _ctx(std::move(ctx)) {}
 
 bool user_function::is_pure() const { return true; }
 
@@ -66,7 +64,11 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
     if (!seastar::thread::running_in_thread()) {
         on_internal_error(log, "User function cannot be executed in this context");
     }
-    return lua::run_script(lua::bitcode_view{_bitcode}, values, return_type(), _cfg).get0();
+    return seastar::visit(_ctx,
+        [&] (lua_context& ctx) {
+            return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get0();
+        });
 }
+
 }
 }
