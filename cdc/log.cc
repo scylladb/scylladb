@@ -709,16 +709,16 @@ private:
        }
        return false;
     }
-    bool compare(const T&, const value_type& v);
+    int32_t compare(const T&, const value_type& v);
 };
 
 template<>
-bool maybe_back_insert_iterator<std::vector<std::pair<bytes_view, bytes_view>>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
+int32_t maybe_back_insert_iterator<std::vector<std::pair<bytes_view, bytes_view>>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
     return _type.compare(t, v.first);
 }
 
 template<>
-bool maybe_back_insert_iterator<std::vector<bytes_view>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
+int32_t maybe_back_insert_iterator<std::vector<bytes_view>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
     return _type.compare(t, v);
 }
 
