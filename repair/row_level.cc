@@ -491,9 +491,22 @@ public:
     future<mutation_fragment_opt>
     read_mutation_fragment() {
         ++_reads_issued;
-        return _reader(db::no_timeout).then([this] (mutation_fragment_opt mfopt) {
-            ++_reads_finished;
-            return mfopt;
+        // Use a very long timeout for the reader to break out any eventual
+        // deadlock within the reader. Thirty minutes should be more than
+        // enough to read a single mutation fragment.
+        auto timeout = db::timeout_clock::now() + std::chrono::minutes(30);
+        return _reader(timeout).then_wrapped([this] (future<mutation_fragment_opt> f) {
+            try {
+                auto mfopt = f.get0();
+                ++_reads_finished;
+                return mfopt;
+            } catch (seastar::timed_out_error& e) {
+                rlogger.warn("Failed to read a fragment from the reader, keyspace={}, table={}, range={}: {}",
+                    _schema->ks_name(), _schema->cf_name(), _range, e);
+                throw;
+            } catch (...) {
+                throw;
+            }
         });
     }
 
