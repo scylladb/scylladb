@@ -636,10 +636,10 @@ future<> server_impl::applier_fiber() {
                        boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                        std::back_inserter(commands));
 
-               auto size = commands.size();
+                auto size = commands.size();
                 if (size) {
-                  co_await _state_machine->apply(std::move(commands));
-                  _stats.applied_entries += size;
+                    co_await _state_machine->apply(std::move(commands));
+                    _stats.applied_entries += size;
                 }
 
                _applied_idx = last_idx;
