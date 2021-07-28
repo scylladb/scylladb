@@ -1364,25 +1364,25 @@ database::existing_index_names(const sstring& ks_name, const sstring& cf_to_excl
 //  - org.apache.cassandra.db.AbstractCell#reconcile()
 //  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
 //  - org.apache.cassandra.db.BufferDeletedCell#reconcile()
-int
+std::strong_ordering
 compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     if (left.timestamp() != right.timestamp()) {
-        return left.timestamp() > right.timestamp() ? 1 : -1;
+        return left.timestamp() <=> right.timestamp();
     }
     if (left.is_live() != right.is_live()) {
-        return left.is_live() ? -1 : 1;
+        return left.is_live() ? std::strong_ordering::less : std::strong_ordering::greater;
     }
     if (left.is_live()) {
-        auto c = compare_unsigned(left.value(), right.value());
+        auto c = compare_unsigned(left.value(), right.value()) <=> 0;
         if (c != 0) {
             return c;
         }
         if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
             // prefer expiring cells.
-            return left.is_live_and_has_ttl() ? 1 : -1;
+            return left.is_live_and_has_ttl() ? std::strong_ordering::greater : std::strong_ordering::less;
         }
         if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
-            return left.expiry() < right.expiry() ? -1 : 1;
+            return left.expiry() <=> right.expiry();
         }
     } else {
         // Both are deleted
@@ -1392,10 +1392,10 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
             // comparing timestamps, which in case of deleted cells will hold
             // serialized expiry.
             return (uint64_t) left.deletion_time().time_since_epoch().count()
-                   < (uint64_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+                   <=> (uint64_t) right.deletion_time().time_since_epoch().count();
         }
     }
-    return 0;
+    return std::strong_ordering::equal;
 }
 
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
