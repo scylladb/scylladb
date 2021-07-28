@@ -34,14 +34,8 @@ struct key_compare {
 };
 
 struct key_tri_compare {
-    int operator()(const per_key_t& a, const per_key_t& b) const noexcept {
-        if (a > b) {
-            return 1;
-        } else if (a < b) {
-            return -1;
-        } else {
-            return 0;
-        }
+    std::strong_ordering operator()(const per_key_t& a, const per_key_t& b) const noexcept {
+        return a <=> b;
     }
 };
 

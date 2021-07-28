@@ -1198,7 +1198,7 @@ static unsigned cardinality(std::optional<int_range> ropt) {
 
 static std::optional<int_range> intersection(int_range a, int_range b) {
     auto int_tri_cmp = [] (int x, int y) {
-        return x < y ? -1 : (x > y ? 1 : 0);
+        return x <=> y;
     };
     return a.intersection(b, int_tri_cmp);
 }
