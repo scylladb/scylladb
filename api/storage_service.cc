@@ -294,7 +294,7 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
-void set_storage_service(http_context& ctx, routes& r) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
             return make_ready_future<json::json_return_type>(id.to_sstring());

@@ -1097,7 +1097,7 @@ int main(int ac, char** av) {
             }).get();
             api::set_server_gossip(ctx).get();
             api::set_server_snitch(ctx).get();
-            api::set_server_storage_proxy(ctx).get();
+            api::set_server_storage_proxy(ctx, ss).get();
             api::set_server_load_sstable(ctx).get();
             static seastar::sharded<memory_threshold_guard> mtg;
             //FIXME: discarded future
@@ -1191,7 +1191,7 @@ int main(int ac, char** av) {
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx).get();
+            api::set_server_storage_service(ctx, ss).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
