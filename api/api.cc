@@ -182,13 +182,20 @@ future<> set_server_gossip_settle(http_context& ctx) {
     });
 }
 
-future<> set_server_done(http_context& ctx) {
+future<> set_server_compaction_manager(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         rb->register_function(r, "compaction_manager",
                 "The Compaction manager API");
         set_compaction_manager(ctx, r);
+    });
+}
+
+future<> set_server_done(http_context& ctx) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         rb->register_function(r, "lsa", "Log-structured allocator API");
         set_lsa(ctx, r);
 

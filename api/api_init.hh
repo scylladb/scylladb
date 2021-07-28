@@ -87,6 +87,7 @@ future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_se
 future<> set_server_stream_manager(http_context& ctx);
 future<> set_server_gossip_settle(http_context& ctx);
 future<> set_server_cache(http_context& ctx);
+future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
 
 }
