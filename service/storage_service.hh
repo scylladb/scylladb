@@ -879,7 +879,7 @@ public:
 
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
-        return get_storage_service().invoke_on(0, [operation = std::move(operation),
+        return container().invoke_on(0, [operation = std::move(operation),
                 func = std::forward<Func>(func)] (storage_service& ss) mutable {
             if (!ss._operation_in_progress.empty()) {
                 throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
@@ -893,7 +893,7 @@ public:
 
     template <typename Func>
     auto run_with_no_api_lock(Func&& func) {
-        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+        return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
             return func(ss);
         });
     }
