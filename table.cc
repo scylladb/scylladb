@@ -387,7 +387,8 @@ void table::enable_off_strategy_trigger() {
 
 future<>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
-    return get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
+    auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
+    co_return co_await get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         if (!offstrategy) {
@@ -401,6 +402,7 @@ table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offs
 
 future<>
 table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
+    auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     mutation_source_opt ms_opt;
     if (ssts.size() == 1) {
         ms_opt = ssts.front()->as_mutation_source();
@@ -420,9 +422,9 @@ table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_ssta
         try_trigger_compaction();
     });
     if (cache_enabled()) {
-        return _cache.update(std::move(adder), *m);
+        co_return co_await _cache.update(std::move(adder), *m);
     } else {
-        return _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
+        co_return co_await _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
     }
 }
 
