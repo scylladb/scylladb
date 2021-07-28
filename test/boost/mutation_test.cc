@@ -2601,33 +2601,14 @@ void merge_container(
     }
 }
 
-// Temporary variant of merge_container() that accepts int as the return value of merge_func,
-// until we convert all users to std::strong_ordering.
-template <typename Container, typename OutputIt>
-void merge_container(
-        Container&& a,
-        Container&& b,
-        OutputIt oit,
-        std::function<int (const typename Container::value_type&, const typename Container::value_type&)> tri_cmp,
-        std::function<typename Container::value_type(typename Container::value_type, typename Container::value_type)> merge_func) {
-    return merge_container(
-            std::forward<Container>(a),
-            std::forward<Container>(b),
-            oit,
-            [tri_cmp] (const typename Container::value_type& a, const typename Container::value_type& b) {
-                return tri_cmp(a, b) <=> 0;
-            },
-            std::move(merge_func));
-}
-
 row_summary merge(const schema& schema, column_kind kind, row_summary a, row_summary b) {
     row_summary merged;
     merge_container(
             std::move(a),
             std::move(b),
             std::inserter(merged, merged.end()),
-            [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) -> int {
-                return a.first - b.first;
+            [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) -> std::strong_ordering {
+                return a.first <=> b.first;
             },
             [&schema, kind] (std::pair<const column_id, value_summary> a, std::pair<const column_id, value_summary> b) {
                 const auto& cdef = schema.column_at(kind, a.first);
