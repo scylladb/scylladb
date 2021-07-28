@@ -58,8 +58,8 @@ size_t prepare_context::bound_variables_size() const {
     return _variable_names.size();
 }
 
-std::vector<lw_shared_ptr<column_specification>> prepare_context::get_variable_specifications() const & {
-    return std::vector<lw_shared_ptr<column_specification>>(_specs.begin(), _specs.end());
+const std::vector<lw_shared_ptr<column_specification>>& prepare_context::get_variable_specifications() const & {
+    return _specs;
 }
 
 std::vector<lw_shared_ptr<column_specification>> prepare_context::get_variable_specifications() && {
