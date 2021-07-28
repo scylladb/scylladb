@@ -49,6 +49,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <seastar/core/file.hh>
 
 namespace locator {
 
