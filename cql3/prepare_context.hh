@@ -80,9 +80,6 @@ private:
 public:
 
     prepare_context() = default;
-    prepare_context(const std::vector<::shared_ptr<column_identifier>>& variable_names);
-
-    static lw_shared_ptr<prepare_context> empty();
 
     size_t bound_variables_size() const;
 

@@ -46,14 +46,6 @@
 
 namespace cql3 {
 
-prepare_context::prepare_context(const std::vector<::shared_ptr<column_identifier>>& variable_names)
-    : _variable_names{variable_names}
-    , _specs{variable_names.size()}
-    , _target_columns{variable_names.size()}
-{ }
-lw_shared_ptr<prepare_context> prepare_context::empty() {
-    return make_lw_shared<prepare_context>(std::vector<::shared_ptr<column_identifier>>{});
-}
 size_t prepare_context::bound_variables_size() const {
     return _variable_names.size();
 }
