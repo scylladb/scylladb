@@ -888,11 +888,11 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(),
-                db, gossiper, sys_dist_ks, view_update_generator,
-                feature_service, sscfg, mm, token_metadata,
-                messaging, cdc_generation_service, repair,
-                raft_gr, lifecycle_notifier).get();
+            ss.start(std::ref(stop_signal.as_sharded_abort_source()),
+                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator),
+                std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata),
+                std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
+                std::ref(raft_gr), std::ref(lifecycle_notifier)).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();

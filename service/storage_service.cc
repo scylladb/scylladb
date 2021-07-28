@@ -3810,33 +3810,6 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
     });
 }
 
-future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config,
-        sharded<service::migration_manager>& mm, sharded<locator::shared_token_metadata>& stm,
-        sharded<netw::messaging_service>& ms,
-        sharded<cdc::generation_service>& cdc_gen_service,
-        sharded<repair_service>& repair,
-        sharded<service::raft_group_registry>& raft_gr,
-        sharded<service::endpoint_lifecycle_notifier>& elc_notif) {
-    return
-        service::get_storage_service().start(std::ref(abort_source),
-            std::ref(db), std::ref(gossiper),
-            std::ref(sys_dist_ks),
-            std::ref(view_update_generator),
-            std::ref(feature_service), config, std::ref(mm),
-            std::ref(stm), std::ref(ms),
-            std::ref(cdc_gen_service),
-            std::ref(repair),
-            std::ref(raft_gr),
-            std::ref(elc_notif));
-}
-
-future<> deinit_storage_service() {
-    return service::get_storage_service().stop();
-}
-
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {
     return seastar::async([this, endpoint] {
         _subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
