@@ -37,7 +37,7 @@
 #include "frozen_mutation.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
-#include "streaming/stream_plan.hh"
+#include "streaming/stream_reason.hh"
 #include "locator/token_metadata.hh"
 
 class flat_mutation_reader;
@@ -195,23 +195,7 @@ public:
     uint64_t nr_ranges_total;
     size_t nr_failed_ranges = 0;
     bool aborted = false;
-    // Map of peer -> <cf, ranges>
-    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_in;
-    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
-    // FIXME: this "100" needs to be a parameter.
-    uint64_t target_partitions = 100;
-    // This affects how many ranges we put in a stream plan. The more the more
-    // memory we use to store the ranges in memory. However, it can reduce the
-    // total number of stream_plan we use for the repair.
-    size_t sub_ranges_to_stream = 10 * 1024;
-    size_t sp_index = 0;
-    size_t current_sub_ranges_nr_in = 0;
-    size_t current_sub_ranges_nr_out = 0;
     int ranges_index = 0;
-    // Only allow one stream_plan in flight
-    named_semaphore sp_parallelism_semaphore{1, named_semaphore_exception_factory{"repair sp parallelism"}};
-    lw_shared_ptr<streaming::stream_plan> _sp_in;
-    lw_shared_ptr<streaming::stream_plan> _sp_out;
     repair_stats _stats;
     uint64_t _sub_ranges_nr = 0;
     std::unordered_set<sstring> dropped_tables;

@@ -24,8 +24,6 @@
 
 #include "atomic_cell_hash.hh"
 #include "dht/sharder.hh"
-#include "streaming/stream_plan.hh"
-#include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
 #include "service/storage_proxy.hh"
@@ -38,6 +36,7 @@
 #include "locator/network_topology_strategy.hh"
 #include "utils/bit_cast.hh"
 #include "service/migration_manager.hh"
+#include "partition_range_compat.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -628,12 +627,6 @@ void repair_info::check_failed_ranges() {
 }
 
 void repair_info::abort() {
-    if (_sp_in) {
-        _sp_in->abort();
-    }
-    if (_sp_out) {
-        _sp_out->abort();
-    }
     aborted = true;
 }
 
