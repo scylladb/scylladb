@@ -232,7 +232,7 @@ public:
         // for CQL queries which piggy-back on Thrift protocol.
         , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
         , _current_permit(current_permit)
-    { (void)_ss; /* temporary */ }
+    { }
 
     const sstring& current_keyspace() const {
         return _query_state.get_client_state().get_raw_keyspace();
@@ -719,8 +719,8 @@ public:
 
     void describe_schema_versions(thrift_fn::function<void(std::map<std::string, std::vector<std::string> >  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [] {
-            return service::get_local_storage_service().describe_schema_versions().then([](auto&& m) {
+        with_cob(std::move(cob), std::move(exn_cob), [this] {
+            return _ss.local().describe_schema_versions().then([](auto&& m) {
                 std::map<std::string, std::vector<std::string>> ret;
                 for (auto&& p : m) {
                     ret[p.first] = std::vector<std::string>(p.second.begin(), p.second.end());
@@ -760,7 +760,7 @@ public:
                 throw make_exception<InvalidRequestException>("There is no ring for the keyspace: %s", keyspace);
             }
 
-            auto ring = service::get_local_storage_service().describe_ring(keyspace, local);
+            auto ring = _ss.local().describe_ring(keyspace, local);
             std::vector<TokenRange> ret;
             ret.reserve(ring.size());
             std::transform(ring.begin(), ring.end(), std::back_inserter(ret), [](auto&& tr) {
@@ -794,8 +794,8 @@ public:
 
     void describe_token_map(thrift_fn::function<void(std::map<std::string, std::string>  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [] {
-            auto m = service::get_local_storage_service().get_token_to_endpoint_map();
+        with_cob(std::move(cob), std::move(exn_cob), [this] {
+            auto m = _ss.local().get_token_to_endpoint_map();
             std::map<std::string, std::string> ret;
             for (auto&& p : m) {
                 ret[format("{}", p.first)] = p.second.to_sstring();
@@ -851,7 +851,7 @@ public:
             auto tend = end_token.empty() ? dht::maximum_token() : dht::token::from_sstring(sstring(end_token));
             range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
             auto cf = sstring(cfName);
-            auto splits = service::get_local_storage_service().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
+            auto splits = _ss.local().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
 
             std::vector<CfSplit> res;
             for (auto&& s : splits) {
