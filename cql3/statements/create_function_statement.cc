@@ -37,7 +37,7 @@ void create_function_statement::create(service::storage_proxy& proxy, functions:
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
-    if (_language != "lua") {
+    if (_language != "lua" && _language != "xwasm") {
         throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
     }
     data_type return_type = prepare_type(proxy, *_return_type);
@@ -56,6 +56,15 @@ void create_function_statement::create(service::storage_proxy& proxy, functions:
 
         _func = ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
             std::move(return_type), _called_on_null_input, std::move(ctx));
+    } else if (_language == "xwasm") {
+       wasm::context ctx{db.wasm_engine(), _name.name};
+       try {
+            wasm::compile(ctx, arg_names, _body);
+            _func = ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+                std::move(return_type), _called_on_null_input, std::move(ctx));
+       } catch (const wasm::exception& we) {
+           throw exceptions::invalid_request_exception(we.what());
+       }
     }
     return;
 }

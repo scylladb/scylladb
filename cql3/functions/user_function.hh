@@ -26,6 +26,7 @@
 #include "abstract_function.hh"
 #include "scalar_function.hh"
 #include "lang/lua.hh"
+#include "lang/wasm.hh"
 
 namespace cql3 {
 namespace functions {
@@ -45,7 +46,7 @@ public:
         lua::runtime_config cfg;
     };
 
-    using context = std::variant<lua_context>;
+    using context = std::variant<lua_context, wasm::context>;
 
 private:
     std::vector<sstring> _arg_names;
