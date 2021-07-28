@@ -416,6 +416,7 @@ sharded<netw::messaging_service>* the_messaging_service;
 sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
+sharded<service::storage_service>* the_storage_service;
 }
 
 int main(int ac, char** av) {
@@ -494,7 +495,7 @@ int main(int ac, char** av) {
     service::load_meter load_meter;
     debug::db = &db;
     auto& proxy = service::get_storage_proxy();
-    auto& ss = service::get_storage_service();
+    sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
@@ -888,6 +889,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
+            debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
                 std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata),

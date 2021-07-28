@@ -106,18 +106,6 @@ namespace service {
 class storage_service;
 class migration_manager;
 
-extern distributed<storage_service> _the_storage_service;
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline distributed<storage_service>& get_storage_service() {
-    return _the_storage_service;
-}
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline storage_service& get_local_storage_service() {
-    return _the_storage_service.local();
-}
-
 enum class disk_error { regular, commit };
 
 struct bind_messaging_port_tag {};

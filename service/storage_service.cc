@@ -101,8 +101,6 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
-distributed<storage_service> _the_storage_service;
-
 storage_service::storage_service(abort_source& abort_source,
     distributed<database>& db, gms::gossiper& gossiper,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
