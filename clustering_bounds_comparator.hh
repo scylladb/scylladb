@@ -64,29 +64,29 @@ public:
         std::reference_wrapper<const schema> _s;
         tri_compare(const schema& s) : _s(s)
         { }
-        int operator()(const clustering_key_prefix& p1, int32_t w1, const clustering_key_prefix& p2, int32_t w2) const {
+        std::strong_ordering operator()(const clustering_key_prefix& p1, int32_t w1, const clustering_key_prefix& p2, int32_t w2) const {
             auto type = _s.get().clustering_key_prefix_type();
             auto res = prefix_equality_tri_compare(type->types().begin(),
                 type->begin(p1.representation()), type->end(p1.representation()),
                 type->begin(p2.representation()), type->end(p2.representation()),
-                ::tri_compare);
-            if (res) {
+                ::tri_compare) <=> 0;
+            if (res != 0) {
                 return res;
             }
             auto d1 = p1.size(_s);
             auto d2 = p2.size(_s);
             if (d1 == d2) {
-                return w1 - w2;
+                return w1 <=> w2;
             }
-            return d1 < d2 ? w1 - (w1 <= 0) : -(w2 - (w2 <= 0));
+            return (d1 < d2 ? w1 - (w1 <= 0) : -(w2 - (w2 <= 0))) <=> 0;
         }
-        int operator()(const bound_view b, const clustering_key_prefix& p) const {
+        std::strong_ordering operator()(const bound_view b, const clustering_key_prefix& p) const {
             return operator()(b._prefix, weight(b._kind), p, 0);
         }
-        int operator()(const clustering_key_prefix& p, const bound_view b) const {
+        std::strong_ordering operator()(const clustering_key_prefix& p, const bound_view b) const {
             return operator()(p, 0, b._prefix, weight(b._kind));
         }
-        int operator()(const bound_view b1, const bound_view b2) const {
+        std::strong_ordering operator()(const bound_view b1, const bound_view b2) const {
             return operator()(b1._prefix, weight(b1._kind), b2._prefix, weight(b2._kind));
         }
     };

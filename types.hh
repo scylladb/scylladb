@@ -574,8 +574,8 @@ public:
     size_t hash(managed_bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
     bool equal(managed_bytes_view v1, managed_bytes_view v2) const;
-    int32_t compare(bytes_view v1, bytes_view v2) const;
-    int32_t compare(managed_bytes_view v1, managed_bytes_view v2) const;
+    std::strong_ordering compare(bytes_view v1, bytes_view v2) const;
+    std::strong_ordering compare(managed_bytes_view v1, managed_bytes_view v2) const;
 
 private:
     // Explicitly instantiated in .cc
@@ -803,15 +803,15 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 static inline
-int tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
+std::strong_ordering tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->compare(e1, e2);
 }
 
 inline
-int
+std::strong_ordering
 tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v2) {
     if (!v1 || !v2) {
-        return int(bool(v1)) - int(bool(v2));
+        return int(bool(v1)) - int(bool(v2)) <=> 0;
     } else {
         return tri_compare(std::move(t), *v1, *v2);
     }

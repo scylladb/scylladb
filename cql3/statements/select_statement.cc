@@ -1591,7 +1591,7 @@ select_statement::get_ordering_comparator(const schema& schema,
                 return bool(c2);
             }
             if (c1) {
-                int result = type->compare(*c1, *c2);
+                auto result = type->compare(*c1, *c2);
                 if (result != 0) {
                     return result < 0;
                 }
