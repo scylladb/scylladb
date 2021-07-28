@@ -1778,13 +1778,13 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
         results.try_emplace(version).first->second.emplace_back(host_and_version.first.to_sstring());
         return results;
-    }).then([] (auto results) {
+    }).then([this] (auto results) {
         // we're done: the results map is ready to return to the client.  the rest is just debug logging:
         auto it_unreachable = results.find(UNREACHABLE);
         if (it_unreachable != results.end()) {
             slogger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", ::join( ",", it_unreachable->second));
         }
-        auto my_version = get_local_storage_service().get_schema_version();
+        auto my_version = get_schema_version();
         for (auto&& entry : results) {
             // check for version disagreement. log the hosts that don't agree.
             if (entry.first == UNREACHABLE || entry.first == my_version) {
@@ -3602,8 +3602,8 @@ future<> storage_service::update_topology(inet_address endpoint) {
 }
 
 void storage_service::init_messaging_service() {
-    _messaging.local().register_replication_finished([] (gms::inet_address from) {
-        return get_local_storage_service().confirm_replication(from);
+    _messaging.local().register_replication_finished([this] (gms::inet_address from) {
+        return confirm_replication(from);
     });
 
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
