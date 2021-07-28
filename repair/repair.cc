@@ -537,23 +537,6 @@ void check_in_shutdown() {
     repair_tracker().check_in_shutdown();
 }
 
-// parallelism_semaphore limits the number of parallel ongoing checksum
-// comparisons. This could mean, for example, that this number of checksum
-// requests have been sent to other nodes and we are waiting for them to
-// return so we can compare those to our own checksums. This limit can be
-// set fairly high because the outstanding comparisons take only few
-// resources. In particular, we do NOT do this number of file reads in
-// parallel because file reads have large memory overhads (read buffers,
-// partitions, etc.) - the number of concurrent reads is further limited
-// by an additional semaphore checksum_parallelism_semaphore (see above).
-//
-// FIXME: This would be better of in a repair service, or even a per-shard
-// repair instance holding all repair state. However, since we are anyway
-// considering ditching those semaphores for a more fine grained resource-based
-// solution, let's do the simplest thing here and change it later
-constexpr int parallelism = 100;
-static thread_local named_semaphore parallelism_semaphore(parallelism, named_semaphore_exception_factory{"repair parallelism"});
-
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range) {
     return db.map_reduce0(
