@@ -696,9 +696,7 @@ public:
 };
 
 template <typename State>
-class persistence : public raft::persistence {
-    snapshots_t<State>& _snapshots;
-
+class persistence {
     std::pair<raft::snapshot_descriptor, State> _stored_snapshot;
     std::pair<raft::term_t, raft::server_id> _stored_term_and_vote;
 
@@ -726,9 +724,8 @@ public:
     // containing opnly this server's ID which must be also provided here as `init_config_id`.
     // Otherwise it must be initialized with an empty configuration (it will be added to the cluster
     // through a configuration change) and `init_config_id` must be `nullopt`.
-    persistence(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id, State init_state)
-        : _snapshots(snaps)
-        , _stored_snapshot(
+    persistence(std::optional<raft::server_id> init_config_id, State init_state)
+        : _stored_snapshot(
                 raft::snapshot_descriptor{
                     .config = init_config_id ? raft::configuration{*init_config_id} : raft::configuration{}
                 },
@@ -736,45 +733,38 @@ public:
         , _stored_term_and_vote(raft::term_t{1}, raft::server_id{})
     {}
 
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override {
+    void store_term_and_vote(raft::term_t term, raft::server_id vote) {
         _stored_term_and_vote = std::pair{term, vote};
-        co_return;
     }
 
-    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
-        co_return _stored_term_and_vote;
+    std::pair<raft::term_t, raft::server_id> load_term_and_vote() {
+        return _stored_term_and_vote;
     }
 
-    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
+    void store_snapshot(const raft::snapshot_descriptor& snap, State snap_data, size_t preserve_log_entries) {
         // The snapshot's index cannot be smaller than the index of the first stored entry minus one;
         // that would create a ``gap'' in the log.
         assert(_stored_entries.empty() || snap.idx + 1 >= _stored_entries.front()->idx);
 
-        auto it = _snapshots.find(snap.id);
-        assert(it != _snapshots.end());
-        _stored_snapshot = {snap, it->second};
+        _stored_snapshot = {snap, std::move(snap_data)};
 
         if (!_stored_entries.empty() && snap.idx > _stored_entries.back()->idx) {
             // Clear the log in order to not create a gap.
             _stored_entries.clear();
-            co_return;
+            return;
         }
 
         auto first_to_remain = snap.idx + 1 >= preserve_log_entries ? raft::index_t{snap.idx + 1 - preserve_log_entries} : raft::index_t{0};
         _stored_entries.erase(_stored_entries.begin(), find(first_to_remain));
-
-        co_return;
     }
 
-    virtual future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
-        auto [snap, state] = _stored_snapshot;
-        _snapshots.insert_or_assign(snap.id, std::move(state));
-        co_return snap;
+    std::pair<raft::snapshot_descriptor, State> load_snapshot() {
+        return _stored_snapshot;
     }
 
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override {
+    void store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
         if (entries.empty()) {
-            co_return;
+            return;
         }
 
         // The raft server is supposed to provide entries in strictly increasing order,
@@ -790,16 +780,68 @@ public:
             assert(entries[i]->idx == entries[i-1]->idx + 1);
             _stored_entries.push_back(entries[i]);
         }
+    }
 
+    raft::log_entries load_log() {
+        return _stored_entries;
+    }
+
+    void truncate_log(raft::index_t idx) {
+        _stored_entries.erase(find(idx), _stored_entries.end());
+    }
+};
+
+template <typename State>
+class persistence_proxy : public raft::persistence {
+    snapshots_t<State>& _snapshots;
+    ::persistence<State> _persistence;
+
+public:
+    // If this is the first server of a cluster, it must be initialized with a singleton configuration
+    // containing opnly this server's ID which must be also provided here as `init_config_id`.
+    // Otherwise it must be initialized with an empty configuration (it will be added to the cluster
+    // through a configuration change) and `init_config_id` must be `nullopt`.
+    persistence_proxy(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id, State init_state)
+        : _snapshots(snaps)
+        , _persistence(std::move(init_config_id), std::move(init_state))
+    {}
+
+    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override {
+        _persistence.store_term_and_vote(term, vote);
+        co_return;
+    }
+
+    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
+        co_return _persistence.load_term_and_vote();
+    }
+
+    // Stores not only the snapshot descriptor but also the corresponding snapshot.
+    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
+        auto it = _snapshots.find(snap.id);
+        assert(it != _snapshots.end());
+
+        _persistence.store_snapshot(snap, it->second, preserve_log_entries);
+        co_return;
+    }
+
+    // Loads not only the snapshot descriptor but also the corresponding snapshot.
+    virtual future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
+        auto [snap, state] = _persistence.load_snapshot();
+        _snapshots.insert_or_assign(snap.id, std::move(state));
+        co_return snap;
+    }
+
+    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override {
+        _persistence.store_log_entries(entries);
         co_return;
     }
 
     virtual future<raft::log_entries> load_log() override {
-        co_return _stored_entries;
+        co_return _persistence.load_log();
     }
 
     virtual future<> truncate_log(raft::index_t idx) override {
-        _stored_entries.erase(find(idx), _stored_entries.end());
+        _persistence.truncate_log(idx);
         co_return;
     }
 
@@ -1061,7 +1103,7 @@ public:
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
-        auto persistence_ = std::make_unique<persistence<state_t>>(*snapshots, first_server ? std::optional{id} : std::nullopt, M::init);
+        auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, first_server ? std::optional{id} : std::nullopt, M::init);
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
