@@ -612,11 +612,11 @@ repair_info::repair_info(repair_service& repair,
 }
 
 void repair_info::check_failed_ranges() {
-    rlogger.info("repair id {} on shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, sub_ranges_nr={}, {}",
-        id, shard, reason, keyspace, table_names(), ranges.size(), _sub_ranges_nr, _stats.get_stats());
+    rlogger.info("repair id {} on shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
+        id, shard, reason, keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.warn("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
-        throw std::runtime_error(format("repair id {} on shard {} failed to repair {} sub ranges", id, shard, nr_failed_ranges));
+        rlogger.warn("repair id {} on shard {} failed - {} out of {} ranges failed", id, shard, nr_failed_ranges, ranges.size());
+        throw std::runtime_error(format("repair id {} on shard {} failed to repair {} out of {} ranges", id, shard, nr_failed_ranges, ranges.size()));
     } else {
         if (dropped_tables.size()) {
             rlogger.warn("repair id {} on shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id, shard, keyspace, dropped_tables);
@@ -686,7 +686,6 @@ future<> repair_info::repair_range(const dht::token_range& range) {
             } catch (no_such_column_family&) {
                 return make_ready_future<>();
             }
-            _sub_ranges_nr++;
             // Row level repair
             if (dropped_tables.contains(cf)) {
                 return make_ready_future<>();

@@ -197,7 +197,6 @@ public:
     bool aborted = false;
     int ranges_index = 0;
     repair_stats _stats;
-    uint64_t _sub_ranges_nr = 0;
     std::unordered_set<sstring> dropped_tables;
     std::optional<utils::UUID> _ops_uuid;
 public:
