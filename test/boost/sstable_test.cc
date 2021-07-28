@@ -773,7 +773,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         opts.read_ahead = 0;
 
         compression_parameters cp({
-            { compression_parameters::CLASS, "LZ4Compressor" },
+            { compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor" },
             { compression_parameters::CHUNK_LENGTH_KB, std::to_string(opts.buffer_size/1024) },
         });
 
