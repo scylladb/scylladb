@@ -645,6 +645,9 @@ repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 future<> repair_info::repair_range(const dht::token_range& range) {
+    check_in_shutdown();
+    check_in_abort();
+    ranges_index++;
     repair_neighbors neighbors = get_repair_neighbors(range);
     return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
@@ -677,6 +680,8 @@ future<> repair_info::repair_range(const dht::token_range& range) {
             ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
+      rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
+            ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors);
       return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range] {
         return do_for_each(table_ids.begin(), table_ids.end(), [this, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
@@ -975,11 +980,6 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // repair all the ranges in limited parallelism
     return parallel_for_each(ri->ranges, [ri] (auto&& range) {
         return with_semaphore(repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
-            check_in_shutdown();
-            ri->check_in_abort();
-            ri->ranges_index++;
-            rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
-                ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->table_names(), range);
             return ri->repair_range(range).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
