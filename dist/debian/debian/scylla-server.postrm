@@ -4,13 +4,13 @@ set -e
 
 case "$1" in
     purge|remove)
-        rm -rf /etc/systemd/system/scylla-housekeeping-daily.service.d/
-        rm -rf /etc/systemd/system/scylla-housekeeping-restart.service.d/
         rm -rf /etc/systemd/system/scylla-helper.slice.d/
         # We need to keep dependencies.conf and sysconfdir.conf on 'remove',
         # otherwise it will be missing after rollback.
         if [ "$1" = "purge" ]; then
             rm -rf /etc/systemd/system/scylla-server.service.d/
+            rm -rf /etc/systemd/system/scylla-housekeeping-daily.service.d/
+            rm -rf /etc/systemd/system/scylla-housekeeping-restart.service.d/
         fi
         ;;
 esac
