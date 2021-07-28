@@ -433,11 +433,12 @@ void server::set_routes(routes& r) {
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
-server::server(executor& exec, cql3::query_processor& qp)
+server::server(executor& exec, cql3::query_processor& qp, service::storage_proxy& proxy)
         : _http_server("http-alternator")
         , _https_server("https-alternator")
         , _executor(exec)
         , _qp(qp)
+        , _proxy(proxy)
         , _key_cache(1024, 1min, slogger)
         , _enforce_authorization(false)
         , _enabled_servers{}
@@ -507,6 +508,7 @@ server::server(executor& exec, cql3::query_processor& qp)
             return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
     } {
+        (void)_proxy; // temporary
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
