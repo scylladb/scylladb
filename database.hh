@@ -493,10 +493,6 @@ public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
-    sstables::shared_sstable get_staging_sstable(uint64_t generation) {
-        auto it = _sstables_staging.find(generation);
-        return it != _sstables_staging.end() ? it->second : nullptr;
-    }
     sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
             io_error_handler_gen error_handler_gen);
     sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
