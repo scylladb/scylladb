@@ -363,8 +363,8 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_repaired_background);
     });
 
-    sp::get_schema_versions.set(r, [](std::unique_ptr<request> req)  {
-        return service::get_local_storage_service().describe_schema_versions().then([] (auto result) {
+    sp::get_schema_versions.set(r, [&ss](std::unique_ptr<request> req)  {
+        return ss.local().describe_schema_versions().then([] (auto result) {
             std::vector<sp::mapper_list> res;
             for (auto e : result) {
                 sp::mapper_list entry;
