@@ -3590,7 +3590,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 }
 
 future<> storage_service::update_topology(inet_address endpoint) {
-    return service::get_storage_service().invoke_on(0, [endpoint] (auto& ss) {
+    return container().invoke_on(0, [endpoint] (auto& ss) {
         return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
             // initiate the token metadata endpoints cache reset
             tmptr->invalidate_cached_rings();

@@ -255,7 +255,7 @@ private:
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
-    static future<> update_topology(inet_address endpoint);
+    future<> update_topology(inet_address endpoint);
     future<> publish_schema_version();
     void install_schema_version_change_listener();
 
