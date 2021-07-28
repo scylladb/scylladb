@@ -151,7 +151,7 @@ public:
         // @k1 and @k2 must be serialized using @type, which was passed to the constructor.
         std::strong_ordering operator()(managed_bytes_view k1, managed_bytes_view k2) const {
             if (_type.is_singular()) {
-                return compare_unsigned(*_type.begin(k1), *_type.begin(k2)) <=> 0;
+                return compare_unsigned(*_type.begin(k1), *_type.begin(k2));
             }
             return lexicographical_tri_compare(
                 _type.begin(k1), _type.end(k1),
@@ -160,7 +160,7 @@ public:
                     if (c1.size() != c2.size() || !c1.size()) {
                         return c1.size() < c2.size() ? std::strong_ordering::less : c1.size() ? std::strong_ordering::greater : std::strong_ordering::equal;
                     }
-                    return compare_unsigned(c1, c2) <=> 0;
+                    return compare_unsigned(c1, c2);
                 });
         }
     };
@@ -661,7 +661,7 @@ std::strong_ordering composite::tri_compare::operator()(composite_view v1, compo
     auto b_values = v2.components();
     auto cmp = [&](const data_type& t, component_view c1, component_view c2) {
         // First by value, then by EOC
-        auto r = t->compare(c1.first, c2.first) <=> 0;
+        auto r = t->compare(c1.first, c2.first);
         if (r != 0) {
             return r;
         }

@@ -103,7 +103,7 @@ decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
     if (r != 0) {
         return r;
     } else {
-        return _key.legacy_tri_compare(s, other._key) <=> 0;
+        return _key.legacy_tri_compare(s, other._key);
     }
 }
 
@@ -113,7 +113,7 @@ decorated_key::tri_compare(const schema& s, const ring_position& other) const {
     if (r != 0) {
         return r;
     } else if (other.has_key()) {
-        return _key.legacy_tri_compare(s, *other.key()) <=> 0;
+        return _key.legacy_tri_compare(s, *other.key());
     }
     return 0 <=> other.relation_to_keys();
 }

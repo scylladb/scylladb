@@ -2253,7 +2253,7 @@ class clustering_fragment_summary::tri_cmp {
         }
         // Range tombstones can have the same start position. In this case use
         // the end bound to decide who's "less".
-        return _bv_cmp(a.end_bound(), b.end_bound()) <=> 0;
+        return _bv_cmp(a.end_bound(), b.end_bound());
     }
 
 public:

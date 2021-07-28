@@ -69,7 +69,7 @@ public:
             auto res = prefix_equality_tri_compare(type->types().begin(),
                 type->begin(p1.representation()), type->end(p1.representation()),
                 type->begin(p2.representation()), type->end(p2.representation()),
-                ::tri_compare) <=> 0;
+                ::tri_compare);
             if (res != 0) {
                 return res;
             }

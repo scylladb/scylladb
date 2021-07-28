@@ -392,7 +392,7 @@ public:
             return lexicographical_tri_compare(types.begin(), types.end(),
                 a._ck->begin(_s), a._ck->end(_s),
                 b._ck->begin(_s), b._ck->end(_s),
-                cmp, a.relation(), b.relation()) <=> 0;
+                cmp, a.relation(), b.relation());
         }
 
         std::strong_ordering operator()(position_in_partition_view a, composite_view b) const {
@@ -412,7 +412,7 @@ public:
             return lexicographical_tri_compare(types.begin(), types.end(),
                 a._ck->begin(_s), a._ck->end(_s),
                 b_values.begin(), b_values.end(),
-                cmp, a.relation(), relation_for_lower_bound(b)) <=> 0;
+                cmp, a.relation(), relation_for_lower_bound(b));
         }
 
         std::strong_ordering operator()(composite_view a, position_in_partition_view b) const {
@@ -432,7 +432,7 @@ public:
                 b_values.begin(), b_values.end(),
                 cmp,
                 relation_for_lower_bound(a),
-                relation_for_lower_bound(b)) <=> 0;
+                relation_for_lower_bound(b));
         }
     };
 
@@ -459,7 +459,7 @@ public:
             if (!a._ck) {
                 return std::strong_ordering::equal;
             }
-            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight)) <=> 0;
+            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight));
         }
     public:
         tri_compare(const schema& s) : _cmp(s) { }

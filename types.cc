@@ -2218,19 +2218,19 @@ struct compare_visitor {
         return a <=> b;
       });
     }
-    std::strong_ordering operator()(const string_type_impl&) { return compare_unsigned(v1, v2) <=> 0; }
-    std::strong_ordering operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2) <=> 0; }
-    std::strong_ordering operator()(const duration_type_impl&) { return compare_unsigned(v1, v2) <=> 0; }
-    std::strong_ordering operator()(const inet_addr_type_impl&) { return compare_unsigned(v1, v2) <=> 0; }
+    std::strong_ordering operator()(const string_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const duration_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const inet_addr_type_impl&) { return compare_unsigned(v1, v2); }
     std::strong_ordering operator()(const date_type_impl&) {
         // This is not the same behaviour as timestamp_type_impl
-        return compare_unsigned(v1, v2) <=> 0;
+        return compare_unsigned(v1, v2);
     }
     std::strong_ordering operator()(const timeuuid_type_impl&) {
       return with_empty_checks([&] {
         return with_linearized(v1, [&] (bytes_view v1) {
             return with_linearized(v2, [&] (bytes_view v2) {
-                return utils::timeuuid_tri_compare(v1, v2) <=> 0;
+                return utils::timeuuid_tri_compare(v1, v2);
             });
         });
       });
@@ -2263,11 +2263,11 @@ struct compare_visitor {
         if (c1 == 1) {
             return with_linearized(v1, [&] (bytes_view v1) {
                 return with_linearized(v2, [&] (bytes_view v2) {
-                    return utils::uuid_tri_compare_timeuuid(v1, v2) <=> 0;
+                    return utils::uuid_tri_compare_timeuuid(v1, v2);
                 });
             });
         }
-        return compare_unsigned(v1, v2) <=> 0;
+        return compare_unsigned(v1, v2);
     }
     std::strong_ordering operator()(const empty_type_impl&) { return std::strong_ordering::equal; }
     std::strong_ordering operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
@@ -2281,7 +2281,7 @@ struct compare_visitor {
       return with_empty_checks([&] {
         auto a = deserialize_value(d, v1);
         auto b = deserialize_value(d, v2);
-        return a.compare(b) <=> 0;
+        return a.compare(b);
       });
     }
     std::strong_ordering operator()(const varint_type_impl& v) {

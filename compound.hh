@@ -251,21 +251,21 @@ public:
     std::strong_ordering compare(managed_bytes_view b1, managed_bytes_view b2) const {
         return with_linearized(b1, [&] (bytes_view bv1) {
             return with_linearized(b2, [&] (bytes_view bv2) {
-                return compare(bv1, bv2) <=> 0;
+                return compare(bv1, bv2);
             });
         });
     }
     std::strong_ordering compare(bytes_view b1, bytes_view b2) const {
         if (_byte_order_comparable) {
             if (_is_reversed) {
-                return compare_unsigned(b2, b1) <=> 0;
+                return compare_unsigned(b2, b1);
             } else {
-                return compare_unsigned(b1, b2) <=> 0;
+                return compare_unsigned(b1, b2);
             }
         }
         return lexicographical_tri_compare(_types.begin(), _types.end(),
             begin(b1), end(b1), begin(b2), end(b2), [] (auto&& type, auto&& v1, auto&& v2) {
-                return type->compare(v1, v2) <=> 0;
+                return type->compare(v1, v2);
             });
     }
     // Retruns true iff given prefix has no missing components

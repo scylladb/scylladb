@@ -58,7 +58,7 @@ public:
     bool empty() const { return _bytes.empty(); }
 
     std::strong_ordering tri_compare(key_view other) const {
-        return compare_unsigned(_bytes, other._bytes) <=> 0;
+        return compare_unsigned(_bytes, other._bytes);
     }
 
     std::strong_ordering tri_compare(const schema& s, partition_key_view other) const {
