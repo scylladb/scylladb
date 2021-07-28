@@ -73,7 +73,6 @@
 #include "mutation.hh"
 #include "mutation_partition.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
@@ -1280,7 +1279,7 @@ future<> mutate_MV(
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto& keyspace_name = mut.s->ks_name();
         auto target_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
-        auto remote_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
+        auto remote_endpoints = service::get_local_storage_proxy().get_token_metadata_ptr()->pending_endpoints_for(view_token, keyspace_name);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
 
         // First, find the local endpoint and ensure that if it exists,
