@@ -612,52 +612,6 @@ repair_info::repair_info(repair_service& repair,
     , _ops_uuid(std::move(ops_uuid)) {
 }
 
-future<> repair_info::do_streaming() {
-    size_t ranges_in = 0;
-    size_t ranges_out = 0;
-    _sp_in = make_lw_shared<streaming::stream_plan>(format("repair-in-id-{}-shard-{}-index-{}", id.id, shard, sp_index), streaming::stream_reason::repair);
-    _sp_out = make_lw_shared<streaming::stream_plan>(format("repair-out-id-{}-shard-{}-index-{}", id.id, shard, sp_index), streaming::stream_reason::repair);
-
-    for (auto& x : ranges_need_repair_in) {
-        auto& peer = x.first;
-        for (auto& y : x.second) {
-            auto& cf = y.first;
-            auto& stream_ranges = y.second;
-            ranges_in += stream_ranges.size();
-            _sp_in->request_ranges(peer, keyspace, std::move(stream_ranges), {cf});
-        }
-    }
-    ranges_need_repair_in.clear();
-    current_sub_ranges_nr_in = 0;
-
-    for (auto& x : ranges_need_repair_out) {
-        auto& peer = x.first;
-        for (auto& y : x.second) {
-            auto& cf = y.first;
-            auto& stream_ranges = y.second;
-            ranges_out += stream_ranges.size();
-            _sp_out->transfer_ranges(peer, keyspace, std::move(stream_ranges), {cf});
-        }
-    }
-    ranges_need_repair_out.clear();
-    current_sub_ranges_nr_out = 0;
-
-    if (ranges_in || ranges_out) {
-        rlogger.info("Start streaming for repair id={}, shard={}, index={}, ranges_in={}, ranges_out={}", id, shard, sp_index, ranges_in, ranges_out);
-    }
-    sp_index++;
-
-    return _sp_in->execute().discard_result().then([this, sp_in = _sp_in, sp_out = _sp_out] {
-        return _sp_out->execute().discard_result();
-    }).handle_exception([this] (auto ep) {
-        rlogger.warn("repair's stream failed: {}", ep);
-        return make_exception_future(ep);
-    }).finally([this] {
-        _sp_in = {};
-        _sp_out = {};
-    });
-}
-
 void repair_info::check_failed_ranges() {
     rlogger.info("repair id {} on shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, sub_ranges_nr={}, {}",
         id, shard, reason, keyspace, table_names(), ranges.size(), _sub_ranges_nr, _stats.get_stats());
@@ -671,27 +625,6 @@ void repair_info::check_failed_ranges() {
             rlogger.info("repair id {} on shard {} completed successfully, keyspace={}", id, shard, keyspace);
         }
     }
-}
-
-future<> repair_info::request_transfer_ranges(const sstring& cf,
-    const ::dht::token_range& range,
-    const std::vector<gms::inet_address>& neighbors_in,
-    const std::vector<gms::inet_address>& neighbors_out) {
-    rlogger.debug("Add cf {}, range {}, current_sub_ranges_nr_in {}, current_sub_ranges_nr_out {}", cf, range, current_sub_ranges_nr_in, current_sub_ranges_nr_out);
-    return seastar::with_semaphore(sp_parallelism_semaphore, 1, [this, cf, range, neighbors_in, neighbors_out] {
-        for (const auto& peer : neighbors_in) {
-            ranges_need_repair_in[peer][cf].emplace_back(range);
-            current_sub_ranges_nr_in++;
-        }
-        for (const auto& peer : neighbors_out) {
-            ranges_need_repair_out[peer][cf].emplace_back(range);
-            current_sub_ranges_nr_out++;
-        }
-        if (current_sub_ranges_nr_in >= sub_ranges_to_stream || current_sub_ranges_nr_out >= sub_ranges_to_stream) {
-            return do_streaming();
-        }
-        return make_ready_future<>();
-    });
 }
 
 void repair_info::abort() {

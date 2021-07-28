@@ -227,12 +227,7 @@ public:
             const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
             std::optional<utils::UUID> ops_uuid);
-    future<> do_streaming();
     void check_failed_ranges();
-    future<> request_transfer_ranges(const sstring& cf,
-        const ::dht::token_range& range,
-        const std::vector<gms::inet_address>& neighbors_in,
-        const std::vector<gms::inet_address>& neighbors_out);
     void abort();
     void check_in_abort();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
