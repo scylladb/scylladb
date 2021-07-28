@@ -72,8 +72,8 @@ def new_test_table(cql, keyspace, schema, extra=""):
 
 # A utility function for creating a new temporary user-defined function.
 @contextmanager
-def new_function(cql, keyspace, body):
-    fun = unique_name()
+def new_function(cql, keyspace, body, name=None):
+    fun = name if name else unique_name()
     cql.execute(f"CREATE FUNCTION {keyspace}.{fun} {body}")
     try:
         yield fun
