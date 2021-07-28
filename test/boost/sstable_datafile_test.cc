@@ -4389,7 +4389,8 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
-    return std::make_unique<index_reader>(sst, std::move(permit), default_priority_class(), tracing::trace_state_ptr());
+    return std::make_unique<index_reader>(sst, std::move(permit), default_priority_class(),
+                                          tracing::trace_state_ptr(), use_caching::yes);
 }
 
 SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {

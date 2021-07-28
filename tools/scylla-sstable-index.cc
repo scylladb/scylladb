@@ -179,7 +179,8 @@ Note: UDT is not supported for now.
             auto stop_semaphore = deferred_stop(rcs_sem);
 
             {
-                sstables::index_reader idx_reader(sst, rcs_sem.make_tracking_only_permit(primary_key_schema.get(), "idx"), default_priority_class(), {});
+                sstables::index_reader idx_reader(sst, rcs_sem.make_tracking_only_permit(primary_key_schema.get(), "idx"), default_priority_class(), {},
+                                                  sstables::use_caching::yes);
 
                 list_partitions(*primary_key_schema, idx_reader);
 

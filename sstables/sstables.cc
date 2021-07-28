@@ -2701,7 +2701,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     std::exception_ptr ex;
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
     try {
-        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
+        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr(), use_caching::yes);
         present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
     } catch (...) {
         ex = std::current_exception();
@@ -3013,6 +3013,10 @@ sstable::sstable(schema_ptr schema,
 {
     tracker.add(*this);
     manager.add(this);
+}
+
+file sstable::uncached_index_file() {
+    return _cached_index_file->get_file();
 }
 
 void sstable::unused() {
