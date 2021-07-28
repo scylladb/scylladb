@@ -30,9 +30,12 @@
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
+#include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
-#include "service/storage_service.hh"
+#include "locator/snitch_base.hh"
+#include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/fb_utilities.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -191,8 +194,11 @@ protected:
 };
 
 class local_nodelist_handler : public gated_handler {
+    service::storage_proxy& _proxy;
 public:
-    local_nodelist_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+    local_nodelist_handler(seastar::gate& pending_requests, service::storage_proxy& proxy)
+        : gated_handler(pending_requests)
+        , _proxy(proxy) {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rjson::value results = rjson::empty_array();
@@ -202,8 +208,7 @@ protected:
         sstring local_dc = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
                 utils::fb_utilities::get_broadcast_address());
         std::unordered_set<gms::inet_address> local_dc_nodes =
-                service::get_local_storage_service().get_token_metadata().
-                get_topology().get_datacenter_endpoints().at(local_dc);
+                _proxy.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
             if (gms::get_local_gossiper().is_alive(ip)) {
                 rjson::push_back(results, rjson::from_string(ip.to_sstring()));
@@ -426,7 +431,7 @@ void server::set_routes(routes& r) {
     // consider this to be a security risk, because an attacker can already
     // scan an entire subnet for nodes responding to the health request,
     // or even just scan for open ports.
-    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests));
+    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests, _proxy));
     r.put(operation_type::OPTIONS, "/", new options_handler(_pending_requests));
 }
 
@@ -508,7 +513,6 @@ server::server(executor& exec, cql3::query_processor& qp, service::storage_proxy
             return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
     } {
-        (void)_proxy; // temporary
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
