@@ -645,9 +645,8 @@ repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 future<> repair_info::repair_range(const dht::token_range& range) {
-    auto id = utils::UUID_gen::get_time_UUID();
     repair_neighbors neighbors = get_repair_neighbors(range);
-    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range, id] (auto& neighbors, auto& mandatory_neighbors) {
+    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
                     boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
       for (auto& node : mandatory_neighbors) {
@@ -678,7 +677,7 @@ future<> repair_info::repair_range(const dht::token_range& range) {
             ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range, id] {
+      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range] {
         return do_for_each(table_ids.begin(), table_ids.end(), [this, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
             try {
