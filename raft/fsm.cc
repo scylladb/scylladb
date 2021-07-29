@@ -41,6 +41,8 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
     logger.trace("fsm[{}]: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
+
+    // Init timeout settings
     reset_election_timeout();
 }
 
@@ -144,8 +146,12 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+    static thread_local std::uniform_int_distribution<> dist;
+    // Timeout within range of [1, conf size]
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re,
+            std::uniform_int_distribution<int>::param_type{1,
+                    std::max((size_t) ELECTION_TIMEOUT.count(),
+                            _log.get_configuration().current.size())})};
 }
 
 void fsm::become_leader() {
