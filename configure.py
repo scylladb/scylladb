@@ -1338,6 +1338,14 @@ for mode_level in args.mode_o_levels:
 for mode in modes:
     modes[mode]['cxxflags'] += f' -O{modes[mode]["optimization-level"]}'
 
+has_wasmtime = os.path.isfile('/usr/lib64/libwasmtime.a') and os.path.isdir('/usr/local/include/wasmtime')
+
+if has_wasmtime:
+    for mode in modes:
+        modes[mode]['cxxflags'] += ' -DSCYLLA_ENABLE_WASMTIME'
+else:
+    print("wasmtime not found - WASM support will not be enabled in this build")
+
 linker_flags = linker_flags(compiler=args.cxx)
 
 dbgflag = '-g -gz' if args.debuginfo else ''
@@ -1644,7 +1652,11 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  # experimental APIs that we use are only present there.
                  maybe_static(True, '-lzstd'),
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
-                 '-lxxhash'])
+                 '-lxxhash',
+                ])
+if has_wasmtime:
+    print("Found wasmtime dependency, linking with libwasmtime")
+    libs += ' -lwasmtime'
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
