@@ -19,8 +19,8 @@
 # (PutItem, UpdateItem and DeleteItem) conditional on the existing attribute
 # values. ConditionExpression is a newer and more powerful version of the
 # older "Expected" syntax. That older syntax is tested by the separate
-# test_condition_expression.py. Many of the tests there are very similar to
-# the ones included here.
+# test_expected.py. Many of the tests there are very similar to the ones
+# included here.
 
 # NOTE: In this file, we use the b'xyz' syntax to represent DynamoDB's binary
 # values. This syntax works as expected only in Python3. In Python2 it
@@ -58,7 +58,7 @@ def clear_write_isolation(table):
 # same for the PutItem and DeleteItem operations, and we'll make a small
 # effort to verify that at the end of the file.
 
-# Somewhat pedanticly, DynamoDB forbids using new-style ConditionExpression
+# Somewhat pedantically, DynamoDB forbids using new-style ConditionExpression
 # together with old-style AttributeUpdates... ConditionExpression can only be
 # used with UpdateExpression.
 def test_condition_expression_attribute_updates(test_table_s):
@@ -73,7 +73,7 @@ def test_condition_expression_attribute_updates(test_table_s):
 # comparison of two attributes (as usual, each can be an attribute of the
 # item or a constant from the request's ExpressionAttributeValues).
 # All these tests involve top-level attribute - we'll test the possibility
-# of directly-addressing nested attributes in a separate tests below.
+# of directly-addressing nested attributes in separate tests below.
 # Additional tests below will check additional functions, as well as
 # applying boolean logic (AND, OR, NOT, parentheses) on simpler conditions.
 # In each case we have tests for the "true" case of the condition, meaning
@@ -189,7 +189,7 @@ def test_update_condition_eq_set(test_table_s):
         ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
     # Sanity check - the attribute contains the set we think it does
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['chinchilla', 'cat', 'dog', 'mouse'])
-    # Now finally check that conditio expression check knows the equality too.
+    # Now finally check that condition expression check knows the equality too.
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET b = :val1',
         ConditionExpression='a = :oldval',
@@ -228,7 +228,7 @@ def test_update_condition_eq_nested_set(test_table_s):
             ConditionExpression='a = :oldval',
             ExpressionAttributeValues={':val1': 4, ':oldval': wrong})
 
-# Test for ConditionExpression with operator "<>" (non-equality),
+# Test for ConditionExpression with operator "<>" (non-equality)
 def test_update_condition_ne(test_table_s):
     p = random_string()
     # We only check here one type of attributes (numbers), assuming that the
@@ -988,7 +988,7 @@ def test_update_condition_attribute_exists(test_table_s):
 # Primitive conditions usually look like an operator between two (<, <=,
 # etc.), three (BETWEEN) or more (IN) values. Can just a single value be
 # a condition? The special case of a single function call *can* be - we saw
-# an example attribute_exists(z) in the previous test. However that only
+# an example attribute_exists(z) in the previous test. However only
 # function calls are supported in this context - not general values (i.e.,
 # attribute or value references).
 # While DynamoDB does not accept a non-function-call value as a condition
@@ -1344,7 +1344,7 @@ def test_update_condition_size(test_table_s):
 # The above test tested conditions involving size() in a comparison.
 # Trying to use just size(a) as a condition (as we use the rest of the
 # functions supported by ConditionExpression) does not work - DynamoDB
-# reports # that "The function is not allowed to be used this way in an
+# reports that "The function is not allowed to be used this way in an
 # expression; function: size".
 def test_update_condition_size_alone(test_table_s):
     p = random_string()
@@ -1369,7 +1369,7 @@ def test_update_condition_attribute_exists_in_comparison(test_table_s):
 # In essense, the size() function tested in the previous test behaves
 # exactly like the functions of UpdateExpressions, i.e., it transforms a
 # value (attribute from the item or the query) into a new value, which
-# can than be operated (in our case, compared). In this test we check
+# can then be operated (in our case, compared). In this test we check
 # that other functions supported by UpdateExpression - if_not_exists()
 # and list_append() - are not supported.
 def test_update_condition_other_funcs(test_table_s):
@@ -1459,7 +1459,7 @@ def test_update_condition_nested_attribute_reference(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 1
 
 # All the previous tests involved a single condition. The following tests
-# involving building more complex conditions by using AND, OR, NOT and
+# involve building more complex conditions by using AND, OR, NOT and
 # parentheses on simpler condition expressions. There's also operator
 # precedence involved, and should be tested (see the definitions in
 # https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.OperatorsAndFunctions.html
@@ -1821,7 +1821,7 @@ def test_condition_expression_unsigned_bytes(test_table_s):
 def test_update_item_condition_key_ne(test_table_s):
     p = random_string()
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
-    # Create an empty item with key p, but only an item with p exists yet.
+    # Create an empty item with key p, but only if no item with p exists yet.
     # Note how when the item does not exist, the <> (not equal) test succeeds
     # (we already tested that in test_update_condition_ne())
     test_table_s.update_item(Key={'p': p},
