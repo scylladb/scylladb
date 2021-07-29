@@ -172,12 +172,11 @@ public:
         return res;
     }
 
-    // Returns a future that resolves after a number of `tick()`s represented by `d`.
-    // Example usage: `sleep(20_t)` resolves after 20 `tick()`s.
+    // Returns a future that resolves at logical time point `tp` (according to this timer's clock).
     // Note: analogous remark applies as for `with_timeout`, i.e. make sure to call at least one `tick`
-    // per one `sleep` call on average.
-    future<> sleep(raft::logical_clock::duration d) {
-        if (d == raft::logical_clock::duration{0}) {
+    // per one `sleep_until` call on average.
+    future<> sleep_until(raft::logical_clock::time_point tp) {
+        if (tp <= now()) {
             return make_ready_future<>();
         }
 
@@ -190,12 +189,20 @@ public:
         auto s = make_shared<sched>();
         auto f = s->_p.get_future();
         _scheduled.push_back(scheduled{
-            ._at = now() + d,
+            ._at = tp,
             ._impl = std::move(s)
         });
         std::push_heap(_scheduled.begin(), _scheduled.end(), cmp);
 
         return f;
+    }
+
+    // Returns a future that resolves after a number of `tick()`s represented by `d`.
+    // Example usage: `sleep(20_t)` resolves after 20 `tick()`s.
+    // Note: analogous remark applies as for `with_timeout`, i.e. make sure to call at least one `tick`
+    // per one `sleep` call on average.
+    future<> sleep(raft::logical_clock::duration d) {
+        return sleep_until(now() + d);
     }
 
     // Schedule `f` to be called at logical time point `tp` (according to this timer's clock).
