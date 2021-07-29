@@ -157,7 +157,7 @@ redirects_file = "_utils/redirections.yaml"
 TAGS = []
 smv_tag_whitelist = multiversion_regex_builder(TAGS)
 # Whitelist pattern for branches (set to None to ignore all branches)
-BRANCHES = ['master']
+BRANCHES = ['branch-4.3', 'branch-4.4', 'branch-4.5']
 smv_branch_whitelist = multiversion_regex_builder(BRANCHES)
 # Defines which version is considered to be the latest stable version.
 # Must be listed in smv_tag_whitelist or smv_branch_whitelist.
@@ -169,6 +169,8 @@ smv_remote_whitelist = r"^origin$"
 smv_released_pattern = r'^tags/.*$'
 # Format for versioned output directories inside the build directory
 smv_outputdir_format = '{ref.name}'
+smv_latest_version = 'branch-4.4'
+smv_rename_latest_version = 'stable' # Use the commit hash
 
 # -- Options for LaTeX page output ---------------------------------------
 
