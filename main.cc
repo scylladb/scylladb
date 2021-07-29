@@ -416,6 +416,7 @@ sharded<netw::messaging_service>* the_messaging_service;
 sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
+sharded<service::storage_service>* the_storage_service;
 }
 
 int main(int ac, char** av) {
@@ -494,7 +495,7 @@ int main(int ac, char** av) {
     service::load_meter load_meter;
     debug::db = &db;
     auto& proxy = service::get_storage_proxy();
-    auto& ss = service::get_storage_service();
+    sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
@@ -888,11 +889,12 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(),
-                db, gossiper, sys_dist_ks, view_update_generator,
-                feature_service, sscfg, mm, token_metadata,
-                messaging, cdc_generation_service, repair,
-                raft_gr, lifecycle_notifier).get();
+            debug::the_storage_service = &ss;
+            ss.start(std::ref(stop_signal.as_sharded_abort_source()),
+                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator),
+                std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata),
+                std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
+                std::ref(raft_gr), std::ref(lifecycle_notifier)).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -1097,7 +1099,7 @@ int main(int ac, char** av) {
             }).get();
             api::set_server_gossip(ctx).get();
             api::set_server_snitch(ctx).get();
-            api::set_server_storage_proxy(ctx).get();
+            api::set_server_storage_proxy(ctx, ss).get();
             api::set_server_load_sstable(ctx).get();
             static seastar::sharded<memory_threshold_guard> mtg;
             //FIXME: discarded future
@@ -1191,7 +1193,7 @@ int main(int ac, char** av) {
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx).get();
+            api::set_server_storage_service(ctx, ss).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
@@ -1372,7 +1374,7 @@ int main(int ac, char** av) {
                 api::unset_transport_controller(ctx).get();
             });
 
-            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter);
+            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss);
 
             ss.local().register_client_shutdown_hook("rpc server", [&thrift_ctl] {
                 thrift_ctl.stop().get();

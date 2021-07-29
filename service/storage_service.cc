@@ -101,8 +101,6 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
-distributed<storage_service> _the_storage_service;
-
 storage_service::storage_service(abort_source& abort_source,
     distributed<database>& db, gms::gossiper& gossiper,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -1778,13 +1776,13 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
         results.try_emplace(version).first->second.emplace_back(host_and_version.first.to_sstring());
         return results;
-    }).then([] (auto results) {
+    }).then([this] (auto results) {
         // we're done: the results map is ready to return to the client.  the rest is just debug logging:
         auto it_unreachable = results.find(UNREACHABLE);
         if (it_unreachable != results.end()) {
             slogger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", ::join( ",", it_unreachable->second));
         }
-        auto my_version = get_local_storage_service().get_schema_version();
+        auto my_version = get_schema_version();
         for (auto&& entry : results) {
             // check for version disagreement. log the hosts that don't agree.
             if (entry.first == UNREACHABLE || entry.first == my_version) {
@@ -3590,7 +3588,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 }
 
 future<> storage_service::update_topology(inet_address endpoint) {
-    return service::get_storage_service().invoke_on(0, [endpoint] (auto& ss) {
+    return container().invoke_on(0, [endpoint] (auto& ss) {
         return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
             // initiate the token metadata endpoints cache reset
             tmptr->invalidate_cached_rings();
@@ -3602,8 +3600,8 @@ future<> storage_service::update_topology(inet_address endpoint) {
 }
 
 void storage_service::init_messaging_service() {
-    _messaging.local().register_replication_finished([] (gms::inet_address from) {
-        return get_local_storage_service().confirm_replication(from);
+    _messaging.local().register_replication_finished([this] (gms::inet_address from) {
+        return confirm_replication(from);
     });
 
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
@@ -3808,33 +3806,6 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
                     return std::pair(p.first.to_sstring(), std::move(s));
                 }));
     });
-}
-
-future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config,
-        sharded<service::migration_manager>& mm, sharded<locator::shared_token_metadata>& stm,
-        sharded<netw::messaging_service>& ms,
-        sharded<cdc::generation_service>& cdc_gen_service,
-        sharded<repair_service>& repair,
-        sharded<service::raft_group_registry>& raft_gr,
-        sharded<service::endpoint_lifecycle_notifier>& elc_notif) {
-    return
-        service::get_storage_service().start(std::ref(abort_source),
-            std::ref(db), std::ref(gossiper),
-            std::ref(sys_dist_ks),
-            std::ref(view_update_generator),
-            std::ref(feature_service), config, std::ref(mm),
-            std::ref(stm), std::ref(ms),
-            std::ref(cdc_gen_service),
-            std::ref(repair),
-            std::ref(raft_gr),
-            std::ref(elc_notif));
-}
-
-future<> deinit_storage_service() {
-    return service::get_storage_service().stop();
 }
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {

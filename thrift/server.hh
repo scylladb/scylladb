@@ -76,6 +76,8 @@ namespace auth {
 class service;
 }
 
+namespace service { class storage_service; }
+
 struct thrift_server_config {
     ::timeout_config timeout_config;
     uint64_t max_request_size;
@@ -127,7 +129,7 @@ private:
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
-    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, service::memory_limiter& ml, thrift_server_config config);
+    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, auth::service&, service::memory_limiter& ml, thrift_server_config config);
     ~thrift_server();
     future<> listen(socket_address addr, bool keepalive);
     future<> stop();

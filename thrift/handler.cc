@@ -203,6 +203,7 @@ enum class query_order { no, yes };
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
+    sharded<service::storage_service>& _ss;
     ::timeout_config _timeout_config;
     service::client_state _client_state;
     service::query_state _query_state;
@@ -220,9 +221,10 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
         : _db(db)
         , _query_processor(qp)
+        , _ss(ss)
         , _timeout_config(timeout_config)
         , _client_state(service::client_state::external_tag{}, auth_service, nullptr, _timeout_config, socket_address(), true)
         // FIXME: Handlers are not created per query, but rather per connection, so it makes little sense to store
@@ -717,8 +719,8 @@ public:
 
     void describe_schema_versions(thrift_fn::function<void(std::map<std::string, std::vector<std::string> >  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [] {
-            return service::get_local_storage_service().describe_schema_versions().then([](auto&& m) {
+        with_cob(std::move(cob), std::move(exn_cob), [this] {
+            return _ss.local().describe_schema_versions().then([](auto&& m) {
                 std::map<std::string, std::vector<std::string>> ret;
                 for (auto&& p : m) {
                     ret[p.first] = std::vector<std::string>(p.second.begin(), p.second.end());
@@ -758,7 +760,7 @@ public:
                 throw make_exception<InvalidRequestException>("There is no ring for the keyspace: %s", keyspace);
             }
 
-            auto ring = service::get_local_storage_service().describe_ring(keyspace, local);
+            auto ring = _ss.local().describe_ring(keyspace, local);
             std::vector<TokenRange> ret;
             ret.reserve(ring.size());
             std::transform(ring.begin(), ring.end(), std::back_inserter(ret), [](auto&& tr) {
@@ -792,8 +794,8 @@ public:
 
     void describe_token_map(thrift_fn::function<void(std::map<std::string, std::string>  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [] {
-            auto m = service::get_local_storage_service().get_token_to_endpoint_map();
+        with_cob(std::move(cob), std::move(exn_cob), [this] {
+            auto m = _ss.local().get_token_to_endpoint_map();
             std::map<std::string, std::string> ret;
             for (auto&& p : m) {
                 ret[format("{}", p.first)] = p.second.to_sstring();
@@ -849,7 +851,7 @@ public:
             auto tend = end_token.empty() ? dht::maximum_token() : dht::token::from_sstring(sstring(end_token));
             range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
             auto cf = sstring(cfName);
-            auto splits = service::get_local_storage_service().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
+            auto splits = _ss.local().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
 
             std::vector<CfSplit> res;
             for (auto&& s : splits) {
@@ -2018,19 +2020,21 @@ protected:
 class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
+    sharded<service::storage_service>& _ss;
     auth::service& _auth_service;
     timeout_config _timeout_config;
     service_permit& _current_permit;
 public:
     explicit handler_factory(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
+                             sharded<service::storage_service>& ss,
                              auth::service& auth_service,
                              ::timeout_config timeout_config,
                              service_permit& current_permit)
-        : _db(db), _query_processor(qp), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
+        : _db(db), _query_processor(qp), _ss(ss), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db, _query_processor, _auth_service, _timeout_config, _current_permit);
+        return new thrift_handler(_db, _query_processor, _ss, _auth_service, _timeout_config, _current_permit);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -2038,7 +2042,8 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service,
+create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp,
+        sharded<service::storage_service>& ss, auth::service& auth_service,
         ::timeout_config timeout_config, service_permit& current_permit) {
-    return std::make_unique<handler_factory>(db, qp, auth_service, timeout_config, current_permit);
+    return std::make_unique<handler_factory>(db, qp, ss, auth_service, timeout_config, current_permit);
 }

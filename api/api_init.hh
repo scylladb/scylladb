@@ -30,6 +30,7 @@ namespace service {
 
 class load_meter;
 class storage_proxy;
+class storage_service;
 
 } // namespace service
 
@@ -69,7 +70,7 @@ struct http_context {
 future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx);
-future<> set_server_storage_service(http_context& ctx);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
@@ -82,7 +83,7 @@ future<> set_server_gossip(http_context& ctx);
 future<> set_server_load_sstable(http_context& ctx);
 future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms);
 future<> unset_server_messaging_service(http_context& ctx);
-future<> set_server_storage_proxy(http_context& ctx);
+future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_service>& ss);
 future<> set_server_stream_manager(http_context& ctx);
 future<> set_server_gossip_settle(http_context& ctx);
 future<> set_server_cache(http_context& ctx);

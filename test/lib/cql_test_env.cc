@@ -542,7 +542,7 @@ public:
             raft_gr.start(std::ref(ms), std::ref(gms::get_gossiper()), std::ref(qp)).get();
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
-            auto& ss = service::get_storage_service();
+            sharded<service::storage_service> ss;
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
@@ -684,8 +684,8 @@ public:
                 cdc.stop().get();
             });
 
-            service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
-            service::get_local_storage_service().join_cluster().get();
+            ss.local().init_server(service::bind_messaging_port(false)).get();
+            ss.local().join_cluster().get();
 
             auth::permissions_cache_config perm_cache_config;
             perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
