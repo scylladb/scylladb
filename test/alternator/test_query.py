@@ -324,6 +324,46 @@ def test_query_limit_paging(test_table_sn):
         got_sort_keys = [x['c'] for x in got_items]
         assert got_sort_keys == numbers
 
+# Although ExclusiveStartKey is usually used for paging through a long
+# partition by setting it to the previous page's LastEvaluatedKey, a user
+# may also use ExclusiveStartKey to skip directly to the middle of a
+# partition, without having paged through anything earlier. Moreover,
+# ExclusiveStartKey doesn't even have to be one of the actual keys in the
+# partition. This test verifies that this works.
+# Additionally, because the previous tests only passed the value of
+# LastEvaluatedKey into ExclusiveStartKey, they couldn't tell whether the
+# format of the "cookie" is the correct one - any opaque cookie would have
+# worked. So this test also demonstrates that ExclusiveStartKey with a
+# specific format actually works - because users can use this format directly.
+def test_query_exclusivestartkey(test_table_sn):
+    # Insert the numbers 0, 2, 4, ... 38 into one partition. We insert the
+    # items in random order, but of course as sort keys they will be sorted.
+    numbers = [i*2 for i in range(20)]
+    p = random_string()
+    items = [{'p': p, 'c': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Query with ExclusiveStartKey set to different numbers, and verify we
+    # get the expected results. In particular we want to check that the
+    # result is *exclusive* of the given key (if ExclusiveStartKey=0,
+    # the first result is 2, not 0), and that it's fine for ExclusiveStartKey
+    # to not be an existing key (-3, 17 and 80), and that it's fine that we
+    # have less than the Limit remaining items (34 and 80).
+    limit = 5
+    for start in [-3, 0, 8, 17, 34, 80]:
+        expected_sort_keys = [x for x in numbers if x > start][:limit]
+        # The ExclusiveStartKey option must indicate both partition key and
+        # sort key. Note that the Python driver further converts this map
+        # into the correct format for the request (including the key types).
+        exclusivestartkey = { 'p': p, 'c': start }
+        got_items = test_table_sn.query(
+            KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ExclusiveStartKey= { 'p': p, 'c': start },
+            Limit=limit)['Items']
+        got_sort_keys = [x['c'] for x in got_items]
+        assert expected_sort_keys == got_sort_keys
+
 # Test that the ScanIndexForward parameter works, and can be used to
 # return items sorted in reverse order. Combining this with Limit can
 # be used to return the last items instead of the first items of the
