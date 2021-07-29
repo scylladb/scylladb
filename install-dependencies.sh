@@ -179,6 +179,28 @@ node_exporter_url() {
     echo "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/$(node_exporter_filename)"
 }
 
+WASMTIME_VERSION=0.29.0
+WASMTIME_DIR=/opt/scylladb/dependencies
+declare -A WASMTIME_CHECKSUM=(
+    ["x86_64"]=e94a9a768270e86e7f7eac1a68575bb1f287702822e83b14c3b04bf7e865a84c
+    ["aarch64"]=36a257aef36f5a0cabc8ce414e31ccede9c16ca996d6b07cb440a32aaa263164
+)
+
+wasmtime_filename() {
+    echo "wasmtime-v$WASMTIME_VERSION-$(arch)-linux-c-api.tar.xz"
+}
+
+wasmtime_fullpath() {
+    echo "$WASMTIME_DIR/$(wasmtime_filename)"
+}
+
+wasmtime_checksum() {
+    sha256sum "$(wasmtime_fullpath)" | while read -r sum _; do [[ "$sum" == "${WASMTIME_CHECKSUM["$(arch)"]}" ]]; done
+}
+
+wasmtime_url() {
+    echo "https://github.com/bytecodealliance/wasmtime/releases/download/v$WASMTIME_VERSION/$(wasmtime_filename)"
+}
 
 print_usage() {
     echo "Usage: install-dependencies.sh [OPTION]..."
@@ -254,6 +276,23 @@ elif [ "$ID" = "fedora" ]; then
         if ! node_exporter_checksum; then
             echo "$(node_exporter_filename) download failed"
             exit 1
+        fi
+    fi
+    if [ -f "$(wasmtime_fullpath)" ] && wasmtime_checksum; then
+        echo "$(wasmtime_filename) already exists, skipping download"
+    else
+        mkdir -p "$WASMTIME_DIR"
+        if curl --retry 5 -fSL -o "$(wasmtime_fullpath)" "$(wasmtime_url)"; then
+            if ! wasmtime_checksum; then
+                echo "$(wasmtime_filename) download failed, skipping"
+            else
+                ( cd $WASMTIME_DIR; tar xvf $(wasmtime_filename) )
+                wasmtime_unpacked=$(basename $(wasmtime_filename) .tar.xz)
+                cp $WASMTIME_DIR/$wasmtime_unpacked/lib/libwasmtime.a /usr/lib64/
+                cp -r $WASMTIME_DIR/$wasmtime_unpacked/include/was{m.h,i.h,mtime,mtime.h} /usr/local/include/
+            fi
+        else
+            echo "$(wasmtime_url) is unreachable, skipping"
         fi
     fi
 elif [ "$ID" = "centos" ]; then
