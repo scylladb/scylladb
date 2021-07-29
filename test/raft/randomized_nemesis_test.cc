@@ -2137,6 +2137,50 @@ struct reconfiguration {
     }
 };
 
+template <PureStateMachine M>
+struct stop_crash {
+    raft::logical_clock::duration restart_delay;
+
+    struct state_type {
+        environment<M>& env;
+        std::unordered_set<raft::server_id>& known;
+        logical_timer& timer;
+        std::mt19937 rnd;
+    };
+
+    struct result_type {};
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        assert(s.known.size() > 0);
+        auto it = s.known.begin();
+        std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(s.rnd));
+        auto srv = *it;
+
+        static std::bernoulli_distribution bdist{0.5};
+        if (bdist(s.rnd)) {
+            tlogger.debug("Crashing server {}", srv);
+            s.env.crash(srv);
+        } else {
+            tlogger.debug("Stopping server {}...", srv);
+            co_await s.env.stop(srv);
+            tlogger.debug("Server {} stopped", srv);
+        }
+        co_await s.timer.sleep(restart_delay);
+        tlogger.debug("Restarting server {}", srv);
+        co_await s.env.start_server(srv);
+
+        co_return result_type{};
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const stop_crash& c) {
+        return os << format("stop_crash{{delay:{}}}", c.restart_delay);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const result_type&) {
+        return os << "";
+    }
+};
+
 namespace std {
 
 std::ostream& operator<<(std::ostream& os, const std::monostate&) {
@@ -2372,7 +2416,8 @@ SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             network_majority_grudge<AppendReg>,
-            reconfiguration<AppendReg>
+            reconfiguration<AppendReg>,
+            stop_crash<AppendReg>
         >>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
 
@@ -2470,10 +2515,18 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             .rnd = std::mt19937{seed}
         };
 
+        stop_crash<AppendReg>::state_type crash_state {
+            .env = env,
+            .known = known_config,
+            .timer = timer,
+            .rnd = std::mt19937{seed}
+        };
+
         auto init_state = op_type::state_type{
             std::move(db_call_state),
             std::move(network_majority_grudge_state),
-            std::move(reconfiguration_state)
+            std::move(reconfiguration_state),
+            std::move(crash_state)
         };
 
         using namespace generator;
