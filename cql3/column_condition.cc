@@ -68,7 +68,7 @@ void validate_operation_on_durations(const abstract_type& type, cql3::expr::oper
 int is_satisfied_by(cql3::expr::oper_t op, const abstract_type& cell_type,
         const abstract_type& param_type, const data_value& cell_value, const bytes& param) {
 
-        int rc;
+        std::strong_ordering rc = std::strong_ordering::equal;
         // For multi-cell sets and lists, cell value is represented as a map,
         // thanks to collections_as_maps flag in partition_slice. param, however,
         // is represented as a set or list type.
@@ -79,7 +79,7 @@ int is_satisfied_by(cql3::expr::oper_t op, const abstract_type& cell_type,
             const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
             assert(list_type.is_multi_cell());
             // Inverse comparison result since the order of arguments is inverse.
-            rc = -list_type.compare_with_map(map_type, param, map_type.decompose(cell_value));
+            rc = 0 <=> list_type.compare_with_map(map_type, param, map_type.decompose(cell_value));
         } else {
             rc = cell_type.compare(cell_type.decompose(cell_value), param);
         }

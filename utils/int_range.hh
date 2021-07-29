@@ -43,7 +43,7 @@ unsigned cardinality(const std::optional<int_range>& ropt) {
 inline
 std::optional<int_range> intersection(const int_range& a, const int_range& b) {
     auto int_tri_cmp = [] (int x, int y) {
-        return x < y ? -1 : (x > y ? 1 : 0);
+        return x <=> y;
     };
     return a.intersection(b, int_tri_cmp);
 }

@@ -24,6 +24,7 @@
 #include "multiprecision_int.hh"
 #include <boost/multiprecision/cpp_int.hpp>
 #include <ostream>
+#include <compare>
 
 #include "bytes.hh"
 
@@ -48,7 +49,7 @@ public:
 
     sstring to_string() const;
 
-    int compare(const big_decimal& other) const;
+    std::strong_ordering compare(const big_decimal& other) const;
 
     big_decimal& operator+=(const big_decimal& other);
     big_decimal& operator-=(const big_decimal& other);

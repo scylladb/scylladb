@@ -52,7 +52,7 @@ public:
     virtual data_type freeze() const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
-    static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
+    static std::strong_ordering compare_maps(data_type keys_comparator, data_type values_comparator,
                         managed_bytes_view o1, managed_bytes_view o2);
     using abstract_type::deserialize;
     using collection_type_impl::deserialize;

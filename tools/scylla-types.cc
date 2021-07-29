@@ -74,13 +74,13 @@ void compare_handler(type_variant type, std::vector<bytes> values) {
     struct {
         bytes_view lhs, rhs;
 
-        int operator()(const data_type& type) {
+        std::strong_ordering operator()(const data_type& type) {
             return type->compare(lhs, rhs);
         }
-        int operator()(const compound_type<allow_prefixes::yes>& type) {
+        std::strong_ordering operator()(const compound_type<allow_prefixes::yes>& type) {
             return type.compare(lhs, rhs);
         }
-        int operator()(const compound_type<allow_prefixes::no>& type) {
+        std::strong_ordering operator()(const compound_type<allow_prefixes::no>& type) {
             return type.compare(lhs, rhs);
         }
     } compare_visitor{values[0], values[1]};

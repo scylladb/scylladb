@@ -36,7 +36,7 @@ public:
     struct tri_compare {
         test_key_tri_compare _cmp;
         template <typename A, typename B>
-        std::strong_ordering operator()(const A& a, const B& b) const noexcept { return _cmp(a, b) <=> 0; }
+        std::strong_ordering operator()(const A& a, const B& b) const noexcept { return _cmp(a, b); }
     };
     using test_tree = tree<test_key, &test_key::b_hook, tri_compare, 4, 5, key_search::both, with_debug::yes>;
     test_key(int nr, int cookie) noexcept : tree_test_key_base(nr, cookie) {}

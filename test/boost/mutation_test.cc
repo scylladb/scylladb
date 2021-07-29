@@ -2253,7 +2253,7 @@ class clustering_fragment_summary::tri_cmp {
         }
         // Range tombstones can have the same start position. In this case use
         // the end bound to decide who's "less".
-        return _bv_cmp(a.end_bound(), b.end_bound()) <=> 0;
+        return _bv_cmp(a.end_bound(), b.end_bound());
     }
 
 public:
@@ -2283,7 +2283,7 @@ public:
     }
 };
 
-using collection_element_tri_cmp_type = std::function<int(const std::pair<bytes, cell_summary>&, const std::pair<bytes, cell_summary>&)>;
+using collection_element_tri_cmp_type = std::function<std::strong_ordering(const std::pair<bytes, cell_summary>&, const std::pair<bytes, cell_summary>&)>;
 
 collection_element_tri_cmp_type
 collection_element_tri_cmp(const abstract_type& type) {
@@ -2298,13 +2298,7 @@ collection_element_tri_cmp(const abstract_type& type) {
             return [] (const std::pair<bytes, cell_summary>& a, const std::pair<bytes, cell_summary>& b) {
                 auto ai = deserialize_field_index(a.first);
                 auto bi = deserialize_field_index(b.first);
-                if (ai < bi) {
-                    return -1;
-                }
-                if (ai == bi) {
-                    return 0;
-                }
-                return 1;
+                return ai <=> bi;
             };
         },
         [] (const abstract_type& o) -> collection_element_tri_cmp_type {
@@ -2607,33 +2601,14 @@ void merge_container(
     }
 }
 
-// Temporary variant of merge_container() that accepts int as the return value of merge_func,
-// until we convert all users to std::strong_ordering.
-template <typename Container, typename OutputIt>
-void merge_container(
-        Container&& a,
-        Container&& b,
-        OutputIt oit,
-        std::function<int (const typename Container::value_type&, const typename Container::value_type&)> tri_cmp,
-        std::function<typename Container::value_type(typename Container::value_type, typename Container::value_type)> merge_func) {
-    return merge_container(
-            std::forward<Container>(a),
-            std::forward<Container>(b),
-            oit,
-            [tri_cmp] (const typename Container::value_type& a, const typename Container::value_type& b) {
-                return tri_cmp(a, b) <=> 0;
-            },
-            std::move(merge_func));
-}
-
 row_summary merge(const schema& schema, column_kind kind, row_summary a, row_summary b) {
     row_summary merged;
     merge_container(
             std::move(a),
             std::move(b),
             std::inserter(merged, merged.end()),
-            [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) -> int {
-                return a.first - b.first;
+            [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) -> std::strong_ordering {
+                return a.first <=> b.first;
             },
             [&schema, kind] (std::pair<const column_id, value_summary> a, std::pair<const column_id, value_summary> b) {
                 const auto& cdef = schema.column_at(kind, a.first);

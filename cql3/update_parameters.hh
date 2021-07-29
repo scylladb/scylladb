@@ -83,7 +83,7 @@ public:
                     const partition_key& pk2, const clustering_key& ck2) const {
 
                 std::strong_ordering rc = pk_cmp(pk1, pk2);
-                return rc != 0 ? rc : ck_cmp(ck1, ck2) <=> 0;
+                return rc != 0 ? rc : ck_cmp(ck1, ck2);
             }
             // Allow mixing std::pair<partition_key, clustering_key> and
             // std::pair<const partition_key&, const clustering_key&> during lookup

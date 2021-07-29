@@ -512,14 +512,14 @@ listlike_collection_type_impl::listlike_collection_type_impl(
         kind k, sstring name, data_type elements, bool is_multi_cell)
     : collection_type_impl(k, name, is_multi_cell), _elements(elements) {}
 
-int listlike_collection_type_impl::compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const
+std::strong_ordering listlike_collection_type_impl::compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const
 {
     assert((is_set() && map_type.get_keys_type() == _elements) || (!is_set() && map_type.get_values_type() == _elements));
 
     if (list.empty()) {
-        return map.empty() ? 0 : -1;
+        return map.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
     } else if (map.empty()) {
-        return 1;
+        return std::strong_ordering::greater;
     }
 
     const abstract_type& element_type = *_elements;
@@ -545,7 +545,7 @@ int listlike_collection_type_impl::compare_with_map(const map_type_impl& map_typ
             return cmp;
         }
     }
-    return list_size == map_size ? 0 : (list_size < map_size ? -1 : 1);
+    return list_size <=> map_size;
 }
 
 bytes listlike_collection_type_impl::serialize_map(const map_type_impl& map_type, const data_value& value) const
@@ -1078,12 +1078,12 @@ map_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
             && _values->is_value_compatible_with(*p->_values);
 }
 
-int32_t
+std::strong_ordering
 map_type_impl::compare_maps(data_type keys, data_type values, managed_bytes_view o1, managed_bytes_view o2) {
     if (o1.empty()) {
-        return o2.empty() ? 0 : -1;
+        return o2.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
     } else if (o2.empty()) {
-        return 1;
+        return std::strong_ordering::greater;
     }
     auto sf = cql_serialization_format::internal();
     int size1 = read_collection_size(o1, sf);
@@ -1103,7 +1103,7 @@ map_type_impl::compare_maps(data_type keys, data_type values, managed_bytes_view
             return cmp;
         }
     }
-    return size1 == size2 ? 0 : (size1 < size2 ? -1 : 1);
+    return size1 <=> size2;
 }
 
 static size_t map_serialized_size(const map_type_impl::native_type* m) {
@@ -2141,7 +2141,7 @@ template data_value abstract_type::deserialize_impl<>(single_fragmented_view) co
 template data_value abstract_type::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 template data_value abstract_type::deserialize_impl<>(managed_bytes_view) const;
 
-int32_t compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, const managed_bytes_view& v2) {
+std::strong_ordering compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, const managed_bytes_view& v2) {
     // This is a slight modification of lexicographical_tri_compare:
     // when the only difference between the tuples is that one of them has additional trailing nulls,
     // we consider them equal. For example, in the following CQL scenario:
@@ -2163,7 +2163,7 @@ int32_t compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, cons
     auto last2 = tuple_deserializing_iterator::finish(v2);
 
     while (types_first != types_last && first1 != last1 && first2 != last2) {
-        if (auto c = tri_compare_opt(*types_first, *first1, *first2)) {
+        if (auto c = tri_compare_opt(*types_first, *first1, *first2); c != 0) {
             return c;
         }
 
@@ -2174,7 +2174,7 @@ int32_t compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, cons
 
     while (types_first != types_last && first1 != last1) {
         if (*first1) {
-            return 1;
+            return std::strong_ordering::greater;
         }
 
         ++first1;
@@ -2183,75 +2183,81 @@ int32_t compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, cons
 
     while (types_first != types_last && first2 != last2) {
         if (*first2) {
-            return -1;
+            return std::strong_ordering::less;
         }
 
         ++first2;
         ++types_first;
     }
 
-    return 0;
+    return std::strong_ordering::equal;
 }
 
 namespace {
+
 struct compare_visitor {
     managed_bytes_view v1;
     managed_bytes_view v2;
-    template <typename T> int32_t operator()(const simple_type_impl<T>&) {
+
+    template <std::invocable<> Func>
+    requires std::same_as<std::strong_ordering, std::invoke_result_t<Func>>
+    std::strong_ordering with_empty_checks(Func func) {
         if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
+            return v2.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
         }
         if (v2.empty()) {
-            return 1;
+            return std::strong_ordering::greater;
         }
+        return func();
+    }
+
+    template <typename T> std::strong_ordering operator()(const simple_type_impl<T>&) {
+      return with_empty_checks([&] {
         T a = simple_type_traits<T>::read_nonempty(v1);
         T b = simple_type_traits<T>::read_nonempty(v2);
-        return a == b ? 0 : a < b ? -1 : 1;
+        return a <=> b;
+      });
     }
-    int32_t operator()(const string_type_impl&) { return compare_unsigned(v1, v2); }
-    int32_t operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2); }
-    int32_t operator()(const duration_type_impl&) { return compare_unsigned(v1, v2); }
-    int32_t operator()(const inet_addr_type_impl&) { return compare_unsigned(v1, v2); }
-    int32_t operator()(const date_type_impl&) {
+    std::strong_ordering operator()(const string_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const bytes_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const duration_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const inet_addr_type_impl&) { return compare_unsigned(v1, v2); }
+    std::strong_ordering operator()(const date_type_impl&) {
         // This is not the same behaviour as timestamp_type_impl
         return compare_unsigned(v1, v2);
     }
-    int32_t operator()(const timeuuid_type_impl&) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+    std::strong_ordering operator()(const timeuuid_type_impl&) {
+      return with_empty_checks([&] {
         return with_linearized(v1, [&] (bytes_view v1) {
             return with_linearized(v2, [&] (bytes_view v2) {
                 return utils::timeuuid_tri_compare(v1, v2);
             });
         });
+      });
     }
-    int32_t operator()(const listlike_collection_type_impl& l) {
+    std::strong_ordering operator()(const listlike_collection_type_impl& l) {
         using llpdi = listlike_partial_deserializing_iterator;
         auto sf = cql_serialization_format::internal();
         return lexicographical_tri_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
                 llpdi::end(v2, sf),
                 [&] (const managed_bytes_view& o1, const managed_bytes_view& o2) { return l.get_elements_type()->compare(o1, o2); });
     }
-    int32_t operator()(const map_type_impl& m) {
+    std::strong_ordering operator()(const map_type_impl& m) {
         return map_type_impl::compare_maps(m.get_keys_type(), m.get_values_type(), v1, v2);
     }
-    int32_t operator()(const uuid_type_impl&) {
+    std::strong_ordering operator()(const uuid_type_impl&) {
         if (v1.size() < 16) {
-            return v2.size() < 16 ? 0 : -1;
+            return v2.size() < 16 ? std::strong_ordering::equal : std::strong_ordering::less;
         }
         if (v2.size() < 16) {
 
-            return 1;
+            return std::strong_ordering::greater;
         }
         auto c1 = (v1[6] >> 4) & 0x0f;
         auto c2 = (v2[6] >> 4) & 0x0f;
 
         if (c1 != c2) {
-            return c1 - c2;
+            return c1 <=> c2;
         }
 
         if (c1 == 1) {
@@ -2263,71 +2269,60 @@ struct compare_visitor {
         }
         return compare_unsigned(v1, v2);
     }
-    int32_t operator()(const empty_type_impl&) { return 0; }
-    int32_t operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
-    int32_t operator()(const counter_type_impl&) {
+    std::strong_ordering operator()(const empty_type_impl&) { return std::strong_ordering::equal; }
+    std::strong_ordering operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
+    std::strong_ordering operator()(const counter_type_impl&) {
         // untouched (empty) counter evaluates as 0
         const auto a = v1.empty() ? 0 : simple_type_traits<int64_t>::read_nonempty(v1);
         const auto b = v2.empty() ? 0 : simple_type_traits<int64_t>::read_nonempty(v2);
-        return a == b ? 0 : a < b ? -1 : 1;
+        return a <=> b;
     }
-    int32_t operator()(const decimal_type_impl& d) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+    std::strong_ordering operator()(const decimal_type_impl& d) {
+      return with_empty_checks([&] {
         auto a = deserialize_value(d, v1);
         auto b = deserialize_value(d, v2);
         return a.compare(b);
+      });
     }
-    int32_t operator()(const varint_type_impl& v) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+    std::strong_ordering operator()(const varint_type_impl& v) {
+      return with_empty_checks([&] {
         auto a = deserialize_value(v, v1);
         auto b = deserialize_value(v, v2);
-        return a == b ? 0 : a < b ? -1 : 1;
+        return a == b ? std::strong_ordering::equal : a < b ? std::strong_ordering::less : std::strong_ordering::greater;
+      });
     }
-    template <typename T> int32_t operator()(const floating_type_impl<T>&) {
-        if (v1.empty()) {
-            return v2.empty() ? 0 : -1;
-        }
-        if (v2.empty()) {
-            return 1;
-        }
+    template <typename T> std::strong_ordering operator()(const floating_type_impl<T>&) {
+      return with_empty_checks([&] {
         T a = simple_type_traits<T>::read_nonempty(v1);
         T b = simple_type_traits<T>::read_nonempty(v2);
 
         // in java world NaN == NaN and NaN is greater than anything else
         if (std::isnan(a) && std::isnan(b)) {
-            return 0;
+            return std::strong_ordering::equal;
         } else if (std::isnan(a)) {
-            return 1;
+            return std::strong_ordering::greater;
         } else if (std::isnan(b)) {
-            return -1;
+            return std::strong_ordering::less;
         }
         // also -0 < 0
         if (std::signbit(a) && !std::signbit(b)) {
-            return -1;
+            return std::strong_ordering::less;
         } else if (!std::signbit(a) && std::signbit(b)) {
-            return 1;
+            return std::strong_ordering::greater;
         }
-        return a == b ? 0 : a < b ? -1 : 1;
+        // note: float <=> returns std::partial_ordering
+        return a == b ? std::strong_ordering::equal : a < b ? std::strong_ordering::less : std::strong_ordering::greater;
+      });
     }
-    int32_t operator()(const reversed_type_impl& r) { return r.underlying_type()->compare(v2, v1); }
+    std::strong_ordering operator()(const reversed_type_impl& r) { return r.underlying_type()->compare(v2, v1); }
 };
 }
 
-int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
+std::strong_ordering abstract_type::compare(bytes_view v1, bytes_view v2) const {
     return compare(managed_bytes_view(v1), managed_bytes_view(v2));
 }
 
-int32_t abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
+std::strong_ordering abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
     try {
         return visit(*this, compare_visitor{v1, v2});
     } catch (const marshal_exception&) {

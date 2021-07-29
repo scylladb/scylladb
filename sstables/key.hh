@@ -58,7 +58,7 @@ public:
     bool empty() const { return _bytes.empty(); }
 
     std::strong_ordering tri_compare(key_view other) const {
-        return compare_unsigned(_bytes, other._bytes) <=> 0;
+        return compare_unsigned(_bytes, other._bytes);
     }
 
     std::strong_ordering tri_compare(const schema& s, partition_key_view other) const {
@@ -66,7 +66,7 @@ public:
             auto lf = other.legacy_form(s);
             return lexicographical_tri_compare(
                     v.begin(), v.end(), lf.begin(), lf.end(),
-                    [](uint8_t b1, uint8_t b2) { return (int) b1 - b2; }) <=> 0;
+                    [](uint8_t b1, uint8_t b2) { return  b1 <=> b2; });
         });
     }
 };

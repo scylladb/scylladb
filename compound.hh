@@ -248,14 +248,14 @@ public:
         }
         return h;
     }
-    int compare(managed_bytes_view b1, managed_bytes_view b2) const {
+    std::strong_ordering compare(managed_bytes_view b1, managed_bytes_view b2) const {
         return with_linearized(b1, [&] (bytes_view bv1) {
             return with_linearized(b2, [&] (bytes_view bv2) {
                 return compare(bv1, bv2);
             });
         });
     }
-    int compare(bytes_view b1, bytes_view b2) const {
+    std::strong_ordering compare(bytes_view b1, bytes_view b2) const {
         if (_byte_order_comparable) {
             if (_is_reversed) {
                 return compare_unsigned(b2, b1);

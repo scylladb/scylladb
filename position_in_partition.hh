@@ -380,12 +380,12 @@ public:
 
         composite_tri_compare(const schema& s) : _s(s) {}
 
-        int operator()(position_in_partition_view a, position_in_partition_view b) const {
+        std::strong_ordering operator()(position_in_partition_view a, position_in_partition_view b) const {
             if (a._type != b._type) {
-                return rank(a._type) - rank(b._type);
+                return rank(a._type) <=> rank(b._type);
             }
             if (!a._ck) {
-                return 0;
+                return std::strong_ordering::equal;
             }
             auto&& types = _s.clustering_key_type()->types();
             auto cmp = [&] (const data_type& t, managed_bytes_view c1, managed_bytes_view c2) { return t->compare(c1, c2); };
@@ -395,16 +395,16 @@ public:
                 cmp, a.relation(), b.relation());
         }
 
-        int operator()(position_in_partition_view a, composite_view b) const {
+        std::strong_ordering operator()(position_in_partition_view a, composite_view b) const {
             if (b.empty()) {
-                return 1; // a cannot be empty.
+                return std::strong_ordering::greater; // a cannot be empty.
             }
             partition_region b_type = b.is_static() ? partition_region::static_row : partition_region::clustered;
             if (a._type != b_type) {
-                return rank(a._type) - rank(b_type);
+                return rank(a._type) <=> rank(b_type);
             }
             if (!a._ck) {
-                return 0;
+                return std::strong_ordering::equal;
             }
             auto&& types = _s.clustering_key_type()->types();
             auto b_values = b.values();
@@ -415,13 +415,13 @@ public:
                 cmp, a.relation(), relation_for_lower_bound(b));
         }
 
-        int operator()(composite_view a, position_in_partition_view b) const {
-            return -(*this)(b, a);
+        std::strong_ordering operator()(composite_view a, position_in_partition_view b) const {
+            return 0 <=> (*this)(b, a);
         }
 
-        int operator()(composite_view a, composite_view b) const {
+        std::strong_ordering operator()(composite_view a, composite_view b) const {
             if (a.is_static() != b.is_static()) {
-                return a.is_static() ? -1 : 1;
+                return a.is_static() ? std::strong_ordering::less : std::strong_ordering::greater;
             }
             auto&& types = _s.clustering_key_type()->types();
             auto a_values = a.values();
@@ -459,7 +459,7 @@ public:
             if (!a._ck) {
                 return std::strong_ordering::equal;
             }
-            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight)) <=> 0;
+            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight));
         }
     public:
         tri_compare(const schema& s) : _cmp(s) { }

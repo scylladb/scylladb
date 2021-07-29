@@ -22,6 +22,7 @@
 #pragma once
 
 #include <concepts>
+#include <compare>
 #include <boost/range/algorithm/copy.hpp>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/print.hh>
@@ -286,18 +287,18 @@ void skip_empty_fragments(View& v) {
 }
 
 template<FragmentedView V1, FragmentedView V2>
-int compare_unsigned(V1 v1, V2 v2) {
+std::strong_ordering compare_unsigned(V1 v1, V2 v2) {
     while (!v1.empty() && !v2.empty()) {
         size_t n = std::min(v1.current_fragment().size(), v2.current_fragment().size());
         if (int d = memcmp(v1.current_fragment().data(), v2.current_fragment().data(), n)) {
-            return d;
+            return d <=> 0;
         }
         v1.remove_prefix(n);
         v2.remove_prefix(n);
         skip_empty_fragments(v1);
         skip_empty_fragments(v2);
     }
-    return v1.size_bytes() - v2.size_bytes();
+    return v1.size_bytes() <=> v2.size_bytes();
 }
 
 template<FragmentedView V1, FragmentedView V2>
