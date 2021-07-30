@@ -1565,11 +1565,6 @@ void init_messaging_service(sharded<messaging_service>& ms,
 
     const auto& ssl_opts = db_config.server_encryption_options();
     auto encrypt = utils::get_or_default(ssl_opts, "internode_encryption", "none");
-    auto ms_trust_store = utils::get_or_default(ssl_opts, "truststore");
-    auto ms_cert = utils::get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-    auto ms_key = utils::get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
-    auto ms_tls_prio = utils::get_or_default(ssl_opts, "priority_string", sstring());
-    auto ms_client_auth = utils::is_true(utils::get_or_default(ssl_opts, "require_client_auth", "false"));
 
     if (encrypt == "all") {
         mscfg.encrypt = encrypt_what::all;
@@ -1583,23 +1578,7 @@ void init_messaging_service(sharded<messaging_service>& ms,
 
     if (mscfg.encrypt != encrypt_what::none) {
         creds = std::make_shared<credentials_builder>();
-        creds->set_dh_level(dh_params::level::MEDIUM);
-
-        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
-        if (ms_trust_store.empty()) {
-            creds->set_system_trust().get();
-        } else {
-            creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
-        }
-
-        creds->set_priority_string(db::config::default_tls_priority);
-
-        if (!ms_tls_prio.empty()) {
-            creds->set_priority_string(ms_tls_prio);
-        }
-        if (ms_client_auth) {
-            creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
-        }
+        utils::configure_tls_creds_builder(*creds, std::move(ssl_opts)).get();
     }
 
     // Init messaging_service

@@ -99,15 +99,9 @@ future<> controller::start() {
                         "switch to setting alternator_encryption_options instead.");
                 }
             }
-            creds->set_dh_level(tls::dh_params::level::MEDIUM);
-            auto cert = utils::get_or_default(opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = utils::get_or_default(opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
-            creds->set_x509_key_file(cert, key, tls::x509_crt_format::PEM).get();
-            auto prio = utils::get_or_default(opts, "priority_string", sstring());
-            creds->set_priority_string(db::config::default_tls_priority);
-            if (!prio.empty()) {
-                creds->set_priority_string(prio);
-            }
+            opts.erase("require_client_auth");
+            opts.erase("truststore");
+            utils::configure_tls_creds_builder(creds.value(), std::move(opts)).get();
         }
         bool alternator_enforce_authorization = _config.alternator_enforce_authorization();
         _server.invoke_on_all(

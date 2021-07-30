@@ -115,24 +115,7 @@ future<> controller::do_start_server() {
         // main should have made sure values are clean and neatish
         if (utils::is_true(utils::get_or_default(ceo, "enabled", "false"))) {
             auto cred = std::make_shared<seastar::tls::credentials_builder>();
-
-            cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
-            cred->set_priority_string(db::config::default_tls_priority);
-
-            if (ceo.contains("priority_string")) {
-                cred->set_priority_string(ceo.at("priority_string"));
-            }
-            if (utils::is_true(utils::get_or_default(ceo, "require_client_auth", "false"))) {
-                cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
-            }
-
-            auto cert = utils::get_or_default(ceo, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = utils::get_or_default(ceo, "keyfile", db::config::get_conf_sub("scylla.key").string());
-            cred->set_x509_key_file(cert, key, seastar::tls::x509_crt_format::PEM).get();
-
-            if (ceo.contains("truststore")) {
-                cred->set_x509_trust_file(ceo.at("truststore"), seastar::tls::x509_crt_format::PEM).get();
-            }
+            utils::configure_tls_creds_builder(*cred, std::move(ceo)).get();
 
             logger.info("Enabling encrypted CQL connections between client and server");
 
