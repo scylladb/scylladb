@@ -210,7 +210,7 @@ raft::command make_command(const cmd_id_t& cmd_id, const Input& input) {
 
 // TODO: handle other errors?
 template <PureStateMachine M>
-using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown>;
+using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::stopped_error>;
 
 // Sends a given `input` as a command to `server`, waits until the command gets replicated
 // and applied on that server and returns the produced output.
@@ -255,6 +255,8 @@ future<call_result_t<M>> call(
         } catch (raft::dropped_entry e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (raft::commit_status_unknown e) {
+            return make_ready_future<call_result_t<M>>(e);
+        } catch (raft::stopped_error e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (logical_timer::timed_out<typename M::output_t> e) {
             (void)e.get_future().discard_result()
@@ -1017,7 +1019,7 @@ private:
 };
 
 using reconfigure_result_t = std::variant<std::monostate,
-    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress>;
+    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error>;
 
 future<reconfigure_result_t> reconfigure(
         const std::vector<raft::server_id>& ids,
@@ -1041,6 +1043,8 @@ future<reconfigure_result_t> reconfigure(
     } catch (raft::commit_status_unknown e) {
         co_return e;
     } catch (raft::conf_change_in_progress e) {
+        co_return e;
+    } catch (raft::stopped_error e) {
         co_return e;
     } catch (logical_timer::timed_out<void> e) {
         (void)e.get_future().discard_result()
