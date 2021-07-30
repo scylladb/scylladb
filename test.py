@@ -327,7 +327,7 @@ class BoostTest(UnitTest):
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
-        boost_args += ['--color_output={}'.format('true' if output_is_a_tty else 'false')]
+        boost_args += ['--color_output=false']
         boost_args += ['--']
         self.args = boost_args + self.args
 
