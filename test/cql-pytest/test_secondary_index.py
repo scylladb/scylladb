@@ -227,7 +227,11 @@ def test_too_large_indexed_value(cql, test_keyspace):
         cql.execute(f"CREATE INDEX ON {table}(v)")
         big = 'x'*66536
         with pytest.raises(WriteFailure):
-            cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
+            try:
+                cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
+            # Cassandra 4.0 uses a different error type - so a minor translation is needed
+            except InvalidRequest as ir:
+                raise WriteFailure(str(ir))
 
 # Selecting values using only clustering key should require filtering, but work correctly
 # Reproduces issue #8991
