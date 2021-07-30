@@ -67,11 +67,11 @@ sstring column_identifier::to_cql_string() const {
     return util::maybe_quote(_text);
 }
 
-sstring column_identifier::raw::to_cql_string() const {
+sstring column_identifier_raw::to_cql_string() const {
     return util::maybe_quote(_text);
 }
 
-column_identifier::raw::raw(sstring raw_text, bool keep_case)
+column_identifier_raw::column_identifier_raw(sstring raw_text, bool keep_case)
     : _raw_text{raw_text}
     , _text{raw_text}
 {
@@ -80,12 +80,12 @@ column_identifier::raw::raw(sstring raw_text, bool keep_case)
     }
 }
 
-::shared_ptr<selection::selectable> column_identifier::raw::prepare(const schema& s) const {
+::shared_ptr<selection::selectable> column_identifier_raw::prepare(const schema& s) const {
     return prepare_column_identifier(s);
 }
 
 ::shared_ptr<column_identifier>
-column_identifier::raw::prepare_column_identifier(const schema& schema) const {
+column_identifier_raw::prepare_column_identifier(const schema& schema) const {
     if (schema.regular_column_name_type() == utf8_type) {
         return ::make_shared<column_identifier>(_text, true);
     }
@@ -102,23 +102,23 @@ column_identifier::raw::prepare_column_identifier(const schema& schema) const {
     return ::make_shared<column_identifier>(schema.regular_column_name_type()->from_string(_raw_text), _text);
 }
 
-bool column_identifier::raw::processes_selection() const {
+bool column_identifier_raw::processes_selection() const {
     return false;
 }
 
-bool column_identifier::raw::operator==(const raw& other) const {
+bool column_identifier_raw::operator==(const column_identifier_raw& other) const {
     return _text == other._text;
 }
 
-bool column_identifier::raw::operator!=(const raw& other) const {
+bool column_identifier_raw::operator!=(const column_identifier_raw& other) const {
     return !operator==(other);
 }
 
-sstring column_identifier::raw::to_string() const {
+sstring column_identifier_raw::to_string() const {
     return _text;
 }
 
-std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {
+std::ostream& operator<<(std::ostream& out, const column_identifier_raw& id) {
     return out << id._text;
 }
 

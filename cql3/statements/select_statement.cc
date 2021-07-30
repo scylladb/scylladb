@@ -1373,7 +1373,8 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
             _select_clause.reserve(schema->all_columns().size());
             for (const column_definition& column_def : schema->all_columns_in_select_order()) {
                 _select_clause.push_back(make_shared<selection::raw_selector>(
-                        ::make_shared<column_identifier::raw>(column_def.name_as_text(), true), nullptr));
+                    expr::unresolved_identifier{::make_shared<column_identifier::raw>(column_def.name_as_text(), true)},
+                    nullptr));
             }
         }
 
@@ -1391,14 +1392,14 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
         }
 
         // Prepare args for as_json_function
-        std::vector<::shared_ptr<selection::selectable::raw>> raw_selectables;
+        std::vector<expr::expression> raw_selectables;
         raw_selectables.reserve(_select_clause.size());
         for (const auto& raw_selector : _select_clause) {
             raw_selectables.push_back(raw_selector->selectable_);
         }
         auto as_json = ::make_shared<functions::as_json_function>(std::move(selector_names), std::move(selector_types));
         auto as_json_selector = ::make_shared<selection::raw_selector>(
-                ::make_shared<selection::selectable::with_anonymous_function::raw>(as_json, std::move(raw_selectables)), nullptr);
+                expr::function_call{as_json, std::move(raw_selectables)}, nullptr);
         _select_clause.clear();
         _select_clause.push_back(as_json_selector);
     }

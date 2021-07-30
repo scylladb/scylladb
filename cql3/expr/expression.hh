@@ -30,11 +30,14 @@
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
 #include "cql3/term.hh"
+#include "cql3/cql3_type.hh"
+#include "cql3/functions/function_name.hh"
 #include "database_fwd.hh"
 #include "gc_clock.hh"
 #include "range.hh"
 #include "seastarx.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/variant_element.hh"
 
 class row;
 
@@ -49,11 +52,18 @@ namespace query {
 
 namespace cql3 {
 
+class column_identifier_raw;
 class query_options;
 
 namespace selection {
     class selection;
 } // namespace selection
+
+namespace functions {
+
+class function;
+
+}
 
 namespace expr {
 
@@ -65,9 +75,39 @@ class conjunction;
 struct column_value;
 struct column_value_tuple;
 struct token;
+class unresolved_identifier;
+class column_mutation_attribute;
+class function_call;
+class cast;
+class field_selection;
 
-/// A restriction expression -- union of all possible restriction types.  bool means a Boolean constant.
-using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token>;
+/// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
+using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
+                                unresolved_identifier, column_mutation_attribute, function_call, cast,
+                                field_selection>;
+
+template <typename T>
+concept ExpressionElement = utils::VariantElement<T, expression>;
+
+// An expression variant element can't contain an expression by value, since the size of the variant
+// will be infinite. `nested_expression` contains an expression indirectly, but has value semantics and
+// is copyable.
+class nested_expression {
+    std::unique_ptr<expression> _e;
+public:
+    // not explicit, an expression _is_ a nested expression
+    nested_expression(expression e);
+    // not explicit, an ExpressionElement _is_ an expression
+    nested_expression(ExpressionElement auto e);
+    nested_expression(const nested_expression&);
+    nested_expression(nested_expression&&) = default;
+    nested_expression& operator=(const nested_expression&);
+    nested_expression& operator=(nested_expression&&) = default;
+    const expression* operator->() const { return _e.get(); }
+    expression* operator->() { return _e.get(); }
+    const expression& operator*() const { return *_e.get(); }
+    expression& operator*() { return *_e.get(); }
+};
 
 /// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
 struct column_value {
@@ -106,22 +146,49 @@ enum class comparison_order : char {
 
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
-    std::unique_ptr<expression> lhs;
+    nested_expression lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
     comparison_order order;
 
     binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order = comparison_order::cql);
-
-    binary_operator(const binary_operator& x);
-    binary_operator& operator=(const binary_operator&);
-    binary_operator(binary_operator&& x) = default;
-    binary_operator& operator=(binary_operator&& x) = default;
 };
 
 /// A conjunction of restrictions.
 struct conjunction {
     std::vector<expression> children;
+};
+
+// Gets resolved eventually into a column_value.
+struct unresolved_identifier {
+    ::shared_ptr<column_identifier_raw> ident;
+
+    ~unresolved_identifier();
+};
+
+// An attribute attached to a column mutation: writetime or ttl
+struct column_mutation_attribute {
+    enum class attribute_kind { writetime, ttl };
+
+    attribute_kind kind;
+    // note: only unresolved_identifier is legal here now. One day, when prepare()
+    // on expressions yields expressions, column_value will also be legal here.
+    nested_expression column;
+};
+
+struct function_call {
+    std::variant<functions::function_name, shared_ptr<functions::function>> func;
+    std::vector<expression> args;
+};
+
+struct cast {
+    nested_expression arg;
+    cql3_type type;
+};
+
+struct field_selection {
+    nested_expression structure;
+    shared_ptr<column_identifier_raw> field;
 };
 
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
@@ -199,6 +266,22 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [] (const column_value&) -> const binary_operator* { return nullptr; },
             [] (const column_value_tuple&) -> const binary_operator* { return nullptr; },
             [] (const token&) -> const binary_operator* { return nullptr; },
+            [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
+            [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
+            [&] (const function_call& fc) -> const binary_operator* {
+                for (auto& arg : fc.args) {
+                    if (auto found = find_atom(arg, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
+            [&] (const cast& c) -> const binary_operator* {
+                return find_atom(*c.arg, f);
+            },
+            [&] (const field_selection& fs) -> const binary_operator* {
+                return find_atom(*fs.structure, f);
+            },
         }, e);
 }
 
@@ -216,6 +299,17 @@ size_t count_if(const expression& e, Fn f) {
             [] (const column_value&) -> size_t { return 0; },
             [] (const column_value_tuple&) -> size_t { return 0; },
             [] (const token&) -> size_t { return 0; },
+            [] (const unresolved_identifier&) -> size_t { return 0; },
+            [] (const column_mutation_attribute&) -> size_t { return 0; },
+            [&] (const function_call& fc) -> size_t {
+                return std::accumulate(fc.args.cbegin(), fc.args.cend(), size_t{0},
+                                       [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
+            },
+            [&] (const cast& c) -> size_t {
+                return count_if(*c.arg, f); },
+            [&] (const field_selection& fs) -> size_t {
+                return count_if(*fs.structure, f);
+            },
         }, e);
 }
 
@@ -306,6 +400,9 @@ column_value_tuple::column_value_tuple(Range r)
         : column_value_tuple(std::vector<column_value>(r.begin(), r.end())) {
 }
 
+nested_expression::nested_expression(ExpressionElement auto e)
+        : nested_expression(expression(std::move(e))) {
+}
 
 } // namespace expr
 

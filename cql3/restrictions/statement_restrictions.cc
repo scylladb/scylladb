@@ -210,6 +210,26 @@ static std::vector<expr::expression> extract_partition_range(
         }
 
         void operator()(bool) {}
+
+        void operator()(const unresolved_identifier&) {
+            on_internal_error(rlogger, "extract_partition_range(unresolved_identifier)");
+        }
+
+        void operator()(const column_mutation_attribute&) {
+            on_internal_error(rlogger, "extract_partition_range(column_mutation_attribute)");
+        }
+
+        void operator()(const function_call&) {
+            on_internal_error(rlogger, "extract_partition_range(function_call)");
+        }
+
+        void operator()(const cast&) {
+            on_internal_error(rlogger, "extract_partition_range(cast)");
+        }
+
+        void operator()(const field_selection&) {
+            on_internal_error(rlogger, "extract_partition_range(field_selection)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -275,6 +295,26 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         }
 
         void operator()(bool) {}
+
+        void operator()(const unresolved_identifier&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(unresolved_identifier)");
+        }
+
+        void operator()(const column_mutation_attribute&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(column_mutation_attribute)");
+        }
+
+        void operator()(const function_call&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(function_call)");
+        }
+
+        void operator()(const cast&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(cast)");
+        }
+
+        void operator()(const field_selection&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(field_selection)");
+        }
     } v;
     std::visit(v, where_clause);
 
@@ -682,7 +722,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     size_t product_size = 1;
     for (const auto& e : expressions) {
         if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
-            if (auto cv = std::get_if<expr::column_value>(arbitrary_binop->lhs.get())) {
+            if (auto cv = std::get_if<expr::column_value>(&*arbitrary_binop->lhs)) {
                 const value_set vals = possible_lhs_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
@@ -946,6 +986,26 @@ struct multi_column_range_accumulator {
 
     void operator()(const token&) {
         on_internal_error(rlogger, "Token encountered outside binary operator");
+    }
+
+    void operator()(const unresolved_identifier&) {
+        on_internal_error(rlogger, "Unresolved identifier encountered outside binary operator");
+    }
+
+    void operator()(const column_mutation_attribute&) {
+        on_internal_error(rlogger, "writetime/ttl encountered outside binary operator");
+    }
+
+    void operator()(const function_call&) {
+        on_internal_error(rlogger, "function call encountered outside binary operator");
+    }
+
+    void operator()(const cast&) {
+        on_internal_error(rlogger, "typecast encountered outside binary operator");
+    }
+
+    void operator()(const field_selection&) {
+        on_internal_error(rlogger, "field selection encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

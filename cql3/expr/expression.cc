@@ -53,24 +53,31 @@ using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
 
+nested_expression::nested_expression(expression e)
+        : _e(std::make_unique<expression>(std::move(e))) {
+}
+
+nested_expression::nested_expression(const nested_expression& o)
+        : nested_expression(*o._e) {
+}
+
+nested_expression&
+nested_expression::operator=(const nested_expression& o) {
+    if (this != &o) {
+        _e = std::make_unique<expression>(*o._e);
+    }
+    return *this;
+}
+
 binary_operator::binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order)
-            : lhs(std::make_unique<expression>(std::move(lhs)))
+            : lhs(std::move(lhs))
             , op(op)
             , rhs(std::move(rhs))
             , order(order) {
 }
 
-binary_operator::binary_operator(const binary_operator& x) : binary_operator(*x.lhs, x.op, x.rhs, x.order) {
-}
-
-binary_operator&
-binary_operator::operator=(const binary_operator& x) {
-    *lhs = *x.lhs;
-    op = x.op;
-    rhs = x.rhs;
-    order = x.order;
-    return *this;
-}
+// Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
+unresolved_identifier::~unresolved_identifier() = default;
 
 namespace {
 
@@ -528,6 +535,21 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const binary_operator&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: binary operators cannot be nested");
             },
+            [] (const unresolved_identifier&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as the LHS of a binary expression");
+            },
+            [] (const column_mutation_attribute&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: column_mutation_attribute cannot serve as the LHS of a binary expression");
+            },
+            [] (const function_call&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: function_call cannot serve as the LHS of a binary expression");
+            },
+            [] (const cast&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: cast cannot serve as the LHS of a binary expression");
+            },
+            [] (const field_selection&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: field_selection cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -548,6 +570,21 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const token&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
+            },
+            [] (const unresolved_identifier&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
+            },
+            [] (const column_mutation_attribute&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: the writetime/ttl cannot serve as a restriction by itself");
+            },
+            [] (const function_call&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a function call cannot serve as a restriction by itself");
+            },
+            [] (const cast&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a a type cast cannot serve as a restriction by itself");
+            },
+            [] (const field_selection&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a field selection cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -770,6 +807,21 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [&] (bool) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
                         },
+                        [] (const unresolved_identifier&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: unresolved identifiers are not supported as the LHS of a binary expression");
+                        },
+                        [] (const column_mutation_attribute&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: writetime/ttl are not supported as the LHS of a binary expression");
+                        },
+                        [] (const function_call&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
+                        },
+                        [] (const cast&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: typecasts are not supported as the LHS of a binary expression");
+                        },
+                        [] (const field_selection&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: field selections are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -780,6 +832,21 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const token&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
+            },
+            [] (const unresolved_identifier&) -> value_set {
+                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
+            },
+            [] (const column_mutation_attribute&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: the writetime/ttl functions cannot serve as a restriction by itself");
+            },
+            [] (const function_call&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a function call cannot serve as a restriction by itself");
+            },
+            [] (const cast&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a typecast cannot serve as a restriction by itself");
+            },
+            [] (const field_selection&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a field selection cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -824,6 +891,21 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (bool) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: constants are not supported as the LHS of a binary expression");
                         },
+                        [] (const unresolved_identifier&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: an unresolved identifier is not supported as the LHS of a binary expression");
+                        },
+                        [&] (const column_mutation_attribute&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: writetime/ttl are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const function_call&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: function calls are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const cast&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: typecasts are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const field_selection&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: field selections are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const auto& default_case) { return false; }
@@ -864,6 +946,30 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const column_value_tuple& tuple) {
                 fmt::print(os, "({})", fmt::join(tuple.elements, ","));
             },
+            [&] (const unresolved_identifier& ui) {
+                fmt::print(os, "unresolved({})", *ui.ident);
+            },
+            [&] (const column_mutation_attribute& cma)  {
+                fmt::print(os, "{}({})",
+                        cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
+                        *cma.column);
+            },
+            [&] (const function_call& fc)  {
+                std::visit(overloaded_functor{
+                    [&] (const functions::function_name& named) {
+                        fmt::print(os, "{}({})", named, fmt::join(fc.args, ", "));
+                    },
+                    [&] (const shared_ptr<functions::function>& anon) {
+                        fmt::print(os, "<anonymous function>({})", fmt::join(fc.args, ", "));
+                    },
+                }, fc.func);
+            },
+            [&] (const cast& c)  {
+                fmt::print(os, "({} AS {})", *c.arg, c.type);
+            },
+            [&] (const field_selection& fs)  {
+                fmt::print(os, "({}.{})", *fs.structure, fs.field);
+            },
         }, expr);
     return os;
 }
@@ -876,7 +982,7 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = std::get_if<column_value_tuple>(b.lhs.get())) {
+    if (auto tuple = std::get_if<column_value_tuple>(&*b.lhs)) {
         return boost::algorithm::any_of(tuple->elements, [] (const column_value& v) { return v.sub; });
     }
     return false;
@@ -900,6 +1006,11 @@ expression replace_column_def(const expression& expr, const column_definition* n
                 throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
             },
             [&] (const token&) { return expr; },
+            [&] (const unresolved_identifier&) { return expr; },
+            [&] (const column_mutation_attribute&) { return expr; },
+            [&] (const function_call&) { return expr; },
+            [&] (const cast&) { return expr; },
+            [&] (const field_selection&) { return expr; },
         }, expr);
 }
 
@@ -920,7 +1031,26 @@ expression replace_token(const expression& expr, const column_definition* new_cd
             [&] (const column_value_tuple&) -> expression {
                 throw std::logic_error(format("replace_token invalid with column tuple: {}", to_string(expr)));
             },
-            [&] (const token&) -> expression { return column_value{new_cdef}; }
+            [&] (const token&) -> expression { return column_value{new_cdef}; },
+            [&] (const unresolved_identifier&) -> expression {
+                throw std::logic_error(format("replace_token invalid with unresolved identifier: {}", to_string(expr)));
+            },
+            [&] (const column_mutation_attribute&) -> expression {
+                return expr;
+            },
+            [&] (const function_call&) -> expression {
+                // A token function could be one of the arguments, but it doesn't help the caller to replace it
+                // since we can't index function of the token function.
+                return expr;
+            },
+            [&] (const cast&) -> expression {
+                // A token function could be what's being casted, but it doesn't help the caller to replace it
+                // since we can't index function of the token function.
+                return expr;
+            },
+            [&] (const field_selection&) -> expression {
+                return expr;
+            },
         }, expr);
 }
 
