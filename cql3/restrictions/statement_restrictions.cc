@@ -372,6 +372,7 @@ statement_restrictions::statement_restrictions(database& db,
     const expr::allow_local_index allow_local(
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
             && _partition_key_restrictions->is_all_eq());
+    _has_multi_column = find_atom(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local);
     _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local);
     _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local);
@@ -409,8 +410,7 @@ statement_restrictions::statement_restrictions(database& db,
     process_clustering_columns_restrictions(for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
-    if (_is_key_range && _has_queriable_ck_index &&
-        !dynamic_pointer_cast<multi_column_restriction>(_clustering_columns_restrictions)) {
+    if (_is_key_range && _has_queriable_ck_index && !_has_multi_column) {
         _uses_secondary_indexing = true;
     }
 
@@ -445,7 +445,7 @@ statement_restrictions::statement_restrictions(database& db,
     }
 
     if (!_nonprimary_key_restrictions->empty()) {
-        if (_has_queriable_regular_index) {
+        if (_has_queriable_regular_index && !_has_multi_column) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
@@ -1389,6 +1389,10 @@ bool statement_restrictions::need_filtering() const {
         return true; // Regular columns are unsorted in storage and no single index suffices.
     }
     if (nreg == 1) { // Single non-key restriction supported by an index.
+        if (_has_multi_column) {
+            // Index will not be used; base-table results must be filtered on _nonprimary_key_restrictions.
+            return true;
+        }
         // Will the index-table query require filtering?  That depends on whether its clustering key is restricted to a
         // continuous range.  Recall that this clustering key is (token, pk, ck) of the base table.
         if (npart == 0 && _clustering_columns_restrictions->empty()) {
