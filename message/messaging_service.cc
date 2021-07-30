@@ -1559,10 +1559,25 @@ future<> messaging_service::send_raft_timeout_now(msg_addr id, clock_type::time_
 
 
 void init_messaging_service(sharded<messaging_service>& ms,
-                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
-                sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {
+                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg, const db::config& db_config) {
     using encrypt_what = messaging_service::encrypt_what;
     using namespace seastar::tls;
+
+    const auto& ssl_opts = db_config.server_encryption_options();
+    auto encrypt = utils::get_or_default(ssl_opts, "internode_encryption", "none");
+    auto ms_trust_store = utils::get_or_default(ssl_opts, "truststore");
+    auto ms_cert = utils::get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+    auto ms_key = utils::get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
+    auto ms_tls_prio = utils::get_or_default(ssl_opts, "priority_string", sstring());
+    auto ms_client_auth = utils::is_true(utils::get_or_default(ssl_opts, "require_client_auth", "false"));
+
+    if (encrypt == "all") {
+        mscfg.encrypt = encrypt_what::all;
+    } else if (encrypt == "dc") {
+        mscfg.encrypt = encrypt_what::dc;
+    } else if (encrypt == "rack") {
+        mscfg.encrypt = encrypt_what::rack;
+    }
 
     std::shared_ptr<credentials_builder> creds;
 

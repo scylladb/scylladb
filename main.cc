@@ -782,14 +782,6 @@ int main(int ac, char** av) {
             dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
-            const auto& ssl_opts = cfg->server_encryption_options();
-            auto encrypt_what = utils::get_or_default(ssl_opts, "internode_encryption", "none");
-            auto trust_store = utils::get_or_default(ssl_opts, "truststore");
-            auto cert = utils::get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = utils::get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
-            auto prio = utils::get_or_default(ssl_opts, "priority_string", sstring());
-            auto clauth = utils::is_true(utils::get_or_default(ssl_opts, "require_client_auth", "false"));
-
             netw::messaging_service::config mscfg;
 
             mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
@@ -797,14 +789,6 @@ int main(int ac, char** av) {
             mscfg.ssl_port = cfg->ssl_storage_port();
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
             mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
-
-            if (encrypt_what == "all") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
-            } else if (encrypt_what == "dc") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
-            } else if (encrypt_what == "rack") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
-            }
 
             const auto& seo = cfg->server_encryption_options();
             if (utils::is_true(utils::get_or_default(seo, "require_client_auth", "false"))) {
@@ -849,7 +833,7 @@ int main(int ac, char** av) {
             scfg.gossip = dbcfg.gossip_scheduling_group;
 
             debug::the_messaging_service = &messaging;
-            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
+            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), *cfg);
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 netw::uninit_messaging_service(messaging).get();
             });

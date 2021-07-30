@@ -66,6 +66,7 @@ namespace utils {
 
 namespace db {
 class seed_provider_type;
+class config;
 }
 
 namespace db::view {
@@ -596,8 +597,7 @@ public:
 };
 
 void init_messaging_service(sharded<messaging_service>& ms,
-        messaging_service::config cfg, messaging_service::scheduling_config scheduling_config,
-        sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth);
+        messaging_service::config cfg, messaging_service::scheduling_config scheduling_config, const db::config& db_config);
 future<> uninit_messaging_service(sharded<messaging_service>& ms);
 
 } // namespace netw
