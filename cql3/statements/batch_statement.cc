@@ -359,6 +359,8 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     auto cas_timeout = now + cfg.cas_timeout;     // Ballot contention timeout.
     auto read_timeout = now + cfg.read_timeout;   // Query timeout.
 
+    computed_function_values cached_fn_calls;
+
     for (size_t i = 0; i < _statements.size(); ++i) {
 
         modification_statement& statement = *_statements[i].statement;
@@ -377,6 +379,8 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         } else if (keys.size() != 1 || keys.front().equal(request->key().front(), dht::ring_position_comparator(*schema)) == false) {
             throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
         }
+        cached_fn_calls.merge(std::move(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls()));
+
         std::vector<query::clustering_range> ranges = statement.create_clustering_ranges(statement_options, json_cache);
 
         request->add_row_update(statement, std::move(ranges), std::move(json_cache), statement_options);
@@ -389,7 +393,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+                ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls)));
     }
 
     return proxy.cas(schema, request, request->read_command(proxy), request->key(),
@@ -433,7 +437,7 @@ namespace raw {
 
 std::unique_ptr<prepared_statement>
 batch_statement::prepare(database& db, cql_stats& stats) {
-    auto&& bound_names = get_bound_variables();
+    auto&& meta = get_prepare_context();
 
     std::optional<sstring> first_ks;
     std::optional<sstring> first_cf;
@@ -449,20 +453,20 @@ batch_statement::prepare(database& db, cql_stats& stats) {
         } else {
             have_multiple_cfs = first_ks.value() != parsed->keyspace() || first_cf.value() != parsed->column_family();
         }
-        statements.emplace_back(parsed->prepare(db, bound_names, stats));
+        statements.emplace_back(parsed->prepare(db, meta, stats));
     }
 
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
-    prep_attrs->collect_marker_specification(bound_names);
+    prep_attrs->fill_prepare_context(meta);
 
-    cql3::statements::batch_statement batch_statement_(bound_names.size(), _type, std::move(statements), std::move(prep_attrs), stats);
+    cql3::statements::batch_statement batch_statement_(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
 
     std::vector<uint16_t> partition_key_bind_indices;
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
-        partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
+        partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
     return std::make_unique<prepared_statement>(make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
-                                                     bound_names.get_specifications(),
+                                                     meta.get_variable_specifications(),
                                                      std::move(partition_key_bind_indices));
 }
 

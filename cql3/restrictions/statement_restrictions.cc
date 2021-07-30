@@ -345,7 +345,7 @@ statement_restrictions::statement_restrictions(database& db,
         schema_ptr schema,
         statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
-        variable_specifications& bound_names,
+        prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering)
@@ -376,7 +376,7 @@ statement_restrictions::statement_restrictions(database& db,
                     throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation->to_string()));
                 }
             } else {
-                const auto restriction = relation->to_restriction(db, schema, bound_names);
+                const auto restriction = relation->to_restriction(db, schema, ctx);
                 if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
                     _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
                 } else if (has_token(restriction->expression)) {

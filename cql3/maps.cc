@@ -228,7 +228,7 @@ maps::delayed_value::contains_bind_marker() const {
 }
 
 void
-maps::delayed_value::collect_marker_specification(variable_specifications& bound_names) const {
+maps::delayed_value::fill_prepare_context(prepare_context& ctx) const {
 }
 
 shared_ptr<terminal>
@@ -306,9 +306,9 @@ maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 }
 
 void
-maps::setter_by_key::collect_marker_specification(variable_specifications& bound_names) const {
-    operation::collect_marker_specification(bound_names);
-    _k->collect_marker_specification(bound_names);
+maps::setter_by_key::fill_prepare_context(prepare_context& ctx) const {
+    operation::fill_prepare_context(ctx);
+    _k->fill_prepare_context(ctx);
 }
 
 void

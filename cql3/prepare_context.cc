@@ -39,33 +39,34 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "cql3/variable_specifications.hh"
+#include "cql3/prepare_context.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/functions/function_call.hh"
 
 namespace cql3 {
 
-variable_specifications::variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names)
+prepare_context::prepare_context(const std::vector<::shared_ptr<column_identifier>>& variable_names)
     : _variable_names{variable_names}
     , _specs{variable_names.size()}
     , _target_columns{variable_names.size()}
 { }
-lw_shared_ptr<variable_specifications> variable_specifications::empty() {
-    return make_lw_shared<variable_specifications>(std::vector<::shared_ptr<column_identifier>>{});
+lw_shared_ptr<prepare_context> prepare_context::empty() {
+    return make_lw_shared<prepare_context>(std::vector<::shared_ptr<column_identifier>>{});
 }
-size_t variable_specifications::size() const {
+size_t prepare_context::bound_variables_size() const {
     return _variable_names.size();
 }
 
-std::vector<lw_shared_ptr<column_specification>> variable_specifications::get_specifications() const & {
+std::vector<lw_shared_ptr<column_specification>> prepare_context::get_variable_specifications() const & {
     return std::vector<lw_shared_ptr<column_specification>>(_specs.begin(), _specs.end());
 }
 
-std::vector<lw_shared_ptr<column_specification>> variable_specifications::get_specifications() && {
+std::vector<lw_shared_ptr<column_specification>> prepare_context::get_variable_specifications() && {
     return std::move(_specs);
 }
 
-std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(const schema& schema) const {
+std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes(const schema& schema) const {
     auto count = schema.partition_key_columns().size();
     std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
     std::vector<bool> set(count, false);
@@ -85,7 +86,7 @@ std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(co
     return partition_key_positions;
 }
 
-void variable_specifications::add(int32_t bind_index, lw_shared_ptr<column_specification> spec) {
+void prepare_context::add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec) {
     _target_columns[bind_index] = spec;
     auto name = _variable_names[bind_index];
     // Use the user name, if there is one
@@ -95,14 +96,29 @@ void variable_specifications::add(int32_t bind_index, lw_shared_ptr<column_speci
     _specs[bind_index] = spec;
 }
 
-void variable_specifications::set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bound_names) {
-    _variable_names = bound_names;
+void prepare_context::set_bound_variables(const std::vector<shared_ptr<column_identifier>>& prepare_meta) {
+    _variable_names = prepare_meta;
     _specs.clear();
     _target_columns.clear();
 
-    const size_t bn_size = bound_names.size();
+    const size_t bn_size = prepare_meta.size();
     _specs.resize(bn_size);
     _target_columns.resize(bn_size);
 }
+
+prepare_context::function_calls_t& prepare_context::pk_function_calls() {
+    return _pk_fn_calls;
+}
+
+void prepare_context::add_pk_function_call(::shared_ptr<cql3::functions::function_call> fn) {
+    constexpr auto fn_limit = std::numeric_limits<uint8_t>::max();
+    if (_pk_fn_calls.size() == fn_limit) {
+        throw exceptions::invalid_request_exception(
+            format("Too many function calls within one statement. Max supported number is {}", fn_limit));
+    }
+    fn->set_id(_pk_fn_calls.size());
+    _pk_fn_calls.emplace_back(std::move(fn));
+}
+
 
 }

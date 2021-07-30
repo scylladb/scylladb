@@ -160,31 +160,31 @@ public:
 
 protected:
     virtual shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
-                                                                     variable_specifications& bound_names) override {
+                                                                     prepare_context& ctx) override {
         auto rs = receivers(db, *schema);
         std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
+        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), ctx);
         return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, t);
     }
 
     virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
-                                                                     variable_specifications& bound_names) override {
+                                                                     prepare_context& ctx) override {
         auto rs = receivers(db, *schema);
         std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
         if (_in_marker) {
-            auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
+            auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), ctx);
             auto as_abstract_marker = static_pointer_cast<abstract_marker>(t);
             return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, as_abstract_marker);
         } else {
             std::vector<::shared_ptr<term::raw>> raws(_in_values.size());
             std::copy(_in_values.begin(), _in_values.end(), raws.begin());
-            auto ts = to_terms(col_specs, raws, db, schema->ks_name(), bound_names);
+            auto ts = to_terms(col_specs, raws, db, schema->ks_name(), ctx);
             // Convert a single-item IN restriction to an EQ restriction
             if (ts.size() == 1) {
                 return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, std::move(ts[0]));
@@ -194,24 +194,24 @@ protected:
     }
 
     virtual shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
-                                                                        variable_specifications& bound_names,
+                                                                        prepare_context& ctx,
                                                                         statements::bound bound, bool inclusive) override {
         auto rs = receivers(db, *schema);
         std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
+        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), ctx);
         return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t, _mode);
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
-                                                                           variable_specifications& bound_names, bool is_key) override {
+                                                                           prepare_context& ctx, bool is_key) override {
         throw exceptions::invalid_request_exception(format("{} cannot be used for Multi-column relations", get_operator()));
     }
 
     virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(
-            database& db, schema_ptr schema, variable_specifications& bound_names) override {
+            database& db, schema_ptr schema, prepare_context& ctx) override {
         throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
     }
 
@@ -224,10 +224,10 @@ protected:
 
     virtual shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                      const term::raw& raw, database& db, const sstring& keyspace,
-                                     variable_specifications& bound_names) const override {
+                                     prepare_context& ctx) const override {
         const auto& as_multi_column_raw = dynamic_cast<const term::multi_column_raw&>(raw);
         auto t = as_multi_column_raw.prepare(db, keyspace, receivers);
-        t->collect_marker_specification(bound_names);
+        t->fill_prepare_context(ctx);
         return t;
     }
 

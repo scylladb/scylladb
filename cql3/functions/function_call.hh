@@ -53,11 +53,22 @@ namespace functions {
 class function_call : public non_terminal {
     const shared_ptr<scalar_function> _fun;
     const std::vector<shared_ptr<term>> _terms;
+    // 0-based index of the function call within a CQL statement.
+    // Used to populate the cache of execution results while passing to
+    // another shard (handling `bounce_to_shard` messages) in LWT statements.
+    //
+    // The id is set only for the function calls that are a part of LWT
+    // statement restrictions for the partition key. Otherwise, the id is not
+    // set and the call is not considered when using or populating the cache.
+    std::optional<uint8_t> _id;
 public:
     function_call(shared_ptr<scalar_function> fun, std::vector<shared_ptr<term>> terms)
             : _fun(std::move(fun)), _terms(std::move(terms)) {
     }
-    virtual void collect_marker_specification(variable_specifications& bound_names) const override;
+    virtual void fill_prepare_context(prepare_context& ctx) const override;
+    void set_id(std::optional<uint8_t> id) {
+        _id = id;
+    }
     virtual shared_ptr<terminal> bind(const query_options& options) override;
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 private:

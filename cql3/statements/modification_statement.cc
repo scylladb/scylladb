@@ -334,7 +334,8 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+                ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard,
+                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
     }
 
     return proxy.cas(s, request, request->read_command(proxy), request->key(),
@@ -389,8 +390,8 @@ void modification_statement::build_cas_result_set_metadata() {
 }
 
 void
-modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, variable_specifications& names) {
-    _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, names,
+modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, prepare_context& ctx) {
+    _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, ctx,
             applies_only_to_static_columns(), _selects_a_collection, false);
     /*
      * If there's no clustering columns restriction, we may assume that EXISTS
@@ -461,24 +462,50 @@ namespace raw {
 std::unique_ptr<prepared_statement>
 modification_statement::prepare(database& db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
-    auto bound_names = get_bound_variables();
-    auto statement = prepare(db, bound_names, stats);
-    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(std::move(statement), bound_names, std::move(partition_key_bind_indices));
+    auto meta = get_prepare_context();
+    auto statement = prepare(db, meta, stats);
+    auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
+    return std::make_unique<prepared_statement>(std::move(statement), meta, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(database& db, variable_specifications& bound_names, cql_stats& stats) const {
+modification_statement::prepare(database& db, prepare_context& ctx, cql_stats& stats) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
-    prepared_attributes->collect_marker_specification(bound_names);
+    prepared_attributes->fill_prepare_context(ctx);
 
-    return prepare_internal(db, schema, bound_names, std::move(prepared_attributes), stats);
+    auto prepared_stmt = prepare_internal(db, schema, ctx, std::move(prepared_attributes), stats);
+    // At this point the prepare context instance should have a list of
+    // `function_call` AST nodes corresponding to non-pure functions that
+    // evaluate partition key constraints.
+    //
+    // These calls can affect partition key ranges computation and target shard
+    // selection for LWT statements.
+    // For such cases we need to forward the computed execution result of the
+    // function when redirecting the query execution to another shard.
+    // Otherwise, it's possible that we end up bouncing indefinitely between
+    // various shards when evaluating a non-deterministic function each time on
+    // each shard.
+    //
+    // Prepare context is used to keep track of such AST nodes and also modifies
+    // them to include an id, that will be used for caching the results.
+    // At this point we don't yet know if it's an LWT query or not, because the
+    // prepared statement object is constructed later.
+    //
+    // Since this cache is only meaningful for LWT queries, just clear the ids
+    // if it's not a conditional statement so that the AST nodes don't
+    // participate in the caching mechanism later.
+    if (!prepared_stmt->has_conditions()) {
+        for (auto& fn : ctx.pk_function_calls()) {
+            fn->set_id(std::nullopt);
+        }
+    }
+    return prepared_stmt;
 }
 
 void
-modification_statement::prepare_conditions(database& db, const schema& schema, variable_specifications& bound_names,
+modification_statement::prepare_conditions(database& db, const schema& schema, prepare_context& ctx,
         cql3::statements::modification_statement& stmt) const
 {
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
@@ -508,7 +535,7 @@ modification_statement::prepare_conditions(database& db, const schema& schema, v
                 }
 
                 auto condition = entry.second->prepare(db, keyspace(), *def);
-                condition->collect_marker_specificaton(bound_names);
+                condition->collect_marker_specificaton(ctx);
 
                 if (def->is_primary_key()) {
                     throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", *id));

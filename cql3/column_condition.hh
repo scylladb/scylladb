@@ -89,7 +89,7 @@ public:
      * @param boundNames the list of column specification where to collect the
      * bind variables of this term in.
      */
-    void collect_marker_specificaton(variable_specifications& bound_names) const;
+    void collect_marker_specificaton(prepare_context& ctx) const;
 
     // Retrieve parameter marker values, if any, find the appropriate collection
     // element if the cell is a collection and an element access is used in the expression,

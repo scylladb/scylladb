@@ -364,7 +364,8 @@ select_statement::do_execute(service::storage_proxy& proxy,
         if (this_shard_id() != shard) {
             proxy.get_stats().replica_cross_shard_ops++;
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+                    ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard,
+                        std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
         }
     }
 
@@ -1407,7 +1408,7 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
 
 std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
-    variable_specifications& bound_names = get_bound_variables();
+    prepare_context& ctx = get_prepare_context();
 
     maybe_jsonize_select_clause(db, schema);
 
@@ -1415,7 +1416,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, _select_clause);
 
-    auto restrictions = prepare_restrictions(db, schema, bound_names, selection, for_view, _parameters->allow_filtering());
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering());
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(*schema, *selection, *restrictions);
@@ -1437,53 +1438,53 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
-    prepared_attrs->collect_marker_specification(bound_names);
+    prepared_attrs->fill_prepare_context(ctx);
     if (restrictions->uses_secondary_indexing()) {
         stmt = indexed_table_select_statement::prepare(
                 db,
                 schema,
-                bound_names.size(),
+                ctx.bound_variables_size(),
                 _parameters,
                 std::move(selection),
                 std::move(restrictions),
                 std::move(group_by_cell_indices),
                 is_reversed_,
                 std::move(ordering_comparator),
-                prepare_limit(db, bound_names, _limit),
-                prepare_limit(db, bound_names, _per_partition_limit),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
     } else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
                 schema,
-                bound_names.size(),
+                ctx.bound_variables_size(),
                 _parameters,
                 std::move(selection),
                 std::move(restrictions),
                 std::move(group_by_cell_indices),
                 is_reversed_,
                 std::move(ordering_comparator),
-                prepare_limit(db, bound_names, _limit),
-                prepare_limit(db, bound_names, _per_partition_limit),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
     }
 
-    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*schema);
+    auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
 
-    return std::make_unique<prepared_statement>(std::move(stmt), bound_names, std::move(partition_key_bind_indices));
+    return std::make_unique<prepared_statement>(std::move(stmt), ctx, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>
 select_statement::prepare_restrictions(database& db,
                                        schema_ptr schema,
-                                       variable_specifications& bound_names,
+                                       prepare_context& ctx,
                                        ::shared_ptr<selection::selection> selection,
                                        bool for_view,
                                        bool allow_filtering)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), bound_names,
+        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), ctx,
             selection->contains_only_static_columns(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
@@ -1495,14 +1496,14 @@ select_statement::prepare_restrictions(database& db,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::prepare_limit(database& db, variable_specifications& bound_names, ::shared_ptr<term::raw> limit)
+select_statement::prepare_limit(database& db, prepare_context& ctx, ::shared_ptr<term::raw> limit)
 {
     if (!limit) {
         return {};
     }
 
     auto prep_limit = limit->prepare(db, keyspace(), limit_receiver());
-    prep_limit->collect_marker_specification(bound_names);
+    prep_limit->fill_prepare_context(ctx);
     return prep_limit;
 }
 

@@ -46,7 +46,7 @@
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
-#include "cql3/variable_specifications.hh"
+#include "cql3/prepare_context.hh"
 #include "types/list.hh"
 
 namespace cql3 {
@@ -56,8 +56,8 @@ abstract_marker::abstract_marker(int32_t bind_index, lw_shared_ptr<column_specif
     , _receiver{std::move(receiver)}
 { }
 
-void abstract_marker::collect_marker_specification(variable_specifications& bound_names) const {
-    bound_names.add(_bind_index, _receiver);
+void abstract_marker::fill_prepare_context(prepare_context& ctx) const {
+    ctx.add_variable_specification(_bind_index, _receiver);
 }
 
 bool abstract_marker::contains_bind_marker() const {

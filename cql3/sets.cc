@@ -201,7 +201,7 @@ sets::delayed_value::contains_bind_marker() const {
 }
 
 void
-sets::delayed_value::collect_marker_specification(variable_specifications& bound_names) const {
+sets::delayed_value::fill_prepare_context(prepare_context& ctx) const {
 }
 
 shared_ptr<terminal>

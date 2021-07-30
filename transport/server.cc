@@ -849,24 +849,31 @@ make_result(int16_t stream, messages::result_message& msg, const tracing::trace_
 
 template<typename Process>
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-cql_server::connection::process_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
+cql_server::connection::process_on_shard(::shared_ptr<messages::result_message::bounce_to_shard> bounce_msg, uint16_t stream, fragmented_temporary_buffer::istream is,
         service::client_state& cs, service_permit permit, tracing::trace_state_ptr trace_state, Process process_fn) {
-    return _server.container().invoke_on(shard, _server._config.bounce_request_smp_service_group,
+    return _server.container().invoke_on(*bounce_msg->move_to_shard(), _server._config.bounce_request_smp_service_group,
             [this, is = std::move(is), cs = cs.move_to_other_shard(), stream, permit = std::move(permit), process_fn,
-             gt = tracing::global_trace_state_ptr(std::move(trace_state))] (cql_server& server) {
+             gt = tracing::global_trace_state_ptr(std::move(trace_state)),
+             cached_vals = std::move(bounce_msg->take_cached_pk_function_calls())] (cql_server& server) {
         service::client_state client_state = cs.get();
-        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is), stream, process_fn,
-                                                                  trace_state = tracing::trace_state_ptr(gt)]
-                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) mutable {
+        return do_with(bytes_ostream(), std::move(client_state), std::move(cached_vals),
+                [this, &server, is = std::move(is), stream, process_fn,
+                 trace_state = tracing::trace_state_ptr(gt)] (bytes_ostream& linearization_buffer,
+                    service::client_state& client_state,
+                    cql3::computed_function_values& cached_vals) mutable {
             request_reader in(is, linearization_buffer);
             return process_fn(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
-                    /* FIXME */empty_service_permit(), std::move(trace_state), false).then([] (auto msg) {
+                    /* FIXME */empty_service_permit(), std::move(trace_state), false, std::move(cached_vals)).then([] (auto msg) {
                 // result here has to be foreign ptr
                 return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
             });
         });
     });
 }
+
+using process_fn_return_type = std::variant<
+    foreign_ptr<std::unique_ptr<cql_server::response>>,
+    ::shared_ptr<messages::result_message::bounce_to_shard>>;
 
 template<typename Process>
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
@@ -875,26 +882,29 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     fragmented_temporary_buffer::istream is = in.get_stream();
 
     return process_fn(client_state, _server._query_processor, in, stream,
-            _version, _cql_serialization_format, permit, trace_state, true)
+            _version, _cql_serialization_format, permit, trace_state, true, {})
             .then([stream, &client_state, this, is, permit, process_fn, trace_state]
-                   (std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> msg) mutable {
-        unsigned* shard = std::get_if<unsigned>(&msg);
-        if (shard) {
-            return process_on_shard(*shard, stream, is, client_state, std::move(permit), trace_state, process_fn);
+                   (process_fn_return_type msg) mutable {
+        auto* bounce_msg = std::get_if<shared_ptr<messages::result_message::bounce_to_shard>>(&msg);
+        if (bounce_msg) {
+            return process_on_shard(*bounce_msg, stream, is, client_state, std::move(permit), trace_state, process_fn);
         }
         return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
     });
 }
 
-static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
+static future<process_fn_return_type>
 process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
-        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace) {
+        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
     auto query = in.read_long_string_view();
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
     q_state->options = in.read_options(version, serialization_format, qp.local().get_cql_config());
     auto& options = *q_state->options;
+    if (!cached_pk_fn_calls.empty()) {
+        options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
     auto skip_metadata = options.skip_metadata();
 
     if (init_trace) {
@@ -909,10 +919,10 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
 
     return qp.local().execute_direct(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
+            return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
+            return process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
         }
     });
 }
@@ -953,10 +963,10 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     });
 }
 
-static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
+static future<process_fn_return_type>
 process_execute_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
-        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace) {
+        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes());
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
     bool needs_authorization = false;
@@ -985,6 +995,9 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         q_state->options = in.read_options(version, serialization_format, qp.local().get_cql_config());
     }
     auto& options = *q_state->options;
+    if (!cached_pk_fn_calls.empty()) {
+        options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
     auto skip_metadata = options.skip_metadata();
 
     if (init_trace) {
@@ -1018,10 +1031,10 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     return qp.local().execute_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
         if (msg->move_to_shard()) {
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
+            return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
+            return process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
         }
     });
 }
@@ -1032,10 +1045,10 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connectio
     return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_execute_internal);
 }
 
-static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
+static future<process_fn_return_type>
 process_batch_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
-        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace) {
+        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls) {
     if (version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
     }
@@ -1126,6 +1139,9 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(version < 3 ? 1 : version, serialization_format,
                                                                      qp.local().get_cql_config())), std::move(values)));
     auto& options = *q_state->options;
+    if (!cached_pk_fn_calls.empty()) {
+        options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
 
     if (init_trace) {
         tracing::set_consistency_level(trace_state, options.get_consistency());
@@ -1138,10 +1154,10 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     return qp.local().execute_batch(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->move_to_shard()) {
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
+            return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, trace_state, version)));
+            return process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version)));
         }
     });
 }
