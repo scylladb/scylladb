@@ -218,6 +218,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         // start the server instance prior to arming the ticker timer.
         // By the time the tick() is executed the server should already be initialized.
         co_await new_grp.server->start();
+        new_grp.server->register_metrics();
     } catch (...) {
         on_internal_error(rslog, std::current_exception());
     }

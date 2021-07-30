@@ -132,6 +132,11 @@ public:
     // In case of a timeout returns timeout_error.
     virtual future<> stepdown(logical_clock::duration timeout) = 0;
 
+    // Register metrics for this server. Metric are global but their names
+    // depend on the server's ID, so it is possible to register metrics
+    // of two servers iff their IDs are different.
+    virtual void register_metrics() = 0;
+
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;
