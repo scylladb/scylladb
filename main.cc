@@ -806,11 +806,15 @@ int main(int ac, char** av) {
                 mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
             }
 
-            if (clauth && (mscfg.encrypt == netw::messaging_service::encrypt_what::dc || mscfg.encrypt == netw::messaging_service::encrypt_what::rack)) {
-                startlog.warn("Setting require_client_auth is incompatible with 'rack' and 'dc' internode_encryption values."
-                    " To ensure that mutual TLS authentication is enforced, please set internode_encryption to 'all'. Continuing with"
-                    " potentially insecure configuration."
-                );
+            const auto& seo = cfg->server_encryption_options();
+            if (utils::is_true(utils::get_or_default(seo, "require_client_auth", "false"))) {
+                auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
+                if (encrypt == "dc" || encrypt == "rack") {
+                    startlog.warn("Setting require_client_auth is incompatible with 'rack' and 'dc' internode_encryption values."
+                        " To ensure that mutual TLS authentication is enforced, please set internode_encryption to 'all'. Continuing with"
+                        " potentially insecure configuration."
+                    );
+                }
             }
 
             sstring compress_what = cfg->internode_compression();
