@@ -60,6 +60,20 @@ thread_id some(const thread_set& s) {
     return *s.begin();
 }
 
+template <size_t... I>
+auto take_impl(const std::vector<thread_id>& vec, std::index_sequence<I...>) {
+    return std::make_tuple(vec[I]...);
+}
+
+template <size_t N>
+auto take(const thread_set& s) {
+    assert(N <= s.size());
+    auto end = s.begin();
+    std::advance(end, N);
+    std::vector<thread_id> vec{s.begin(), end};
+    return take_impl(vec, std::make_index_sequence<N>{});
+}
+
 // Make a set of `n` threads.
 thread_set make_thread_set(size_t n) {
     thread_set s;
