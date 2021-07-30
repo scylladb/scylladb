@@ -75,6 +75,7 @@
 #include "mutation_source_metadata.hh"
 #include "mutation_fragment_stream_validator.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/utf8.hh"
 
 namespace sstables {
 
@@ -1213,9 +1214,9 @@ public:
                 type,
                 schema.ks_name(),
                 schema.cf_name(),
-                new_key.key().with_schema(schema),
+                partition_key_to_string(new_key.key(), schema),
                 new_key,
-                current_key.key().with_schema(schema),
+                partition_key_to_string(current_key.key(), schema),
                 current_key,
                 action.empty() ? "" : "; ",
                 action);
@@ -1228,9 +1229,9 @@ public:
                 type,
                 schema.ks_name(),
                 schema.cf_name(),
-                new_key.key().with_schema(schema),
+                partition_key_to_string(new_key.key(), schema),
                 new_key,
-                current_key.key().with_schema(schema),
+                partition_key_to_string(current_key.key(), schema),
                 current_key,
                 action.empty() ? "" : "; ",
                 action);
@@ -1248,7 +1249,7 @@ public:
                 mf.mutation_fragment_kind(),
                 mf.has_key() ? format(" with key {}", mf.key().with_schema(schema)) : "",
                 mf.position(),
-                key.key().with_schema(schema),
+                partition_key_to_string(key.key(), schema),
                 key,
                 prev_pos.region(),
                 prev_pos.has_key() ? format(" with key {}", prev_pos.key().with_schema(schema)) : "",
@@ -1260,10 +1261,15 @@ public:
         const auto& schema = validator.schema();
         const auto& key = validator.previous_partition_key();
         clogger.error("[{} compaction {}.{}] Invalid end-of-stream, last partition {} ({}) didn't end with a partition-end fragment{}{}",
-                type, schema.ks_name(), schema.cf_name(), key.key().with_schema(schema), key, action.empty() ? "" : "; ", action);
+                type, schema.ks_name(), schema.cf_name(), partition_key_to_string(key.key(), schema), key, action.empty() ? "" : "; ", action);
     }
 
 private:
+    static sstring partition_key_to_string(const partition_key& key, const ::schema& s) {
+        sstring ret = format("{}", key.with_schema(s));
+        return utils::utf8::validate((const uint8_t*)ret.data(), ret.size()) ? ret : "<non-utf8-key>";
+    }
+
     class reader : public flat_mutation_reader::impl {
         using skip = bool_class<class skip_tag>;
     private:
