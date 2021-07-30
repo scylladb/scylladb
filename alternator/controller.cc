@@ -32,15 +32,6 @@ using namespace seastar;
 
 namespace alternator {
 
-template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
-V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
-    const auto iter = ss.find(key);
-    if (iter != ss.end()) {
-        return iter->second;
-    }
-    return def;
-}
-
 static logging::logger logger("alternator_controller");
 
 controller::controller(sharded<service::storage_proxy>& proxy,
@@ -109,10 +100,10 @@ future<> controller::start() {
                 }
             }
             creds->set_dh_level(tls::dh_params::level::MEDIUM);
-            auto cert = get_or_default(opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = get_or_default(opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
+            auto cert = utils::get_or_default(opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+            auto key = utils::get_or_default(opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
             creds->set_x509_key_file(cert, key, tls::x509_crt_format::PEM).get();
-            auto prio = get_or_default(opts, "priority_string", sstring());
+            auto prio = utils::get_or_default(opts, "priority_string", sstring());
             creds->set_priority_string(db::config::default_tls_priority);
             if (!prio.empty()) {
                 creds->set_priority_string(prio);

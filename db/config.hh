@@ -393,3 +393,21 @@ private:
 };
 
 }
+
+namespace utils {
+
+template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
+V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
+    const auto iter = ss.find(key);
+    if (iter != ss.end()) {
+        return iter->second;
+    }
+    return def;
+}
+
+inline bool is_true(sstring val) {
+    std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+    return val == "true" || val == "1";
+}
+
+}
