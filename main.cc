@@ -687,21 +687,6 @@ int main(int ac, char** av) {
                 utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address, family, preferred).get0());
             }
 
-            // The start_native_transport method is invoked by API as well, and uses the config object
-            // (through db) directly. Lets fixup default valued right here instead then, so it in turn can be
-            // kept simple
-            // TODO: make intrinsic part of config defaults instead
-            auto ceo = cfg->client_encryption_options();
-            if (utils::is_true(utils::get_or_default(ceo, "enabled", "false"))) {
-                ceo["enabled"] = "true";
-                ceo["certificate"] = utils::get_or_default(ceo, "certificate", db::config::get_conf_sub("scylla.crt").string());
-                ceo["keyfile"] = utils::get_or_default(ceo, "keyfile", db::config::get_conf_sub("scylla.key").string());
-                ceo["require_client_auth"] = utils::is_true(utils::get_or_default(ceo, "require_client_auth", "false")) ? "true" : "false";
-            } else {
-                ceo["enabled"] = "false";
-            }
-            cfg->client_encryption_options(std::move(ceo), cfg->client_encryption_options.source());
-
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
             // to all reactors
