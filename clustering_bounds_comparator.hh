@@ -75,10 +75,23 @@ public:
             }
             auto d1 = p1.size(_s);
             auto d2 = p2.size(_s);
-            if (d1 == d2) {
-                return w1 <=> w2;
-            }
-            return (d1 < d2 ? w1 - (w1 <= 0) : -(w2 - (w2 <= 0))) <=> 0;
+
+            /*
+             * The logic below is
+             *
+             * if d1 == d2 { return w1 <=> w2 }
+             * if d1 < d2  { if w1 <= 0 return less else return greater
+             * if d1 > d2  { if w2 <= 0 return greater else return less
+             *
+             * Those w vs 0 checks are effectively { w <=> 0.5 } which is the same
+             * as { 2*w <=> 1 }. Next, w1 <=> w2 is equivalent to 2*w1 <=> 2*w2, so
+             * all three branches can be collapsed into a single <=>.
+             *
+             * This looks like veiling the above ifs for no reason, but it really
+             * helps compiler generate jump-less assembly.
+             */
+
+            return ((d1 <= d2) ? w1 << 1 : 1) <=> ((d2 <= d1) ? w2 << 1 : 1);
         }
         std::strong_ordering operator()(const bound_view b, const clustering_key_prefix& p) const {
             return operator()(b._prefix, weight(b._kind), p, 0);
