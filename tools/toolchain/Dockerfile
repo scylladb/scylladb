@@ -1,4 +1,4 @@
-FROM docker.io/fedora:33
+FROM docker.io/fedora:34
 ADD ./install-dependencies.sh ./
 ADD ./seastar/install-dependencies.sh ./seastar/
 ADD ./tools/jmx/install-dependencies.sh ./tools/jmx/
