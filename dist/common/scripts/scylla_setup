@@ -410,7 +410,7 @@ if __name__ == '__main__':
                     selinux_reboot_required=True
 
         if args.ami:
-            bootparam_setup = interactive_ask_service('Do you want add hugepages capability to the bootloader options?', 'Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step.', bootparam_setup)
+            bootparam_setup = interactive_ask_service('Do you want set clock source as bootloader option?', 'Yes - set clock source at boot time. No - skips this step.', bootparam_setup)
             args.no_bootparam_setup = not bootparam_setup
             if bootparam_setup:
                 run_setup_script('boot parameter', 'scylla_bootparam_setup --ami')
