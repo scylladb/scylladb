@@ -754,8 +754,9 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
 
 future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
 {
-    auto map = [&proxy, features] (sstring table) {
-        return db::system_keyspace::query_mutations(proxy, NAME, table).then([&proxy, table, features] (auto rs) {
+    auto map = [&proxy, features] (sstring table) -> future<std::vector<canonical_mutation>> {
+        auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
+        {
             auto s = proxy.local().get_db().local().find_schema(NAME, table);
             std::vector<canonical_mutation> results;
             for (auto&& p : rs->partitions()) {
@@ -767,14 +768,14 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
                 mut = redact_columns_for_missing_features(std::move(mut), features);
                 results.emplace_back(mut);
             }
-            return results;
-        });
+            co_return results;
+        }
     };
     auto reduce = [] (auto&& result, auto&& mutations) {
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    return map_reduce(all_table_names(features), map, std::vector<canonical_mutation>{}, reduce);
+    co_return co_await map_reduce(all_table_names(features), map, std::vector<canonical_mutation>{}, reduce);
 }
 
 std::vector<mutation>
