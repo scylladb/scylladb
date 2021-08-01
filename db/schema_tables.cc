@@ -879,15 +879,18 @@ future<> merge_unlock() {
 
 static
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
-    return calculate_schema_digest(proxy, features).then([&proxy] (utils::UUID uuid) {
-        return db::system_keyspace::update_schema_version(uuid).then([&proxy, uuid] {
-            return proxy.local().get_db().invoke_on_all([uuid] (database& db) {
+    auto uuid = co_await calculate_schema_digest(proxy, features);
+    {
+        co_await db::system_keyspace::update_schema_version(uuid);
+        {
+            co_await proxy.local().get_db().invoke_on_all([uuid] (database& db) {
                 db.update_version(uuid);
             });
-        }).then([uuid] {
+        }
+        {
             slogger.info("Schema version changed to {}", uuid);
-        });
-    });
+        }
+    }
 }
 
 /**
