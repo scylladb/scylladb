@@ -3251,10 +3251,10 @@ future<> drop_column_mapping(utils::UUID table_id, table_schema_version version)
     const static sstring DEL_COLUMN_MAPPING_QUERY =
         format("DELETE FROM system.{} WHERE cf_id = ? and schema_version = ?",
             db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
-    return qctx->qp().execute_internal(
+    co_await qctx->qp().execute_internal(
         DEL_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        {table_id, version}).discard_result();
+        {table_id, version});
 }
 
 } // namespace schema_tables
