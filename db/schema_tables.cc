@@ -2830,14 +2830,15 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
 
 static future<view_ptr> create_view_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row) {
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
-    return do_with(std::move(qn), [&proxy] (auto&& qn) {
-        return read_table_mutations(proxy, qn, views()).then([&] (schema_mutations sm) {
+    {
+        schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
+        {
             if (!sm.live()) {
                 throw std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
-            return create_view_from_mutations(proxy, std::move(sm));
-        });
-    });
+            co_return create_view_from_mutations(proxy, std::move(sm));
+        }
+    }
 }
 
 /**
