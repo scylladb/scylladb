@@ -173,11 +173,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     std::map<utils::UUID, schema_mutations>&& views_before,
     std::map<utils::UUID, schema_mutations>&& views_after);
 
-struct user_types_to_drop final {
+struct [[nodiscard]] user_types_to_drop final {
     seastar::noncopyable_function<void()> drop;
 };
 
-[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy,
+static future<user_types_to_drop> merge_types(distributed<service::storage_proxy>& proxy,
     schema_result before,
     schema_result after);
 
@@ -1107,7 +1107,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 #endif
 
        std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
-       auto types_to_drop = merge_types(proxy, std::move(old_types), std::move(new_types));
+       auto types_to_drop = merge_types(proxy, std::move(old_types), std::move(new_types)).get0();
        merge_tables_and_views(proxy,
             std::move(old_column_families), std::move(new_column_families),
             std::move(old_views), std::move(new_views)).get0();
@@ -1477,7 +1477,7 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
 }
 
 // see the comments for merge_keyspaces()
-[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after)
+static future<user_types_to_drop> merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after)
 {
     auto diff = diff_rows(before, after);
 
@@ -1485,20 +1485,20 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
     // use those types. Similarly, defer dropping until after tables/views that may use
     // some of these user types are dropped.
 
-    proxy.local().get_db().invoke_on_all([&diff] (database& db) {
-        return seastar::async([&] {
+    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+        {
             for (auto&& user_type : create_types(db, diff.created)) {
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-                db.get_notifier().create_user_type(user_type).get();
+                co_await db.get_notifier().create_user_type(user_type);
             }
             for (auto&& user_type : create_types(db, diff.altered)) {
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-                db.get_notifier().update_user_type(user_type).get();
+                co_await db.get_notifier().update_user_type(user_type);
             }
-        });
-    }).get();
+        }
+    });
 
-    return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable {
+    co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable {
         proxy.local().get_db().invoke_on_all([&rows](database& db) {
             return do_with(create_types(db, rows), [&db] (auto &dropped) {
                 return do_for_each(dropped, [&db](auto& user_type) {
