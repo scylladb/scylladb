@@ -174,7 +174,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     std::map<utils::UUID, schema_mutations>&& views_after);
 
 struct [[nodiscard]] user_types_to_drop final {
-    seastar::noncopyable_function<void()> drop;
+    seastar::noncopyable_function<future<> ()> drop;
 };
 
 static future<user_types_to_drop> merge_types(distributed<service::storage_proxy>& proxy,
@@ -1115,7 +1115,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 #if 0
        mergeAggregates(oldAggregates, newAggregates);
 #endif
-       types_to_drop.drop();
+       types_to_drop.drop().get0();
 
        proxy.local().get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
@@ -1498,15 +1498,16 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
         }
     });
 
-    co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable {
-        proxy.local().get_db().invoke_on_all([&rows](database& db) {
-            return do_with(create_types(db, rows), [&db] (auto &dropped) {
-                return do_for_each(dropped, [&db](auto& user_type) {
+    co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable -> future<> {
+        co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+            auto dropped = create_types(db, rows);
+            {
+                for (auto& user_type : dropped) {
                     db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                    return db.get_notifier().drop_user_type(user_type);
-                });
-            });
-        }).get();
+                    co_await db.get_notifier().drop_user_type(user_type);
+                }
+            }
+        });
     }};
 }
 
