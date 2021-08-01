@@ -54,6 +54,7 @@
 #include "utils/UUID_gen.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/coroutine/all.hh>
 #include "log.hh"
 #include "frozen_schema.hh"
 #include "schema_registry.hh"
@@ -2298,17 +2299,18 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
 
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
 {
-    return when_all_succeed(
-        read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, view_virtual_columns(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, computed_columns(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name)).then_unpack(
-            [] (mutation cf_m, mutation col_m, mutation vv_col_m, mutation c_col_m, mutation dropped_m, mutation idx_m, mutation st_m) {
-                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
-            });
+    auto&& [cf_m, col_m, vv_col_m, c_col_m, dropped_m, idx_m, st_m] = co_await coroutine::all(
+        [&] { return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, view_virtual_columns(), table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, computed_columns(), table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name); }
+    );
+    {
+                co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
+    }
 #if 0
         // FIXME:
     Row serializedTriggers = readSchemaPartitionForTable(TRIGGERS, ksName, cfName);
