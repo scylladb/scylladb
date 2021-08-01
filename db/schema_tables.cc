@@ -3195,17 +3195,17 @@ static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_or
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version version) {
-    auto cm_fut = qctx->qp().execute_internal(
+    shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id, version}
     );
-    return cm_fut.then([version] (shared_ptr<cql3::untyped_result_set> results) {
+    {
         if (results->empty()) {
             // If we don't have a stored column_mapping for an obsolete schema version
             // then it means it's way too old and been cleaned up already.
             // Fail the whole learn stage in this case.
-            return make_exception_future<column_mapping>(std::runtime_error(
+            co_return coroutine::make_exception(std::runtime_error(
                 format("Failed to look up column mapping for schema version {}",
                     version)));
         }
@@ -3232,8 +3232,8 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
             cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
         }
         column_mapping cm(std::move(cm_columns), static_columns.size());
-        return make_ready_future<column_mapping>(std::move(cm));
-    });
+        co_return std::move(cm);
+    }
 }
 
 future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version) {
