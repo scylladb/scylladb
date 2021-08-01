@@ -927,8 +927,8 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
 }
 
 future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
-    return with_merge_lock([&proxy, &feat] {
-        return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+    co_await with_merge_lock([&] () -> future<> {
+        co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
     });
 }
 
