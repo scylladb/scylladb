@@ -167,6 +167,7 @@ private:
     friend class memtable_entry;
     friend class flush_reader;
     friend class flush_memory_accounter;
+    friend class partition_snapshot_read_accounter;
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const dht::partition_range& r) const;
     partition_entry& find_or_create_partition(const dht::decorated_key& key);

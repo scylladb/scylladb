@@ -42,6 +42,7 @@ public:
 
 class mp_row_consumer_m {
     reader_permit _permit;
+    const shared_sstable& _sst;
     tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
 public:
@@ -217,6 +218,7 @@ public:
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
         : _permit(std::move(permit))
+        , _sst(sst)
         , _trace_state(std::move(trace_state))
         , _pc(pc)
         , _reader(reader)
@@ -377,6 +379,9 @@ public:
         _in_progress_row->apply(tomb);
         if (shadowable_tomb) {
             _in_progress_row->apply(shadowable_tombstone{shadowable_tomb});
+        }
+        if (_in_progress_row->tomb()) {
+            _sst->get_stats().on_row_tombstone_read();
         }
         return proceed::yes;
     }
