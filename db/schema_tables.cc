@@ -1159,24 +1159,25 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         slogger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
-    return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) mutable {
-        return do_with(std::move(altered), [&proxy, &created](auto& altered) {
-            return proxy.local().get_db().invoke_on_all([&created, &altered, &proxy] (database& db) {
-                return do_for_each(created, [&db](auto&& val) {
+    {
+        {
+            co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+                for (auto&& val : created) {
                     auto ksm = create_keyspace_from_schema_partition(val);
-                    return db.create_keyspace(ksm).then([&db, ksm] {
-                        return db.get_notifier().create_keyspace(ksm);
-                    });
-                }).then([&altered, &db, &proxy]() {
-                    return do_for_each(altered, [&db, &proxy](auto& name) {
-                        return db.update_keyspace(proxy, name);
-                    });
-                });
+                    co_await db.create_keyspace(ksm);
+                    co_await db.get_notifier().create_keyspace(ksm);
+                }
+                {
+                    for (auto& name : altered) {
+                        co_await db.update_keyspace(proxy, name);
+                    };
+                }
             });
-        });
-    }).then([dropped = std::move(dropped)] () {
-        return make_ready_future<std::set<sstring>>(dropped);
-    });
+        }
+    }
+    {
+        co_return dropped;
+    }
 }
 
 struct schema_diff {
