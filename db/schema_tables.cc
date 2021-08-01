@@ -1035,7 +1035,7 @@ static void fill_column_info(const schema& table,
 future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl) {
     // Skip "system*" tables -- only user-related tables are relevant
     if (static_cast<std::string_view>(s->ks_name()).starts_with(db::system_keyspace::NAME)) {
-        return make_ready_future<>();
+        co_return;
     }
     schema_ptr history_tbl = scylla_table_schema_history();
 
@@ -1056,7 +1056,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
         fill_column_info(*s, ckey, cdef, ts, ttl, m);
         muts.emplace_back(std::move(m));
     }
-    return proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
+    co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
