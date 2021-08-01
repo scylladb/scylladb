@@ -167,7 +167,7 @@ struct qualified_name {
 
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
 
-static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     std::map<utils::UUID, schema_mutations>&& tables_before,
     std::map<utils::UUID, schema_mutations>&& tables_after,
     std::map<utils::UUID, schema_mutations>&& views_before,
@@ -1110,7 +1110,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        auto types_to_drop = merge_types(proxy, std::move(old_types), std::move(new_types));
        merge_tables_and_views(proxy,
             std::move(old_column_families), std::move(new_column_families),
-            std::move(old_views), std::move(new_views));
+            std::move(old_views), std::move(new_views)).get0();
        merge_functions(proxy, std::move(old_functions), std::move(new_functions));
 #if 0
        mergeAggregates(oldAggregates, newAggregates);
@@ -1231,7 +1231,7 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
 // that when a base schema and a subset of its views are modified together (i.e.,
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
-static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     std::map<utils::UUID, schema_mutations>&& tables_before,
     std::map<utils::UUID, schema_mutations>&& tables_after,
     std::map<utils::UUID, schema_mutations>&& views_before,
@@ -1279,28 +1279,28 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
         return vp;
     });
 
-    proxy.local().get_db().invoke_on_all([&] (database& db) {
-        return seastar::async([&] {
+    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+        {
             // First drop views and *only then* the tables, if interleaved it can lead
             // to a mv not finding its schema when snapshoting since the main table
             // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
-            parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) {
+            co_await parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
                 auto& s = *dt.schema.get();
-                return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-            }).get();
-            parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) {
+                co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+            });
+            co_await parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
                 auto& s = *dt.schema.get();
-                return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-            }).get();
+                co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+            });
 
             // In order to avoid possible races we first create the tables and only then the views.
             // That way if a view seeks information about its base table it's guarantied to find it.
-            parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) {
-                return db.add_column_family_and_make_directory(gs);
-            }).get();
-            parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) {
-                return db.add_column_family_and_make_directory(gs);
-            }).get();
+            co_await parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
+                co_await db.add_column_family_and_make_directory(gs);
+            });
+            co_await parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) -> future<> {
+                co_await db.add_column_family_and_make_directory(gs);
+            });
             for (auto&& gs : boost::range::join(tables_diff.created, views_diff.created)) {
                 db.find_column_family(gs).mark_ready_for_writes();
             }
@@ -1311,21 +1311,21 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
             }
 
             auto it = columns_changed.begin();
-            auto notify = [&] (auto& r, auto&& f) {
+            auto notify = [&] (auto& r, auto&& f) -> future<> {
                 auto notifications = r | boost::adaptors::transformed(f);
-                when_all(notifications.begin(), notifications.end()).get();
+                co_await when_all(notifications.begin(), notifications.end());
             };
             // View drops are notified first, because a table can only be dropped if its views are already deleted
-            notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
-            notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
+            co_await notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
+            co_await notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
             // Table creations are notified first, in case a view is created right after the table
-            notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
-            notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
+            co_await notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
+            co_await notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
             // Table altering is notified first, in case new base columns appear
-            notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
-            notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
-        });
-    }).get();
+            co_await notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
+            co_await notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
+        }
+    });
 
     // Insert column_mapping into history table for altered and created tables.
     //
@@ -1337,20 +1337,20 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     //
     // Drop column mapping entries for dropped tables since these will not be TTLed automatically
     // and will stay there forever if we don't clean them up manually
-    when_all_succeed(
-        parallel_for_each(tables_diff.created, [&proxy] (global_schema_ptr& gs) {
-            return store_column_mapping(proxy, gs.get(), false);
+    co_await when_all_succeed(
+        parallel_for_each(tables_diff.created, [&proxy] (global_schema_ptr& gs) -> future<> {
+            co_await store_column_mapping(proxy, gs.get(), false);
         }),
-        parallel_for_each(tables_diff.altered, [&proxy] (schema_diff::altered_schema& altered) {
-            return when_all_succeed(
+        parallel_for_each(tables_diff.altered, [&proxy] (schema_diff::altered_schema& altered) -> future<> {
+            co_await when_all_succeed(
                 store_column_mapping(proxy, altered.old_schema.get(), true),
-                store_column_mapping(proxy, altered.new_schema.get(), false)).discard_result();
+                store_column_mapping(proxy, altered.new_schema.get(), false));
         }),
-        parallel_for_each(tables_diff.dropped, [&proxy] (schema_diff::dropped_schema& dropped) {
+        parallel_for_each(tables_diff.dropped, [&proxy] (schema_diff::dropped_schema& dropped) -> future<> {
             schema_ptr s = dropped.schema.get();
-            return drop_column_mapping(s->id(), s->version());
+            co_await drop_column_mapping(s->id(), s->version());
         })
-    ).get();
+    );
 }
 
 static std::vector<const query::result_set_row*> collect_rows(const std::set<sstring>& keys, const schema_result& result) {
