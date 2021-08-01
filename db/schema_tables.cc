@@ -918,10 +918,11 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
  */
 future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
 {
-    return with_merge_lock([&proxy, &feat, mutations = std::move(mutations)] () mutable {
-        return do_merge_schema(proxy, std::move(mutations), true).then([&proxy, &feat] {
-            return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
-        });
+    co_await with_merge_lock([&] () mutable -> future<> {
+        co_await do_merge_schema(proxy, std::move(mutations), true);
+        {
+            co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+        }
     });
 }
 
