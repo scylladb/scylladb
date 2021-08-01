@@ -2328,14 +2328,16 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
 
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
-    return do_with(qualified_name(keyspace, table), [&proxy] (qualified_name& qn) {
-        return read_table_mutations(proxy, qn, tables()).then([qn, &proxy] (schema_mutations sm) {
+    auto qn = qualified_name(keyspace, table);
+    {
+        auto sm = co_await read_table_mutations(proxy, qn, tables());
+        {
             if (!sm.live()) {
                throw std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
-            return create_table_from_mutations(proxy, std::move(sm));
-        });
-    });
+            co_return create_table_from_mutations(proxy, std::move(sm));
+        }
+    }
 }
 
 /**
