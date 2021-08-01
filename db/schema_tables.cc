@@ -877,6 +877,20 @@ future<> merge_unlock() {
     return smp::submit_to(0, [] { the_merge_lock.signal(); });
 }
 
+static future<> with_merge_lock(noncopyable_function<future<> ()> func) {
+    co_await merge_lock();
+    std::exception_ptr ep;
+    try {
+        co_await func();
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    co_await merge_unlock();
+    if (ep) {
+        std::rethrow_exception(std::move(ep));
+    }
+}
+
 static
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
     auto uuid = co_await calculate_schema_digest(proxy, features);
@@ -904,20 +918,16 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
  */
 future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
 {
-    return merge_lock().then([&proxy, &feat, mutations = std::move(mutations)] () mutable {
+    return with_merge_lock([&proxy, &feat, mutations = std::move(mutations)] () mutable {
         return do_merge_schema(proxy, std::move(mutations), true).then([&proxy, &feat] {
             return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
         });
-    }).finally([] {
-        return merge_unlock();
     });
 }
 
 future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
-    return merge_lock().then([&proxy, &feat] {
+    return with_merge_lock([&proxy, &feat] {
         return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
-    }).finally([] {
-        return merge_unlock();
     });
 }
 
