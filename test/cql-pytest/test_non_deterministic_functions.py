@@ -27,7 +27,7 @@
 from time import sleep
 from util import new_test_table
 
-def nondeterm_fn_repeated_execute(cql, test_keyspace, pk_type, fn):
+def lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, pk_type, fn):
     with new_test_table(cql, test_keyspace, f"pk {pk_type} PRIMARY KEY") as table:
         # Test that both unprepared and prepared statements work exactly the
         # same way as described above.
@@ -57,17 +57,17 @@ def nondeterm_fn_repeated_execute(cql, test_keyspace, pk_type, fn):
         rows = list(cql.execute(select_str))
         assert len(rows) == num_iterations * 2
 
-def test_uuid_fn_pk_insert(cql, test_keyspace):
-    nondeterm_fn_repeated_execute(cql, test_keyspace, "uuid", "uuid")
+def test_lwt_uuid_fn_pk_insert(cql, test_keyspace):
+    lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "uuid", "uuid")
 
-def test_currenttimestamp_fn_pk_insert(cql, test_keyspace):
-    nondeterm_fn_repeated_execute(cql, test_keyspace, "timestamp", "currenttimestamp")
+def test_lwt_currenttimestamp_fn_pk_insert(cql, test_keyspace):
+    lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "timestamp", "currenttimestamp")
 
-def test_currenttime_fn_pk_insert(cql, test_keyspace):
-    nondeterm_fn_repeated_execute(cql, test_keyspace, "time", "currenttime")
+def test_lwt_currenttime_fn_pk_insert(cql, test_keyspace):
+    lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "time", "currenttime")
 
-def test_currenttimeuuid_fn_pk_insert(cql, test_keyspace):
-    nondeterm_fn_repeated_execute(cql, test_keyspace, "timeuuid", "currenttimeuuid")
+def test_lwt_currenttimeuuid_fn_pk_insert(cql, test_keyspace):
+    lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "timeuuid", "currenttimeuuid")
 
-def test_now_fn_pk_insert(cql, test_keyspace):
-    nondeterm_fn_repeated_execute(cql, test_keyspace, "timeuuid", "now")
+def test_lwt_now_fn_pk_insert(cql, test_keyspace):
+    lwt_nondeterm_fn_repeated_execute(cql, test_keyspace, "timeuuid", "now")
