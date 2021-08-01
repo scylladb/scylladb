@@ -3237,13 +3237,14 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
 }
 
 future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version) {
-    return qctx->qp().execute_internal(
+    shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id, version}
-    ).then([] (shared_ptr<cql3::untyped_result_set> results) {
-        return !results->empty();
-    });
+    );
+    {
+        co_return !results->empty();
+    }
 }
 
 future<> drop_column_mapping(utils::UUID table_id, table_schema_version version) {
