@@ -670,7 +670,7 @@ public:
         _closed_file = true;
 
         if (p) {
-            std::rethrow_exception(p);
+            co_return coroutine::exception(std::move(p));
         }
 
         co_return me;
@@ -1530,7 +1530,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_await f.close();
     }
     if (ep) {
-        std::rethrow_exception(ep);
+        co_return coroutine::exception(std::move(ep));
     }
 
     co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size, align);
@@ -1589,7 +1589,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
     if (_shutdown) {
-        throw std::runtime_error("Commitlog has been shut down. Cannot add data");
+        co_return coroutine::make_exception(std::runtime_error("Commitlog has been shut down. Cannot add data"));
     }
 
     ++_new_counter;

@@ -1441,8 +1441,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     if (querier_opt) {
         co_await querier_opt->close();
     }
-    if(ex) {
-        std::rethrow_exception(std::move(ex));
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
     }
 
     auto hit_rate = cf.get_global_cache_hit_rate();
@@ -1497,8 +1497,8 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     if (querier_opt) {
         co_await querier_opt->close();
     }
-    if(ex) {
-        std::rethrow_exception(std::move(ex));
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
     }
 
     auto hit_rate = cf.get_global_cache_hit_rate();
@@ -1868,8 +1868,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
     if (!s->is_synced()) {
-        throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
-                                 s->ks_name(), s->cf_name(), s->version()));
+        return make_exception_future<>(std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
+                s->ks_name(), s->cf_name(), s->version())));
     }
 
     sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());

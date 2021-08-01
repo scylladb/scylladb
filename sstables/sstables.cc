@@ -2708,7 +2708,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     }
     co_await sem.stop();
     if (ex) {
-        std::rethrow_exception(std::move(ex));
+        co_return coroutine::exception(std::move(ex));
     }
     co_return present;
 }

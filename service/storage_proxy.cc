@@ -803,7 +803,7 @@ static future<std::optional<paxos_response_handler::ballot_and_data>> sleep_and_
 future<paxos_response_handler::ballot_and_data>
 paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
     if (!_proxy->features().cluster_supports_lwt()) {
-        throw std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support.");
+        return make_exception_future<paxos_response_handler::ballot_and_data>(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
     }
 
     return do_with(api::timestamp_type(0), shared_from_this(), [this, &cs, &contentions, is_write]
@@ -3999,7 +3999,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     const auto tmptr = get_token_metadata_ptr();
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
-            throw std::runtime_error("mixed singular and non singular range are not supported");
+            co_return coroutine::make_exception(std::runtime_error("mixed singular and non singular range are not supported"));
         }
 
         auto token_range = dht::token_range::make_singular(pr.start()->value().token());
@@ -4392,7 +4392,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     }
 
     if (cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        throw std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard");
+        return make_exception_future<storage_proxy::coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
     }
     // All cas networking operations run with query provided timeout
     db::timeout_clock::time_point timeout = query_options.timeout(*this);
@@ -4489,7 +4489,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
     if (cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        throw std::logic_error("storage_proxy::cas called on a wrong shard");
+        co_return coroutine::make_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
     }
 
     // In case a nullptr is passed to this function (i.e. the caller isn't interested in
@@ -4789,9 +4789,9 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
         // to perform the operation.
         auto live_members = gossiper.get_live_members().size();
 
-        throw exceptions::unavailable_exception(db::consistency_level::ALL,
+        return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
                 live_members + gossiper.get_unreachable_members().size(),
-                live_members);
+                live_members));
     }
 
     auto all_endpoints = gossiper.get_live_token_owners();

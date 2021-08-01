@@ -164,10 +164,10 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
                         }
 
                         if (_stack_size > _max_size.hard_limit) {
-                            throw std::runtime_error(fmt::format(
+                            return make_exception_future<stop_iteration>(std::runtime_error(fmt::format(
                                     "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
                                     _max_size.hard_limit,
-                                    key->with_schema(*_schema)));
+                                    key->with_schema(*_schema))));
                         } else {
                             fmr_logger.warn(
                                     "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
@@ -628,7 +628,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             return make_ready_future<>();
         };
         virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
-            throw std::runtime_error("This reader can't be fast forwarded to another position.");
+            return make_exception_future<>(std::runtime_error("This reader can't be fast forwarded to another position."));
         };
         virtual future<> close() noexcept override {
             return make_ready_future<>();
