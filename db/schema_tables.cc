@@ -936,12 +936,13 @@ future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, 
 future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
     auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
-    return db::system_keyspace::query(proxy, schema_table->ks_name(), schema_table->cf_name(), pkey).then([schema_table] (auto&& rs) {
-        return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
+    auto&& rs = co_await db::system_keyspace::query(proxy, schema_table->ks_name(), schema_table->cf_name(), pkey);
+    {
+        co_return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
             const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
             return row.get_nonnull<sstring>(name);
         }));
-    });
+    }
 }
 
 static utils::UUID table_id_from_mutations(const schema_mutations& sm) {
