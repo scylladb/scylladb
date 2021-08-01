@@ -595,7 +595,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         return;
     }
 
-    progress.commit_idx = reply.commit_idx;
+    progress.commit_idx = std::max(progress.commit_idx, reply.commit_idx);
 
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted
