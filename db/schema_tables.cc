@@ -855,7 +855,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, sche
             .build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice),
             query::row_limit(query::max_rows));
-    return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key));
+    co_return co_await query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key));
 }
 
 future<mutation>
