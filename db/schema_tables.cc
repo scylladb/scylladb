@@ -803,7 +803,7 @@ read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstr
         }
         return std::move(result);
     };
-    return map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result{}, insert);
+    co_return co_await map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result{}, insert);
 }
 
 static
