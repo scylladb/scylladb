@@ -831,14 +831,17 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 }
 
 future<schema_result_value_type>
-read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
+read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name_, const sstring& keyspace_name_)
 {
+    auto schema_table_name = schema_table_name_; // capture for co_await
+    auto keyspace_name = keyspace_name_; // capture for co_await
     auto schema = proxy.local().get_db().local().find_schema(NAME, schema_table_name);
     auto keyspace_key = dht::decorate_key(*schema,
         partition_key::from_singular(*schema, keyspace_name));
-    return db::system_keyspace::query(proxy, NAME, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
-        return schema_result_value_type{keyspace_name, std::move(rs)};
-    });
+    auto rs = co_await db::system_keyspace::query(proxy, NAME, schema_table_name, keyspace_key);
+    {
+        co_return schema_result_value_type{keyspace_name, std::move(rs)};
+    }
 }
 
 future<mutation>
