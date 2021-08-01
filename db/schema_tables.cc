@@ -73,6 +73,7 @@
 
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include <seastar/core/coroutine.hh>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -233,14 +234,15 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    return parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) {
+    co_await parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) -> future<> {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
-        return qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
+        co_await qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
-    }).then([ksm, &qp] {
-        auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
-        return qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
     });
+    {
+        auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
+        co_await qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
+    }
 }
 
 /** add entries to system_schema.* for the hardcoded system definitions */
