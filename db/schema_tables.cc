@@ -864,7 +864,7 @@ read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring
     auto key = partition_key::from_singular(*s, keyspace_name);
     auto slice = s->full_slice();
     auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), std::move(slice), proxy.local().get_max_result_size(slice));
-    return query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
+    co_return co_await query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 
 static thread_local semaphore the_merge_lock {1};
