@@ -813,20 +813,21 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     partition_key pkey)
 {
     auto dk = dht::decorate_key(*s, pkey);
-    return do_with(dht::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
-        return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout, tracing::trace_state_ptr{})
-                .then([dk = std::move(dk), s](rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> res_hit_rate) {
+    auto range = dht::partition_range::make_singular(dk);
+    {
+        auto res_hit_rate = co_await proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout, tracing::trace_state_ptr{});
+        {
                     auto&& [res, hit_rate] = res_hit_rate;
                     auto&& partitions = res->partitions();
                     if (partitions.size() == 0) {
-                        return mutation(s, std::move(dk));
+                        co_return mutation(s, std::move(dk));
                     } else if (partitions.size() == 1) {
-                        return partitions[0].mut().unfreeze(s);
+                        co_return partitions[0].mut().unfreeze(s);
                     } else {
                         throw std::invalid_argument("Results must have at most one partition");
                     }
-                });
-    });
+        }
+    }
 }
 
 future<schema_result_value_type>
