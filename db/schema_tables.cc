@@ -52,8 +52,6 @@
 #include "schema_builder.hh"
 #include "map_difference.hh"
 #include "utils/UUID_gen.hh"
-#include <seastar/core/do_with.hh>
-#include <seastar/core/thread.hh>
 #include <seastar/coroutine/all.hh>
 #include "log.hh"
 #include "frozen_schema.hh"
