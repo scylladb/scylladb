@@ -136,6 +136,8 @@ std::string_view to_string(compaction_options::scrub::mode scrub_mode) {
             return "skip";
         case compaction_options::scrub::mode::segregate:
             return "segregate";
+        case compaction_options::scrub::mode::validate:
+            return "validate";
     }
     on_internal_error_noexcept(clogger, format("Invalid scrub mode {}", int(scrub_mode)));
     return "(invalid)";

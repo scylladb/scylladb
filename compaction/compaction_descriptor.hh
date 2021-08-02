@@ -79,6 +79,7 @@ public:
             abort, // abort scrub on the first sign of corruption
             skip, // skip corrupt data, including range of rows and/or partitions that are out-of-order
             segregate, // segregate out-of-order data into streams that all contain data with correct order
+            validate, // validate data, printing all errors found (sstables are only read, not rewritten)
         };
         mode operation_mode = mode::abort;
     };
