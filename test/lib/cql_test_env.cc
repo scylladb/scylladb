@@ -69,6 +69,8 @@
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
 #include "debug.hh"
+#include <sys/time.h>
+#include <sys/resource.h>
 
 using namespace std::chrono_literals;
 
@@ -171,6 +173,22 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
+    static void adjust_rlimit() {
+        // Tests should use 1024 file descriptors, but don't punish them
+        // with weird behavior if they do.
+        //
+        // Since this more of a courtesy, don't make the situation worse if
+        // getrlimit/setrlimit fail for some reason.
+        struct rlimit lim;
+        int r = getrlimit(RLIMIT_NOFILE, &lim);
+        if (r == -1) {
+            return;
+        }
+        if (lim.rlim_cur < lim.rlim_max) {
+            lim.rlim_cur = lim.rlim_max;
+            setrlimit(RLIMIT_NOFILE, &lim);
+        }
+    }
 public:
     single_node_cql_env(
             sharded<database>& db,
@@ -189,7 +207,9 @@ public:
             , _mnotifier(mnotifier)
             , _sl_controller(sl_controller)
             , _mm(mm)
-    { }
+    {
+        adjust_rlimit();
+    }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
