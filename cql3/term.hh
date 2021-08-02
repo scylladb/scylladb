@@ -92,11 +92,6 @@ public:
     }
 };
 
-class multi_column_term_raw : public virtual term_raw {
-public:
-    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const = 0;
-};
-
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
  *
@@ -153,8 +148,6 @@ public:
     }
 
     using raw = term_raw;
-
-    using multi_column_raw = multi_column_term_raw;
 };
 
 /**

@@ -61,7 +61,7 @@ public:
      * A raw, literal tuple.  When prepared, this will become a Tuples.Value or Tuples.DelayedValue, depending
      * on whether the tuple holds NonTerminals.
      */
-    class literal : public term::multi_column_raw {
+    class literal : public term::raw {
         std::vector<shared_ptr<term::raw>> _elements;
         shared_ptr<term> prepare_nontuple(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const;
         shared_ptr<term> prepare_tuple(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const;
@@ -225,7 +225,7 @@ public:
      * A raw placeholder for a tuple of values for different multiple columns, each of which may have a different type.
      * For example, "SELECT ... WHERE (col1, col2) > ?".
      */
-    class raw : public abstract_marker::raw, public term::multi_column_raw {
+    class raw : public abstract_marker::raw {
     public:
         using abstract_marker::raw::raw;
 
@@ -264,7 +264,7 @@ public:
     /**
      * A raw marker for an IN list of tuples, like "SELECT ... WHERE (a, b, c) IN ?"
      */
-    class in_raw : public abstract_marker::raw, public term::multi_column_raw {
+    class in_raw : public abstract_marker::raw {
     public:
         using abstract_marker::raw::raw;
 
