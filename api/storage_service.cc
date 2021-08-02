@@ -546,7 +546,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_validation(&cf);
+                return cm.perform_sstable_scrub(&cf, sstables::compaction_options::scrub::mode::validate);
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);

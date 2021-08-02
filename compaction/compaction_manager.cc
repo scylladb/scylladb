@@ -753,7 +753,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     return task->compaction_done.get_future().then([task] {});
 }
 
-future<> compaction_manager::perform_sstable_validation(column_family* cf) {
+future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* cf) {
     return run_custom_job(cf, sstables::compaction_type::Scrub, [this, &cf = *cf, sstables = get_candidates(*cf)] () mutable -> future<> {
         class pending_tasks {
             compaction_manager::stats& _stats;
@@ -883,6 +883,9 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, column_family
 
 // Submit a column family to be scrubbed and wait for its termination.
 future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode) {
+    if (scrub_mode == sstables::compaction_options::scrub::mode::validate) {
+        return perform_sstable_scrub_validate_mode(cf);
+    }
     return rewrite_sstables(cf, sstables::compaction_options::make_scrub(scrub_mode), [this] (const table& cf) {
         return get_candidates(cf);
     });

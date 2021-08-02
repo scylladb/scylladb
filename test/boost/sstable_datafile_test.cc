@@ -4632,7 +4632,7 @@ std::vector<mutation_fragment> write_corrupt_sstable(test_env& env, sstable& sst
     return corrupt_fragments;
 }
 
-SEASTAR_TEST_CASE(sstable_validation_test) {
+SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     cql_test_config test_cfg;
 
     auto& db_cfg = *test_cfg.db_config;
@@ -4712,7 +4712,7 @@ SEASTAR_TEST_CASE(sstable_validation_test) {
             testlog.info("Validate");
 
             // No way to really test validation besides observing the log messages.
-            compaction_manager.perform_sstable_validation(table.get()).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::validate).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
