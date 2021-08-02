@@ -225,6 +225,10 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const field_selection&) {
             on_internal_error(rlogger, "extract_partition_range(field_selection)");
         }
+
+        void operator()(const term_raw_ptr&) {
+            on_internal_error(rlogger, "extract_partition_range(term::raw)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -309,6 +313,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const field_selection&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(field_selection)");
+        }
+
+        void operator()(const term_raw_ptr&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(term::raw)");
         }
     } v;
     std::visit(v, where_clause);
@@ -1001,6 +1009,10 @@ struct multi_column_range_accumulator {
 
     void operator()(const field_selection&) {
         on_internal_error(rlogger, "field selection encountered outside binary operator");
+    }
+
+    void operator()(const term_raw_ptr&) {
+        on_internal_error(rlogger, "term::raw encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

@@ -550,6 +550,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const field_selection&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: field_selection cannot serve as the LHS of a binary expression");
             },
+            [] (const term_raw_ptr&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: term_raw cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -585,6 +588,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const field_selection&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a field selection cannot serve as a restriction by itself");
+            },
+            [] (const term_raw_ptr&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a raw term cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -822,6 +828,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const field_selection&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: field selections are not supported as the LHS of a binary expression");
                         },
+                        [] (const term_raw_ptr&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: raw terms are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -847,6 +856,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const field_selection&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a field selection cannot serve as a restriction by itself");
+            },
+            [] (const term_raw_ptr&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a raw term cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -905,6 +917,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const field_selection&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: field selections are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const term_raw_ptr&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: raw terms are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -970,6 +985,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const field_selection& fs)  {
                 fmt::print(os, "({}.{})", *fs.structure, fs.field);
             },
+            [&] (const term_raw_ptr& trp)  {
+                fmt::print(os, "{}", *trp);
+            },
         }, expr);
     return os;
 }
@@ -1011,6 +1029,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const function_call&) { return expr; },
             [&] (const cast&) { return expr; },
             [&] (const field_selection&) { return expr; },
+            [&] (const term_raw_ptr&) { return expr; },
         }, expr);
 }
 
@@ -1050,6 +1069,10 @@ expression replace_token(const expression& expr, const column_definition* new_cd
             },
             [&] (const field_selection&) -> expression {
                 return expr;
+            },
+            [&] (const term_raw_ptr&) -> expression {
+                // A raw term could well be the token function. But this function is never called for unprepared expressions.
+                on_internal_error(expr_logger, "replace_token() called on term_raw_ptr");
             },
         }, expr);
 }
@@ -1121,6 +1144,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const function_call&) {}
         void operator()(const cast&) {}
         void operator()(const field_selection&) {}
+        void operator()(const term_raw_ptr&) {}
     };
 
     visitor v {

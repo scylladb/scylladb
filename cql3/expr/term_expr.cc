@@ -62,6 +62,9 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const field_selection&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::prepare()");
         },
+        [&] (const term_raw_ptr& raw) -> ::shared_ptr<term> {
+            return raw->prepare(db, keyspace, receiver);
+        },
     }, _expr);
 }
 
@@ -101,12 +104,18 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         [&] (const field_selection&) -> test_result {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::test_assignment()");
         },
+        [&] (const term_raw_ptr& raw) -> test_result {
+            return raw->test_assignment(db, keyspace, receiver);
+        },
     }, _expr);
 }
 
 sstring
 term_raw_expr::to_string() const {
     return std::visit(overloaded_functor{
+        [&] (const term_raw_ptr& raw) {
+            return raw->to_string();
+        },
         [&] (auto& default_case) -> sstring { return fmt::format("{}", _expr); },
     }, _expr);
 }
@@ -114,6 +123,9 @@ term_raw_expr::to_string() const {
 sstring
 term_raw_expr::assignment_testable_source_context() const {
     return std::visit(overloaded_functor{
+        [&] (const term_raw_ptr& raw) {
+            return raw->assignment_testable_source_context();
+        },
         [&] (auto& default_case) -> sstring { return fmt::format("{}", _expr); },
     }, _expr);
 }

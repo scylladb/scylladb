@@ -54,6 +54,7 @@ namespace cql3 {
 
 class column_identifier_raw;
 class query_options;
+class term_raw;
 
 namespace selection {
     class selection;
@@ -80,11 +81,12 @@ class column_mutation_attribute;
 class function_call;
 class cast;
 class field_selection;
+using term_raw_ptr = ::shared_ptr<term_raw>;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection>;
+                                field_selection, term_raw_ptr>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -282,6 +284,9 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [&] (const field_selection& fs) -> const binary_operator* {
                 return find_atom(*fs.structure, f);
             },
+            [&] (const term_raw_ptr&) -> const binary_operator* {
+                return nullptr;
+            },
         }, e);
 }
 
@@ -309,6 +314,9 @@ size_t count_if(const expression& e, Fn f) {
                 return count_if(*c.arg, f); },
             [&] (const field_selection& fs) -> size_t {
                 return count_if(*fs.structure, f);
+            },
+            [&] (const term_raw_ptr&) -> size_t {
+                return 0;
             },
         }, e);
 }
