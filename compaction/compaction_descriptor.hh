@@ -131,6 +131,8 @@ public:
         return std::visit(std::forward<Visitor>(visitor)..., _options);
     }
 
+    const options_variant& options() const { return _options; }
+
     compaction_type type() const;
 };
 
