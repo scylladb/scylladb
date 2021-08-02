@@ -1614,7 +1614,7 @@ future<> remove_endpoint(gms::inet_address ep) {
 
 future<> update_tokens(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
-        throw std::invalid_argument("remove_endpoint should be used instead");
+        return make_exception_future<>(std::invalid_argument("remove_endpoint should be used instead"));
     }
 
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);

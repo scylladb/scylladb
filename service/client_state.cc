@@ -69,15 +69,15 @@ future<> service::client_state::check_user_can_login() {
 
     return role_manager.exists(*_user->name).then([this](bool exists) mutable {
         if (!exists) {
-            throw exceptions::authentication_exception(
+            return make_exception_future<>(exceptions::authentication_exception(
                             format("User {} doesn't exist - create it with CREATE USER query first",
-                                            *_user->name));
+                                            *_user->name)));
         }
         return make_ready_future();
     }).then([this, &role_manager] {
         return role_manager.can_login(*_user->name).then([this](bool can_login) {
             if (!can_login) {
-                throw exceptions::authentication_exception(format("{} is not permitted to log in", *_user->name));
+                return make_exception_future<>(exceptions::authentication_exception(format("{} is not permitted to log in", *_user->name)));
             }
 
             return make_ready_future();
@@ -137,7 +137,7 @@ future<> service::client_state::has_schema_access(const schema& s, auth::permiss
 
 future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
-        throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
+        return make_exception_future<>(exceptions::invalid_request_exception("You have not set a keyspace for this session"));
     }
     if (_is_internal) {
         return make_ready_future();
@@ -154,7 +154,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
         if (is_system_keyspace(name)) {
-            throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
+            return make_exception_future<>(exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable."));
         }
 
         //
@@ -169,8 +169,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                 && (cmd.permission == auth::permission::DROP);
 
         if (dropping_anything_in_tracing || dropping_auth_keyspace) {
-            throw exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
+            return make_exception_future<>(exceptions::unauthorized_exception(
+                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
         }
     }
 
@@ -190,7 +190,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     }
     if (alteration_permissions.contains(cmd.permission)) {
         if (auth::is_protected(*_auth_service, cmd)) {
-            throw exceptions::unauthorized_exception(format("{} is protected", cmd.resource));
+            return make_exception_future<>(exceptions::unauthorized_exception(format("{} is protected", cmd.resource)));
         }
     }
 
@@ -199,8 +199,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         if (resource_view.table()) {
             if (cmd.permission == auth::permission::DROP) {
                 if (cdc::is_log_for_some_table(ks, *resource_view.table())) {
-                    throw exceptions::unauthorized_exception(
-                            format("Cannot {} cdc log table {}", auth::permissions::to_string(cmd.permission), cmd.resource));
+                    return make_exception_future<>(exceptions::unauthorized_exception(
+                            format("Cannot {} cdc log table {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
                 }
             }
 
@@ -213,8 +213,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TIMESTAMPS
                         || resource_view.table() == db::system_distributed_keyspace::CDC_GENERATIONS_V2)) {
-                    throw exceptions::unauthorized_exception(
-                            format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
+                    return make_exception_future<>(exceptions::unauthorized_exception(
+                            format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
                 }
             }
         }
@@ -245,12 +245,13 @@ future<bool> service::client_state::check_has_permission(auth::command_desc cmd)
 future<> service::client_state::ensure_has_permission(auth::command_desc cmd) const {
     return check_has_permission(cmd).then([this, cmd](bool ok) {
         if (!ok) {
-            throw exceptions::unauthorized_exception(
+            return make_exception_future<>(exceptions::unauthorized_exception(
                 format("User {} has no {} permission on {} or any of its parents",
                         *_user,
                         auth::permissions::to_string(cmd.permission),
-                        cmd.resource));
+                        cmd.resource)));
         }
+        return make_ready_future<>();
     });
 }
 
@@ -266,7 +267,7 @@ void service::client_state::set_keyspace(database& db, std::string_view keyspace
 future<> service::client_state::ensure_exists(const auth::resource& r) const {
     return _auth_service->exists(r).then([&r](bool exists) {
         if (!exists) {
-            throw exceptions::invalid_request_exception(format("{} doesn't exist.", r));
+            return make_exception_future<>(exceptions::invalid_request_exception(format("{} doesn't exist.", r)));
         }
 
         return make_ready_future<>();
