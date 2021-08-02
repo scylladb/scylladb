@@ -1636,7 +1636,7 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
     return descriptor.options.visit(visitor_factory);
 }
 
-future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, const compaction_info& info) {
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_info& info) {
     auto schema = reader.schema();
 
     bool valid = true;
@@ -1656,25 +1656,25 @@ future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, co
             if (mf.is_partition_start()) {
                 const auto& ps = mf.as_partition_start();
                 if (!validator(mf)) {
-                    scrub_compaction::report_invalid_partition_start(compaction_type::Validation, validator, ps.key());
+                    scrub_compaction::report_invalid_partition_start(compaction_type::Scrub, validator, ps.key());
                     validator.reset(mf);
                     valid = false;
                 }
                 if (!validator(ps.key())) {
-                    scrub_compaction::report_invalid_partition(compaction_type::Validation, validator, ps.key());
+                    scrub_compaction::report_invalid_partition(compaction_type::Scrub, validator, ps.key());
                     validator.reset(ps.key());
                     valid = false;
                 }
             } else {
                 if (!validator(mf)) {
-                    scrub_compaction::report_invalid_mutation_fragment(compaction_type::Validation, validator, mf);
+                    scrub_compaction::report_invalid_mutation_fragment(compaction_type::Scrub, validator, mf);
                     validator.reset(mf);
                     valid = false;
                 }
             }
         }
         if (!validator.on_end_of_stream()) {
-            scrub_compaction::report_invalid_end_of_stream(compaction_type::Validation, validator);
+            scrub_compaction::report_invalid_end_of_stream(compaction_type::Scrub, validator);
             valid = false;
         }
     } catch (...) {
@@ -1690,7 +1690,7 @@ future<bool> validate_compaction_validate_reader(flat_mutation_reader reader, co
     co_return valid;
 }
 
-static future<compaction_info> validate_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
+static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, column_family& cf) {
     auto schema = cf.schema();
 
     formatted_sstables_list sstables_list_msg;
@@ -1707,15 +1707,15 @@ static future<compaction_info> validate_sstables(sstables::compaction_descriptor
         cf.get_compaction_manager().deregister_compaction(info);
     });
 
-    clogger.info("Validating {}", sstables_list_msg);
+    clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
 
-    auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "Validation");
+    auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "scrub:validate");
     auto reader = sstables->make_local_shard_sstable_reader(schema, permit, query::full_partition_range, schema->full_slice(), descriptor.io_priority,
             tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no, default_read_monitor_generator());
 
-    const auto valid = co_await validate_compaction_validate_reader(std::move(reader), *info);
+    const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), *info);
 
-    clogger.info("Validated {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+    clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
 
     co_return *info;
 }
@@ -1726,9 +1726,10 @@ compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) 
         throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
                 cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    if (descriptor.options.type() == compaction_type::Validation) {
-        // Bypass the usual compaction machinery for validation compaction
-        return validate_sstables(std::move(descriptor), cf);
+    if (descriptor.options.type() == compaction_type::Scrub
+            && std::get<compaction_options::scrub>(descriptor.options.options()).operation_mode == compaction_options::scrub::mode::validate) {
+        // Bypass the usual compaction machinery for dry-mode scrub
+        return scrub_sstables_validate_mode(std::move(descriptor), cf);
     }
     auto c = make_compaction(cf, std::move(descriptor));
     if (c->enable_garbage_collected_sstable_writer()) {

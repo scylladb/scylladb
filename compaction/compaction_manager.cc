@@ -754,7 +754,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
 }
 
 future<> compaction_manager::perform_sstable_validation(column_family* cf) {
-    return run_custom_job(cf, sstables::compaction_type::Validation, [this, &cf = *cf, sstables = get_candidates(*cf)] () mutable -> future<> {
+    return run_custom_job(cf, sstables::compaction_type::Scrub, [this, &cf = *cf, sstables = get_candidates(*cf)] () mutable -> future<> {
         class pending_tasks {
             compaction_manager::stats& _stats;
             size_t _n;
@@ -774,8 +774,14 @@ future<> compaction_manager::perform_sstable_validation(column_family* cf) {
 
             try {
                 co_await with_scheduling_group(_maintenance_sg.cpu, [&] () {
-                    auto desc = sstables::compaction_descriptor({ sst }, {}, _maintenance_sg.io, sst->get_sstable_level(),
-                            sstables::compaction_descriptor::default_max_sstable_bytes, sst->run_identifier(), sstables::compaction_options::make_validation());
+                    auto desc = sstables::compaction_descriptor(
+                            { sst },
+                            {},
+                            _maintenance_sg.io,
+                            sst->get_sstable_level(),
+                            sstables::compaction_descriptor::default_max_sstable_bytes,
+                            sst->run_identifier(),
+                            sstables::compaction_options::make_scrub(sstables::compaction_options::scrub::mode::validate));
                     return compact_sstables(std::move(desc), cf);
                 });
             } catch (sstables::compaction_stop_exception&) {
@@ -787,7 +793,7 @@ future<> compaction_manager::perform_sstable_validation(column_family* cf) {
                 // expected, just continue with the other sstables when seeing
                 // one.
                 _stats.errors++;
-                cmlog.error("Validating {} failed due to {}, continuing.", sst->get_filename(), std::current_exception());
+                cmlog.error("Scrubbing in validate mode {} failed due to {}, continuing.", sst->get_filename(), std::current_exception());
             }
 
             pending--;
