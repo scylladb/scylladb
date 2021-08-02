@@ -192,6 +192,15 @@ public:
         end_kind = new_end.kind();
     }
 
+    // Swap bounds to reverse range-tombstone -- as if it came from a table with
+    // reverse native order. See docs/design-notes/reverse-reads.md.
+    void reverse() {
+        std::swap(start, end);
+        std::swap(start_kind, end_kind);
+        start_kind = reverse_kind(start_kind);
+        end_kind = reverse_kind(end_kind);
+    }
+
     size_t external_memory_usage(const schema&) const noexcept {
         return start.external_memory_usage() + end.external_memory_usage();
     }
