@@ -182,20 +182,27 @@ static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, 
     return timestamp;
 }
 
-static bool belongs_to_current_node(const dht::token& t, const dht::token_range_vector& sorted_owned_ranges) {
-    auto low = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), t,
-            [] (const range<dht::token>& a, const dht::token& b) {
-        // check that range a is before token b.
-        return a.after(b, dht::token_comparator());
-    });
-
-    if (low != sorted_owned_ranges.end()) {
-        const dht::token_range& r = *low;
-        return r.contains(t, dht::token_comparator());
+class incremental_owned_ranges_checker {
+    const dht::token_range_vector& _sorted_owned_ranges;
+    mutable dht::token_range_vector::const_iterator _it;
+public:
+    incremental_owned_ranges_checker(const dht::token_range_vector& sorted_owned_ranges)
+        : _sorted_owned_ranges(sorted_owned_ranges)
+        , _it(_sorted_owned_ranges.begin()) {
     }
 
-    return false;
-}
+    // Must be called with increasing token values.
+    bool belongs_to_current_node(const dht::token& t) const {
+        // While token T is after a range Rn, advance the iterator.
+        // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
+        // or at a range which is after T (if T doesn't belong to this node).
+        while (_it != _sorted_owned_ranges.end() && _it->after(t, dht::token_comparator())) {
+            _it++;
+        }
+
+        return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
+    }
+};
 
 static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable> sstables) {
     auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
@@ -1116,6 +1123,7 @@ private:
 
 class cleanup_compaction final : public regular_compaction {
     dht::token_range_vector _owned_ranges;
+    incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
     dht::partition_range_vector
@@ -1155,6 +1163,7 @@ private:
     cleanup_compaction(database& db, column_family& cf, compaction_descriptor descriptor)
         : regular_compaction(cf, std::move(descriptor))
         , _owned_ranges(db.get_keyspace_local_ranges(_schema->ks_name()))
+        , _owned_ranges_checker(_owned_ranges)
     {
     }
 
@@ -1183,7 +1192,7 @@ public:
             assert(dht::shard_of(*_schema, dk.token()) == this_shard_id());
 #endif
 
-            if (!belongs_to_current_node(dk.token(), _owned_ranges)) {
+            if (!_owned_ranges_checker.belongs_to_current_node(dk.token())) {
                 log_trace("Token {} does not belong to this node, skipping", dk.token());
                 return false;
             }
