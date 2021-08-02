@@ -2220,7 +2220,7 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
     }
     _live_rows += is_alive;
     auto stop = _memory_accounter.update_and_check(cr.memory_usage(_schema));
-    if (is_alive) {
+    if (is_alive || _slice.options.contains<query::partition_slice::option::allow_mutation_read_page_without_live_row>()) {
         // We are considering finishing current read only after consuming a
         // live clustering row. While sending a single live row is enough to
         // guarantee progress, not ending the result on a live row would

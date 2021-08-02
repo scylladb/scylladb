@@ -4980,6 +4980,8 @@ protected:
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
+        cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
+
         // Waited on indirectly.
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
@@ -5003,9 +5005,11 @@ protected:
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
                 // than the total number of column we are interested in (which may be < count on a retry).
-                // So in particular, if no host returned count live columns, we know it's not a short read.
-                bool can_send_short_read = rr_opt && rr_opt->is_short_read() && rr_opt->row_count() > 0;
-                if (rr_opt && (can_send_short_read || data_resolver->all_reached_end() || rr_opt->row_count() >= original_row_limit()
+                // So in particular, if no host returned count live columns, we know it's not a short read due to
+                // row or partition limits being exhausted and retry is not needed.
+                if (rr_opt && (rr_opt->is_short_read()
+                               || data_resolver->all_reached_end()
+                               || rr_opt->row_count() >= original_row_limit()
                                || data_resolver->live_partition_count() >= original_partition_limit())
                         && !data_resolver->any_partition_short_read()) {
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
