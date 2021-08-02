@@ -414,38 +414,49 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     if (_selection->is_trivial() && !restrictions_need_filtering && !_per_partition_limit) {
-        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p = std::move(p)] (result_generator generator) {
+      return repeat_until_value([this, page_size, now, timeout, p_ptr = std::move(p)] () mutable {
+        auto& p = *p_ptr;
+        return p.fetch_page_generator(page_size, now, timeout, _stats).then([this, &p] (result_generator generator) -> std::optional<shared_ptr<cql_transport::messages::result_message>> {
+            if (!p.is_exhausted() && generator.empty()) {
+                return std::nullopt; // next page
+            }
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
-                if (!p->is_exhausted()) {
+                if (!p.is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
-                    meta->set_paging_state(p->state());
+                    meta->set_paging_state(p.state());
                     return meta;
                 } else {
                     return _selection->get_result_metadata();
                 }
             }();
-
             return shared_ptr<cql_transport::messages::result_message>(
                 make_shared<cql_transport::messages::result_message::rows>(result(std::move(generator), std::move(meta)))
             );
         });
+      });
     }
 
-    return p->fetch_page(page_size, now, timeout).then(
-            [this, p = std::move(p), &options, now, restrictions_need_filtering](std::unique_ptr<cql3::result_set> rs) {
+    return repeat_until_value([this, page_size, &options, now, restrictions_need_filtering, timeout, p_ptr = std::move(p)] () mutable {
+        auto& p = *p_ptr;
+        return p.fetch_page(page_size, now, timeout).then(
+            [this, &p, &options, now, restrictions_need_filtering](std::unique_ptr<cql3::result_set> rs) -> std::optional<shared_ptr<cql_transport::messages::result_message>> {
 
-                if (!p->is_exhausted()) {
-                    rs->get_metadata().set_paging_state(p->state());
+                if (!p.is_exhausted()) {
+                    if (rs->empty()) {
+                        return std::nullopt; // next page
+                    }
+                    rs->get_metadata().set_paging_state(p.state());
                 }
 
                 if (restrictions_need_filtering) {
-                    _stats.filtered_rows_read_total += p->stats().rows_read_total;
+                    _stats.filtered_rows_read_total += p.stats().rows_read_total;
                     _stats.filtered_rows_matched_total += rs->size();
                 }
                 update_stats_rows_read(rs->size());
                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
-                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
+                return msg;
             });
+    });
 }
 
 template<typename KeyType>

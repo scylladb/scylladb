@@ -146,6 +146,11 @@ public:
         // directly, bypassing the intermediate reconcilable_result format used
         // in pre 4.5 range scans.
         range_scan_data_variant,
+        // When set, mutation query can end a page even if there is no live row in the
+        // final reconcilable_result. This prevents exchanging large pages when there
+        // is a lot of dead rows. This flag is needed during rolling upgrades to support
+        // old coordinators which do not tolerate pages with no live rows.
+        allow_empty_pages,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -160,7 +165,8 @@ public:
         option::with_digest,
         option::bypass_cache,
         option::always_return_static_content,
-        option::range_scan_data_variant>>;
+        option::range_scan_data_variant,
+        option::allow_empty_pages>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap
