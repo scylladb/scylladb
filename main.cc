@@ -1031,6 +1031,9 @@ int main(int ac, char** av) {
 
             distributed_loader::ensure_system_table_directories(db).get();
 
+            // making compaction manager api available, after system keyspace has already been established.
+            api::set_server_compaction_manager(ctx).get();
+
             supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
