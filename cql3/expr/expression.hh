@@ -387,6 +387,10 @@ extern expression replace_column_def(const expression&, const column_definition*
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
 extern expression replace_token(const expression&, const column_definition*);
 
+extern ::shared_ptr<term_raw> as_term_raw(const expression& e);
+
+extern expression as_expression(::shared_ptr<term::raw> t);
+
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :

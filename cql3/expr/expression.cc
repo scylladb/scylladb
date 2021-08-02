@@ -20,6 +20,7 @@
  */
 
 #include "expression.hh"
+#include "term_expr.hh"
 
 #include <seastar/core/on_internal_error.hh>
 
@@ -1075,6 +1076,22 @@ expression replace_token(const expression& expr, const column_definition* new_cd
                 on_internal_error(expr_logger, "replace_token() called on term_raw_ptr");
             },
         }, expr);
+}
+
+::shared_ptr<term_raw> as_term_raw(const expression& e) {
+    if (auto t = std::get_if<term_raw_ptr>(&e)) {
+        return *t;
+    } else {
+        return ::make_shared<term_raw_expr>(e);
+    }
+}
+
+expression as_expression(::shared_ptr<term::raw> t) {
+    if (auto te = dynamic_pointer_cast<term_raw_expr>(t)) {
+        return te->as_expression();
+    } else {
+        return expression(std::move(t));
+    }
 }
 
 std::ostream& operator<<(std::ostream& s, oper_t op) {
