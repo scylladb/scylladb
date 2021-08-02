@@ -868,6 +868,7 @@ public:
     static std::unique_ptr<raft_server> create(
             raft::server_id id,
             shared_ptr<failure_detector> fd,
+            raft::server::configuration cfg,
             bool first_server,
             typename rpc<typename M::state_t>::send_message_t send_rpc) {
         using state_t = typename M::state_t;
@@ -883,7 +884,7 @@ public:
 
         auto server = raft::create_server(
                 id, std::move(rpc_), std::move(sm), std::move(persistence_), std::move(fd),
-                raft::server::configuration{});
+                std::move(cfg));
 
         return std::make_unique<raft_server>(initializer{
             ._id = id,
@@ -1083,8 +1084,8 @@ public:
     // if they want to make a cluster (group) out of this server and other existing servers.
     // The user should be able to create multiple clusters by calling `new_server` multiple times with `first = true`.
     // (`first` means ``first in group'').
-    future<raft::server_id> new_server(bool first) {
-        return with_gate(_gate, [this, first] () -> future<raft::server_id> {
+    future<raft::server_id> new_server(bool first, raft::server::configuration cfg = {}) {
+        return with_gate(_gate, [this, first, cfg = std::move(cfg)] () -> future<raft::server_id> {
             auto id = to_raft_id(_next_id++);
 
             // TODO: in the future we want to simulate multiple raft servers running on a single ``node'',
@@ -1096,7 +1097,7 @@ public:
                 _network.send(id, dst, std::nullopt);
             });
 
-            auto srv = raft_server<M>::create(id, fd, first,
+            auto srv = raft_server<M>::create(id, fd, std::move(cfg), first,
                     [id, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
                 _network.send(id, dst, {std::move(m)});
             });
@@ -1314,4 +1315,85 @@ SEASTAR_TEST_CASE(basic_test) {
     });
 
     tlogger.debug("Finished");
+}
+
+// A snapshot was being taken with the wrong term (current term instead of the term at the snapshotted index).
+// This is a regression test for that bug.
+SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
+    logical_timer timer;
+    environment_config cfg {
+        .network_delay = 1_t,
+        .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start({
+            {1, [&] {
+                env.tick_network();
+                timer.tick();
+            }},
+            {10, [&] {
+                env.tick_servers();
+            }}
+        }, 10'000);
+
+
+        auto id1 = co_await env.new_server(true,
+                raft::server::configuration{
+        // It's easier to catch the problem when we send entries one by one, not in batches.
+                    .append_request_threshold = 1,
+                });
+        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, 1000_t) == id1);
+
+        auto id2 = co_await env.new_server(true,
+                raft::server::configuration{
+                    .append_request_threshold = 1,
+                });
+
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.get_server(id1).reconfigure({id1, id2}, timer.now() + 100_t, timer)));
+
+        // Append a bunch of entries
+        for (int i = 1; i <= 10; ++i) {
+            assert(std::holds_alternative<typename ExReg::ret>(
+                co_await env.get_server(id1).call(ExReg::exchange{0}, timer.now() + 100_t, timer)));
+        }
+
+        assert(env.get_server(id1).is_leader());
+
+        // Force a term increase by partitioning the network and waiting for the leader to step down
+        tlogger.trace("add grudge");
+        env.get_network().add_grudge(id2, id1);
+        env.get_network().add_grudge(id1, id2);
+
+        while (env.get_server(id1).is_leader()) {
+            co_await seastar::later();
+        }
+
+        tlogger.trace("remove grudge");
+        env.get_network().remove_grudge(id2, id1);
+        env.get_network().remove_grudge(id1, id2);
+
+        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, 1000_t);
+        tlogger.trace("last leader: {}", l);
+
+        // Now the current term is greater than the term of the first couple of entries.
+        // Join another server with a small snapshot_threshold.
+        // The leader will send entries to this server one by one (due to small append_request_threshold),
+        // so the joining server will apply entries one by one or in small batches (depends on the timing),
+        // making it likely that it decides to take a snapshot at an entry with term lower than the current one.
+        // If we are (un)lucky and we take a snapshot at the last appended entry, the node will refuse all
+        // later append_entries requests due to non-matching term at the last appended entry. Note: due to this
+        // requirement, the test is nondeterministic and doesn't always catch the bug (it depends on a race
+        // between applier_fiber and io_fiber), but it does catch it in a significant number of runs.
+        // It's also a lot easier to catch this in dev than in debug, for instance.
+        // If we catch the bug, the reconfigure request below will time out.
+
+        auto id3 = co_await env.new_server(false,
+                raft::server::configuration{
+                    .snapshot_threshold = 5,
+                    .snapshot_trailing = 2,
+                });
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.get_server(l).reconfigure({l, id3}, timer.now() + 1000_t, timer)));
+    });
 }
