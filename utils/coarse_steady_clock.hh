@@ -21,16 +21,22 @@
 
 #pragma once
 
+// A coarser and faster version of std::steady_clock, using
+// CLOCK_MONOTONIC_COARSE instead of CLOCK_MONOTONIC.
+//
+// Intended for measuring time taken by synchronous code paths (where
+// seastar::lowres_clock is not suitable).
+
 #include <chrono>
 #include <ctime>
 
 namespace utils {
 
-struct coarse_clock {
+struct coarse_steady_clock {
     using duration   = std::chrono::nanoseconds;
     using rep        = duration::rep;
     using period     = duration::period;
-    using time_point = std::chrono::time_point<coarse_clock, duration>;
+    using time_point = std::chrono::time_point<coarse_steady_clock, duration>;
 
     static constexpr bool is_steady = true;
 
