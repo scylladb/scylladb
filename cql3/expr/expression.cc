@@ -47,7 +47,7 @@
 namespace cql3 {
 namespace expr {
 
-static logging::logger expr_logger("cql_expression");
+logging::logger expr_logger("cql_expression");
 
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
