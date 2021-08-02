@@ -766,43 +766,11 @@
          ]
       },
       {
-         "path":"/storage_service/keyspace_validate/{keyspace}",
-         "operations":[
-            {
-               "method":"POST",
-               "summary":"Trigger a validation of sstables on a single keyspace",
-               "type": "long",
-               "nickname":"validate",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-                  {
-                     "name":"keyspace",
-                     "description":"The keyspace to validate",
-                     "required":true,
-                     "allowMultiple":false,
-                     "type":"string",
-                     "paramType":"path"
-                  },
-                  {
-                     "name":"cf",
-                     "description":"Comma seperated column family names",
-                     "required":false,
-                     "allowMultiple":false,
-                     "type":"string",
-                     "paramType":"query"
-                  }
-               ]
-            }
-         ]
-      },
-      {
          "path":"/storage_service/keyspace_scrub/{keyspace}",
          "operations":[
             {
                "method":"GET",
-               "summary":"Scrub (deserialize + reserialize at the latest version, resolving corruptions if any) the given keyspace. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false. Scrub has the following modes: Abort (default) - abort scrub if corruption is detected; Skip (same as `skip_corrupted=true`) skip over corrupt data, omitting them from the output; Segregate - segregate data into multiple sstables if needed, such that each sstable contains data with valid order.",
+               "summary":"Scrub (deserialize + reserialize at the latest version, resolving corruptions if any) the given keyspace. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false. Scrub has the following modes: Abort (default) - abort scrub if corruption is detected; Skip (same as `skip_corrupted=true`) skip over corrupt data, omitting them from the output; Segregate - segregate data into multiple sstables if needed, such that each sstable contains data with valid order; Validate - read (no rewrite) and validate data, logging any problems found.",
                "type": "long",
                "nickname":"scrub",
                "produces":[
@@ -834,7 +802,8 @@
                      "enum":[
                         "ABORT",
                         "SKIP",
-                        "SEGREGATE"
+                        "SEGREGATE",
+                        "VALIDATE"
                      ],
                      "paramType":"query"
                   },

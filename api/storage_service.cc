@@ -541,19 +541,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::validate.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families ) {
-        return ctx.db.invoke_on_all([=] (database& db) {
-            return do_for_each(column_families, [=, &db](sstring cfname) {
-                auto& cm = db.get_compaction_manager();
-                auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_scrub(&cf, sstables::compaction_options::scrub::mode::validate);
-            });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
-        });
-
-    }));
-
     ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
@@ -1276,6 +1263,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 scrub_mode = sstables::compaction_options::scrub::mode::skip;
             } else if (scrub_mode_str == "SEGREGATE") {
                 scrub_mode = sstables::compaction_options::scrub::mode::segregate;
+            } else if (scrub_mode_str == "VALIDATE") {
+                scrub_mode = sstables::compaction_options::scrub::mode::validate;
             } else {
                 throw std::invalid_argument(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
             }
