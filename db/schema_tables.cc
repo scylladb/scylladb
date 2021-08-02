@@ -704,20 +704,18 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
 {
     auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<std::vector<mutation>> {
         auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
-        {
-            auto s = proxy.local().get_db().local().find_schema(NAME, table);
-            std::vector<mutation> mutations;
-            for (auto&& p : rs->partitions()) {
-                auto mut = p.mut().unfreeze(s);
-                auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
-                if (!accept_keyspace(partition_key)) {
-                    continue;
-                }
-                mut = redact_columns_for_missing_features(std::move(mut), features);
-                mutations.emplace_back(std::move(mut));
+        auto s = proxy.local().get_db().local().find_schema(NAME, table);
+        std::vector<mutation> mutations;
+        for (auto&& p : rs->partitions()) {
+            auto mut = p.mut().unfreeze(s);
+            auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+            if (!accept_keyspace(partition_key)) {
+                continue;
             }
-            co_return mutations;
+            mut = redact_columns_for_missing_features(std::move(mut), features);
+            mutations.emplace_back(std::move(mut));
         }
+        co_return mutations;
     };
     auto reduce = [features] (auto& hash, auto&& mutations) {
         for (const mutation& m : mutations) {
@@ -729,20 +727,16 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
     {
         for (auto& table: tables) {
             auto mutations = co_await map(table);
-            {
-                if (diff_logger.is_enabled(logging::log_level::trace)) {
-                    for (const mutation& m : mutations) {
-                        md5_hasher h;
-                        feed_hash_for_schema_digest(h, m, features);
-                        diff_logger.trace("Digest {} for {}, compacted={}", h.finalize(), m, compact_for_schema_digest(m));
-                    }
+            if (diff_logger.is_enabled(logging::log_level::trace)) {
+                for (const mutation& m : mutations) {
+                    md5_hasher h;
+                    feed_hash_for_schema_digest(h, m, features);
+                    diff_logger.trace("Digest {} for {}, compacted={}", h.finalize(), m, compact_for_schema_digest(m));
                 }
-                reduce(hash, mutations);
             }
+            reduce(hash, mutations);
         }
-        {
-            co_return utils::UUID_gen::get_name_UUID(hash.finalize());
-        }
+        co_return utils::UUID_gen::get_name_UUID(hash.finalize());
     }
 }
 
@@ -755,20 +749,18 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
 {
     auto map = [&proxy, features] (sstring table) -> future<std::vector<canonical_mutation>> {
         auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
-        {
-            auto s = proxy.local().get_db().local().find_schema(NAME, table);
-            std::vector<canonical_mutation> results;
-            for (auto&& p : rs->partitions()) {
-                auto mut = p.mut().unfreeze(s);
-                auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
-                if (is_system_keyspace(partition_key)) {
-                    continue;
-                }
-                mut = redact_columns_for_missing_features(std::move(mut), features);
-                results.emplace_back(mut);
+        auto s = proxy.local().get_db().local().find_schema(NAME, table);
+        std::vector<canonical_mutation> results;
+        for (auto&& p : rs->partitions()) {
+            auto mut = p.mut().unfreeze(s);
+            auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+            if (is_system_keyspace(partition_key)) {
+                continue;
             }
-            co_return results;
+            mut = redact_columns_for_missing_features(std::move(mut), features);
+            results.emplace_back(mut);
         }
+        co_return results;
     };
     auto reduce = [] (auto&& result, auto&& mutations) {
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
@@ -813,19 +805,15 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 {
     auto dk = dht::decorate_key(*s, pkey);
     auto range = dht::partition_range::make_singular(dk);
-    {
-        auto res_hit_rate = co_await proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout, tracing::trace_state_ptr{});
-        {
-                    auto&& [res, hit_rate] = res_hit_rate;
-                    auto&& partitions = res->partitions();
-                    if (partitions.size() == 0) {
-                        co_return mutation(s, std::move(dk));
-                    } else if (partitions.size() == 1) {
-                        co_return partitions[0].mut().unfreeze(s);
-                    } else {
-                        throw std::invalid_argument("Results must have at most one partition");
-                    }
-        }
+    auto res_hit_rate = co_await proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout, tracing::trace_state_ptr{});
+    auto&& [res, hit_rate] = res_hit_rate;
+    auto&& partitions = res->partitions();
+    if (partitions.size() == 0) {
+        co_return mutation(s, std::move(dk));
+    } else if (partitions.size() == 1) {
+        co_return partitions[0].mut().unfreeze(s);
+    } else {
+        throw std::invalid_argument("Results must have at most one partition");
     }
 }
 
@@ -838,9 +826,7 @@ read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, c
     auto keyspace_key = dht::decorate_key(*schema,
         partition_key::from_singular(*schema, keyspace_name));
     auto rs = co_await db::system_keyspace::query(proxy, NAME, schema_table_name, keyspace_key);
-    {
-        co_return schema_result_value_type{keyspace_name, std::move(rs)};
-    }
+    co_return schema_result_value_type{keyspace_name, std::move(rs)};
 }
 
 future<mutation>
@@ -893,17 +879,11 @@ static future<> with_merge_lock(noncopyable_function<future<> ()> func) {
 static
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
     auto uuid = co_await calculate_schema_digest(proxy, features);
-    {
-        co_await db::system_keyspace::update_schema_version(uuid);
-        {
-            co_await proxy.local().get_db().invoke_on_all([uuid] (database& db) {
-                db.update_version(uuid);
-            });
-        }
-        {
-            slogger.info("Schema version changed to {}", uuid);
-        }
-    }
+    co_await db::system_keyspace::update_schema_version(uuid);
+    co_await proxy.local().get_db().invoke_on_all([uuid] (database& db) {
+        db.update_version(uuid);
+    });
+    slogger.info("Schema version changed to {}", uuid);
 }
 
 /**
@@ -919,9 +899,7 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
 {
     co_await with_merge_lock([&] () mutable -> future<> {
         co_await do_merge_schema(proxy, std::move(mutations), true);
-        {
-            co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
-        }
+        co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
     });
 }
 
@@ -936,12 +914,10 @@ future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
     auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
     auto&& rs = co_await db::system_keyspace::query(proxy, schema_table->ks_name(), schema_table->cf_name(), pkey);
-    {
-        co_return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
-            const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
-            return row.get_nonnull<sstring>(name);
-        }));
-    }
+    co_return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
+        const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
+        return row.get_nonnull<sstring>(name);
+    }));
 }
 
 static utils::UUID table_id_from_mutations(const schema_mutations& sm) {
@@ -1060,71 +1036,69 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
 
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
 {
-   {
-       slogger.trace("do_merge_schema: {}", mutations);
-       schema_ptr s = keyspaces();
-       // compare before/after schemas of the affected keyspaces only
-       std::set<sstring> keyspaces;
-       std::set<utils::UUID> column_families;
-       for (auto&& mutation : mutations) {
-           keyspaces.emplace(value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
-           column_families.emplace(mutation.column_family_id());
-           // We must force recalculation of schema version after the merge, since the resulting
-           // schema may be a mix of the old and new schemas.
-           delete_schema_version(mutation);
-       }
+    slogger.trace("do_merge_schema: {}", mutations);
+    schema_ptr s = keyspaces();
+    // compare before/after schemas of the affected keyspaces only
+    std::set<sstring> keyspaces;
+    std::set<utils::UUID> column_families;
+    for (auto&& mutation : mutations) {
+        keyspaces.emplace(value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
+        column_families.emplace(mutation.column_family_id());
+        // We must force recalculation of schema version after the merge, since the resulting
+        // schema may be a mix of the old and new schemas.
+        delete_schema_version(mutation);
+    }
 
-       // current state of the schema
-       auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-       auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, tables());
-       auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-       auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
-       auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
+    // current state of the schema
+    auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+    auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, tables());
+    auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
+    auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
+    auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
 #if 0 // not in 2.1.8
-       /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
+    /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
-       co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+    co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
-       if (do_flush) {
-           co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
-               auto& cfs = column_families;
-               co_await parallel_for_each(cfs.begin(), cfs.end(), [&] (const utils::UUID& id) -> future<> {
-                   auto& cf = db.find_column_family(id);
-                   co_await cf.flush();
-               });
-           });
-       }
+    if (do_flush) {
+        co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+            auto& cfs = column_families;
+            co_await parallel_for_each(cfs.begin(), cfs.end(), [&] (const utils::UUID& id) -> future<> {
+                auto& cf = db.find_column_family(id);
+                co_await cf.flush();
+            });
+        });
+    }
 
-       // with new data applied
-       auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-       auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, tables());
-       auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-       auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
-       auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
+    // with new data applied
+    auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+    auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, tables());
+    auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
+    auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
+    auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
 #if 0 // not in 2.1.8
        /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
-       std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
-       auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
-       co_await merge_tables_and_views(proxy,
-            std::move(old_column_families), std::move(new_column_families),
-            std::move(old_views), std::move(new_views));
-       co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
+    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
+    auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
+    co_await merge_tables_and_views(proxy,
+        std::move(old_column_families), std::move(new_column_families),
+        std::move(old_views), std::move(new_views));
+    co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
 #if 0
-       mergeAggregates(oldAggregates, newAggregates);
+    mergeAggregates(oldAggregates, newAggregates);
 #endif
-       co_await types_to_drop.drop();
+    co_await types_to_drop.drop();
 
-       co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
-           // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-           for (auto keyspace_to_drop : keyspaces_to_drop) {
-               db.drop_keyspace(keyspace_to_drop);
-               co_await db.get_notifier().drop_keyspace(keyspace_to_drop);
-           }
-       });
-   }
+    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+        // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
+        for (auto keyspace_to_drop : keyspaces_to_drop) {
+            db.drop_keyspace(keyspace_to_drop);
+            co_await db.get_notifier().drop_keyspace(keyspace_to_drop);
+        }
+    });
 }
 
 future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
@@ -1158,25 +1132,19 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         slogger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
-    {
-        {
-            co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
-                for (auto&& val : created) {
-                    auto ksm = create_keyspace_from_schema_partition(val);
-                    co_await db.create_keyspace(ksm);
-                    co_await db.get_notifier().create_keyspace(ksm);
-                }
-                {
-                    for (auto& name : altered) {
-                        co_await db.update_keyspace(proxy, name);
-                    };
-                }
-            });
+    co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
+        for (auto&& val : created) {
+            auto ksm = create_keyspace_from_schema_partition(val);
+            co_await db.create_keyspace(ksm);
+            co_await db.get_notifier().create_keyspace(ksm);
         }
-    }
-    {
-        co_return dropped;
-    }
+        {
+            for (auto& name : altered) {
+                co_await db.update_keyspace(proxy, name);
+            };
+        }
+    });
+    co_return dropped;
 }
 
 struct schema_diff {
@@ -1281,51 +1249,49 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     });
 
     co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
-        {
-            // First drop views and *only then* the tables, if interleaved it can lead
-            // to a mv not finding its schema when snapshoting since the main table
-            // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
-            co_await parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
-                auto& s = *dt.schema.get();
-                co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-            });
-            co_await parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
-                auto& s = *dt.schema.get();
-                co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-            });
+        // First drop views and *only then* the tables, if interleaved it can lead
+        // to a mv not finding its schema when snapshoting since the main table
+        // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
+        co_await parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
+            auto& s = *dt.schema.get();
+            co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+        });
+        co_await parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) -> future<> {
+            auto& s = *dt.schema.get();
+            co_await db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+        });
 
-            // In order to avoid possible races we first create the tables and only then the views.
-            // That way if a view seeks information about its base table it's guarantied to find it.
-            co_await parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
-                co_await db.add_column_family_and_make_directory(gs);
-            });
-            co_await parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) -> future<> {
-                co_await db.add_column_family_and_make_directory(gs);
-            });
-            for (auto&& gs : boost::range::join(tables_diff.created, views_diff.created)) {
-                db.find_column_family(gs).mark_ready_for_writes();
-            }
-            std::vector<bool> columns_changed;
-            columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
-            for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
-                columns_changed.push_back(db.update_column_family(altered.new_schema));
-            }
-
-            auto it = columns_changed.begin();
-            auto notify = [&] (auto& r, auto&& f) -> future<> {
-                auto notifications = r | boost::adaptors::transformed(f);
-                co_await when_all(notifications.begin(), notifications.end());
-            };
-            // View drops are notified first, because a table can only be dropped if its views are already deleted
-            co_await notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
-            co_await notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
-            // Table creations are notified first, in case a view is created right after the table
-            co_await notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
-            co_await notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
-            // Table altering is notified first, in case new base columns appear
-            co_await notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
-            co_await notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
+        // In order to avoid possible races we first create the tables and only then the views.
+        // That way if a view seeks information about its base table it's guarantied to find it.
+        co_await parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) -> future<> {
+            co_await db.add_column_family_and_make_directory(gs);
+        });
+        co_await parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) -> future<> {
+            co_await db.add_column_family_and_make_directory(gs);
+        });
+        for (auto&& gs : boost::range::join(tables_diff.created, views_diff.created)) {
+            db.find_column_family(gs).mark_ready_for_writes();
         }
+        std::vector<bool> columns_changed;
+        columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
+        for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
+            columns_changed.push_back(db.update_column_family(altered.new_schema));
+        }
+
+        auto it = columns_changed.begin();
+        auto notify = [&] (auto& r, auto&& f) -> future<> {
+            auto notifications = r | boost::adaptors::transformed(f);
+            co_await when_all(notifications.begin(), notifications.end());
+        };
+        // View drops are notified first, because a table can only be dropped if its views are already deleted
+        co_await notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
+        co_await notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
+        // Table creations are notified first, in case a view is created right after the table
+        co_await notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
+        co_await notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
+        // Table altering is notified first, in case new base columns appear
+        co_await notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
+        co_await notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
     });
 
     // Insert column_mapping into history table for altered and created tables.
@@ -1487,26 +1453,22 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     // some of these user types are dropped.
 
     co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
-        {
-            for (auto&& user_type : create_types(db, diff.created)) {
-                db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-                co_await db.get_notifier().create_user_type(user_type);
-            }
-            for (auto&& user_type : create_types(db, diff.altered)) {
-                db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-                co_await db.get_notifier().update_user_type(user_type);
-            }
+        for (auto&& user_type : create_types(db, diff.created)) {
+            db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+            co_await db.get_notifier().create_user_type(user_type);
+        }
+        for (auto&& user_type : create_types(db, diff.altered)) {
+            db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+            co_await db.get_notifier().update_user_type(user_type);
         }
     });
 
     co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable -> future<> {
         co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
             auto dropped = create_types(db, rows);
-            {
-                for (auto& user_type : dropped) {
-                    db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                    co_await db.get_notifier().drop_user_type(user_type);
-                }
+            for (auto& user_type : dropped) {
+                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+                co_await db.get_notifier().drop_user_type(user_type);
             }
         });
     }};
@@ -1691,11 +1653,9 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     auto ckey = clustering_key_prefix::make_empty();
     m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
 
-    {
-        auto map = keyspace->strategy_options();
-        map["class"] = keyspace->strategy_name();
-        store_map(m, ckey, "replication", timestamp, map);
-    }
+    auto map = keyspace->strategy_options();
+    map["class"] = keyspace->strategy_name();
+    store_map(m, ckey, "replication", timestamp, map);
 
     mutations.emplace_back(std::move(m));
 
@@ -2064,23 +2024,21 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
 
     auto scylla_tables_mutation = make_scylla_tables_mutation(table, timestamp);
 
-    {
-        list_type_impl::native_type flags;
-        if (table->is_super()) {
-            flags.emplace_back("super");
-        }
-        if (table->is_dense()) {
-            flags.emplace_back("dense");
-        }
-        if (table->is_compound()) {
-            flags.emplace_back("compound");
-        }
-        if (table->is_counter()) {
-            flags.emplace_back("counter");
-        }
-
-        m.set_clustered_cell(ckey, "flags", make_list_value(s->get_column_definition("flags")->type, flags), timestamp);
+    list_type_impl::native_type flags;
+    if (table->is_super()) {
+        flags.emplace_back("super");
     }
+    if (table->is_dense()) {
+        flags.emplace_back("dense");
+    }
+    if (table->is_compound()) {
+        flags.emplace_back("compound");
+    }
+    if (table->is_counter()) {
+        flags.emplace_back("counter");
+    }
+
+    m.set_clustered_cell(ckey, "flags", make_list_value(s->get_column_definition("flags")->type, flags), timestamp);
 
     add_table_params_to_mutations(m, ckey, table, timestamp);
 
@@ -2271,11 +2229,9 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     for (auto& column : table_or_view->dropped_columns() | boost::adaptors::map_keys) {
         drop_column_from_schema_mutation(dropped_columns(), table_or_view, column, timestamp, mutations);
     }
-    {
-        mutation m{scylla_tables(), pkey};
-        m.partition().apply_delete(*scylla_tables(), ckey, tombstone(timestamp, gc_clock::now()));
-        mutations.emplace_back(m);
-    }
+    mutation m1{scylla_tables(), pkey};
+    m1.partition().apply_delete(*scylla_tables(), ckey, tombstone(timestamp, gc_clock::now()));
+    mutations.emplace_back(m1);
 }
 
 std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
@@ -2306,9 +2262,7 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
         [&] { return read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name); }
     );
-    {
-                co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
-    }
+    co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
 #if 0
         // FIXME:
     Row serializedTriggers = readSchemaPartitionForTable(TRIGGERS, ksName, cfName);
@@ -2327,15 +2281,11 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
     auto qn = qualified_name(keyspace, table);
-    {
-        auto sm = co_await read_table_mutations(proxy, qn, tables());
-        {
-            if (!sm.live()) {
-               throw std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
-            }
-            co_return create_table_from_mutations(proxy, std::move(sm));
-        }
+    auto sm = co_await read_table_mutations(proxy, qn, tables());
+    if (!sm.live()) {
+        throw std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
     }
+    co_return create_table_from_mutations(proxy, std::move(sm));
 }
 
 /**
@@ -2348,13 +2298,9 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
     auto tables = std::map<sstring, schema_ptr>();
     co_await parallel_for_each(result->rows().begin(), result->rows().end(), [&] (const query::result_set_row& row) -> future<> {
         schema_ptr cfm = co_await create_table_from_table_row(proxy, row);
-        {
-            tables.emplace(cfm->cf_name(), std::move(cfm));
-        }
+        tables.emplace(cfm->cf_name(), std::move(cfm));
     });
-    {
-        co_return std::move(tables);
-    }
+    co_return std::move(tables);
 }
 
 #if 0
@@ -2828,15 +2774,11 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
 
 static future<view_ptr> create_view_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row) {
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
-    {
-        schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
-        {
-            if (!sm.live()) {
-                throw std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
-            }
-            co_return create_view_from_mutations(proxy, std::move(sm));
-        }
+    schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
+    if (!sm.live()) {
+        throw std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
     }
+    co_return create_view_from_mutations(proxy, std::move(sm));
 }
 
 /**
@@ -2847,17 +2789,11 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     std::vector<view_ptr> views;
-    {
-        co_await parallel_for_each(result->rows().begin(), result->rows().end(), [&] (auto&& row) -> future<> {
-            auto v = co_await create_view_from_table_row(proxy, row);
-            {
-                views.push_back(std::move(v));
-            }
-        });
-        {
-            co_return std::move(views);
-        }
-    }
+    co_await parallel_for_each(result->rows().begin(), result->rows().end(), [&] (auto&& row) -> future<> {
+        auto v = co_await create_view_from_table_row(proxy, row);
+        views.push_back(std::move(v));
+    });
+    co_return std::move(views);
 }
 
 static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns)
@@ -3179,12 +3115,8 @@ future<schema_mutations> read_table_mutations(distributed<service::storage_proxy
     sstring keyspace_name, sstring table_name, schema_ptr s)
 {
     mutation cf_m = co_await read_schema_partition_for_table(proxy, s, keyspace_name, table_name);
-    {
-            mutation col_m = co_await read_schema_partition_for_table(proxy, db::system_keyspace::legacy::columns(), keyspace_name, table_name);
-            {
-                    co_return schema_mutations{std::move(cf_m), std::move(col_m)};
-            }
-    }
+    mutation col_m = co_await read_schema_partition_for_table(proxy, db::system_keyspace::legacy::columns(), keyspace_name, table_name);
+    co_return schema_mutations{std::move(cf_m), std::move(col_m)};
 }
 
 } // namespace legacy
@@ -3198,40 +3130,38 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
         db::consistency_level::LOCAL_ONE,
         {table_id, version}
     );
-    {
-        if (results->empty()) {
-            // If we don't have a stored column_mapping for an obsolete schema version
-            // then it means it's way too old and been cleaned up already.
-            // Fail the whole learn stage in this case.
-            co_return coroutine::make_exception(std::runtime_error(
-                format("Failed to look up column mapping for schema version {}",
-                    version)));
-        }
-        std::vector<column_definition>  static_columns, regular_columns;
-        for (const auto& row : *results) {
-            auto kind = deserialize_kind(row.get_as<sstring>("kind"));
-            auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"));
-            auto name_bytes = row.get_blob("column_name_bytes");
-            column_id position = row.get_as<int32_t>("position");
-
-            auto order = row.get_as<sstring>("clustering_order");
-            std::transform(order.begin(), order.end(), order.begin(), ::toupper);
-            if (order == "DESC") {
-                type = reversed_type_impl::get_instance(type);
-            }
-            if (kind == column_kind::static_column) {
-                static_columns.emplace_back(name_bytes, type, kind, position);
-            } else if (kind == column_kind::regular_column) {
-                regular_columns.emplace_back(name_bytes, type, kind, position);
-            }
-        }
-        std::vector<column_mapping_entry> cm_columns;
-        for (const column_definition& def : boost::range::join(static_columns, regular_columns)) {
-            cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
-        }
-        column_mapping cm(std::move(cm_columns), static_columns.size());
-        co_return std::move(cm);
+    if (results->empty()) {
+        // If we don't have a stored column_mapping for an obsolete schema version
+        // then it means it's way too old and been cleaned up already.
+        // Fail the whole learn stage in this case.
+        co_return coroutine::make_exception(std::runtime_error(
+            format("Failed to look up column mapping for schema version {}",
+                version)));
     }
+    std::vector<column_definition>  static_columns, regular_columns;
+    for (const auto& row : *results) {
+        auto kind = deserialize_kind(row.get_as<sstring>("kind"));
+        auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"));
+        auto name_bytes = row.get_blob("column_name_bytes");
+        column_id position = row.get_as<int32_t>("position");
+
+        auto order = row.get_as<sstring>("clustering_order");
+        std::transform(order.begin(), order.end(), order.begin(), ::toupper);
+        if (order == "DESC") {
+            type = reversed_type_impl::get_instance(type);
+        }
+        if (kind == column_kind::static_column) {
+            static_columns.emplace_back(name_bytes, type, kind, position);
+        } else if (kind == column_kind::regular_column) {
+            regular_columns.emplace_back(name_bytes, type, kind, position);
+        }
+    }
+    std::vector<column_mapping_entry> cm_columns;
+    for (const column_definition& def : boost::range::join(static_columns, regular_columns)) {
+        cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
+    }
+    column_mapping cm(std::move(cm_columns), static_columns.size());
+    co_return std::move(cm);
 }
 
 future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version) {
@@ -3240,9 +3170,7 @@ future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version ve
         db::consistency_level::LOCAL_ONE,
         {table_id, version}
     );
-    {
-        co_return !results->empty();
-    }
+    co_return !results->empty();
 }
 
 future<> drop_column_mapping(utils::UUID table_id, table_schema_version version) {
