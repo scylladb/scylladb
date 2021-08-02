@@ -1449,7 +1449,7 @@ BOOST_AUTO_TEST_CASE(test_leader_ignores_messages_with_current_term) {
     BOOST_CHECK(!msg1.vote_granted);
 }
 
-BOOST_AUTO_TEST_CASE(test_leader_check_quorum) {
+BOOST_AUTO_TEST_CASE(test_leader_read_quorum) {
     discrete_failure_detector fd;
     server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
 
@@ -2110,4 +2110,134 @@ BOOST_AUTO_TEST_CASE(test_candidate_outside_configuration) {
     BOOST_CHECK(A.is_leader());
     communicate(A, B);
     BOOST_CHECK(B.is_leader());
+}
+
+BOOST_AUTO_TEST_CASE(test_read_barrier) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id, C_id, D_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    auto D = create_follower(D_id, log);
+    auto E = create_follower(E_id, log);
+
+    // A becomes leader
+    election_timeout(A);
+    communicate(A, B, C, D);
+    BOOST_CHECK(A.is_leader());
+    // propagate commit index
+    A.tick();
+    communicate(A, B, C, D);
+
+    // Check that a node outside of config cannot start read barrier
+    BOOST_CHECK_THROW(A.start_read_barrier(E_id), std::runtime_error);
+
+    // start read barrier
+    auto rid = A.start_read_barrier(A_id);
+    BOOST_CHECK(rid);
+
+    // Check that read_quorum was broadcasted to other nodes
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 3);
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[0].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[1].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[2].second));
+
+    // Check that it gets re-broadcasted on leader's tick
+    A.tick();
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 3);
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[0].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[1].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[2].second));
+
+    auto read_quorum_msg = std::get<raft::read_quorum>(output.messages[0].second);
+    // check that read id is correct
+    BOOST_CHECK_EQUAL(read_quorum_msg.id, rid->first);
+
+    // Check that a leader ignores read_barrier with its own term
+    A.step(B_id, std::move(read_quorum_msg));
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+
+    // Check that a follower replies to read_barrier with read_quorum_reply
+    B.step(A_id, std::move(read_quorum_msg));
+    output = B.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum_reply>(output.messages[0].second));
+
+    auto read_quorum_reply_msg = std::get<raft::read_quorum_reply>(output.messages[0].second);
+
+    // Ack barrier from B and check that this is not enough to complete a read
+    A.step(B_id, std::move(read_quorum_reply_msg));
+    output = A.get_output();
+    BOOST_CHECK(!output.max_read_id_with_quorum);
+
+    // Ack from B one more time and check that ack is not counted twice
+    A.step(B_id, std::move(read_quorum_reply_msg));
+    output = A.get_output();
+    BOOST_CHECK(!output.max_read_id_with_quorum);
+
+    // Ack from C and check that the read barrier is completed
+    A.step(C_id, std::move(read_quorum_reply_msg));
+    output = A.get_output();
+    BOOST_CHECK(output.max_read_id_with_quorum);
+
+    // Enter joint config
+    raft::configuration newcfg({A_id, E_id});
+    A.add_entry(newcfg);
+    // Process log storing event
+    output = A.get_output();
+    // Drop append_entries messages
+    output = A.get_output();
+
+    // start read barrier
+    rid = A.start_read_barrier(A_id);
+    BOOST_CHECK(rid);
+
+    // check that read_barrier is broadcasted to all nodes
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 4);
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[0].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[1].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[2].second));
+    BOOST_CHECK(std::holds_alternative<raft::read_quorum>(output.messages[3].second));
+
+    // Ack in only old quorum and check that the read is not completed
+    A.step(B_id, read_quorum_reply{A.get_current_term(), index_t{0}, rid->first});
+    A.step(C_id, read_quorum_reply{A.get_current_term(), index_t{0}, rid->first});
+    A.step(D_id, read_quorum_reply{A.get_current_term(), index_t{0}, rid->first});
+    output = A.get_output();
+    BOOST_CHECK(!output.max_read_id_with_quorum);
+
+    // Ack in new config as well and see that it is committed now
+    A.step(E_id, read_quorum_reply{A.get_current_term(), index_t{0}, rid->first});
+    output = A.get_output();
+    BOOST_CHECK(output.max_read_id_with_quorum);
+
+    // check that read_barrier with lower term does not depose the leader
+    A.step(E_id, read_quorum{term_t{A.get_current_term() - 1}, index_t{10}, rid->first});
+    BOOST_CHECK(A.is_leader());
+
+    // check that read_barrier with higher term leads to leader
+    // step down
+    A.step(E_id, read_quorum{term_t{A.get_current_term() + 1}, index_t{10}, rid->first});
+    BOOST_CHECK(!A.is_leader());
+
+    // create one node cluster
+    raft::log log1(raft::snapshot{.idx = raft::index_t{0}, .config = raft::configuration({A_id})});
+    auto AA = create_follower(A_id, log1);
+    // Make AA a leader
+    election_timeout(AA);
+    BOOST_CHECK(AA.is_leader());
+    output = AA.get_output();
+
+    // execute read barrier
+    rid = AA.start_read_barrier(A_id);
+    BOOST_CHECK(rid);
+
+    // check that it completes immediately
+    output = AA.get_output();
+    BOOST_CHECK(output.max_read_id_with_quorum);
 }
