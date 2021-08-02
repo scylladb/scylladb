@@ -104,6 +104,7 @@ options {
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/function_call.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/term_expr.hh"
 #include <seastar/core/sstring.hh>
 #include "CqlLexer.hpp"
 
@@ -1512,7 +1513,10 @@ functionArgs returns [std::vector<shared_ptr<cql3::term::raw>> a]
 
 term returns [::shared_ptr<cql3::term::raw> term1]
     : v=value                          { $term1 = v; }
-    | f=functionName args=functionArgs { $term1 = ::make_shared<cql3::functions::function_call::raw>(std::move(f), std::move(args)); }
+    | f=functionName args=functionArgs { $term1 = cql3::expr::as_term_raw(
+                                            cql3::expr::function_call{std::move(f),
+                                                boost::copy_range<std::vector<cql3::expr::expression>>(
+                                                    std::move(args) | boost::adaptors::transformed(cql3::expr::as_expression))}); }
     | '(' c=comparatorType ')' t=term  { $term1 = make_shared<cql3::type_cast>(c, t); }
     ;
 

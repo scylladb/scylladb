@@ -20,6 +20,7 @@
  */
 
 #include "term_expr.hh"
+#include "cql3/functions/function_call.hh"
 
 // A term::raw that is implemented using an expression
 namespace cql3::expr {
@@ -53,8 +54,8 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const column_mutation_attribute&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::prepare()");
         },
-        [&] (const function_call&) -> ::shared_ptr<term> {
-            on_internal_error(expr_logger, "function_calls are not yet reachable via term_raw_expr::prepare()");
+        [&] (const function_call& fc) -> ::shared_ptr<term> {
+            return functions::prepare_function_call(fc, db, keyspace, receiver);
         },
         [&] (const cast&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "casts are not yet reachable via term_raw_expr::prepare()");
@@ -95,8 +96,8 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         [&] (const column_mutation_attribute&) -> test_result {
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::test_assignment()");
         },
-        [&] (const function_call&) -> test_result {
-            on_internal_error(expr_logger, "function_calls are not yet reachable via term_raw_expr::test_assignment()");
+        [&] (const function_call& fc) -> test_result {
+            return functions::test_assignment_function_call(fc, db, keyspace, receiver);
         },
         [&] (const cast&) -> test_result {
             on_internal_error(expr_logger, "casts are not yet reachable via term_raw_expr::test_assignment()");
