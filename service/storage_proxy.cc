@@ -3080,7 +3080,15 @@ private:
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
         bool always_return_static_content = cmd.slice.options.contains<query::partition_slice::option::always_return_static_content>();
         mp.compact_for_query(s, cmd.timestamp, ranges, always_return_static_content, is_reversed, limit);
+        return primary_key{m.decorated_key(), get_last_reconciled_row(s, mp, is_reversed)};
+    }
 
+    static primary_key get_last_reconciled_row(const schema& s, const mutation_and_live_row_count& m_a_rc, bool is_reversed) {
+        const auto& m = m_a_rc.mut;
+        return primary_key{m.decorated_key(), get_last_reconciled_row(s, m.partition(), is_reversed)};
+    }
+
+    static std::optional<clustering_key> get_last_reconciled_row(const schema& s, const mutation_partition& mp, bool is_reversed) {
         std::optional<clustering_key> ck;
         if (!mp.clustered_rows().empty()) {
             if (is_reversed) {
@@ -3089,7 +3097,7 @@ private:
                 ck = mp.clustered_rows().rbegin()->key();
             }
         }
-        return primary_key { m.decorated_key(), ck };
+        return ck;
     }
 
     static bool got_incomplete_information_in_partition(const schema& s, const primary_key& last_reconciled_row, const std::vector<version>& versions, bool is_reversed) {
@@ -3200,7 +3208,11 @@ private:
             }
             ++pv;
         }
-        return false;
+        if (rp.empty()) {
+            return false;
+        }
+        auto&& last_row = get_last_reconciled_row(s, *rp.begin(), is_reversed);
+        return got_incomplete_information_across_partitions(s, cmd, last_row, rp, versions, is_reversed);
     }
 public:
     data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout) {
