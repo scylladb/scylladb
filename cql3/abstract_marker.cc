@@ -68,8 +68,9 @@ abstract_marker::raw::raw(int32_t bind_index)
     : _bind_index{bind_index}
 { }
 
-::shared_ptr<term> abstract_marker::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const
+::shared_ptr<term> abstract_marker::raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const
 {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     if (receiver->type->is_collection()) {
         if (receiver->type->without_reversed().is_list()) {
             return ::make_shared<lists::marker>(_bind_index, receiver);
@@ -105,7 +106,8 @@ lw_shared_ptr<column_specification> abstract_marker::in_raw::make_in_receiver(co
     return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
 }
 
-::shared_ptr<term> abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+::shared_ptr<term> abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     return ::make_shared<lists::marker>(_bind_index, make_in_receiver(*receiver));
 }
 

@@ -53,7 +53,8 @@ public:
             : _type(std::move(type)), _term(std::move(term)) {
     }
 
-    virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
+    virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const override {
+        auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
         if (!is_assignable(_term->test_assignment(db, keyspace, *casted_spec_of(db, keyspace, *receiver)))) {
             throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
         }

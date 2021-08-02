@@ -88,8 +88,8 @@ public:
         };
     public:
         static thread_local const ::shared_ptr<terminal> NULL_VALUE;
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-            if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override {
+            if (!is_assignable(test_assignment(db, keyspace, *std::get<lw_shared_ptr<column_specification>>(receiver)))) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
             }
             return NULL_VALUE;
@@ -154,7 +154,7 @@ public:
             return ::make_shared<literal>(type::DURATION, text);
         }
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
     private:
         bytes parsed_value(data_type validator) const;
     public:

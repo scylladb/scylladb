@@ -45,11 +45,18 @@
 #include "cql3/query_options.hh"
 #include "cql3/values.hh"
 
+#include <variant>
+#include <vector>
+
 namespace cql3 {
 
 class term;
 class terminal;
 class prepare_context;
+
+
+using column_specification_or_tuple = std::variant<lw_shared_ptr<column_specification>,
+                                                    std::vector<lw_shared_ptr<column_specification>>>;
 
 /**
  * A parsed, non prepared (thus untyped) term.
@@ -72,7 +79,7 @@ public:
      * case this RawTerm describe a list index or a map key, etc...
      * @return the prepared term.
      */
-    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const = 0;
+    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const = 0;
 
     virtual sstring to_string() const = 0;
 
@@ -87,7 +94,7 @@ public:
 
 class multi_column_term_raw : public virtual term_raw {
 public:
-    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receiver) const = 0;
+    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const = 0;
 };
 
 /**

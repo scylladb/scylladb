@@ -66,7 +66,8 @@ user_types::literal::literal(elements_map_type entries)
         : _entries(std::move(entries)) {
 }
 
-shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     validate_assignable_to(db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;

@@ -63,7 +63,7 @@ public:
         elements_map_type _entries;
 
         literal(elements_map_type entries);
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
     public:

@@ -155,8 +155,9 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, const
 }
 
 ::shared_ptr<term>
-constants::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const
+constants::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const
 {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             _type, _text, *receiver->name, receiver->type->as_cql3_type().to_string()));

@@ -36,7 +36,7 @@ tuples::component_spec_of(const column_specification& column, size_t component) 
 }
 
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+tuples::literal::prepare_nontuple(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, *receiver);
     std::vector<shared_ptr<term>> values;
     bool all_terminal = true;
@@ -56,7 +56,7 @@ tuples::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<co
 }
 
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const {
+tuples::literal::prepare_tuple(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const {
     if (_elements.size() != receivers.size()) {
         throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), _elements.size(), *this));
     }
@@ -78,6 +78,18 @@ tuples::literal::prepare(database& db, const sstring& keyspace, const std::vecto
     } else {
         return make_shared<delayed_value>(std::move(value));
     }
+}
+
+shared_ptr<term>
+tuples::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+    return std::visit(overloaded_functor{
+        [&] (const lw_shared_ptr<column_specification>& nontuple) {
+            return prepare_nontuple(db, keyspace, nontuple);
+        },
+        [&] (const std::vector<lw_shared_ptr<column_specification>>& tuple) {
+            return prepare_tuple(db, keyspace, tuple);
+        },
+    }, receiver);
 }
 
 tuples::in_value

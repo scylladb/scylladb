@@ -549,7 +549,8 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
 }
 
 ::shared_ptr<term>
-function_call::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+function_call::raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     std::vector<shared_ptr<assignment_testable>> args;
     args.reserve(_terms.size());
     std::transform(_terms.begin(), _terms.end(), std::back_inserter(args),

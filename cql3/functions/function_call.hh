@@ -85,7 +85,7 @@ public:
         raw(function_name name, std::vector<shared_ptr<term::raw>> terms)
             : _name(std::move(name)), _terms(std::move(terms)) {
         }
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
     private:
         // All parameters must be terminal
         static bytes_opt execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters);

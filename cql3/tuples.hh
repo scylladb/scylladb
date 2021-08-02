@@ -63,13 +63,13 @@ public:
      */
     class literal : public term::multi_column_raw {
         std::vector<shared_ptr<term::raw>> _elements;
+        shared_ptr<term> prepare_nontuple(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const;
+        shared_ptr<term> prepare_tuple(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const;
     public:
         literal(std::vector<shared_ptr<term::raw>> elements)
                 : _elements(std::move(elements)) {
         }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
-
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
 
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
@@ -229,12 +229,9 @@ public:
     public:
         using abstract_marker::raw::raw;
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const override {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override {
+            auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
             return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
-        }
-
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-            throw std::runtime_error("Tuples.Raw.prepare() requires a list of receivers");
         }
 
         virtual sstring assignment_testable_source_context() const override {
@@ -271,12 +268,9 @@ public:
     public:
         using abstract_marker::raw::raw;
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const override {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override {
+            auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
             return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
-        }
-
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-            throw std::runtime_error("Tuples.INRaw.prepare() requires a list of receivers");
         }
 
         virtual sstring assignment_testable_source_context() const override {

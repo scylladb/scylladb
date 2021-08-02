@@ -66,7 +66,8 @@ maps::value_spec_of(const column_specification& column) {
 }
 
 ::shared_ptr<term>
-maps::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+maps::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     validate_assignable_to(db, keyspace, *receiver);
 
     auto key_spec = maps::key_spec_of(*receiver);

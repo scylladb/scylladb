@@ -51,7 +51,8 @@ lists::uuid_index_spec_of(const column_specification& column) {
 
 
 shared_ptr<term>
-lists::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+lists::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     validate_assignable_to(db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
