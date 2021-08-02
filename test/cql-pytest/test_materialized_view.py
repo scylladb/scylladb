@@ -67,6 +67,8 @@ def test_mv_select_stmt_bound_values(cql, test_keyspace):
     schema = 'p int PRIMARY KEY'
     mv = unique_name()
     with new_test_table(cql, test_keyspace, schema) as table:
-        with pytest.raises(InvalidRequest):
-            cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p = ? PRIMARY KEY (p)")
-        cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+        try:
+            with pytest.raises(InvalidRequest, match="CREATE MATERIALIZED VIEW"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p = ? PRIMARY KEY (p)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
