@@ -525,7 +525,6 @@ future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
             rlogger.info("repair id {} completed successfully", id);
             done(id, true);
         }).handle_exception([this, id] (std::exception_ptr ep) {
-            rlogger.warn("repair id {} failed: {}", id, ep);
             done(id, false);
             return make_exception_future(std::move(ep));
         });
