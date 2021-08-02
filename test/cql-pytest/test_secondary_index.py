@@ -245,3 +245,13 @@ def test_filter_cluster_key(cql, test_keyspace):
         stmt = SimpleStatement(f"SELECT c1, c2 FROM {table} WHERE c1 = 1 and c2 = 1 ALLOW FILTERING")
         rows = cql.execute(stmt)
         assert_rows(rows, [1, 1])
+
+def test_multi_column_with_regular_index(cql, test_keyspace):
+    """Reproduces #9085."""
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, primary key(p,c1,c2)') as tbl:
+        cql.execute(f'CREATE INDEX ON {tbl}(r)')
+        cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 1, 1, 0)')
+        cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 1, 2, 1)')
+        cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 2, 1, 0)')
+        assert_rows(cql.execute(f'SELECT c1 FROM {tbl} WHERE (c1,c2)<(2,0) AND r=0 ALLOW FILTERING'), [1])
+        assert_rows(cql.execute(f'SELECT c1 FROM {tbl} WHERE p=1 AND (c1,c2)<(2,0) AND r=0 ALLOW FILTERING'), [1])

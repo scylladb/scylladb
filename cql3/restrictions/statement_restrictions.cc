@@ -412,6 +412,7 @@ statement_restrictions::statement_restrictions(database& db,
     const expr::allow_local_index allow_local(
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
             && _partition_key_restrictions->is_all_eq());
+    _has_multi_column = find_atom(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local);
     _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local);
     _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local);
@@ -449,8 +450,7 @@ statement_restrictions::statement_restrictions(database& db,
     process_clustering_columns_restrictions(for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
-    if (_is_key_range && _has_queriable_ck_index &&
-        !dynamic_pointer_cast<multi_column_restriction>(_clustering_columns_restrictions)) {
+    if (_is_key_range && _has_queriable_ck_index && !_has_multi_column) {
         _uses_secondary_indexing = true;
     }
 
@@ -1454,7 +1454,10 @@ bool statement_restrictions::need_filtering() const {
         if (npart == 0 && _clustering_columns_restrictions->empty()) {
             return false; // No clustering key restrictions => whole partitions.
         }
-        return !token_known(*this) || _clustering_columns_restrictions->needs_filtering(*_schema);
+        return !token_known(*this) || _clustering_columns_restrictions->needs_filtering(*_schema)
+                // Multi-column restrictions don't require filtering when querying the base table, but the index
+                // table has a different clustering key and may require filtering.
+                || _has_multi_column;
     }
     // Now we know there are no nonkey restrictions.
 

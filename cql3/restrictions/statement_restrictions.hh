@@ -103,6 +103,7 @@ private:
     bool _is_key_range = false;
 
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
+    bool _has_multi_column; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
 
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
 
