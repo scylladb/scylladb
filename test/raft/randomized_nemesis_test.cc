@@ -868,6 +868,7 @@ public:
     static std::unique_ptr<raft_server> create(
             raft::server_id id,
             shared_ptr<failure_detector> fd,
+            raft::server::configuration cfg,
             bool first_server,
             typename rpc<typename M::state_t>::send_message_t send_rpc) {
         using state_t = typename M::state_t;
@@ -883,7 +884,7 @@ public:
 
         auto server = raft::create_server(
                 id, std::move(rpc_), std::move(sm), std::move(persistence_), std::move(fd),
-                raft::server::configuration{});
+                std::move(cfg));
 
         return std::make_unique<raft_server>(initializer{
             ._id = id,
@@ -1083,8 +1084,8 @@ public:
     // if they want to make a cluster (group) out of this server and other existing servers.
     // The user should be able to create multiple clusters by calling `new_server` multiple times with `first = true`.
     // (`first` means ``first in group'').
-    future<raft::server_id> new_server(bool first) {
-        return with_gate(_gate, [this, first] () -> future<raft::server_id> {
+    future<raft::server_id> new_server(bool first, raft::server::configuration cfg = {}) {
+        return with_gate(_gate, [this, first, cfg = std::move(cfg)] () -> future<raft::server_id> {
             auto id = to_raft_id(_next_id++);
 
             // TODO: in the future we want to simulate multiple raft servers running on a single ``node'',
@@ -1096,7 +1097,7 @@ public:
                 _network.send(id, dst, std::nullopt);
             });
 
-            auto srv = raft_server<M>::create(id, fd, first,
+            auto srv = raft_server<M>::create(id, fd, std::move(cfg), first,
                     [id, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
                 _network.send(id, dst, {std::move(m)});
             });
