@@ -46,7 +46,7 @@
 #include "utils/log_heap.hh"
 #include "utils/preempt.hh"
 #include "utils/vle.hh"
-#include "utils/coarse_clock.hh"
+#include "utils/coarse_steady_clock.hh"
 
 #include <random>
 #include <chrono>
@@ -2118,7 +2118,7 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
 }
 
 class reclaim_timer {
-    using clock = utils::coarse_clock;
+    using clock = utils::coarse_steady_clock;
 
     const is_preemptible _preemptible;
     const size_t _memory_to_release;
