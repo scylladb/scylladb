@@ -356,3 +356,42 @@ def test_select_indexed_cluster_three_keys_conservative(cql, table5, cassandra_b
     # Don't require filtering, but for now we report they do
     check_af_optional(cql, table5, "p = 0 AND c1 = [1] AND c3 = 0", check_good_row)
     check_af_optional(cql, table5, "p = 0 AND c1 = [1] AND c2 < [3] AND c3 = 0", lambda r : check_good_row(r) and r.c2 < [3])
+
+# This test demonstrates a loose end after issue #9085 was fixed by PR #9122.
+# The fix ensured correct results - but not correct ALLOW FILTERING need.
+# In issue #9085, we have a query with a restriction on an indexed column plus
+# the base table's partition key *and* a multi-column restriction on the
+# compound clustering key. The incorrect results happened because the multi-
+# column restriction was being ignored. The fix in PR #9122 was to apply the
+# multi-column restriction as a "filtering" step. But this means we now
+# require ALLOW FILTERING in this case, even when the query has a full
+# prefix of the index table's clustering key.
+# This test demonstrates how after PR #9122 we wrongly require ALLOW FILTERING
+# in one such case.
+# This test is basically the same as test_multi_column_with_regular_index in
+# test_secondary_index.py, but it focuses on the correctness of the ALLOW
+# FILTERING requirement, not just on the correctness of the results.
+@pytest.mark.xfail(reason="PR #9122 loose end")
+def test_allow_filtering_multi_column_and_index(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, primary key(p,c1,c2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(r)')
+        cql.execute(f'INSERT INTO {table}(p, c1, c2, r) VALUES (1, 1, 1, 0)')
+        cql.execute(f'INSERT INTO {table}(p, c1, c2, r) VALUES (1, 1, 2, 1)')
+        cql.execute(f'INSERT INTO {table}(p, c1, c2, r) VALUES (1, 2, 1, 0)')
+        cql.execute(f'INSERT INTO {table}(p, c1, c2, r) VALUES (2, 2, -1, 0)')
+        everything = list(cql.execute(f"SELECT * FROM {table}"))
+        wait_for_index(cql, table, 'r', everything)
+        # If the base table's partition key (p) is missing in the query, it's
+        # not a full prefix of the index table's clustering key, so filtering
+        # *is* needed:
+        check_af_mandatory(cql, (table, everything),
+            "(c1,c2)<(2,0) AND r = 0",
+            lambda r : r.r == 0 and (r.c1 < 2 or (r.c1 == 2 and r.c2 < 0)))
+        # But if the base table's partition key is in the query, along with
+        # the clustering key, then it's a full prefix of the index's
+        # clustering key - so filtering is not neeeded. PR #9122 fixed the
+        # correctness of this query, but left ALLOW FILTERING mandatory so
+        # the following test failed:
+        check_af_optional(cql, (table, everything),
+            "p=1 AND (c1,c2)<(2,0) AND r = 0",
+            lambda r : r.p == 1 and r.r == 0 and (r.c1 < 2 or (r.c1 == 2 and r.c2 < 0)))
