@@ -1403,3 +1403,66 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
             co_await env.get_server(l).reconfigure({l, id3}, timer.now() + 1000_t, timer)));
     });
 }
+
+// Regression test for the following bug: when we took a snapshot, we forgot to save the configuration.
+// This caused each node in the cluster to eventually forget the cluster configuration.
+SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
+    logical_timer timer;
+    environment_config cfg {
+        .network_delay = 1_t,
+        .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start({
+            {1, [&] {
+                env.tick_network();
+                timer.tick();
+            }},
+            {10, [&] {
+                env.tick_servers();
+            }}
+        }, 10'000);
+
+
+        auto id1 = co_await env.new_server(true,
+                raft::server::configuration{
+                    .snapshot_threshold = 5,
+                    .snapshot_trailing = 1,
+                });
+        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, 1000_t) == id1);
+
+        auto id2 = co_await env.new_server(false,
+                raft::server::configuration{
+                    .snapshot_threshold = 5,
+                    .snapshot_trailing = 1,
+                });
+
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.get_server(id1).reconfigure({id1, id2}, timer.now() + 100_t, timer)));
+
+        // Append a bunch of entries
+        for (int i = 1; i <= 10; ++i) {
+            assert(std::holds_alternative<typename ExReg::ret>(
+                co_await env.get_server(id1).call(ExReg::exchange{0}, timer.now() + 100_t, timer)));
+        }
+
+        assert(env.get_server(id1).is_leader());
+
+        // Partition the network, forcing the leader to step down.
+        tlogger.trace("add grudge");
+        env.get_network().add_grudge(id2, id1);
+        env.get_network().add_grudge(id1, id2);
+
+        while (env.get_server(id1).is_leader()) {
+            co_await seastar::later();
+        }
+
+        tlogger.trace("remove grudge");
+        env.get_network().remove_grudge(id2, id1);
+        env.get_network().remove_grudge(id1, id2);
+
+        // With the bug this would timeout, the cluster is unable to elect a leader without the configuration.
+        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, 1000_t);
+        tlogger.trace("last leader: {}", l);
+    });
+}
