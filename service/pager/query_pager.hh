@@ -87,6 +87,7 @@ protected:
 
     std::optional<partition_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
+    std::optional<utils::UUID> _query_uuid;
 
     schema_ptr _schema;
     shared_ptr<const cql3::selection::selection> _selection;
