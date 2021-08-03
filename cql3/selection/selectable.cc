@@ -195,7 +195,12 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             }, fc.func);
         },
         [&] (const expr::cast& c) -> shared_ptr<selectable> {
-            return ::make_shared<selectable::with_cast>(prepare_selectable(s, *c.arg), c.type);
+            auto t = std::get_if<cql3_type>(&c.type);
+            if (!t) {
+                // FIXME: adjust prepare_seletable() signature so we can prepare the type too
+                on_internal_error(slogger, "unprepared type in selector type cast");
+            }
+            return ::make_shared<selectable::with_cast>(prepare_selectable(s, *c.arg), *t);
         },
         [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
             // static_pointer_cast<> needed due to lack of covariant return type

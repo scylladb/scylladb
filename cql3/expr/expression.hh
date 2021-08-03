@@ -185,7 +185,7 @@ struct function_call {
 
 struct cast {
     nested_expression arg;
-    cql3_type type;
+    std::variant<cql3_type, shared_ptr<cql3_type::raw>> type;
 };
 
 struct field_selection {

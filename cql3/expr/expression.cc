@@ -981,7 +981,14 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                 }, fc.func);
             },
             [&] (const cast& c)  {
-                fmt::print(os, "({} AS {})", *c.arg, c.type);
+                std::visit(overloaded_functor{
+                    [&] (const cql3_type& t) {
+                        fmt::print(os, "({} AS {})", *c.arg, t);
+                    },
+                    [&] (const shared_ptr<cql3_type::raw>& t) {
+                        fmt::print(os, "({}) {}", t, *c.arg);
+                    },
+                }, c.type);
             },
             [&] (const field_selection& fs)  {
                 fmt::print(os, "({}.{})", *fs.structure, fs.field);
