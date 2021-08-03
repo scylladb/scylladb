@@ -392,7 +392,13 @@ public:
             static const raft::logical_clock::duration send_snapshot_timeout = 20_t;
 
             // TODO: catch aborts from the abort_source as well
-            co_return co_await _timer.with_timeout(_timer.now() + send_snapshot_timeout, std::move(f));
+            try {
+                co_return co_await _timer.with_timeout(_timer.now() + send_snapshot_timeout, std::move(f));
+            } catch (logical_timer::timed_out<raft::snapshot_reply>& e) {
+                // The future will probably get a broken_promise exception after we destroy the guard.
+                (void)e.get_future().discard_result().handle_exception_type([] (const broken_promise&) {});
+                throw timed_out_error{};
+            }
             // co_await ensures that `guard` is destroyed before we leave `_gate`
         });
     }
