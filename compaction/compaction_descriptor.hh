@@ -38,7 +38,7 @@ namespace sstables {
 enum class compaction_type {
     Compaction = 0,
     Cleanup = 1,
-    Validation = 2,
+    Validation = 2, // Origin uses this for a compaction that is used exclusively for repair
     Scrub = 3,
     Index_build = 4,
     Reshard = 5,
