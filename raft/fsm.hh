@@ -222,15 +222,6 @@ private:
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
-    server_id current_leader() const {
-        if (is_leader()) {
-            return _my_id;
-        } else if (is_candidate()) {
-            return {};
-        } else {
-            return follower_state().current_leader;
-        }
-    }
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
     // Signals _sm_events. May resign leadership if we committed
@@ -354,6 +345,16 @@ public:
     // Precondition: `log_last_idx()` >= `idx` >= `log_last_snapshot_idx()`.
     const configuration& log_last_conf_for(index_t idx) const {
         return _log.last_conf_for(idx);
+    }
+
+    server_id current_leader() const {
+        if (is_leader()) {
+            return _my_id;
+        } else if (is_candidate()) {
+            return {};
+        } else {
+            return follower_state().current_leader;
+        }
     }
 
     // Call this function to wait for the number of log entries to
