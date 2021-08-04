@@ -75,16 +75,12 @@ bconfig() { buildah config "$@" "$container"; }
 bcp "${packages[@]}" packages/
 
 bcp dist/docker/etc etc/
-bcp dist/docker/scylla-service.sh /scylla-service.sh
-bcp dist/docker/node-exporter-service.sh /node-exporter-service.sh
 bcp dist/docker/scylla-housekeeping-service.sh /scylla-housekeeping-service.sh
-bcp dist/docker/scylla-jmx-service.sh /scylla-jmx-service.sh
 bcp dist/docker/sshd-service.sh /sshd-service.sh
 
 bcp dist/docker/scyllasetup.py /scyllasetup.py
 bcp dist/docker/commandlineparser.py /commandlineparser.py
 bcp dist/docker/docker-entrypoint.py /docker-entrypoint.py
-bcp dist/docker/node_exporter_install /node_exporter_install
 
 bcp dist/docker/scylla_bashrc /scylla_bashrc
 
@@ -93,15 +89,20 @@ run apt-get -y update
 run apt-get -y install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
-run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python python-yaml curl rsyslog locales
+run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python python-yaml curl rsyslog locales sudo
 run locale-gen en_US.UTF-8
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
 run bash -ec "cat /scylla_bashrc >> /etc/bashrc"
 run mkdir -p /etc/supervisor.conf.d
 run mkdir -p /var/log/scylla
-run /node_exporter_install
 run chown -R scylla:scylla /var/lib/scylla
+
+run mkdir -p /opt/scylladb/supervisor
+bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
+bcp dist/common/supervisor/scylla-jmx.sh /opt/scylladb/supervisor/scylla-jmx.sh
+bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
+bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --entrypoint  "/docker-entrypoint.py"
