@@ -23,6 +23,67 @@
 #include "cql3/functions/function_call.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/constants.hh"
+#include "cql3/abstract_marker.hh"
+#include "cql3/lists.hh"
+#include "cql3/sets.hh"
+#include "cql3/user_types.hh"
+#include "types/list.hh"
+
+namespace cql3 {
+
+abstract_marker::raw::raw(int32_t bind_index)
+    : _bind_index{bind_index}
+{ }
+
+sstring
+abstract_marker::raw::to_string() const {
+    return "?";
+}
+
+assignment_testable::test_result
+abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+}
+
+::shared_ptr<term>
+abstract_marker::raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const
+{
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+    if (receiver->type->is_collection()) {
+        if (receiver->type->without_reversed().is_list()) {
+            return ::make_shared<lists::marker>(_bind_index, receiver);
+        } else if (receiver->type->without_reversed().is_set()) {
+            return ::make_shared<sets::marker>(_bind_index, receiver);
+        } else if (receiver->type->without_reversed().is_map()) {
+            return ::make_shared<maps::marker>(_bind_index, receiver);
+        }
+        assert(0);
+    }
+
+    if (receiver->type->is_user_type()) {
+        return ::make_shared<user_types::marker>(_bind_index, receiver);
+    }
+
+    return ::make_shared<constants::marker>(_bind_index, receiver);
+}
+
+abstract_marker::in_raw::in_raw(int32_t bind_index)
+    : raw{bind_index}
+{ }
+
+lw_shared_ptr<column_specification>
+abstract_marker::in_raw::make_in_receiver(const column_specification& receiver) {
+    auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver.name->to_string() + sstring(")"), true);
+    return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
+}
+
+::shared_ptr<term>
+abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+    return ::make_shared<lists::marker>(_bind_index, make_in_receiver(*receiver));
+}
+
+}
 
 namespace cql3::expr {
 
