@@ -52,41 +52,13 @@ public:
     type_cast(shared_ptr<cql3_type::raw> type, shared_ptr<cql3::term::raw> term)
             : _type(std::move(type)), _term(std::move(term)) {
     }
-
-    virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const override {
-        auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-        if (!is_assignable(_term->test_assignment(db, keyspace, *casted_spec_of(db, keyspace, *receiver)))) {
-            throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
-        }
-        if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
-            throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", *this, receiver->name, receiver->type->as_cql3_type()));
-        }
-        return _term->prepare(db, keyspace, receiver);
-    }
+    virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const override;
 private:
-    lw_shared_ptr<column_specification> casted_spec_of(database& db, const sstring& keyspace, const column_specification& receiver) const {
-        return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name,
-                ::make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
-    }
+    lw_shared_ptr<column_specification> casted_spec_of(database& db, const sstring& keyspace, const column_specification& receiver) const;
 public:
-    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
-        try {
-            auto&& casted_type = _type->prepare(db, keyspace).get_type();
-            if (receiver.type == casted_type) {
-                return assignment_testable::test_result::EXACT_MATCH;
-            } else if (receiver.type->is_value_compatible_with(*casted_type)) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            } else {
-                return assignment_testable::test_result::NOT_ASSIGNABLE;
-            }
-        } catch (exceptions::invalid_request_exception& e) {
-            abort();
-        }
-    }
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
 
-    virtual sstring to_string() const override {
-        return format("({}){}", _type, _term);
-    }
+    virtual sstring to_string() const override;
 };
 
 }

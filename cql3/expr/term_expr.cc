@@ -21,6 +21,50 @@
 
 #include "term_expr.hh"
 #include "cql3/functions/function_call.hh"
+#include "cql3/type_cast.hh"
+
+namespace cql3 {
+
+sstring
+type_cast::to_string() const {
+    return format("({}){}", _type, _term);
+}
+
+lw_shared_ptr<column_specification>
+type_cast::casted_spec_of(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name,
+            ::make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
+}
+
+assignment_testable::test_result
+type_cast::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    try {
+        auto&& casted_type = _type->prepare(db, keyspace).get_type();
+        if (receiver.type == casted_type) {
+            return assignment_testable::test_result::EXACT_MATCH;
+        } else if (receiver.type->is_value_compatible_with(*casted_type)) {
+            return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+        } else {
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
+        }
+    } catch (exceptions::invalid_request_exception& e) {
+        abort();
+    }
+}
+
+shared_ptr<term>
+type_cast::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+    if (!is_assignable(_term->test_assignment(db, keyspace, *casted_spec_of(db, keyspace, *receiver)))) {
+        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
+    }
+    if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
+        throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", *this, receiver->name, receiver->type->as_cql3_type()));
+    }
+    return _term->prepare(db, keyspace, receiver);
+}
+
+}
 
 // A term::raw that is implemented using an expression
 namespace cql3::expr {
