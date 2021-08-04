@@ -398,7 +398,7 @@ public:
     void discard_completed_segments(const cf_id_type&);
     void discard_completed_segments(const cf_id_type&, const rp_set&);
     void on_timer();
-    void sync();
+
     void arm(uint32_t extra = 0) {
         if (!_shutdown) {
             _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
@@ -429,8 +429,18 @@ public:
 
     struct shutdown_request {};
 
+    struct write_request {
+        sseg_ptr segment = {};
+        buffer_type buffer = {};
+        uint64_t file_offset = 0;
+        size_t size = 0;
+        bool flush = false;
+        bool termination = false;
+    };
+
     using message_payload = std::variant<
-        shutdown_request
+        shutdown_request,
+        write_request
         // to come...
     >;
 
@@ -447,6 +457,8 @@ public:
     using message_type = size_t;
 
     static inline message_type constexpr shutdown_request_index = get_index<shutdown_request, message_payload>::value;
+    static inline message_type constexpr write_request_index = get_index<write_request, message_payload>::value;
+
     using message_clock = clock_type; // todo: steady_clock_type? higher res.;
     static inline constexpr auto immediately = message_clock::time_point::min();
     static inline constexpr auto no_timeout = message_clock::time_point::max();
@@ -511,6 +523,9 @@ private:
 
     future<> message_loop();
     void wakeup();
+
+    void handle_writes(messages&, pending_tasks&);
+    void do_periodic_syncs(pending_tasks&);
 
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
@@ -595,8 +610,13 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     file _file;
     sstring _file_name;
 
+    using file_pos_counter = utils::waitable_counter<uint64_t>;
+
     uint64_t _file_pos = 0;
-    uint64_t _flush_pos = 0;
+    file_pos_counter _written_pos = 0;
+    file_pos_counter _flush_pos = 0;
+    uint64_t _flushing_to_pos = 0;
+
     uint64_t _size_on_disk = 0;
 
     size_t _alignment;
@@ -616,7 +636,6 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     time_point _sync_time;
-    utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
     uint64_t _num_allocs = 0;
 
@@ -668,7 +687,7 @@ public:
         _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), 
         _size_on_disk(initial_disk_size),
         _alignment(alignment),
-        _sync_time(clock_type::now()), _pending_ops(true) // want exception propagation
+        _sync_time(clock_type::now())
     {
         ++_segment_manager->totals.segments_created;
         clogger.debug("Created new segment {}", *this);
@@ -715,7 +734,7 @@ public:
         auto now = clock_type::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - _sync_time).count();
-        if ((_segment_manager->cfg.commitlog_sync_period_in_ms * 2) < uint64_t(ms)) {
+        if (_segment_manager->cfg.commitlog_sync_period_in_ms <= uint64_t(ms)) {
             clogger.debug("{} needs sync. {} ms elapsed", *this, ms);
             return true;
         }
@@ -728,6 +747,9 @@ public:
         //FIXME: discarded future.
         (void)close();
         return _segment_manager->active_segment(timeout);
+    }
+    time_point sync_time() const {
+        return _sync_time;
     }
     void reset_sync_time() {
         _sync_time = clock_type::now();
@@ -751,8 +773,6 @@ public:
         } catch (...) {
             p = std::current_exception();
         }
-    
-        co_await _pending_ops.close();
         co_await _file.truncate(_flush_pos);
         co_await _file.close();
         _closed_file = true;
@@ -765,29 +785,7 @@ public:
     }
     // See class comment for info
     future<sseg_ptr> sync() {
-        // Note: this is not a marker for when sync was finished.
-        // It is when it was initiated
-        reset_sync_time();
         return cycle(true);
-    }
-    // See class comment for info
-    future<sseg_ptr> flush() {
-        auto me = shared_from_this();
-        assert(me.use_count() > 1);
-        uint64_t pos = _file_pos;
-
-        clogger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
-
-        // Only run the flush when all write ops at lower rp:s
-        // have completed.
-        replay_position rp(_desc.id, position_type(pos));
-
-        // Run like this to ensure flush ordering, and making flushes "waitable"
-        co_await _pending_ops.run_with_ordered_post_op(rp, [] {}, [&] {
-            assert(_pending_ops.has_operation(rp));
-            return do_flush(pos);
-        });
-        co_return me;
     }
     future<sseg_ptr> terminate() {
         assert(_closed);
@@ -807,38 +805,11 @@ public:
         return make_ready_future<sseg_ptr>(shared_from_this());
     }
     future<sseg_ptr> close() {
+        auto me = shared_from_this();
         _closed = true;
-        auto s = co_await sync();
-        co_await flush();
+        co_await sync();
         co_await terminate();
         _segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
-        co_return s;
-    }
-    future<sseg_ptr> do_flush(uint64_t pos) {
-        auto me = shared_from_this();
-        co_await begin_flush();
-
-        auto finally = defer([&] () noexcept {
-            end_flush();
-        });
-
-        if (pos <= _flush_pos) {
-            clogger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
-            co_return me;
-        }
-
-        try {
-            co_await _file.flush();
-            // TODO: retry/ignore/fail/stop - optional behaviour in origin.
-            // we fast-fail the whole commit.
-            _flush_pos = std::max(pos, _flush_pos);
-            ++_segment_manager->totals.flush_count;
-            clogger.trace("{} synced to {}", *this, _flush_pos);
-        } catch (...) {
-            clogger.error("Failed to flush commits to disk: {}", std::current_exception());
-            throw;
-        }
-
         co_return me;
     }
 
@@ -867,18 +838,16 @@ public:
         return buffer_position() <= segment_overhead_size
                         || (_file_pos == 0 && buffer_position() <= (segment_overhead_size + descriptor_header_size));
     }
-    /**
-     * Send any buffer contents to disk and get a new tmp buffer
-     */
-    // See class comment for info
-    future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
-        auto me = shared_from_this();
 
-        if (_buffer.empty() && !termination) {
-            if (flush_after) {
-                co_await flush();
-            }
-            co_return me;
+    segment_manager::write_request make_write_request(bool flush_after = true, bool termination = false) {
+        if (_buffer.empty()) {
+            return segment_manager::write_request{
+                .segment = shared_from_this(), 
+                .buffer = {},
+                .file_offset = _file_pos,
+                .size = 0,
+                .flush = flush_after,
+            };
         }
 
         auto size = clear_buffer_slack();
@@ -890,8 +859,6 @@ public:
         _file_pos = top;
         _buffer_ostream = { };
         _num_allocs = 0;
-
-        assert(me.use_count() > 1);
 
         auto out = buf.get_ostream();
 
@@ -930,61 +897,160 @@ public:
             write(out, uint64_t(0));
         }
 
+        return segment_manager::write_request{
+            .segment = shared_from_this(), 
+            .buffer = std::move(buf),
+            .file_offset = off,
+            .size = size,
+            .flush = flush_after,
+        };
+    }
+
+    future<> perform_write_request(segment_manager::write_request r) {
+        auto buf = std::move(r.buffer);
+        auto off = r.file_offset;
+        auto size = r.size;
+        auto top = off + size;
+        auto flush = r.flush;
+
         replay_position rp(_desc.id, position_type(off));
 
-        // The write will be allowed to start now, but flush (below) must wait for not only this,
-        // but all previous write/flush pairs.
-        co_await _pending_ops.run_with_ordered_post_op(rp, [&]() -> future<> {
-            auto view = fragmented_temporary_buffer::view(buf);
-            view.remove_suffix(buf.size_bytes() - size);
-            assert(size == view.size_bytes());
+        auto view = fragmented_temporary_buffer::view(buf);
+        view.remove_suffix(buf.size_bytes() - size);
+        assert(size == view.size_bytes());
 
-            if (view.empty()) {
-                co_return;
-            }
+        if (view.empty() && !flush) {
+            co_return;
+        }
 
-            auto&& priority_class = service::get_local_commitlog_priority();
+        clogger.trace("Write {} begin {} -> {} ({})", *this, off, top, flush);
 
-            auto finally = defer([&] () noexcept {
-                _segment_manager->notify_memory_written(size);
-                _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
-                if (_size_on_disk < _file_pos) {
-                    _segment_manager->totals.total_size_on_disk += (_file_pos - _size_on_disk);
-                    _size_on_disk = _file_pos;
-                }
-            });
+        if (flush) {
+            // Not 100% happy about this, but let's retain old usage of "sync time",
+            // i.e. when initiated.
+            reset_sync_time();
+        }
 
-            for (;;) {
+        auto&& priority_class = service::get_local_commitlog_priority();
+        std::exception_ptr ep;
+
+        try {
+            while (!view.empty()) {
                 auto current = *view.begin();
-                try {
-                    auto bytes = co_await _file.dma_write(off, current.data(), current.size(), priority_class);
-                    _segment_manager->totals.bytes_written += bytes;
-                    _segment_manager->totals.active_size_on_disk += bytes;
-                    ++_segment_manager->totals.cycle_count;
-                    if (bytes == view.size_bytes()) {
-                        clogger.trace("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
-                        break;
-                    }
-                    // gah, partial write. should always get here with dma chunk sized
-                    // "bytes", but lets make sure...
-                    bytes = align_down(bytes, _alignment);
-                    off += bytes;
-                    view.remove_prefix(bytes);
-                    clogger.trace("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
-                    continue;
-                    // TODO: retry/ignore/fail/stop - optional behaviour in origin.
-                    // we fast-fail the whole commit.
-                } catch (...) {
-                    clogger.error("Failed to persist commits to disk for {}: {}", *this, std::current_exception());
-                    throw;
+                auto bytes = co_await _file.dma_write(off, current.data(), current.size(), priority_class);
+                _segment_manager->totals.bytes_written += bytes;
+                _segment_manager->totals.active_size_on_disk += bytes;
+                ++_segment_manager->totals.cycle_count;
+                if (bytes == view.size_bytes()) {
+                    clogger.trace("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
+                    break;
                 }
+                // gah, partial write. should always get here with dma chunk sized
+                // "bytes", but lets make sure...
+                bytes = align_down(bytes, _alignment);
+                off += bytes;
+                view.remove_prefix(bytes);
+                clogger.trace("Partial write of {} to {}: {}/{} bytes at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
+                continue;
+                // TODO: retry/ignore/fail/stop - optional behaviour in origin.
+                // we fast-fail the whole commit.
             }
-        }, [&]() -> future<> {
-            assert(_pending_ops.has_operation(rp));
-            if (flush_after) {
-                co_await do_flush(top);
+
+            if (size != 0) {
+                // This is a bit of a change from previous behaviour. We effectively
+                // serialize the "position report" of writes. They can be parallel,
+                // but we serialize them here, similar to rp_queue did before.
+                co_await _written_pos.wait_and_set_range(r.file_offset, top);
+                clogger.trace("Write {} serialized to {} -> {}", *this, r.file_offset, top);
             }
-        });
+
+        } catch (...) {
+            ep = std::current_exception();
+            clogger.error("Failed to persist commits to disk for {}: {}", *this, ep);
+        }
+
+        if (flush && !ep) {
+            auto pos = r.file_offset;
+            co_await begin_flush();
+
+            clogger.trace("Flush {} begin at {}", *this, top);
+
+            try {
+                auto prev = pos;
+                if (top < _flushing_to_pos) {
+                    clogger.trace("Flush {} at {} already in progress", *this, top);
+                    co_await _flush_pos.wait(top);
+                } else {
+                    prev = std::exchange(_flushing_to_pos, top);
+                }
+                if (top <= _flush_pos) {
+                    clogger.trace("{} already synced! ({} <= {})", *this, top, _flush_pos);
+                } else {
+                    clogger.trace("Flush {} at {} wait for write {} -> {}", *this, top, _written_pos, top);
+                    co_await _written_pos.wait(top);
+                    clogger.trace("Flush {} at {} wait for previous flush -> {}", *this, prev, pos);
+                    co_await _flush_pos.wait(prev);
+                        co_await _file.flush();
+                        ++_segment_manager->totals.flush_count;
+                    clogger.trace("{} synced to {}", *this, top);
+                    if (_flush_pos < top) {
+                        _flush_pos.set(top);
+                    }
+                }
+            } catch (...) {
+                ep = std::current_exception();
+                clogger.error("Failed to flush commits to disk: {} ({})", ep, pos);
+            }
+
+            end_flush();
+        }
+
+        // notify_memory_written is about buffer memory used,
+        // which is this (size) and whatever slack was left when making this request, which was already
+        // accounted for in clear_buffer_slack. (If pure flush, size is zero) 
+        _segment_manager->notify_memory_written(size);
+        _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
+        if (_size_on_disk < top) {
+            // this should not happen, but iff we actually appended to the file,
+            // we need to account for it here, since delete/recycle will take
+            // the actual file size and decrement this
+            _segment_manager->totals.total_size_on_disk += (top - _size_on_disk);
+            _size_on_disk = top;
+        }
+
+        if (ep) {
+            // Ensure all previous writes/flushes are reported in before we set exception for this range.
+            // This both ensures we "limit" the exposure of a fault, but also ensures integrity
+            // of the position counters.
+            co_await _written_pos.wait_and_set_range_exception(r.file_offset, top, std::current_exception());
+            if (flush) {
+                co_await _flush_pos.wait_and_set_range_exception(r.file_offset, top, std::current_exception());
+            }
+            std::rethrow_exception(ep);
+        }
+    }
+
+    uint64_t issue_cycle(bool flush_after, bool termination) {
+        auto wr = make_write_request(flush_after, termination);
+        auto top = wr.file_offset + wr.size;
+        if (top > _written_pos || (flush_after && top > _flush_pos)) {
+            _segment_manager->send(std::move(wr));
+        }
+        return top;
+    }
+
+    /**
+     * Send any buffer contents to disk and get a new tmp buffer
+     */
+    // See class comment for info
+    future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
+        auto me = shared_from_this();
+        auto top = issue_cycle(flush_after, termination);
+        if (flush_after) {
+            co_await _flush_pos.wait(top);
+        } else {
+            co_await _written_pos.wait(top);
+        }
         co_return me;
     }
 
@@ -1000,27 +1066,24 @@ public:
         auto me = shared_from_this();
         auto fp = _file_pos;
         try {
-            co_await _pending_ops.wait_for_pending(timeout);
+            // wait for all writes (and maybe flush) to reach our _start_
+            co_await _written_pos.wait(fp, timeout);
             if (fp != _file_pos) {
                 // some other request already wrote this buffer.
                 // If so, wait for the operation at our intended file offset
                 // to finish, then we know the flush is complete and we
                 // are in accord.
                 // (Note: wait_for_pending(pos) waits for operation _at_ pos (and before),
-                replay_position rp(_desc.id, position_type(fp));
-                co_await _pending_ops.wait_for_pending(rp, timeout);
-                
                 assert(_segment_manager->cfg.mode != sync_mode::BATCH || _flush_pos > fp);
-                if (_flush_pos <= fp) {
+                if (_flush_pos > fp) {
+                    co_return me;
                     // previous op we were waiting for was not sync one, so it did not flush
                     // force flush here
-                    co_await do_flush(fp);
                 }
-            } else {
-                // It is ok to leave the sync behind on timeout because there will be at most one
-                // such sync, all later allocations will block on _pending_ops until it is done.
-                co_await with_timeout(timeout, sync());
             }
+
+            auto top = issue_cycle(true, false);
+            co_await _flush_pos.wait(top, timeout);
         } catch (...) {
             // If we get an IO exception (which we assume this is)
             // we should close the segment.
@@ -1033,10 +1096,7 @@ public:
     }
 
     void background_cycle() {
-        //FIXME: discarded future
-        (void)cycle().discard_result().handle_exception([] (auto ex) {
-            clogger.error("Failed to flush commits to disk: {}", ex);
-        });
+        issue_cycle(false, false);
     }
 
     enum class write_result {
@@ -1431,22 +1491,77 @@ future<> db::commitlog::segment_manager::message_loop() {
     while (!shutdown || !_message_queue.empty()) {
         auto next_wakeup = no_timeout;
         auto now = message_clock::now();
+        if (cfg.mode == sync_mode::PERIODIC && !_segments.empty() && _segments.back()->is_still_allocating()) {
+            next_wakeup = _segments.back()->sync_time() + std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms);
+        }
 
         co_await _message_queue.get_messages(msgs, next_wakeup);
 
         // TODO: ordering of which we issue first.
 
         if (!msgs.empty()) {
+            handle_writes(msgs, tasks);
+
             auto mp = msgs.extract_messages(shutdown_request_index);
             if (!mp.empty()) {
                 shutdown = true;
             }
         }
+        
+        do_periodic_syncs(tasks);
 
         assert(msgs.empty());
     }
 
     co_await tasks.drain();
+
+    // since tasks we drained might have had segments kept alive,
+    // we need to do a final sweep here.
+    discard_unused_segments();
+    co_await clear_reserve_segments();
+    co_await do_pending_deletes();    
+}
+
+void db::commitlog::segment_manager::handle_writes(messages& msgs, pending_tasks& tasks) {
+    auto mp = msgs.extract_messages(write_request_index, [](auto& m1, auto& m2) {
+        auto& f1 = std::get<write_request>(m1.payload);
+        auto& f2 = std::get<write_request>(m2.payload);
+        return std::tie(f1.segment->_desc.id, f1.file_offset) < std::tie(f2.segment->_desc.id, f2.file_offset);
+    });
+
+    for (auto&& m : mp) {
+        auto& p = std::get<write_request>(m.payload);
+        // note: we are using arg-passing instead of lambda captures to 
+        // ensure things are kept alive as long as needed, and not longer,
+        // by coroutine frame.
+        tasks.add([](write_request p) -> future<> {
+            auto s = std::move(p.segment);
+            try {
+                co_await s->perform_write_request(std::move(p));
+            } catch (...) {
+                // Redundant. Maybe make write noexcept? Alternative remove logging
+                // from it.
+                clogger.error("Error processing write message: {}", std::current_exception());
+            }
+        }, std::move(p));
+    }
+}
+
+void db::commitlog::segment_manager::do_periodic_syncs(pending_tasks& tasks) {
+    auto def_copy = _segments;
+    for (auto& s : def_copy) {
+        if (s->must_sync()) {
+            tasks.add([](sseg_ptr s) -> future<> {
+                try {
+                    auto wr = s->make_write_request(true);
+                    co_await s->perform_write_request(std::move(wr));
+                } catch (...) {
+                    clogger.error("Error during periodic sync: {}", std::current_exception());
+                }
+            }, s);
+        }
+    }
+    def_copy = {};
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1831,6 +1946,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     auto s = co_await _reserve_segments.pop_eventually();
     _segments.push_back(s);
     _segments.back()->reset_sync_time();
+    // TODO: move all this to message loop
+    wakeup();
+
     co_return s;
 }
 
@@ -2188,29 +2306,12 @@ future<> db::commitlog::segment_manager::clear() {
     }
     co_await orphan_all();
 }
-/**
- * Called by timer in periodic mode.
- */
-void db::commitlog::segment_manager::sync() {
-    auto f = std::exchange(_background_sync, make_ready_future<>());
-    // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
-    auto def_copy = _segments;
-    _background_sync = parallel_for_each(def_copy, [](sseg_ptr s) {
-        return s->sync().discard_result();
-    }).then([f = std::move(f)]() mutable {
-        return std::move(f);
-    });
-}
 
 void db::commitlog::segment_manager::on_timer() {
     // Gate, because we are starting potentially blocking ops
     // without waiting for them, so segement_manager could be shut down
     // while they are running.
     (void)seastar::with_gate(_gate, [this] {
-        if (cfg.mode != sync_mode::BATCH) {
-            sync();
-        }
         // IFF a new segment was put in use since last we checked, and we're
         // above threshold, request flush.
         if (_new_counter > 0) {
