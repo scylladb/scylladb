@@ -144,6 +144,7 @@ if [ -z "$python3" ]; then
 fi
 
 scylla_args=()
+jmx_args=()
 args=()
 
 if $housekeeping; then
@@ -151,11 +152,12 @@ if $housekeeping; then
 fi
 if $nonroot; then
     scylla_args+=(--nonroot)
+    jmx_args+=(--nonroot)
     args+=(--nonroot)
 fi
 if $supervisor; then
     scylla_args+=(--supervisor)
-    args+=(--supervisor)
+    jmx_args+=(--packaging)
 fi
 if $supervisor_log_to_stdout; then
     scylla_args+=(--supervisor-log-to-stdout)
@@ -165,7 +167,7 @@ fi
 
 (cd $(readlink -f scylla-python3); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
 
-(cd $(readlink -f scylla-jmx); ./install.sh --root "$root" --prefix "$prefix"  --sysconfdir "$sysconfdir" ${args[@]})
+(cd $(readlink -f scylla-jmx); ./install.sh --root "$root" --prefix "$prefix"  --sysconfdir "$sysconfdir" ${jmx_args[@]})
 
 (cd $(readlink -f scylla-tools); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
 
