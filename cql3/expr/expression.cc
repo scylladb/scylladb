@@ -557,6 +557,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const null&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: null cannot serve as the LHS of a binary expression");
             },
+            [] (const bind_variable&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: bind_variable cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -598,6 +601,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const null&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: NULL cannot serve as a restriction by itself");
+            },
+            [] (const bind_variable&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a bind variable cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -841,6 +847,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const null&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: nulls are not supported as the LHS of a binary expression");
                         },
+                        [] (const bind_variable&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: bind variables are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -872,6 +881,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const null&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a NULL cannot serve as a restriction by itself");
+            },
+            [] (const bind_variable&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a bind variable cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -936,6 +948,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const null&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: nulls are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const bind_variable&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: bind variables are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -1015,6 +1030,10 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                 // FIXME: adjust tests and change to NULL
                 fmt::print(os, "null");
             },
+            [&] (const bind_variable&) {
+                // FIXME: store and present bind variable name
+                fmt::print(os, "?");
+            },
         }, expr);
     return os;
 }
@@ -1058,6 +1077,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const field_selection&) { return expr; },
             [&] (const term_raw_ptr&) { return expr; },
             [&] (const null&) { return expr; },
+            [&] (const bind_variable&) { return expr; },
         }, expr);
 }
 
@@ -1103,6 +1123,9 @@ expression replace_token(const expression& expr, const column_definition* new_cd
                 on_internal_error(expr_logger, "replace_token() called on term_raw_ptr");
             },
             [&] (const null&) -> expression {
+                return expr;
+            },
+            [&] (const bind_variable&) -> expression {
                 return expr;
             },
         }, expr);
@@ -1193,6 +1216,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const field_selection&) {}
         void operator()(const term_raw_ptr&) {}
         void operator()(const null&) {}
+        void operator()(const bind_variable&) {}
     };
 
     visitor v {

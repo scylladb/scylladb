@@ -168,29 +168,29 @@ struct uninitialized {
         return s;
     }
 
-    shared_ptr<cql3::abstract_marker::raw> new_bind_variables(shared_ptr<cql3::column_identifier> name)
+    cql3::expr::bind_variable new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        auto marker = make_shared<cql3::abstract_marker::raw>(_bind_variables.size());
+        auto marker = cql3::expr::bind_variable{cql3::expr::bind_variable::shape_type::scalar, _bind_variables.size()};
         _bind_variables.push_back(name);
         return marker;
     }
 
-    shared_ptr<cql3::abstract_marker::in_raw> new_in_bind_variables(shared_ptr<cql3::column_identifier> name) {
-        auto marker = make_shared<cql3::abstract_marker::in_raw>(_bind_variables.size());
+    cql3::expr::bind_variable new_in_bind_variables(shared_ptr<cql3::column_identifier> name) {
+        auto marker = cql3::expr::bind_variable{cql3::expr::bind_variable::shape_type::scalar_in, _bind_variables.size()};
         _bind_variables.push_back(std::move(name));
         return marker;
     }
 
-    shared_ptr<cql3::tuples::raw> new_tuple_bind_variables(shared_ptr<cql3::column_identifier> name)
+    cql3::expr::bind_variable new_tuple_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        auto marker = make_shared<cql3::tuples::raw>(_bind_variables.size());
+        auto marker = cql3::expr::bind_variable{cql3::expr::bind_variable::shape_type::tuple, _bind_variables.size()};
         _bind_variables.push_back(std::move(name));
         return marker;
     }
 
-    shared_ptr<cql3::tuples::in_raw> new_tuple_in_bind_variables(shared_ptr<cql3::column_identifier> name)
+    cql3::expr::bind_variable new_tuple_in_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        auto marker = make_shared<cql3::tuples::in_raw>(_bind_variables.size());
+        auto marker = cql3::expr::bind_variable{cql3::expr::bind_variable::shape_type::tuple_in, _bind_variables.size()};
         _bind_variables.push_back(std::move(name));
         return marker;
     }
@@ -236,7 +236,8 @@ struct uninitialized {
             auto left = dynamic_pointer_cast<cql3::constants::literal>(entry.first);
             if (!left) {
                 sstring msg = "Invalid property name: " + entry.first->to_string();
-                if (dynamic_pointer_cast<cql3::abstract_marker::raw>(entry.first)) {
+                auto expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(entry.first);
+                if (expr && std::holds_alternative<cql3::expr::bind_variable>(expr->as_expression())) {
                     msg += " (bind variables are not supported in DDL queries)";
                 }
                 add_recognition_error(msg);
@@ -245,7 +246,8 @@ struct uninitialized {
             auto right = dynamic_pointer_cast<cql3::constants::literal>(entry.second);
             if (!right) {
                 sstring msg = "Invalid property value: " + entry.first->to_string() + " for property: " + entry.second->to_string();
-                if (dynamic_pointer_cast<cql3::abstract_marker::raw>(entry.second)) {
+                auto expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(entry.second);
+                if (expr && std::holds_alternative<cql3::expr::bind_variable>(expr->as_expression())) {
                     msg += " (bind variables are not supported in DDL queries)";
                 }
                 add_recognition_error(msg);
@@ -486,8 +488,8 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
 jsonValue returns [::shared_ptr<cql3::term::raw> value]
     :
     | s=STRING_LITERAL { $value = cql3::constants::literal::string(sstring{$s.text}); }
-    | ':' id=ident     { $value = new_bind_variables(id); }
-    | QMARK            { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
+    | ':' id=ident     { $value = cql3::expr::as_term_raw(new_bind_variables(id)); }
+    | QMARK            { $value = cql3::expr::as_term_raw(new_bind_variables(shared_ptr<cql3::column_identifier>{})); }
     ;
 
 /**
@@ -1480,15 +1482,15 @@ value returns [::shared_ptr<cql3::term::raw> value]
     | u=usertypeLiteral    { $value = u; }
     | t=tupleLiteral       { $value = t; }
     | K_NULL               { $value = cql3::expr::as_term_raw(cql3::expr::null()); }
-    | ':' id=ident         { $value = new_bind_variables(id); }
-    | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
+    | ':' id=ident         { $value = cql3::expr::as_term_raw(new_bind_variables(id)); }
+    | QMARK                { $value = cql3::expr::as_term_raw(new_bind_variables(shared_ptr<cql3::column_identifier>{})); }
     ;
 
 intValue returns [::shared_ptr<cql3::term::raw> value]
     :
     | t=INTEGER     { $value = cql3::constants::literal::integer(sstring{$t.text}); }
-    | ':' id=ident  { $value = new_bind_variables(id); }
-    | QMARK         { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
+    | ':' id=ident  { $value = cql3::expr::as_term_raw(new_bind_variables(id)); }
+    | QMARK         { $value = cql3::expr::as_term_raw(new_bind_variables(shared_ptr<cql3::column_identifier>{})); }
     ;
 
 functionName returns [cql3::functions::function_name s]
@@ -1679,9 +1681,9 @@ relation[std::vector<cql3::relation_ptr>& clauses]
     | '(' relation[$clauses] ')'
     ;
 
-inMarker returns [shared_ptr<cql3::abstract_marker::in_raw> marker]
-    : QMARK { $marker = new_in_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_in_bind_variables(name); }
+inMarker returns [shared_ptr<cql3::term::raw> marker]
+    : QMARK { $marker = cql3::expr::as_term_raw(new_in_bind_variables(nullptr)); }
+    | ':' name=ident { $marker = cql3::expr::as_term_raw(new_in_bind_variables(name)); }
     ;
 
 tupleOfIdentifiers returns [std::vector<::shared_ptr<cql3::column_identifier::raw>> ids]
@@ -1700,18 +1702,18 @@ tupleOfTupleLiterals returns [std::vector<::shared_ptr<cql3::tuples::literal>> l
     : '(' t1=tupleLiteral { $literals.emplace_back(t1); } (',' ti=tupleLiteral { $literals.emplace_back(ti); })* ')'
     ;
 
-markerForTuple returns [shared_ptr<cql3::tuples::raw> marker]
-    : QMARK { $marker = new_tuple_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_tuple_bind_variables(name); }
+markerForTuple returns [shared_ptr<cql3::term::raw> marker]
+    : QMARK { $marker = cql3::expr::as_term_raw(new_tuple_bind_variables(nullptr)); }
+    | ':' name=ident { $marker = cql3::expr::as_term_raw(new_tuple_bind_variables(name)); }
     ;
 
-tupleOfMarkersForTuples returns [std::vector<::shared_ptr<cql3::tuples::raw>> markers]
+tupleOfMarkersForTuples returns [std::vector<::shared_ptr<cql3::term::raw>> markers]
     : '(' m1=markerForTuple { $markers.emplace_back(m1); } (',' mi=markerForTuple { $markers.emplace_back(mi); })* ')'
     ;
 
-inMarkerForTuple returns [shared_ptr<cql3::tuples::in_raw> marker]
-    : QMARK { $marker = new_tuple_in_bind_variables(nullptr); }
-    | ':' name=ident { $marker = new_tuple_in_bind_variables(name); }
+inMarkerForTuple returns [shared_ptr<cql3::term::raw> marker]
+    : QMARK { $marker = cql3::expr::as_term_raw(new_tuple_in_bind_variables(nullptr)); }
+    | ':' name=ident { $marker = cql3::expr::as_term_raw(new_tuple_in_bind_variables(name)); }
     ;
 
 // The comparator_type rule is used for users' queries (internal=false)

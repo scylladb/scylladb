@@ -30,72 +30,54 @@
 #include "cql3/tuples.hh"
 #include "types/list.hh"
 
-namespace cql3 {
+namespace cql3::expr {
 
-abstract_marker::raw::raw(int32_t bind_index)
-    : _bind_index{bind_index}
-{ }
-
-sstring
-abstract_marker::raw::to_string() const {
-    return "?";
-}
-
+static
 assignment_testable::test_result
-abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+bind_variable_test_assignment(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification& receiver) {
     return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
 }
 
+static
 ::shared_ptr<term>
-abstract_marker::raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const
+bind_variable_scalar_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_)
 {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     if (receiver->type->is_collection()) {
         if (receiver->type->without_reversed().is_list()) {
-            return ::make_shared<lists::marker>(_bind_index, receiver);
+            return ::make_shared<lists::marker>(bv.bind_index, receiver);
         } else if (receiver->type->without_reversed().is_set()) {
-            return ::make_shared<sets::marker>(_bind_index, receiver);
+            return ::make_shared<sets::marker>(bv.bind_index, receiver);
         } else if (receiver->type->without_reversed().is_map()) {
-            return ::make_shared<maps::marker>(_bind_index, receiver);
+            return ::make_shared<maps::marker>(bv.bind_index, receiver);
         }
         assert(0);
     }
 
     if (receiver->type->is_user_type()) {
-        return ::make_shared<user_types::marker>(_bind_index, receiver);
+        return ::make_shared<user_types::marker>(bv.bind_index, receiver);
     }
 
-    return ::make_shared<constants::marker>(_bind_index, receiver);
+    return ::make_shared<constants::marker>(bv.bind_index, receiver);
 }
 
-abstract_marker::in_raw::in_raw(int32_t bind_index)
-    : raw{bind_index}
-{ }
-
+static
 lw_shared_ptr<column_specification>
-abstract_marker::in_raw::make_in_receiver(const column_specification& receiver) {
+bind_variable_scalar_in_make_receiver(const column_specification& receiver) {
     auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver.name->to_string() + sstring(")"), true);
     return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
 }
 
+static
 ::shared_ptr<term>
-abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+bind_variable_scalar_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-    return ::make_shared<lists::marker>(_bind_index, make_in_receiver(*receiver));
+    return ::make_shared<lists::marker>(bv.bind_index, bind_variable_scalar_in_make_receiver(*receiver));
 }
 
-sstring
-tuples::raw::to_string() const {
-    return abstract_marker::raw::to_string();
-}
-
-sstring
-tuples::raw::assignment_testable_source_context() const {
-    return abstract_marker::raw::to_string();
-}
-
+static
 lw_shared_ptr<column_specification>
-tuples::raw::make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+bind_variable_tuple_make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     std::vector<data_type> types;
     types.reserve(receivers.size());
     sstring in_name = "(";
@@ -113,24 +95,16 @@ tuples::raw::make_receiver(const std::vector<lw_shared_ptr<column_specification>
     return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
 }
 
+static
 ::shared_ptr<term>
-tuples::raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+bind_variable_tuple_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
     auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
-    return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
+    return make_shared<tuples::marker>(bv.bind_index, bind_variable_tuple_make_receiver(receivers));
 }
 
-sstring
-tuples::in_raw::to_string() const {
-    return abstract_marker::raw::to_string();
-}
-
-sstring
-tuples::in_raw::assignment_testable_source_context() const {
-    return to_string();
-}
-
+static
 lw_shared_ptr<column_specification>
-tuples::in_raw::make_in_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+bind_variable_tuple_in_make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     std::vector<data_type> types;
     types.reserve(receivers.size());
     sstring in_name = "in(";
@@ -153,15 +127,12 @@ tuples::in_raw::make_in_receiver(const std::vector<lw_shared_ptr<column_specific
     return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
 }
 
+static
 ::shared_ptr<term>
-tuples::in_raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+bind_variable_tuple_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
     auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
-    return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
+    return make_shared<tuples::in_marker>(bv.bind_index, bind_variable_tuple_in_make_receiver(receivers));
 }
-
-}
-
-namespace cql3::expr {
 
 static
 assignment_testable::test_result
@@ -276,6 +247,15 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const null&) -> ::shared_ptr<term> {
             return null_prepare_term(db, keyspace, receiver);
         },
+        [&] (const bind_variable& bv) -> ::shared_ptr<term> {
+            switch (bv.shape) {
+            case expr::bind_variable::shape_type::scalar:  return bind_variable_scalar_prepare_term(bv, db, keyspace, receiver);
+            case expr::bind_variable::shape_type::scalar_in: return bind_variable_scalar_in_prepare_term(bv, db, keyspace, receiver);
+            case expr::bind_variable::shape_type::tuple: return bind_variable_tuple_prepare_term(bv, db, keyspace, receiver);
+            case expr::bind_variable::shape_type::tuple_in: return bind_variable_tuple_in_prepare_term(bv, db, keyspace, receiver);
+            }
+            on_internal_error(expr_logger, "unexpected shape in bind_variable");
+        },
     }, _expr);
 }
 
@@ -320,6 +300,10 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         },
         [&] (const null&) -> test_result {
             return null_test_assignment(db, keyspace, receiver);
+        },
+        [&] (const bind_variable& bv) -> test_result {
+            // Same for all bind_variable::shape:s
+            return bind_variable_test_assignment(bv, db, keyspace, receiver);
         },
     }, _expr);
 }

@@ -214,6 +214,9 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
         [&] (const expr::null&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "null found its way to selector context");
         },
+        [&] (const expr::bind_variable&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "bind_variable found its way to selector context");
+        },
     }, raw_selectable);
 }
 
@@ -262,6 +265,9 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
         },
         [&] (const expr::null&) -> bool {
             on_internal_error(slogger, "null found its way to selector context");
+        },
+        [&] (const expr::bind_variable&) -> bool {
+            on_internal_error(slogger, "bind_variable found its way to selector context");
         },
     }, raw_selectable);
 };

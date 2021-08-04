@@ -83,11 +83,12 @@ class cast;
 class field_selection;
 using term_raw_ptr = ::shared_ptr<term_raw>;
 struct null;
+struct bind_variable;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection, term_raw_ptr, null>;
+                                field_selection, term_raw_ptr, null, bind_variable>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -197,6 +198,13 @@ struct field_selection {
 struct null {
 };
 
+struct bind_variable {
+    enum class shape_type { scalar, scalar_in, tuple, tuple_in };
+    // FIXME: infer shape from expression rather than from grammar
+    shape_type shape;
+    int32_t bind_index;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -294,6 +302,9 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [&] (const null&) -> const binary_operator* {
                 return nullptr;
             },
+            [&] (const bind_variable&) -> const binary_operator* {
+                return nullptr;
+            },
         }, e);
 }
 
@@ -326,6 +337,9 @@ size_t count_if(const expression& e, Fn f) {
                 return 0;
             },
             [&] (const null&) -> size_t {
+                return 0;
+            },
+            [&] (const bind_variable&) -> size_t {
                 return 0;
             },
         }, e);

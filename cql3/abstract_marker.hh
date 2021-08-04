@@ -61,37 +61,6 @@ public:
     virtual void fill_prepare_context(prepare_context& ctx) const override;
 
     virtual bool contains_bind_marker() const override;
-
-    /**
-     * A parsed, but non prepared, bind marker.
-     */
-    class raw : public term::raw {
-    protected:
-        const int32_t _bind_index;
-    public:
-        raw(int32_t bind_index);
-
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
-
-        virtual sstring to_string() const override;
-    };
-
-    /**
-     * A raw placeholder for multiple values of the same type for a single column.
-     * For example, "SELECT ... WHERE user_id IN ?'.
-     *
-     * Because a single type is used, a List is used to represent the values.
-     */
-    class in_raw : public raw {
-    public:
-        in_raw(int32_t bind_index);
-    private:
-        static lw_shared_ptr<column_specification> make_in_receiver(const column_specification& receiver);
-    public:
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-    };
 };
 
 }

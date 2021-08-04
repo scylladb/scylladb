@@ -48,6 +48,7 @@
 #include "cql3/operation_impl.hh"
 #include "cql3/type_json.hh"
 #include "cql3/single_column_relation.hh"
+#include "cql3/expr/term_expr.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
@@ -363,7 +364,8 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
 {
     // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
     (void)_if_not_exists;
-    assert(dynamic_pointer_cast<constants::literal>(_json_value) || dynamic_pointer_cast<abstract_marker::raw>(_json_value));
+    auto json_value_expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(_json_value);
+    assert(dynamic_pointer_cast<constants::literal>(_json_value) || (json_value_expr && std::holds_alternative<cql3::expr::bind_variable>(json_value_expr->as_expression())));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = _json_value->prepare(db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->fill_prepare_context(ctx);

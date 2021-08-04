@@ -222,35 +222,6 @@ public:
     };
 
     /**
-     * A raw placeholder for a tuple of values for different multiple columns, each of which may have a different type.
-     * For example, "SELECT ... WHERE (col1, col2) > ?".
-     */
-    class raw : public abstract_marker::raw {
-    public:
-        using abstract_marker::raw::raw;
-
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-        virtual sstring assignment_testable_source_context() const override;
-        virtual sstring to_string() const override;
-    private:
-        static lw_shared_ptr<column_specification> make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers);
-    };
-
-    /**
-     * A raw marker for an IN list of tuples, like "SELECT ... WHERE (a, b, c) IN ?"
-     */
-    class in_raw : public abstract_marker::raw {
-    public:
-        using abstract_marker::raw::raw;
-
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-        virtual sstring assignment_testable_source_context() const override;
-        virtual sstring to_string() const override;
-    private:
-        static lw_shared_ptr<column_specification> make_in_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers);
-    };
-
-    /**
      * Represents a marker for a single tuple, like "SELECT ... WHERE (a, b, c) > ?"
      */
     class marker : public abstract_marker {
