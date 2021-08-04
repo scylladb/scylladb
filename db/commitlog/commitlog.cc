@@ -49,6 +49,7 @@
 #include <unordered_set>
 #include <exception>
 #include <filesystem>
+#include <ranges>
 
 #include <seastar/core/align.hh>
 #include <seastar/core/seastar.hh>
@@ -77,6 +78,7 @@
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
+#include "utils/waitable_counter.hh"
 #include "log.hh"
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
@@ -425,12 +427,90 @@ public:
 
     void flush_segments(uint64_t size_to_remove);
 
+    struct shutdown_request {};
+
+    using message_payload = std::variant<
+        shutdown_request
+        // to come...
+    >;
+
+    template<typename> struct tag{};
+
+    template<typename T, typename V>
+    struct get_index;
+
+    template<typename T, typename... Ts> 
+    struct get_index<T, std::variant<Ts...>>
+        : std::integral_constant<size_t, std::variant<tag<Ts>...>(tag<T>()).index()>
+    {};
+
+    using message_type = size_t;
+
+    static inline message_type constexpr shutdown_request_index = get_index<shutdown_request, message_payload>::value;
+    using message_clock = clock_type; // todo: steady_clock_type? higher res.;
+    static inline constexpr auto immediately = message_clock::time_point::min();
+    static inline constexpr auto no_timeout = message_clock::time_point::max();
+
+    struct message {
+        // this space intentionally left blank. We define a message as a wrapper
+        // so we can eventually add common fields, such as timestamps, if needed
+        // in the future.
+        message_payload payload;
+    };
+
+    void send(message_payload);
+    
 private:
     class shutdown_marker{};
+    class message_queue;
+    class pending_tasks;
+
+    class messages {
+    public:
+        messages();
+
+        // a view of messages that also acts as an extraction anchor thereof,
+        // i.e. when destroyed removes these messages from the set.
+        class extracted_view;
+
+        extracted_view extract_messages(message_type);
+
+        template<std::predicate<const message&, const message&> Cmp>
+        extracted_view extract_messages(message_type, Cmp&& cmp);
+
+        bool empty() const {
+            return _messages.empty();
+        }
+    private:
+        friend class message_queue;
+        std::vector<message> _messages;
+    };
+
+    class message_queue {
+    public:
+        message_queue();
+
+        void send(message_payload);
+        void wakeup();
+
+        future<> get_messages(messages&, message_clock::time_point);
+
+        bool empty() const {
+            return _queue.empty();
+        }
+    private:
+        promise<>* _wakeup = nullptr;
+        uint64_t _wakeups = 0;
+        timer<message_clock> _timer;
+        std::deque<message> _queue;
+    };
 
     future<> clear_reserve_segments();
     void abort_recycled_list(std::exception_ptr);
     void abort_deletion_promise(std::exception_ptr);
+
+    future<> message_loop();
+    void wakeup();
 
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
@@ -448,6 +528,8 @@ private:
     seastar::gate _gate;
     uint64_t _new_counter = 0;
     std::optional<size_t> _disk_write_alignment;
+    future<> _message_loop;
+    message_queue _message_queue;
 };
 
 template<typename T>
@@ -1223,6 +1305,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _recycled_segments(std::numeric_limits<size_t>::max())
     , _reserve_replenisher(make_ready_future<>())
     , _background_sync(make_ready_future<>())
+    , _message_loop(make_ready_future<>())
 {
     assert(max_size > 0);
     assert(max_mutation_size < segment::multi_entry_size_magic);
@@ -1234,6 +1317,136 @@ db::commitlog::segment_manager::segment_manager(config c)
     if (!cfg.metrics_category_name.empty()) {
         create_counters(cfg.metrics_category_name);
     }
+}
+
+// view of a given type of messages that also acts as an extraction anchor - i.e. it removes the messages in the view
+// on destruction.
+class db::commitlog::segment_manager::messages::extracted_view {
+private:
+    friend class messages;
+    std::vector<message>* _messages = nullptr;
+    typename std::vector<message>::iterator _iter{};
+
+    extracted_view(std::vector<message>& messages, message_type index)
+        : _messages(&messages)
+        , _iter(std::partition(messages.begin(), messages.end(), [index](auto& m) { return m.payload.index() != index; }))
+    {}
+public:
+    extracted_view() = default;
+    extracted_view(extracted_view&&) = default;
+    ~extracted_view() {
+        if (_messages) {
+            _messages->erase(_iter, _messages->end());
+        }
+    }
+    auto begin() const {
+        return _iter;
+    }
+    auto end() const {
+        return _messages->end();
+    }
+    bool empty() {
+        return begin() == end();
+    }
+};
+
+db::commitlog::segment_manager::messages::messages() {
+    _messages.reserve(10);
+}
+
+db::commitlog::segment_manager::messages::extracted_view
+db::commitlog::segment_manager::messages::extract_messages(message_type index) {
+    return extracted_view(_messages, index);
+}
+
+template<std::predicate<const db::commitlog::segment_manager::message&, const db::commitlog::segment_manager::message&> Cmp>
+db::commitlog::segment_manager::messages::extracted_view
+db::commitlog::segment_manager::messages::extract_messages(message_type index, Cmp&& cmp) {
+    extracted_view v(_messages, index);
+    std::sort(v.begin(), v.end(), cmp);
+    return v;
+}
+
+db::commitlog::segment_manager::message_queue::message_queue() {
+    _timer.set_callback(std::bind(&message_queue::wakeup, this));
+}
+
+void db::commitlog::segment_manager::message_queue::send(message_payload m) {
+    _queue.emplace_back(message{ std::move(m) });
+    wakeup();
+}
+
+void db::commitlog::segment_manager::message_queue::wakeup() {
+    _timer.cancel();
+    if (_wakeup) {
+        _wakeup->set_value();
+        _wakeup = nullptr;
+    }
+    ++_wakeups;
+}
+
+future<> db::commitlog::segment_manager::message_queue::get_messages(messages& dst, message_clock::time_point until) {
+    if (_queue.empty() && _wakeups == 0) {
+        promise<> promise;
+        assert(_wakeup == nullptr);
+        _wakeup = &promise;
+        _timer.arm(until);
+        co_await promise.get_future();
+        _wakeup = nullptr;
+    }
+    _wakeups = 0;
+    std::move(_queue.begin(), _queue.end(), std::back_inserter(dst._messages));
+    _queue.clear();
+}
+
+class db::commitlog::segment_manager::pending_tasks {
+public:
+    template<typename Func, typename... Args>
+    requires std::invocable<Func, Args...>
+    void add(Func&& func, Args&& ...args) {
+        _tasks = futurize_invoke(std::forward<Func>(func), std::forward<Args>(args)...).then([f = std::move(_tasks)]() mutable {
+            return std::move(f);
+        });
+    }
+    future<> drain() {
+        return std::move(_tasks);
+    }
+private:
+    future<> _tasks = make_ready_future<>();
+};
+
+void db::commitlog::segment_manager::send(message_payload m) {
+    _message_queue.send(std::move(m));
+}
+
+void db::commitlog::segment_manager::wakeup() {
+    _message_queue.wakeup();
+}
+
+future<> db::commitlog::segment_manager::message_loop() {
+    messages msgs;
+    pending_tasks tasks;
+    bool shutdown = false;
+
+    while (!shutdown || !_message_queue.empty()) {
+        auto next_wakeup = no_timeout;
+        auto now = message_clock::now();
+
+        co_await _message_queue.get_messages(msgs, next_wakeup);
+
+        // TODO: ordering of which we issue first.
+
+        if (!msgs.empty()) {
+            auto mp = msgs.extract_messages(shutdown_request_index);
+            if (!mp.empty()) {
+                shutdown = true;
+            }
+        }
+
+        assert(msgs.empty());
+    }
+
+    co_await tasks.drain();
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1313,6 +1526,7 @@ future<> db::commitlog::segment_manager::init() {
     _ids = replay_position(this_shard_id(), id).id;
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _timer.set_callback(std::bind(&segment_manager::on_timer, this));
+    _message_loop = message_loop();
     auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
     clogger.trace("Delaying timer loop {} ms", delay);
     // We need to wait until we have scanned all other segments to actually start serving new
@@ -1821,6 +2035,10 @@ future<> db::commitlog::segment_manager::shutdown() {
         } catch (...) {
             p = std::current_exception();
         }
+
+        send(shutdown_request{});
+        co_await std::move(_message_loop);
+
         // slight functional change from non-coroutine version: we propagate all/any
         // exceptions, not just the replenish one.
         if (p) {
