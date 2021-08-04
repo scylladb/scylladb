@@ -60,7 +60,7 @@ lists::literal::prepare(database& db, const sstring& keyspace, const column_spec
     // away to simplify predicate evaluation. See also
     // https://issues.apache.org/jira/browse/CASSANDRA-5141
     if (receiver->type->is_multi_cell() &&  _elements.empty()) {
-        return cql3::constants::null_literal::NULL_VALUE;
+        return cql3::constants::NULL_VALUE;
     }
 
     auto&& value_spec = value_spec_of(*receiver);

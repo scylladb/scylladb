@@ -78,16 +78,17 @@ public:
 
     static thread_local const ::shared_ptr<value> UNSET_VALUE;
 
-    class null_literal final : public term::raw {
-    private:
-        class null_value final : public value {
-        public:
-            null_value() : value(cql3::raw_value::make_null()) {}
-            virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
-            virtual sstring to_string() const override { return "null"; }
-        };
+    class null_value final : public value {
     public:
-        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
+        null_value() : value(cql3::raw_value::make_null()) {}
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
+        virtual sstring to_string() const override { return "null"; }
+    };
+
+    static thread_local const ::shared_ptr<terminal> NULL_VALUE;
+
+    class null_literal final : public term::raw {
+    public:
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override {
             if (!is_assignable(test_assignment(db, keyspace, *std::get<lw_shared_ptr<column_specification>>(receiver)))) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
