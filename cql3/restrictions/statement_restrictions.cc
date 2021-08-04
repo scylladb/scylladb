@@ -36,6 +36,7 @@
 #include "database.hh"
 #include "cartesian_product.hh"
 
+#include "cql3/expr/term_expr.hh"
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/selection/selection.hh"
@@ -229,6 +230,10 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const term_raw_ptr&) {
             on_internal_error(rlogger, "extract_partition_range(term::raw)");
         }
+
+        void operator()(const null&) {
+            on_internal_error(rlogger, "extract_partition_range(null)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -318,6 +323,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         void operator()(const term_raw_ptr&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(term::raw)");
         }
+
+        void operator()(const null&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(null)");
+        }
     } v;
     std::visit(v, where_clause);
 
@@ -366,7 +375,11 @@ statement_restrictions::statement_restrictions(database& db,
                 }
                 // currently, the grammar only allows the NULL argument to be
                 // "IS NOT", so this assertion should not be able to fail
-                assert(r->get_value() == cql3::constants::NULL_LITERAL);
+                assert([&] {
+                    auto raw_term = r->get_value();
+                    auto raw_term_expr = dynamic_pointer_cast<expr::term_raw_expr>(raw_term);
+                    return raw_term_expr && std::holds_alternative<expr::null>(raw_term_expr->as_expression());
+                }());
 
                 auto col_id = r->get_entity()->prepare_column_identifier(*schema);
                 const auto *cd = get_column_definition(*schema, *col_id);
@@ -1013,6 +1026,10 @@ struct multi_column_range_accumulator {
 
     void operator()(const term_raw_ptr&) {
         on_internal_error(rlogger, "term::raw encountered outside binary operator");
+    }
+
+    void operator()(const null&) {
+        on_internal_error(rlogger, "null encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

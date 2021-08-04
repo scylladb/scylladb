@@ -45,7 +45,6 @@
 namespace cql3 {
 
 thread_local const ::shared_ptr<constants::value> constants::UNSET_VALUE = ::make_shared<constants::value>(cql3::raw_value::make_unset_value());
-thread_local const ::shared_ptr<term::raw> constants::NULL_LITERAL = ::make_shared<constants::null_literal>();
 thread_local const ::shared_ptr<terminal> constants::NULL_VALUE = ::make_shared<constants::null_value>();
 
 std::ostream&

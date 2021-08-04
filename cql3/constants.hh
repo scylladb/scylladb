@@ -87,17 +87,6 @@ public:
 
     static thread_local const ::shared_ptr<terminal> NULL_VALUE;
 
-    class null_literal final : public term::raw {
-    public:
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-        virtual assignment_testable::test_result test_assignment(database& db,
-            const sstring& keyspace,
-            const column_specification& receiver) const override;
-        virtual sstring to_string() const override;
-    };
-
-    static thread_local const ::shared_ptr<term::raw> NULL_LITERAL;
-
     class literal : public term::raw {
     private:
         const type _type;

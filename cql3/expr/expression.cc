@@ -554,6 +554,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const term_raw_ptr&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: term_raw cannot serve as the LHS of a binary expression");
             },
+            [] (const null&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: null cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -592,6 +595,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const term_raw_ptr&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a raw term cannot serve as a restriction by itself");
+            },
+            [] (const null&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: NULL cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -832,6 +838,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const term_raw_ptr&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: raw terms are not supported as the LHS of a binary expression");
                         },
+                        [] (const null&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: nulls are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -860,6 +869,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const term_raw_ptr&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a raw term cannot serve as a restriction by itself");
+            },
+            [] (const null&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a NULL cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -921,6 +933,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const term_raw_ptr&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: raw terms are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const null&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: nulls are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -996,6 +1011,10 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const term_raw_ptr& trp)  {
                 fmt::print(os, "{}", *trp);
             },
+            [&] (const null&) {
+                // FIXME: adjust tests and change to NULL
+                fmt::print(os, "null");
+            },
         }, expr);
     return os;
 }
@@ -1038,6 +1057,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const cast&) { return expr; },
             [&] (const field_selection&) { return expr; },
             [&] (const term_raw_ptr&) { return expr; },
+            [&] (const null&) { return expr; },
         }, expr);
 }
 
@@ -1081,6 +1101,9 @@ expression replace_token(const expression& expr, const column_definition* new_cd
             [&] (const term_raw_ptr&) -> expression {
                 // A raw term could well be the token function. But this function is never called for unprepared expressions.
                 on_internal_error(expr_logger, "replace_token() called on term_raw_ptr");
+            },
+            [&] (const null&) -> expression {
+                return expr;
             },
         }, expr);
 }
@@ -1169,6 +1192,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const cast&) {}
         void operator()(const field_selection&) {}
         void operator()(const term_raw_ptr&) {}
+        void operator()(const null&) {}
     };
 
     visitor v {

@@ -1479,7 +1479,7 @@ value returns [::shared_ptr<cql3::term::raw> value]
     | l=collectionLiteral  { $value = l; }
     | u=usertypeLiteral    { $value = u; }
     | t=tupleLiteral       { $value = t; }
-    | K_NULL               { $value = cql3::constants::NULL_LITERAL; }
+    | K_NULL               { $value = cql3::expr::as_term_raw(cql3::expr::null()); }
     | ':' id=ident         { $value = new_bind_variables(id); }
     | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
     ;
@@ -1644,7 +1644,7 @@ relation[std::vector<cql3::relation_ptr>& clauses]
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         { $clauses.emplace_back(::make_shared<cql3::token_relation>(std::move(l), type, std::move(t))); }
     | name=cident K_IS K_NOT K_NULL {
-          $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::expr::oper_t::IS_NOT, cql3::constants::NULL_LITERAL)); }
+          $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::expr::oper_t::IS_NOT, cql3::expr::as_term_raw(cql3::expr::null()))); }
     | name=cident K_IN marker=inMarker
         { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::expr::oper_t::IN, std::move(marker))); }
     | name=cident K_IN in_values=singleColumnInValues

@@ -79,7 +79,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
         auto iraw = _entries.find(field);
         shared_ptr<term::raw> raw;
         if (iraw == _entries.end()) {
-            raw = cql3::constants::NULL_LITERAL;
+            raw = expr::as_term_raw(expr::null());
         } else {
             raw = iraw->second;
             ++found_values;

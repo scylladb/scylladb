@@ -24,33 +24,26 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/constants.hh"
 
-namespace cql3 {
+namespace cql3::expr {
 
-sstring
-constants::null_literal::to_string() const {
-    return "null";
-}
-
+static
 assignment_testable::test_result
-constants::null_literal::test_assignment(database& db,
+null_test_assignment(database& db,
         const sstring& keyspace,
-        const column_specification& receiver) const {
+        const column_specification& receiver) {
     return receiver.type->is_counter()
         ? assignment_testable::test_result::NOT_ASSIGNABLE
         : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
 }
 
+static
 ::shared_ptr<term>
-constants::null_literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
-    if (!is_assignable(test_assignment(db, keyspace, *std::get<lw_shared_ptr<column_specification>>(receiver)))) {
+null_prepare_term(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
+    if (!is_assignable(null_test_assignment(db, keyspace, *std::get<lw_shared_ptr<column_specification>>(receiver)))) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
     }
-    return NULL_VALUE;
+    return constants::NULL_VALUE;
 }
-
-}
-
-namespace cql3::expr {
 
 static
 sstring
@@ -143,6 +136,9 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const term_raw_ptr& raw) -> ::shared_ptr<term> {
             return raw->prepare(db, keyspace, receiver);
         },
+        [&] (const null&) -> ::shared_ptr<term> {
+            return null_prepare_term(db, keyspace, receiver);
+        },
     }, _expr);
 }
 
@@ -184,6 +180,9 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         },
         [&] (const term_raw_ptr& raw) -> test_result {
             return raw->test_assignment(db, keyspace, receiver);
+        },
+        [&] (const null&) -> test_result {
+            return null_test_assignment(db, keyspace, receiver);
         },
     }, _expr);
 }

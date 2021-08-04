@@ -82,11 +82,12 @@ class function_call;
 class cast;
 class field_selection;
 using term_raw_ptr = ::shared_ptr<term_raw>;
+struct null;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection, term_raw_ptr>;
+                                field_selection, term_raw_ptr, null>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -193,6 +194,9 @@ struct field_selection {
     shared_ptr<column_identifier_raw> field;
 };
 
+struct null {
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -287,6 +291,9 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [&] (const term_raw_ptr&) -> const binary_operator* {
                 return nullptr;
             },
+            [&] (const null&) -> const binary_operator* {
+                return nullptr;
+            },
         }, e);
 }
 
@@ -316,6 +323,9 @@ size_t count_if(const expression& e, Fn f) {
                 return count_if(*fs.structure, f);
             },
             [&] (const term_raw_ptr&) -> size_t {
+                return 0;
+            },
+            [&] (const null&) -> size_t {
                 return 0;
             },
         }, e);
