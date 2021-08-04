@@ -157,7 +157,7 @@ redirects_file = "_utils/redirections.yaml"
 TAGS = []
 smv_tag_whitelist = multiversion_regex_builder(TAGS)
 # Whitelist pattern for branches (set to None to ignore all branches)
-BRANCHES = ['branch-4.3', 'branch-4.4', 'branch-4.5']
+BRANCHES = ['branch-4.4', 'branch-4.5', 'master']
 smv_branch_whitelist = multiversion_regex_builder(BRANCHES)
 # Whitelist pattern for remotes (set to None to use local branches only)
 smv_remote_whitelist = r"^origin$"
