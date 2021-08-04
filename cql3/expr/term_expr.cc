@@ -27,6 +27,7 @@
 #include "cql3/lists.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
+#include "cql3/tuples.hh"
 #include "types/list.hh"
 
 namespace cql3 {
@@ -81,6 +82,81 @@ abstract_marker::in_raw::make_in_receiver(const column_specification& receiver) 
 abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     return ::make_shared<lists::marker>(_bind_index, make_in_receiver(*receiver));
+}
+
+sstring
+tuples::raw::to_string() const {
+    return abstract_marker::raw::to_string();
+}
+
+sstring
+tuples::raw::assignment_testable_source_context() const {
+    return abstract_marker::raw::to_string();
+}
+
+lw_shared_ptr<column_specification>
+tuples::raw::make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+    std::vector<data_type> types;
+    types.reserve(receivers.size());
+    sstring in_name = "(";
+    for (auto&& receiver : receivers) {
+        in_name += receiver->name->text();
+        if (receiver != receivers.back()) {
+            in_name += ",";
+        }
+        types.push_back(receiver->type);
+    }
+    in_name += ")";
+
+    auto identifier = ::make_shared<column_identifier>(in_name, true);
+    auto type = tuple_type_impl::get_instance(types);
+    return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
+}
+
+::shared_ptr<term>
+tuples::raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+    auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
+    return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
+}
+
+sstring
+tuples::in_raw::to_string() const {
+    return abstract_marker::raw::to_string();
+}
+
+sstring
+tuples::in_raw::assignment_testable_source_context() const {
+    return to_string();
+}
+
+lw_shared_ptr<column_specification>
+tuples::in_raw::make_in_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+    std::vector<data_type> types;
+    types.reserve(receivers.size());
+    sstring in_name = "in(";
+    for (auto&& receiver : receivers) {
+        in_name += receiver->name->text();
+        if (receiver != receivers.back()) {
+            in_name += ",";
+        }
+
+        if (receiver->type->is_collection() && receiver->type->is_multi_cell()) {
+            throw exceptions::invalid_request_exception("Non-frozen collection columns do not support IN relations");
+        }
+
+        types.emplace_back(receiver->type);
+    }
+    in_name += ")";
+
+    auto identifier = ::make_shared<column_identifier>(in_name, true);
+    auto type = tuple_type_impl::get_instance(types);
+    return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
+}
+
+::shared_ptr<term>
+tuples::in_raw::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+    auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
+    return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
 }
 
 }

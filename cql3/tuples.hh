@@ -229,36 +229,11 @@ public:
     public:
         using abstract_marker::raw::raw;
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override {
-            auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
-            return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
-        }
-
-        virtual sstring assignment_testable_source_context() const override {
-            return abstract_marker::raw::to_string();
-        }
-
-        virtual sstring to_string() const override {
-            return abstract_marker::raw::to_string();
-        }
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
+        virtual sstring assignment_testable_source_context() const override;
+        virtual sstring to_string() const override;
     private:
-        static lw_shared_ptr<column_specification> make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-            std::vector<data_type> types;
-            types.reserve(receivers.size());
-            sstring in_name = "(";
-            for (auto&& receiver : receivers) {
-                in_name += receiver->name->text();
-                if (receiver != receivers.back()) {
-                    in_name += ",";
-                }
-                types.push_back(receiver->type);
-            }
-            in_name += ")";
-
-            auto identifier = ::make_shared<column_identifier>(in_name, true);
-            auto type = tuple_type_impl::get_instance(types);
-            return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
-        }
+        static lw_shared_ptr<column_specification> make_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers);
     };
 
     /**
@@ -268,18 +243,9 @@ public:
     public:
         using abstract_marker::raw::raw;
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override {
-            auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
-            return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
-        }
-
-        virtual sstring assignment_testable_source_context() const override {
-            return to_string();
-        }
-
-        virtual sstring to_string() const override {
-            return abstract_marker::raw::to_string();
-        }
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
+        virtual sstring assignment_testable_source_context() const override;
+        virtual sstring to_string() const override;
     private:
         static lw_shared_ptr<column_specification> make_in_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers);
     };

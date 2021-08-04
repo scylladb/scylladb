@@ -113,30 +113,6 @@ tuples::in_value::from_serialized(const raw_value_view& value_view, const list_t
     }
 }
 
-lw_shared_ptr<column_specification>
-tuples::in_raw::make_in_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    std::vector<data_type> types;
-    types.reserve(receivers.size());
-    sstring in_name = "in(";
-    for (auto&& receiver : receivers) {
-        in_name += receiver->name->text();
-        if (receiver != receivers.back()) {
-            in_name += ",";
-        }
-
-        if (receiver->type->is_collection() && receiver->type->is_multi_cell()) {
-            throw exceptions::invalid_request_exception("Non-frozen collection columns do not support IN relations");
-        }
-
-        types.emplace_back(receiver->type);
-    }
-    in_name += ")";
-
-    auto identifier = ::make_shared<column_identifier>(in_name, true);
-    auto type = tuple_type_impl::get_instance(types);
-    return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
-}
-
 tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
     : abstract_marker(bind_index, std::move(receiver))
 {
