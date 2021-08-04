@@ -97,7 +97,6 @@ options {
 #include "cql3/lists.hh"
 #include "cql3/role_name.hh"
 #include "cql3/role_options.hh"
-#include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
 #include "cql3/ut_name.hh"
@@ -1517,7 +1516,7 @@ term returns [::shared_ptr<cql3::term::raw> term1]
                                             cql3::expr::function_call{std::move(f),
                                                 boost::copy_range<std::vector<cql3::expr::expression>>(
                                                     std::move(args) | boost::adaptors::transformed(cql3::expr::as_expression))}); }
-    | '(' c=comparatorType ')' t=term  { $term1 = make_shared<cql3::type_cast>(c, t); }
+    | '(' c=comparatorType ')' t=term  { $term1 = cql3::expr::as_term_raw(cql3::expr::cast{cql3::expr::expression(std::move(t)), c}); }
     ;
 
 columnOperation[operations_type& operations]

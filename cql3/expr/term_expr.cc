@@ -21,25 +21,31 @@
 
 #include "term_expr.hh"
 #include "cql3/functions/function_call.hh"
-#include "cql3/type_cast.hh"
+#include "cql3/column_identifier.hh"
 
-namespace cql3 {
+namespace cql3::expr {
 
+static
 sstring
-type_cast::to_string() const {
-    return format("({}){}", _type, _term);
+cast_display_name(const cast& c) {
+    return format("({}){}", std::get<shared_ptr<cql3_type::raw>>(c.type), *c.arg);
 }
 
+static
 lw_shared_ptr<column_specification>
-type_cast::casted_spec_of(database& db, const sstring& keyspace, const column_specification& receiver) const {
+casted_spec_of(const cast& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+    auto& type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name,
-            ::make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
+            ::make_shared<column_identifier>(cast_display_name(c), true), type->prepare(db, keyspace).get_type());
 }
 
+static
 assignment_testable::test_result
-type_cast::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+cast_test_assignment(const cast& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+    auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
+    auto term = as_term_raw(*c.arg);
     try {
-        auto&& casted_type = _type->prepare(db, keyspace).get_type();
+        auto&& casted_type = type->prepare(db, keyspace).get_type();
         if (receiver.type == casted_type) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (receiver.type->is_value_compatible_with(*casted_type)) {
@@ -52,22 +58,22 @@ type_cast::test_assignment(database& db, const sstring& keyspace, const column_s
     }
 }
 
+static
 shared_ptr<term>
-type_cast::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+cast_prepare_term(const cast& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-    if (!is_assignable(_term->test_assignment(db, keyspace, *casted_spec_of(db, keyspace, *receiver)))) {
-        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
+    auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
+    auto term = as_term_raw(*c.arg);
+    if (!is_assignable(term->test_assignment(db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
+        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", term, type));
     }
-    if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
-        throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", *this, receiver->name, receiver->type->as_cql3_type()));
+    if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
+        throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
-    return _term->prepare(db, keyspace, receiver);
-}
-
+    return term->prepare(db, keyspace, receiver);
 }
 
 // A term::raw that is implemented using an expression
-namespace cql3::expr {
 
 extern logging::logger expr_logger;
 
@@ -101,8 +107,8 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const function_call& fc) -> ::shared_ptr<term> {
             return functions::prepare_function_call(fc, db, keyspace, receiver);
         },
-        [&] (const cast&) -> ::shared_ptr<term> {
-            on_internal_error(expr_logger, "casts are not yet reachable via term_raw_expr::prepare()");
+        [&] (const cast& c) -> ::shared_ptr<term> {
+            return cast_prepare_term(c, db, keyspace, receiver);
         },
         [&] (const field_selection&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::prepare()");
@@ -143,8 +149,8 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         [&] (const function_call& fc) -> test_result {
             return functions::test_assignment_function_call(fc, db, keyspace, receiver);
         },
-        [&] (const cast&) -> test_result {
-            on_internal_error(expr_logger, "casts are not yet reachable via term_raw_expr::test_assignment()");
+        [&] (const cast& c) -> test_result {
+            return cast_test_assignment(c, db, keyspace, receiver);
         },
         [&] (const field_selection&) -> test_result {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::test_assignment()");
