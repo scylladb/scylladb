@@ -507,7 +507,8 @@ date_tiered_manifest::get_compaction_candidates(column_family& cf, std::vector<s
 
 int64_t date_tiered_manifest::get_now(column_family& cf) {
     int64_t max_timestamp = 0;
-    for (auto& sst : *cf.get_sstables()) {
+    auto shared_set = cf.get_sstables();
+    for (auto& sst : *shared_set) {
         int64_t candidate = sst->get_stats_metadata().max_timestamp;
         max_timestamp = candidate > max_timestamp ? candidate : max_timestamp;
     }
