@@ -170,7 +170,7 @@ smv_released_pattern = r'^tags/.*$'
 # Format for versioned output directories inside the build directory
 smv_outputdir_format = '{ref.name}'
 smv_latest_version = 'branch-4.4'
-smv_rename_latest_version = 'stable' # Use the commit hash
+smv_rename_latest_version = 'stable'
 
 # -- Options for LaTeX page output ---------------------------------------
 
