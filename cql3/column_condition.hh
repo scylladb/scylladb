@@ -119,7 +119,7 @@ public:
     private:
         ::shared_ptr<term::raw> _value;
         std::vector<::shared_ptr<term::raw>> _in_values;
-        ::shared_ptr<abstract_marker::in_raw> _in_marker;
+        ::shared_ptr<term::raw> _in_marker;
 
         // Can be nullptr, used with the syntax "IF m[e] = ..." (in which case it's 'e')
         ::shared_ptr<term::raw> _collection_element;
@@ -127,7 +127,7 @@ public:
     public:
         raw(::shared_ptr<term::raw> value,
             std::vector<::shared_ptr<term::raw>> in_values,
-            ::shared_ptr<abstract_marker::in_raw> in_marker,
+            ::shared_ptr<term::raw> in_marker,
             ::shared_ptr<term::raw> collection_element,
             expr::oper_t op)
                 : _value(std::move(value))
@@ -147,7 +147,7 @@ public:
         static lw_shared_ptr<raw> simple_condition(::shared_ptr<term::raw> value, ::shared_ptr<term::raw> collection_element,
                 expr::oper_t op) {
             return make_lw_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{},
-                    ::shared_ptr<abstract_marker::in_raw>{}, std::move(collection_element), op);
+                    ::shared_ptr<term::raw>{}, std::move(collection_element), op);
         }
 
         /**
@@ -159,7 +159,7 @@ public:
          * "IF col['key'] IN ?"
          */
         static lw_shared_ptr<raw> in_condition(::shared_ptr<term::raw> collection_element,
-                ::shared_ptr<abstract_marker::in_raw> in_marker, std::vector<::shared_ptr<term::raw>> in_values) {
+                ::shared_ptr<term::raw> in_marker, std::vector<::shared_ptr<term::raw>> in_values) {
             return make_lw_shared<raw>(::shared_ptr<term::raw>{}, std::move(in_values), std::move(in_marker),
                     std::move(collection_element), expr::oper_t::IN);
         }

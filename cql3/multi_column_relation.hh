@@ -48,7 +48,12 @@
 
 #include "cql3/restrictions/multi_column_restriction.hh"
 
+#include <ranges>
+
 namespace cql3 {
+
+template <typename Range>
+concept range_of_term_raw = std::ranges::range<Range> && std::convertible_to<std::ranges::range_value_t<Range>, shared_ptr<term::raw>>;
 
 /**
  * A relation using the tuple notation, which typically affects multiple columns.
@@ -65,12 +70,12 @@ private:
     std::vector<shared_ptr<column_identifier::raw>> _entities;
     shared_ptr<term::raw> _values_or_marker;
     std::vector<shared_ptr<term::raw>> _in_values;
-    shared_ptr<tuples::in_raw> _in_marker;
+    shared_ptr<term::raw> _in_marker;
     mode _mode;
 public:
     multi_column_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
         expr::oper_t relation_type, shared_ptr<term::raw> values_or_marker,
-        std::vector<shared_ptr<term::raw>> in_values, shared_ptr<tuples::in_raw> in_marker, mode m = mode::cql)
+        std::vector<shared_ptr<term::raw>> in_values, shared_ptr<term::raw> in_marker, mode m = mode::cql)
         : relation(relation_type)
         , _entities(std::move(entities))
         , _values_or_marker(std::move(values_or_marker))
@@ -82,7 +87,7 @@ public:
     static shared_ptr<multi_column_relation> create_multi_column_relation(
         std::vector<shared_ptr<column_identifier::raw>> entities, expr::oper_t relation_type,
         shared_ptr<term::raw> values_or_marker, std::vector<shared_ptr<term::raw>> in_values,
-        shared_ptr<tuples::in_raw> in_marker, mode m = mode::cql) {
+        shared_ptr<term::raw> in_marker, mode m = mode::cql) {
         return ::make_shared<multi_column_relation>(std::move(entities), relation_type, std::move(values_or_marker),
             std::move(in_values), std::move(in_marker), m);
     }
@@ -118,14 +123,7 @@ public:
      * @return a new <code>MultiColumnRelation</code> instance
      */
     static shared_ptr<multi_column_relation> create_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                std::vector<shared_ptr<tuples::literal>> in_values) {
-        std::vector<shared_ptr<term::raw>> values(in_values.size());
-        std::copy(in_values.begin(), in_values.end(), values.begin());
-        return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, std::move(values), {});
-    }
-
-    static shared_ptr<multi_column_relation> create_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                std::vector<shared_ptr<tuples::raw>> in_values) {
+                                                                range_of_term_raw auto in_values) {
         std::vector<shared_ptr<term::raw>> values(in_values.size());
         std::copy(in_values.begin(), in_values.end(), values.begin());
         return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, std::move(values), {});
@@ -139,7 +137,7 @@ public:
      * @return a new <code>MultiColumnRelation</code> instance
      */
     static shared_ptr<multi_column_relation> create_single_marker_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                              shared_ptr<tuples::in_raw> in_marker) {
+                                                                              shared_ptr<term::raw> in_marker) {
         return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, {}, std::move(in_marker));
     }
 
