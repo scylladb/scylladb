@@ -3299,6 +3299,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
             slogger.warn("load_and_stream: ops_uuid={}, ks={}, table={}, send_phase, err={}",
                     ops_uuid, ks_name, cf_name, eptr);
         }
+        co_await reader.close();
         try {
             co_await parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const gms::inet_address, send_meta_data>& pair) {
                 auto& meta = pair.second;
