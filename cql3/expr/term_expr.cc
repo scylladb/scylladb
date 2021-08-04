@@ -22,6 +22,33 @@
 #include "term_expr.hh"
 #include "cql3/functions/function_call.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/constants.hh"
+
+namespace cql3 {
+
+sstring
+constants::null_literal::to_string() const {
+    return "null";
+}
+
+assignment_testable::test_result
+constants::null_literal::test_assignment(database& db,
+        const sstring& keyspace,
+        const column_specification& receiver) const {
+    return receiver.type->is_counter()
+        ? assignment_testable::test_result::NOT_ASSIGNABLE
+        : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+}
+
+::shared_ptr<term>
+constants::null_literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+    if (!is_assignable(test_assignment(db, keyspace, *std::get<lw_shared_ptr<column_specification>>(receiver)))) {
+        throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
+    }
+    return NULL_VALUE;
+}
+
+}
 
 namespace cql3::expr {
 
