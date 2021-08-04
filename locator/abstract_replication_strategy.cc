@@ -187,6 +187,9 @@ abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metada
             }
         }
         prev_tok = tok;
+        if (can_yield) {
+            seastar::thread::maybe_yield();
+        }
     }
     return ret;
 }
@@ -202,6 +205,9 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep, can_yield can
             insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
         prev_tok = tok;
+        if (can_yield) {
+            seastar::thread::maybe_yield();
+        }
     }
     return ret;
 }
@@ -227,6 +233,9 @@ abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep, can
             }
         }
         prev_tok = tok;
+        if (can_yield) {
+            seastar::thread::maybe_yield();
+        }
     }
     return ret;
 }
