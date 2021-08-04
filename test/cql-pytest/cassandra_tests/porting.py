@@ -110,8 +110,15 @@ def assert_invalid(cql, table, cmd, *args):
     # SyntaxException.
     assert_invalid_throw(cql, table, InvalidRequest, cmd, *args)
 
+def assert_invalid_syntax(cql, table, cmd, *args):
+    assert_invalid_throw(cql, table, SyntaxException, cmd, *args)
+
 def assert_invalid_message(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=re.escape(message)):
+        execute(cql, table, cmd, *args)
+
+def assert_invalid_message_re(cql, table, message, cmd, *args):
+    with pytest.raises(InvalidRequest, match=message):
         execute(cql, table, cmd, *args)
 
 def assert_invalid_throw_message(cql, table, message, typ, cmd, *args):
@@ -181,6 +188,13 @@ def assert_rows_ignoring_order(result, *expected):
     allresults = list(result)
     assert len(allresults) == len(expected)
     assert multiset(allresults) == multiset(expected)
+
+def assert_all_rows(cql, table, *expected):
+    # The original Cassandra implementation of assert_all_rows() calls
+    # assert_rows(), not assert_rows_ignoring_order(). That means that if
+    # the default partitioner ever changes, all these tests will break.
+    # This makes little sense to me, so I changed to ignoring order.
+    return assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s"), *expected)
 
 # Note that the Python driver has a function _clean_column_name() which
 # "cleans" column names in result sets by dropping any non-alphanumeric

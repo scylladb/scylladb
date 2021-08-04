@@ -44,7 +44,7 @@ private:
                     seastar::visit(right_e, [&] (auto&& b) {
                         testlog.trace("cmp({}, {}) == {}", a, b, order);
                         auto r = _cmp(a, b);
-                        auto actual = r <=> 0;
+                        auto actual = r;
                         if (actual != order) {
                             BOOST_FAIL(format("Expected cmp({}, {}) == {}, but got {}", a, b, order, actual));
                         }

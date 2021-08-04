@@ -148,13 +148,13 @@ sstring big_decimal::to_string() const
     return str;
 }
 
-int big_decimal::compare(const big_decimal& other) const
+std::strong_ordering big_decimal::compare(const big_decimal& other) const
 {
     auto max_scale = std::max(_scale, other._scale);
     boost::multiprecision::cpp_int rescale(10);
     boost::multiprecision::cpp_int x = _unscaled_value * boost::multiprecision::pow(rescale, max_scale - _scale);
     boost::multiprecision::cpp_int y = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
-    return x == y ? 0 : x < y ? -1 : 1;
+    return x == y ? std::strong_ordering::equal : x < y ? std::strong_ordering::less : std::strong_ordering::greater;
 }
 
 big_decimal& big_decimal::operator+=(const big_decimal& other)

@@ -25,7 +25,9 @@
 namespace raft {
 
 leader::~leader() {
-    log_limiter_semaphore.broken(not_a_leader(fsm.current_leader()));
+    if (log_limiter_semaphore) {
+        log_limiter_semaphore->broken(not_a_leader(fsm.current_leader()));
+    }
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
@@ -45,7 +47,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
 future<> fsm::wait_max_log_size() {
     check_is_leader();
 
-   return leader_state().log_limiter_semaphore.wait();
+   return leader_state().log_limiter_semaphore->wait();
 }
 
 const configuration& fsm::get_configuration() const {
@@ -149,7 +151,7 @@ void fsm::reset_election_timeout() {
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
     _state.emplace<leader>(_config.max_log_size, *this);
-    leader_state().log_limiter_semaphore.consume(_log.in_memory_size());
+    leader_state().log_limiter_semaphore->consume(_log.in_memory_size());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
@@ -168,7 +170,9 @@ void fsm::become_follower(server_id leader) {
     if (leader == _my_id) {
         on_internal_error(logger, "fsm cannot become a follower of itself");
     }
-    _state = follower{.current_leader = leader};
+    // Note that current state should be destroyed only after the new one is
+    // assigned. The exchange here guarantis that.
+    std::exchange(_state, follower{.current_leader = leader});
     if (leader != server_id{}) {
         _last_election_time = _clock.now();
     }
@@ -178,7 +182,10 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
-    _state = candidate(_log.get_configuration(), is_prevote);
+
+    // Note that current state should be destroyed only after the new one is
+    // assigned. The exchange here guarantis that.
+    std::exchange(_state, candidate(_log.get_configuration(), is_prevote));
 
     reset_election_timeout();
 
@@ -481,7 +488,7 @@ void fsm::tick_leader() {
         } else if (*state.stepdown <= _clock.now()) {
             logger.trace("tick[{}]: cancel stepdown", _my_id);
             // Cancel stepdown (only if the leader is part of the cluster)
-            leader_state().log_limiter_semaphore.signal(_config.max_log_size);
+            leader_state().log_limiter_semaphore->signal(_config.max_log_size);
             state.stepdown.reset();
             state.timeout_now_sent.reset();
             _abort_leadership_transfer = true;
@@ -588,7 +595,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         return;
     }
 
-    progress.commit_idx = reply.commit_idx;
+    progress.commit_idx = std::max(progress.commit_idx, reply.commit_idx);
 
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
         // accepted
@@ -812,7 +819,6 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         append_request req = {
             .current_term = _current_term,
-            .leader_id = _my_id,
             .prev_log_idx = prev_idx,
             .prev_log_term = prev_term.value(),
             .leader_commit_idx = _commit_idx,
@@ -917,7 +923,7 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
-        leader_state().log_limiter_semaphore.signal(units);
+        leader_state().log_limiter_semaphore->signal(units);
     }
     return true;
 }
@@ -933,7 +939,7 @@ void fsm::transfer_leadership(logical_clock::duration timeout) {
 
     leader_state().stepdown = _clock.now() + timeout;
     // Stop new requests from coming in
-    leader_state().log_limiter_semaphore.consume(_config.max_log_size);
+    leader_state().log_limiter_semaphore->consume(_config.max_log_size);
     // If there is a fully up-to-date voting replica make it start an election
     for (auto&& [_, p] : leader_state().tracker) {
         if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()) {

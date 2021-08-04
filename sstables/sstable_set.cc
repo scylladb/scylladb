@@ -1089,6 +1089,10 @@ sstable_set::make_local_shard_sstable_reader(
         assert(!sst->is_shared());
         return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
+    if (auto sstables = _impl->all(); sstables->size() == 1) [[unlikely]] {
+        auto sst = *sstables->begin();
+        return reader_factory_fn(sst, pr);
+    }
     return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
                     pr,

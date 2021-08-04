@@ -47,8 +47,48 @@
 
 namespace cql3 {
 
+class term;
 class terminal;
-class variable_specifications;
+class prepare_context;
+
+/**
+ * A parsed, non prepared (thus untyped) term.
+ *
+ * This can be one of:
+ *   - a constant
+ *   - a collection literal
+ *   - a function call
+ *   - a marker
+ */
+class term_raw : public virtual assignment_testable {
+public:
+    /**
+     * This method validates this RawTerm is valid for provided column
+     * specification and "prepare" this RawTerm, returning the resulting
+     * prepared Term.
+     *
+     * @param receiver the "column" this RawTerm is supposed to be a value of. Note
+     * that the ColumnSpecification may not correspond to a real column in the
+     * case this RawTerm describe a list index or a map key, etc...
+     * @return the prepared term.
+     */
+    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const = 0;
+
+    virtual sstring to_string() const = 0;
+
+    virtual sstring assignment_testable_source_context() const override {
+        return to_string();
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const term_raw& r) {
+        return os << r.to_string();
+    }
+};
+
+class multi_column_term_raw : public virtual term_raw {
+public:
+    virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receiver) const = 0;
+};
 
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
@@ -68,7 +108,7 @@ public:
      * @param boundNames the variables specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(variable_specifications& bound_names) const = 0;
+    virtual void fill_prepare_context(prepare_context& ctx) const = 0;
 
     /**
      * Bind the values in this term to the values contained in {@code values}.
@@ -105,44 +145,9 @@ public:
         return out << t.to_string();
     }
 
-    /**
-     * A parsed, non prepared (thus untyped) term.
-     *
-     * This can be one of:
-     *   - a constant
-     *   - a collection literal
-     *   - a function call
-     *   - a marker
-     */
-    class raw : public virtual assignment_testable {
-    public:
-        /**
-         * This method validates this RawTerm is valid for provided column
-         * specification and "prepare" this RawTerm, returning the resulting
-         * prepared Term.
-         *
-         * @param receiver the "column" this RawTerm is supposed to be a value of. Note
-         * that the ColumnSpecification may not correspond to a real column in the
-         * case this RawTerm describe a list index or a map key, etc...
-         * @return the prepared term.
-         */
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const = 0;
+    using raw = term_raw;
 
-        virtual sstring to_string() const = 0;
-
-        virtual sstring assignment_testable_source_context() const override {
-            return to_string();
-        }
-
-        friend std::ostream& operator<<(std::ostream& os, const raw& r) {
-            return os << r.to_string();
-        }
-    };
-
-    class multi_column_raw : public virtual raw {
-    public:
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receiver) const = 0;
-    };
+    using multi_column_raw = multi_column_term_raw;
 };
 
 /**
@@ -161,7 +166,7 @@ public:
  */
 class terminal : public term {
 public:
-    virtual void collect_marker_specification(variable_specifications& bound_names) const {
+    virtual void fill_prepare_context(prepare_context& ctx) const {
     }
 
     virtual ::shared_ptr<terminal> bind(const query_options& options) override {

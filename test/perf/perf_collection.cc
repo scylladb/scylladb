@@ -34,14 +34,8 @@ struct key_compare {
 };
 
 struct key_tri_compare {
-    int operator()(const per_key_t& a, const per_key_t& b) const noexcept {
-        if (a > b) {
-            return 1;
-        } else if (a < b) {
-            return -1;
-        } else {
-            return 0;
-        }
+    std::strong_ordering operator()(const per_key_t& a, const per_key_t& b) const noexcept {
+        return a <=> b;
     }
 };
 
@@ -65,10 +59,10 @@ public:
 
     struct tri_compare {
         key_tri_compare _cmp;
-        std::strong_ordering operator()(const per_key_t a, const per_key_t b) const noexcept { return _cmp(a, b) <=> 0; }
-        std::strong_ordering operator()(const perf_intrusive_key& a, const perf_intrusive_key& b) const noexcept { return _cmp(a._k, b._k) <=> 0; }
-        std::strong_ordering operator()(const per_key_t a, const perf_intrusive_key& b) const noexcept { return _cmp(a, b._k) <=> 0; }
-        std::strong_ordering operator()(const perf_intrusive_key& a, const per_key_t b) const noexcept { return _cmp(a._k, b) <=> 0; }
+        std::strong_ordering operator()(const per_key_t a, const per_key_t b) const noexcept { return _cmp(a, b); }
+        std::strong_ordering operator()(const perf_intrusive_key& a, const perf_intrusive_key& b) const noexcept { return _cmp(a._k, b._k); }
+        std::strong_ordering operator()(const per_key_t a, const perf_intrusive_key& b) const noexcept { return _cmp(a, b._k); }
+        std::strong_ordering operator()(const perf_intrusive_key& a, const per_key_t b) const noexcept { return _cmp(a._k, b); }
     };
 };
 
@@ -301,7 +295,7 @@ public:
     virtual void insert_and_erase(per_key_t k) override {
         perf_intrusive_key key(k);
         auto i = _t.insert_before(_t.end(), key);
-        i.erase();
+        _t.erase(i);
     }
     virtual void show_stats() {
         struct intrusive_b::stats st = _t.get_stats();

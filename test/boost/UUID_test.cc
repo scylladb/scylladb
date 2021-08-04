@@ -97,24 +97,24 @@ BOOST_AUTO_TEST_CASE(test_get_time_uuid) {
     BOOST_CHECK(unix_timestamp == millis);
 }
 
-int timeuuid_legacy_tri_compare(bytes_view o1, bytes_view o2) {
-    auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
-        int d = (o1[pos] & mask) - (o2[pos] & mask);
-        return d ? d : ifequal;
+std::strong_ordering timeuuid_legacy_tri_compare(bytes_view o1, bytes_view o2) {
+    auto compare_pos = [&] (unsigned pos, int mask, std::strong_ordering ifequal) {
+        auto d = (o1[pos] & mask) <=> (o2[pos] & mask);
+        return d != 0 ? d : ifequal;
     };
-    int res = compare_pos(6, 0xf,
+    auto res = compare_pos(6, 0xf,
         compare_pos(7, 0xff,
             compare_pos(4, 0xff,
                 compare_pos(5, 0xff,
                     compare_pos(0, 0xff,
                         compare_pos(1, 0xff,
                             compare_pos(2, 0xff,
-                                compare_pos(3, 0xff, 0))))))));
+                                compare_pos(3, 0xff, std::strong_ordering::equal))))))));
     if (res == 0) {
         res = lexicographical_tri_compare(o1.begin(), o1.end(), o2.begin(), o2.end(),
-            [] (const int8_t& a, const int8_t& b) { return a - b; });
+            [] (const int8_t& a, const int8_t& b) { return a <=> b; });
     }
-    return res < 0 ? -1 : res > 0;
+    return res;
 }
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {

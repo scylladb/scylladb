@@ -362,7 +362,13 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table
                         return collect_output_sstables_from_reshaping(std::move(new_sstables));
                     });
                 });
-            }).then([] {
+            }).then_wrapped([&table] (future<> f) {
+                try {
+                    f.get();
+                } catch (sstables::compaction_stop_exception& e) {
+                    dirlog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
         }).then([&reshaped_size] {

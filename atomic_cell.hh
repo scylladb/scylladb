@@ -396,7 +396,7 @@ public:
 
 class column_definition;
 
-int compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);
+std::strong_ordering compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);
 void merge_column(const abstract_type& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);

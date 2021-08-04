@@ -44,6 +44,7 @@
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_vector.hh"
 #include "test/lib/log.hh"
 #include "log.hh"
 #include "test/lib/random_utils.hh"
@@ -1885,6 +1886,38 @@ SEASTAR_THREAD_TEST_CASE(test_weak_ptr) {
 
     BOOST_REQUIRE(obj_wptr.get() == nullptr);
     BOOST_REQUIRE(!obj_wptr);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_buf_alloc_compaction) {
+    logalloc::region region;
+    size_t buf_size = 128; // much smaller than region_impl::buf_align
+
+    utils::chunked_vector<lsa_buffer> bufs;
+
+    bool reclaimer_run = false;
+    region.make_evictable([&] {
+        reclaimer_run = true;
+        if (bufs.empty()) {
+            return memory::reclaiming_result::reclaimed_nothing;
+        }
+        bufs.pop_back();
+        return memory::reclaiming_result::reclaimed_something;
+    });
+
+    allocating_section as;
+    while (!reclaimer_run) {
+        as(region, [&] {
+            bufs.emplace_back(region.alloc_buf(buf_size));
+        });
+    }
+
+    // Allocate a few segments more after eviction starts
+    // to make sure we can really make forward progress.
+    for (int i = 0; i < 32*100; ++i) {
+        as(region, [&] {
+            bufs.emplace_back(region.alloc_buf(buf_size));
+        });
+    }
 }
 
 #endif

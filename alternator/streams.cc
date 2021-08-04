@@ -41,7 +41,6 @@
 #include "cql3/result_set.hh"
 #include "cql3/type_json.hh"
 #include "schema_builder.hh"
-#include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"

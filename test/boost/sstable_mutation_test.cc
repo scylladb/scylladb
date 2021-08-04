@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
             return read_mutation_from_flat_mutation_reader(mr, db::no_timeout);
         }).get0();
         BOOST_REQUIRE(bool(mut));
-        auto& rts = mut->partition().row_tombstones();
+        auto rts = mut->partition().row_tombstones();
         BOOST_REQUIRE(rts.size() == 1);
         auto it = rts.begin();
         BOOST_REQUIRE(it->equal(*s, range_tombstone(
@@ -614,7 +614,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
                     // Somewhat counterintuitively, scylla represents
                     // deleting a small row with all clustering keys set - not
                     // as a "row tombstone" but rather as a deleted clustering row.
-                    auto& rts = mut->partition().row_tombstones();
+                    auto rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 2);
                     auto it = rts.begin();
                     BOOST_REQUIRE(it->equal(*s, range_tombstone(
@@ -630,7 +630,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
                                     make_ckey("aaa"),
                                     bound_kind::incl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
-                    auto& rows = mut->partition().clustered_rows();
+                    auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 1);
                     for (auto& e : rows) {
                         BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb")));
@@ -676,7 +676,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
                         return clustering_key::from_deeply_exploded(*s, std::move(v));
                     };
                     BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
-                    auto& rts = mut->partition().row_tombstones();
+                    auto rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 1);
                     auto it = rts.begin();
                     BOOST_REQUIRE(it->equal(*s, range_tombstone(
@@ -685,7 +685,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
                                     make_ckey("aaa"),
                                     bound_kind::incl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
-                    auto& rows = mut->partition().clustered_rows();
+                    auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 0);
                     return stop_iteration::no;
                 });
@@ -758,8 +758,8 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
                         return clustering_key::from_deeply_exploded(*s, std::move(v));
                     };
                     BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
-                    auto& rows = mut->partition().clustered_rows();
-                    auto& rts = mut->partition().row_tombstones();
+                    auto rows = mut->partition().clustered_rows();
+                    auto rts = mut->partition().row_tombstones();
 
                     auto it = rts.begin();
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_start)));
@@ -932,7 +932,8 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
-    return std::make_unique<index_reader>(sst, std::move(permit), default_priority_class(), tracing::trace_state_ptr());
+    return std::make_unique<index_reader>(sst, std::move(permit), default_priority_class(),
+                                          tracing::trace_state_ptr(), use_caching::yes);
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {

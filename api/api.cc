@@ -109,8 +109,10 @@ future<> unset_rpc_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_rpc_controller(ctx, r); });
 }
 
-future<> set_server_storage_service(http_context& ctx) {
-    return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss) {
+    return register_api(ctx, "storage_service", "The storage service API", [&ss] (http_context& ctx, routes& r) {
+            set_storage_service(ctx, r, ss);
+        });
 }
 
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair) {
@@ -153,9 +155,11 @@ future<> unset_server_messaging_service(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_messaging_service(ctx, r); });
 }
 
-future<> set_server_storage_proxy(http_context& ctx) {
+future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_service>& ss) {
     return register_api(ctx, "storage_proxy",
-                "The storage proxy API", set_storage_proxy);
+                "The storage proxy API", [&ss] (http_context& ctx, routes& r) {
+                    set_storage_proxy(ctx, r, ss);
+                });
 }
 
 future<> set_server_stream_manager(http_context& ctx) {
@@ -178,13 +182,20 @@ future<> set_server_gossip_settle(http_context& ctx) {
     });
 }
 
-future<> set_server_done(http_context& ctx) {
+future<> set_server_compaction_manager(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         rb->register_function(r, "compaction_manager",
                 "The Compaction manager API");
         set_compaction_manager(ctx, r);
+    });
+}
+
+future<> set_server_done(http_context& ctx) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         rb->register_function(r, "lsa", "Log-structured allocator API");
         set_lsa(ctx, r);
 

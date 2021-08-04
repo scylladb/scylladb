@@ -62,17 +62,6 @@ public:
     virtual sstring to_string() const override;
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
-
-    class raw : public selectable::raw {
-        shared_ptr<selectable::raw> _selected;
-        shared_ptr<column_identifier::raw> _field;
-    public:
-        raw(shared_ptr<selectable::raw> selected, shared_ptr<column_identifier::raw> field)
-                : _selected(std::move(selected)), _field(std::move(field)) {
-        }
-        virtual shared_ptr<selectable> prepare(const schema& s) const override;
-        virtual bool processes_selection() const override;
-    };
 };
 
 }

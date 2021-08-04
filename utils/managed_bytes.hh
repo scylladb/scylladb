@@ -98,7 +98,7 @@ class managed_bytes {
     } _u;
     static_assert(sizeof(small_blob) > sizeof(blob_storage*), "inline size too small");
 private:
-    bool external() const {
+    bool external() const noexcept {
         return _u.small.size < 0;
     }
     size_t max_seg(allocation_strategy& alctr) {
@@ -325,7 +325,7 @@ public:
     }
 
     // Returns the amount of external memory used.
-    size_t external_memory_usage() const {
+    size_t external_memory_usage() const noexcept {
         if (external()) {
             size_t mem = 0;
             blob_storage* blob = _u.ptr;
@@ -342,7 +342,7 @@ public:
     // of the same size as us.
     // In other words, it returns the amount of external memory that would used by this
     // managed_bytes if all data was allocated in one big fragment.
-    size_t minimal_external_memory_usage() const {
+    size_t minimal_external_memory_usage() const noexcept {
         if (external()) {
             return sizeof(blob_storage) + _u.ptr->size;
         } else {

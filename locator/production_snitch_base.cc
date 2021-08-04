@@ -49,6 +49,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <seastar/core/file.hh>
 
 namespace locator {
 
@@ -123,11 +124,21 @@ sstring production_snitch_base::get_endpoint_info(inet_address endpoint, gms::ap
 }
 
 void production_snitch_base::set_my_dc(const sstring& new_dc) {
-    _my_dc = new_dc;
+    if (!new_dc.empty()) {
+        _my_dc = new_dc;
+    } else {
+        _my_dc = default_dc;
+        logger().warn("{} snitch attempted to set DC to an empty string, falling back to {}.", get_name(), default_dc);
+    }
 }
 
 void production_snitch_base::set_my_rack(const sstring& new_rack) {
-    _my_rack = new_rack;
+    if (!new_rack.empty()) {
+        _my_rack = new_rack;
+    } else {
+        _my_rack = default_rack;
+        logger().warn("{} snitch attempted to set rack to an empty string, falling back to {}.", get_name(), default_rack);
+    }
 }
 
 void production_snitch_base::set_prefer_local(bool prefer_local) {

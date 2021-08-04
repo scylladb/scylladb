@@ -165,12 +165,14 @@ private:
     qos::service_level_controller& _sl_controller;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
-            service::migration_notifier& mn, service::memory_limiter& ml,
+            service::memory_limiter& ml,
             cql_server_config config,
             const db::config& db_cfg,
             qos::service_level_controller& sl_controller);
 public:
     using response = cql_transport::response;
+    service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
+    service::migration_listener* get_migration_listener() const noexcept;
 private:
     class fmt_visitor;
     friend class connection;
@@ -258,7 +260,7 @@ private:
                 Process process_fn);
         template<typename Process>
         future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-        process_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
+        process_on_shard(::shared_ptr<messages::result_message::bounce_to_shard> bounce_msg, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
                 service_permit permit, tracing::trace_state_ptr trace_state, Process process_fn);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
@@ -272,7 +274,6 @@ private:
 
 private:
     shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
-    future<> on_stop() override;
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
@@ -286,8 +287,6 @@ class cql_server::event_notifier : public service::migration_listener,
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
-    service::migration_notifier& _mnotifier;
-    bool _stopped = false;
 
     // We want to delay sending NEW_NODE CQL event to clients until the new node
     // has started listening for CQL requests.
@@ -295,9 +294,6 @@ class cql_server::event_notifier : public service::migration_listener,
 
     void send_join_cluster(const gms::inet_address& endpoint);
 public:
-    future<> stop();
-    event_notifier(service::migration_notifier& mn);
-    ~event_notifier();
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 
@@ -328,4 +324,6 @@ public:
     virtual void on_down(const gms::inet_address& endpoint) override;
 };
 
+inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }
+inline service::migration_listener* cql_server::get_migration_listener() const noexcept { return _notifier.get(); }
 }

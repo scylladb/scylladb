@@ -2281,23 +2281,37 @@ class scylla_segment_descs(gdb.Command):
         gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        # FIXME: handle debug-mode build
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         try:
             base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments_base'))
         except gdb.error:
-            base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
-        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
-        addr = base
-        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
-            desc = segment_descriptor(desc)
+            try:
+                base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
+            except gdb.error:
+                base = None
+
+        def print_desc(seg_addr, desc):
             if desc.is_lsa():
-                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc.free_space(),
-                                                                                   segment_size - int(desc.free_space()),
-                                                                                   float(segment_size - int(desc.free_space())) * 100 / segment_size,
-                                                                                   int(desc.region())))
+                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (seg_addr, desc.free_space(),
+                    segment_size - int(desc.free_space()),
+                    float(segment_size - int(desc.free_space())) * 100 / segment_size,
+                    int(desc.region())))
             else:
-                gdb.write('0x%x: std\n' % (addr))
-            addr += segment_size
+                gdb.write('0x%x: std\n' % (seg_addr))
+
+        if base is None: # debug mode build
+            segs = std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._store._segments'))
+            descs = std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments'))
+
+            for seg, desc_ref in zip(segs, descs):
+                desc = segment_descriptor(desc_ref)
+                print_desc(int(seg), desc)
+        else:
+            addr = base
+            for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+                desc = segment_descriptor(desc)
+                print_desc(addr, desc)
+                addr += segment_size
 
 
 class scylla_lsa(gdb.Command):

@@ -255,9 +255,6 @@ struct snapshot {
 struct append_request {
     // The leader's term.
     term_t current_term;
-    // So that follower can redirect clients
-    // In practice we do not need it since we should know sender's id anyway.
-    server_id leader_id;
     // Index of the log entry immediately preceding new ones
     index_t prev_log_idx;
     // Term of prev_log_idx entry.

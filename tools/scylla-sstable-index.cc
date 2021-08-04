@@ -43,7 +43,6 @@ const auto app_name = "scylla-sstable-index";
 logging::logger silog(app_name);
 
 db::nop_large_data_handler large_data_handler;
-reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
 
 schema_ptr make_primary_key_schema_from_types(std::vector<data_type> types) {
     schema_builder builder("ks", "cf");
@@ -176,8 +175,12 @@ Note: UDT is not supported for now.
 
             sst->load().get();
 
+            reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
+            auto stop_semaphore = deferred_stop(rcs_sem);
+
             {
-                sstables::index_reader idx_reader(sst, rcs_sem.make_tracking_only_permit(primary_key_schema.get(), "idx"), default_priority_class(), {});
+                sstables::index_reader idx_reader(sst, rcs_sem.make_tracking_only_permit(primary_key_schema.get(), "idx"), default_priority_class(), {},
+                                                  sstables::use_caching::yes);
 
                 list_partitions(*primary_key_schema, idx_reader);
 

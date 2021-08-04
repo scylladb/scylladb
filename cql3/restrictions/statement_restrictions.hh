@@ -49,7 +49,7 @@
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
 #include "cql3/relation.hh"
-#include "cql3/variable_specifications.hh"
+#include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
 
 namespace cql3 {
@@ -103,6 +103,7 @@ private:
     bool _is_key_range = false;
 
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
+    bool _has_multi_column; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
 
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
 
@@ -151,7 +152,7 @@ public:
         schema_ptr schema,
         statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
-        variable_specifications& bound_names,
+        prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view = false,
         bool allow_filtering = false);
@@ -206,6 +207,10 @@ public:
 
     ::shared_ptr<clustering_key_restrictions> get_clustering_columns_restrictions() const {
         return _clustering_columns_restrictions;
+    }
+
+    bool has_token_restrictions() const {
+        return has_token(_partition_key_restrictions->expression);
     }
 
     /**
@@ -445,7 +450,16 @@ public:
     }
 
     bool ck_restrictions_need_filtering() const {
-        return _partition_key_restrictions->has_unrestricted_components(*_schema) || _clustering_columns_restrictions->needs_filtering(*_schema);
+        if (_clustering_columns_restrictions->empty()) {
+            return false;
+        }
+
+        return _partition_key_restrictions->has_unrestricted_components(*_schema)
+        || _clustering_columns_restrictions->needs_filtering(*_schema)
+        // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
+        // A single token restriction can have multiple matching partition key values.
+        // Because of this we can't create a clustering prefix with more than token restriction.
+        || (_uses_secondary_indexing && has_token(_partition_key_restrictions->expression));
     }
 
     /**
@@ -483,6 +497,10 @@ public:
 
     /// Calculates clustering ranges for querying a global-index table.
     std::vector<query::clustering_range> get_global_index_clustering_ranges(
+            const query_options& options, const schema& idx_tbl_schema) const;
+
+    /// Calculates clustering ranges for querying a global-index table for queries with token restrictions present.
+    std::vector<query::clustering_range> get_global_index_token_clustering_ranges(
             const query_options& options, const schema& idx_tbl_schema) const;
 };
 

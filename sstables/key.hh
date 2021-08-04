@@ -57,16 +57,16 @@ public:
 
     bool empty() const { return _bytes.empty(); }
 
-    int tri_compare(key_view other) const {
+    std::strong_ordering tri_compare(key_view other) const {
         return compare_unsigned(_bytes, other._bytes);
     }
 
-    int tri_compare(const schema& s, partition_key_view other) const {
+    std::strong_ordering tri_compare(const schema& s, partition_key_view other) const {
         return with_linearized([&] (bytes_view v) {
             auto lf = other.legacy_form(s);
             return lexicographical_tri_compare(
                     v.begin(), v.end(), lf.begin(), lf.end(),
-                    [](uint8_t b1, uint8_t b2) { return (int) b1 - b2; });
+                    [](uint8_t b1, uint8_t b2) { return  b1 <=> b2; });
         });
     }
 };
@@ -119,12 +119,12 @@ public:
         return composite_view(_bytes, is_compound(s)).explode();
     }
 
-    int32_t tri_compare(key_view k) const {
+    std::strong_ordering tri_compare(key_view k) const {
         if (_kind == kind::before_all_keys) {
-            return -1;
+            return std::strong_ordering::less;
         }
         if (_kind == kind::after_all_keys) {
-            return 1;
+            return std::strong_ordering::greater;
         }
         return key_view(_bytes).tri_compare(k);
     }

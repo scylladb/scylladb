@@ -32,6 +32,7 @@ class thrift_server;
 class database;
 namespace auth { class service; }
 namespace cql3 { class query_processor; }
+namespace service { class storage_service; }
 
 class thrift_controller {
     std::unique_ptr<distributed<thrift_server>> _server;
@@ -42,12 +43,13 @@ class thrift_controller {
     sharded<auth::service>& _auth_service;
     sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _mem_limiter;
+    sharded<service::storage_service>& _ss;
 
     future<> do_start_server();
     future<> do_stop_server();
 
 public:
-    thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&);
+    thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss);
     future<> start_server();
     future<> stop_server();
     future<> stop();

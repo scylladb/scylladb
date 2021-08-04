@@ -484,7 +484,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     BOOST_CHECK(fsm.is_follower());
 
     // Inform FSM about a new leader at a new term
-    fsm.step(id4, raft::append_request{term_t{1}, id4, index_t{1}, term_t{1}});
+    fsm.step(id4, raft::append_request{term_t{1}, index_t{1}, term_t{1}});
 
     (void) fsm.get_output();
 
@@ -601,7 +601,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     BOOST_CHECK(fsm.is_follower());
 
     // Inform FSM about a new leader at a new term
-    fsm.step(id4, raft::append_request{term_t{1}, id4, index_t{1}, term_t{1}});
+    fsm.step(id4, raft::append_request{term_t{1}, index_t{1}, term_t{1}});
 
     (void) fsm.get_output();
 

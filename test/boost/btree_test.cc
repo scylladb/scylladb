@@ -36,7 +36,7 @@ public:
     struct tri_compare {
         test_key_tri_compare _cmp;
         template <typename A, typename B>
-        std::strong_ordering operator()(const A& a, const B& b) const noexcept { return _cmp(a, b) <=> 0; }
+        std::strong_ordering operator()(const A& a, const B& b) const noexcept { return _cmp(a, b); }
     };
     using test_tree = tree<test_key, &test_key::b_hook, tri_compare, 4, 5, key_search::both, with_debug::yes>;
     test_key(int nr, int cookie) noexcept : tree_test_key_base(nr, cookie) {}
@@ -155,7 +155,7 @@ BOOST_AUTO_TEST_CASE(test_iterator_erase) {
     test_tree t;
     auto it = t.insert(std::make_unique<test_key>(2), cmp);
     t.insert(std::make_unique<test_key>(5), cmp);
-    auto in = it.first.erase_and_dispose(key_deleter);
+    auto in = t.erase_and_dispose(it.first, key_deleter);
     BOOST_REQUIRE(*in == 5);
     BOOST_REQUIRE(*t.find(5, cmp) == 5);
     t.erase_and_dispose(5, cmp, key_deleter);
@@ -224,7 +224,7 @@ static void test_lower_bound_sz(int nkeys) {
             break;
         }
 
-        it.erase_and_dispose(key_deleter);
+        t.erase_and_dispose(it, key_deleter);
 
         bool match;
         it = t.lower_bound(0, match, cmp);
@@ -357,7 +357,7 @@ BOOST_AUTO_TEST_CASE(test_data_self_iterator) {
     test_tree::iterator di(d);
     BOOST_REQUIRE(di->cookie() == 42);
 
-    di.erase_and_dispose(key_deleter);
+    t.erase_and_dispose(di, key_deleter);
     BOOST_REQUIRE(t.find(1, cmp) == t.end());
 }
 
@@ -375,7 +375,7 @@ static void test_singular_tree_ptr_sz(int sz) {
         } else {
             BOOST_REQUIRE(it.tree_if_singular() == nullptr);
         }
-        it.erase_and_dispose(key_deleter);
+        t.erase_and_dispose(it, key_deleter);
     }
 }
 

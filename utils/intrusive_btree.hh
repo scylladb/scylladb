@@ -825,6 +825,29 @@ public:
         bool operator==(const iterator_base& o) const noexcept { return is_end() ? o.is_end() : _hook == o._hook; }
         bool operator!=(const iterator_base& o) const noexcept { return !(*this == o); }
         operator bool() const noexcept { return !is_end(); }
+
+        /*
+         * Special constructor for the case when there's the need for an
+         * iterator to the given value poiter. We can get all we need
+         * through the hook -> node_base -> node chain.
+         */
+        iterator_base(pointer key) noexcept : iterator_base(&(key->*Hook), 0) {
+            revalidate();
+        }
+
+        /*
+         * Returns pointer on the owning tree if the element is the
+         * last one left in it.
+         */
+        tree_ptr tree_if_singular() noexcept {
+            node_base* n = revalidate();
+
+            if (n->is_root() && n->is_leaf() && n->num_keys == 1) {
+                return n->is_inline() ? tree::from_inline(n) : node::from_base(n)->_parent.t;
+            } else {
+                return nullptr;
+            }
+        }
     };
 
     using iterator_base_const = iterator_base<true>;
@@ -854,6 +877,7 @@ public:
 
     class iterator final : public iterator_base_nonconst {
         friend class tree;
+        friend class key_grabber;
         using super = iterator_base_nonconst;
 
         explicit iterator(const tree* t) noexcept : super(t) {}
@@ -873,29 +897,7 @@ public:
             }
         }
 
-        /*
-         * Special constructor for the case when there's the need for an
-         * iterator to the given value poiter. We can get all we need
-         * through the hook -> node_base -> node chain.
-         */
-        iterator(Key* key) noexcept : super(&(key->*Hook), 0) {
-            super::revalidate();
-        }
-
-        /*
-         * Returns pointer on the owning tree if the element is the
-         * last one left in it.
-         */
-        tree* tree_if_singular() noexcept {
-            node_base* n = super::revalidate();
-
-            if (n->is_root() && n->is_leaf() && n->num_keys == 1) {
-                return n->is_inline() ? tree::from_inline(n) : node::from_base(n)->_parent.t;
-            } else {
-                return nullptr;
-            }
-        }
-
+    private:
         template <typename Disp>
         requires Disposer<Disp, Key>
         iterator erase_and_dispose(Disp&& disp) noexcept {
@@ -920,9 +922,6 @@ public:
             return cur;
         }
 
-        iterator erase() noexcept { return erase_and_dispose(default_dispose<Key>); }
-
-    private:
         template <typename Pointer>
         iterator insert_before(Pointer kptr) {
             cursor cur;
@@ -1000,7 +999,9 @@ public:
     }
 
     /*
-     * The KeyPointer implementation for moving the key between trees.
+     * Helper to remove keys from trees using only the key iterator.
+     *
+     * Conforms to KeyPointer and can be used to move keys between trees.
      * Create it with an iterator to a key in one tree and feed to some
      * .insert method into the other. If the key will be taken by the
      * target, it will be instantly removed from the source, and the
@@ -1018,9 +1019,16 @@ public:
         key_grabber(key_grabber&&) noexcept = default;
 
         Key& operator*() const noexcept { return *_it; }
+
+        template <typename Disp>
+        requires Disposer<Disp, Key>
+        void release(Disp&& disp) {
+            _it = _it.erase_and_dispose(std::move(disp));
+        }
+
         Key* release() noexcept {
             Key& key = *_it;
-            _it = _it.erase();
+            release(default_dispose<Key>);
             return &key;
         }
     };

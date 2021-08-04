@@ -191,4 +191,28 @@ db::consistency_level query_options::check_serial_consistency() const {
     throw exceptions::protocol_exception("Consistency level for LWT is missing for a request with conditions");
 }
 
+void query_options::cache_pk_function_call(computed_function_values::key_type id, computed_function_values::mapped_type value) const {
+    _cached_pk_fn_calls.emplace(id, std::move(value));
+}
+
+const computed_function_values& query_options::cached_pk_function_calls() const {
+    return _cached_pk_fn_calls;
+}
+
+computed_function_values&& query_options::take_cached_pk_function_calls() {
+    return std::move(_cached_pk_fn_calls);
+}
+
+void query_options::set_cached_pk_function_calls(computed_function_values vals) {
+    _cached_pk_fn_calls = std::move(vals);
+}
+
+computed_function_values::mapped_type* query_options::find_cached_pk_function_call(computed_function_values::key_type id) const {
+    auto it = _cached_pk_fn_calls.find(id);
+    if (it != _cached_pk_fn_calls.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
 }

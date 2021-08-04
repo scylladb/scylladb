@@ -75,5 +75,56 @@ public:
     mutation_source as_mutation_source() override;
 };
 
+class result_collector {
+    schema_ptr _schema;
+    reader_permit _permit;
+public:
+    result_collector(schema_ptr s, reader_permit p)
+        : _schema(std::move(s))
+        , _permit(std::move(p))
+    { }
+
+    // Subsequent calls should pass fragments which form a valid mutation fragment stream (see mutation_fragment.hh).
+    // Concurrent calls not allowed.
+    virtual future<> take(mutation_fragment) = 0;
+
+public: // helpers
+    future<> emit_partition_start(dht::decorated_key dk);
+    future<> emit_partition_end();
+    future<> emit_row(clustering_row&& cr);
+};
+
+// Produces results by emitting a mutation fragment stream.
+//
+// Intended to be used when the amount of data is large because it allows
+// to build the result set incrementally and thus avoid OOM issues.
+//
+// The implementations should override execute() and use the provided result_collector
+// to build the mutation fragment stream.
+// The result collector informs the user when it should stop producing
+// fragments (e.g. because the buffer is full) by returning a non-ready future.
+//
+// The fragments must be ordered according to the natural ordering of the keys
+// in the virtual table's schema.
+//
+// The reader is free to emit more data than is needed by the query.
+// It will be filtered-out automatically.
+// As an optimization, the implementation may skip data using the following ways:
+//
+//  - avoid emitting partitions for which this_shard_owns() returns false.
+//
+//  - avoid emitting partitions which fall outside result_collector::partition_range().
+//
+class streaming_virtual_table : public virtual_table {
+public:
+    using virtual_table::virtual_table;
+
+    // Override one of these execute() overloads.
+    // The handler is always allowed to produce more data than implied by the query_restrictions.
+    virtual future<> execute(reader_permit, result_collector&) { return make_ready_future<>(); }
+    virtual future<> execute(reader_permit p, result_collector& c, const query_restrictions&) { return execute(p, c); }
+
+    mutation_source as_mutation_source() override;
+};
 
 }

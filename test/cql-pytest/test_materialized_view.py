@@ -21,6 +21,7 @@ import time
 import pytest
 
 from util import new_test_table, unique_name
+from cassandra.protocol import InvalidRequest
 
 # Test that building a view with a large value succeeds. Regression test
 # for a bug where values larger than 10MB were rejected during building (#9047)
@@ -58,3 +59,16 @@ def test_update_view_with_large_row(cql, test_keyspace):
             assert len(res) == 1 and res[0].v == big
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW {test_keyspace}.{mv}")
+
+# Test that a `CREATE MATERIALIZED VIEW` request, that contains bind markers in
+# its SELECT statement, fails gracefully with `InvalidRequest` exception and
+# doesn't lead to a database crash.
+def test_mv_select_stmt_bound_values(cql, test_keyspace):
+    schema = 'p int PRIMARY KEY'
+    mv = unique_name()
+    with new_test_table(cql, test_keyspace, schema) as table:
+        try:
+            with pytest.raises(InvalidRequest, match="CREATE MATERIALIZED VIEW"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p = ? PRIMARY KEY (p)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")

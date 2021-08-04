@@ -37,6 +37,8 @@
 #include "mutation_rebuilder.hh"
 #include "range_tombstone_splitter.hh"
 #include <seastar/core/on_internal_error.hh>
+#include <stdexcept>
+#include <seastar/core/coroutine.hh>
 
 #include "clustering_key_filter.hh"
 
@@ -162,10 +164,10 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
                         }
 
                         if (_stack_size > _max_size.hard_limit) {
-                            throw std::runtime_error(fmt::format(
+                            return make_exception_future<stop_iteration>(std::runtime_error(fmt::format(
                                     "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
                                     _max_size.hard_limit,
-                                    key->with_schema(*_schema)));
+                                    key->with_schema(*_schema))));
                         } else {
                             fmr_logger.warn(
                                     "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
@@ -450,7 +452,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
         mutation_fragment_opt _cr;
     private:
         void prepare_next_clustering_row() {
-            auto& crs = _cur->partition().clustered_rows();
+            auto& crs = _cur->partition().mutable_clustered_rows();
             while (true) {
                 auto re = crs.unlink_leftmost_without_rebalance();
                 if (!re) {
@@ -464,7 +466,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             }
         }
         void prepare_next_range_tombstone() {
-            auto& rts = _cur->partition().row_tombstones();
+            auto& rts = _cur->partition().mutable_row_tombstones();
             auto rt = rts.pop_front_and_lock();
             if (rt) {
                 auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
@@ -515,11 +517,11 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             prepare_next_range_tombstone();
         }
         void destroy_current_mutation() {
-            auto &crs = _cur->partition().clustered_rows();
+            auto &crs = _cur->partition().mutable_clustered_rows();
             auto deleter = current_deleter<rows_entry>();
             crs.clear_and_dispose(deleter);
 
-            auto &rts = _cur->partition().row_tombstones();
+            auto &rts = _cur->partition().mutable_row_tombstones();
             auto rt = rts.pop_front_and_lock();
             while (rt) {
                 current_deleter<range_tombstone>()(rt);
@@ -626,7 +628,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             return make_ready_future<>();
         };
         virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
-            throw std::runtime_error("This reader can't be fast forwarded to another position.");
+            return make_exception_future<>(std::runtime_error("This reader can't be fast forwarded to another position."));
         };
         virtual future<> close() noexcept override {
             return make_ready_future<>();
@@ -969,6 +971,104 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
         }
     }
     return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
+}
+
+flat_mutation_reader
+make_slicing_filtering_reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice) {
+    class reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _rd;
+        const dht::partition_range* _pr;
+        const query::partition_slice* _slice;
+        dht::ring_position_comparator _cmp;
+        std::optional<clustering_ranges_walker> _ranges_walker;
+        std::optional<range_tombstone_splitter> _splitter;
+
+    public:
+        reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice)
+            : flat_mutation_reader::impl(rd.schema(), rd.permit())
+            , _rd(std::move(rd))
+            , _pr(&pr)
+            , _slice(&slice)
+            , _cmp(*_schema) {
+        }
+
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            const auto consume_fn = [this] (mutation_fragment mf) {
+                push_mutation_fragment(std::move(mf));
+            };
+
+            while (!is_buffer_full() && !is_end_of_stream()) {
+                co_await _rd.fill_buffer(timeout);
+                while (!_rd.is_buffer_empty()) {
+                    auto mf = _rd.pop_mutation_fragment();
+                    switch (mf.mutation_fragment_kind()) {
+                    case mutation_fragment::kind::partition_start: {
+                        auto& dk = mf.as_partition_start().key();
+                        if (!_pr->contains(dk, _cmp)) {
+                            co_return co_await _rd.next_partition();
+                        } else {
+                            _ranges_walker.emplace(*_schema, _slice->row_ranges(*_schema, dk.key()), false);
+                            _splitter.emplace(*_schema, _permit, *_ranges_walker);
+                        }
+                        // fall-through
+                    }
+
+                    case mutation_fragment::kind::static_row:
+                        consume_fn(std::move(mf));
+                        break;
+
+                    case mutation_fragment::kind::partition_end:
+                        _splitter->flush(position_in_partition::after_all_clustered_rows(), consume_fn);
+                        consume_fn(std::move(mf));
+                        break;
+
+                    case mutation_fragment::kind::clustering_row:
+                        _splitter->flush(mf.position(), consume_fn);
+                        if (_ranges_walker->advance_to(mf.position())) {
+                            consume_fn(std::move(mf));
+                        }
+                        break;
+
+                    case mutation_fragment::kind::range_tombstone:
+                        auto&& rt = mf.as_range_tombstone();
+                        _splitter->consume(rt, consume_fn);
+                        break;
+                    }
+                }
+                
+                _end_of_stream = _rd.is_end_of_stream();
+                co_return;
+            }
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _end_of_stream = false;
+                return _rd.next_partition();
+            }
+
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _rd.fast_forward_to(pr, timeout);
+        }
+
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            forward_buffer_to(pr.start());
+            _end_of_stream = false;
+            return _rd.fast_forward_to(std::move(pr), timeout);
+        }
+
+        virtual future<> close() noexcept override {
+            return _rd.close();
+        }
+    };
+
+    return make_flat_mutation_reader<reader>(std::move(rd), pr, slice);
 }
 
 /*
@@ -1344,7 +1444,15 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
         }
         virtual future<> next_partition() override {
             clear_buffer_to_next_partition();
+
             if (is_buffer_empty()) {
+                // If there is an active tombstone at the moment of doing next_partition(), simply clearing the buffer
+                // means that the closing range_tombstone_change will not be processed by the assembler. This violates
+                // an assumption of the assembler. Since the client executed next_partition(), they aren't interested
+                // in currently active range_tombstone_change (if any). Therefore in both cases, next partition should
+                // start with the assembler state reset. This is relevant only if the the producer still hasn't
+                // advanced to a next partition.
+                _rt_assembler.reset();
                 _end_of_stream = false;
                 return _reader.next_partition();
             }
@@ -1352,11 +1460,20 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2 r) {
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
+
+            // As in next_partition(), current partitions' state of having an active range tombstone is irrelevant for the
+            // partition range that we are forwarding to. Here, it is guaranteed that is_buffer_empty().
+            _rt_assembler.reset();
             _end_of_stream = false;
             return _reader.fast_forward_to(pr, timeout);
         }
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
+
+            // It is guaranteed that at the beginning of `pr`, all the `range_tombstone`s active at the beginning of `pr`
+            // will have emitted appropriate range_tombstone_change. Therefore we can simply reset the state of assembler.
+            // Here, it is guaranteed that is_buffer_empty().
+            _rt_assembler.reset();
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr), timeout);
         }

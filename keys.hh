@@ -86,7 +86,7 @@ public:
         typename TopLevelView::compound _t;
         tri_compare(const schema &s) : _t(get_compound_type(s)) {}
         std::strong_ordering operator()(const TopLevelView& k1, const TopLevelView& k2) const {
-            return _t->compare(k1.representation(), k2.representation()) <=> 0;
+            return _t->compare(k1.representation(), k2.representation());
         }
     };
 
@@ -273,13 +273,13 @@ public:
         typename TopLevel::compound _t;
         tri_compare(const schema& s) : _t(get_compound_type(s)) {}
         std::strong_ordering operator()(const TopLevel& k1, const TopLevel& k2) const {
-            return _t->compare(k1.representation(), k2.representation()) <=> 0;
+            return _t->compare(k1.representation(), k2.representation());
         }
         std::strong_ordering operator()(const TopLevelView& k1, const TopLevel& k2) const {
-            return _t->compare(k1.representation(), k2.representation()) <=> 0;
+            return _t->compare(k1.representation(), k2.representation());
         }
         std::strong_ordering operator()(const TopLevel& k1, const TopLevelView& k2) const {
-            return _t->compare(k1.representation(), k2.representation()) <=> 0;
+            return _t->compare(k1.representation(), k2.representation());
         }
     };
 
@@ -388,11 +388,11 @@ public:
         return _bytes.minimal_external_memory_usage();
     }
 
-    size_t external_memory_usage() const {
+    size_t external_memory_usage() const noexcept {
         return _bytes.external_memory_usage();
     }
 
-    size_t memory_usage() const {
+    size_t memory_usage() const noexcept {
         return sizeof(*this) + external_memory_usage();
     }
 };
@@ -641,7 +641,7 @@ public:
             return prefix_equality_tri_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1.representation()), prefix_type->end(k1.representation()),
                 prefix_type->begin(k2.representation()), prefix_type->end(k2.representation()),
-                tri_compare) <=> 0;
+                tri_compare);
         }
     };
 };

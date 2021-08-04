@@ -3723,12 +3723,12 @@ struct clustering_order_merger_test_generator {
         }
         positions.push_back(position_in_partition::after_all_clustered_rows());
 
-        auto num_ranges = tests::random::get_int(1ul, std::max(all_ks.size() / 3, 1ul));
+        size_t num_ranges = tests::random::get_int(1ul, std::max(all_ks.size() / 3, 1ul));
         positions = tests::random::random_subset(std::move(positions), num_ranges * 2, engine);
         std::sort(positions.begin(), positions.end(), position_in_partition::less_compare(*_s));
 
         std::vector<position_range> fwd_ranges;
-        for (int i = 0; i < num_ranges; ++i) {
+        for (size_t i = 0; i < num_ranges; ++i) {
             assert(2*i+1 < positions.size());
             fwd_ranges.push_back(position_range(std::move(positions[2*i]), std::move(positions[2*i+1])));
         }

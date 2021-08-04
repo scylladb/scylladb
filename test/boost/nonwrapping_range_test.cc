@@ -100,7 +100,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_equal_value_but_opposite_inclusiveness_is_a
 }
 
 BOOST_AUTO_TEST_CASE(test_range_contains) {
-    auto cmp = [] (int i1, int i2) -> int { return i1 - i2; };
+    auto cmp = [] (int i1, int i2) -> std::strong_ordering { return i1 <=> i2; };
 
     auto check_contains = [&] (nonwrapping_range<int> enclosing, nonwrapping_range<int> enclosed) {
         BOOST_REQUIRE(enclosing.contains(enclosed, cmp));
@@ -145,7 +145,7 @@ BOOST_AUTO_TEST_CASE(test_range_contains) {
 }
 
 BOOST_AUTO_TEST_CASE(test_range_subtract) {
-    auto cmp = [] (int i1, int i2) -> int { return i1 - i2; };
+    auto cmp = [] (int i1, int i2) -> std::strong_ordering { return i1 <=> i2; };
     using r = nonwrapping_range<int>;
     using vec = std::vector<r>;
 
@@ -188,8 +188,8 @@ BOOST_AUTO_TEST_CASE(test_range_subtract) {
 }
 
 struct unsigned_comparator {
-    int operator()(unsigned u1, unsigned u2) const {
-        return (u1 > u2 ? 1 : (u1 == u2 ? 0 : -1));
+    std::strong_ordering operator()(unsigned u1, unsigned u2) const {
+        return u1 <=> u2;
     }
 };
 

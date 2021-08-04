@@ -105,7 +105,7 @@ public:
     //
     // This function is used to compare receiver with a literal or parameter marker during condition
     // evaluation.
-    int32_t compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const;
+    std::strong_ordering compare_with_map(const map_type_impl& map_type, bytes_view list, bytes_view map) const;
     // A list or set value can be represented as a vector<pair<timeuuid, data_value>> or
     // vector<pair<data_value, empty>> respectively. Serialize this representation
     // as a vector of values, not as a vector of pairs.

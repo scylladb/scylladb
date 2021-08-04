@@ -591,7 +591,7 @@ struct serializer<std::optional<T>> {
         std::optional<T> v;
         auto b = deserialize(in, boost::type<bool>());
         if (b) {
-            v = deserialize(in, boost::type<T>());
+            v.emplace(deserialize(in, boost::type<T>()));
         }
         return v;
     }
@@ -757,7 +757,7 @@ void serialize(Output& out, const std::variant<T...>& v) {
 template<typename Input, typename T, size_t... I>
 T deserialize_std_variant(Input& in, boost::type<T> t,  size_t idx, std::index_sequence<I...>) {
     T v;
-    (void)((I == idx ? v = deserialize(in, boost::type<std::variant_alternative_t<I, T>>()), true : false) || ...);
+    (void)((I == idx ? v.template emplace<I>(deserialize(in, boost::type<std::variant_alternative_t<I, T>>())), true : false) || ...);
     return v;
 }
 

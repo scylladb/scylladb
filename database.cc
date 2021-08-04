@@ -334,10 +334,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _read_concurrency_sem(max_count_concurrent_reads,
         max_memory_concurrent_reads(),
         "_read_concurrency_sem",
-        max_inactive_queue_length(),
-        [this] {
-            ++_stats->sstable_read_queue_overloaded;
-        })
+        max_inactive_queue_length())
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
@@ -564,7 +561,7 @@ database::setup_metrics() {
         sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
                        sm::description("The number of entries currently in the querier cache.")),
 
-        sm::make_derive("sstable_read_queue_overloads", _stats->sstable_read_queue_overloaded,
+        sm::make_derive("sstable_read_queue_overloads", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 
@@ -1367,25 +1364,25 @@ database::existing_index_names(const sstring& ks_name, const sstring& cf_to_excl
 //  - org.apache.cassandra.db.AbstractCell#reconcile()
 //  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
 //  - org.apache.cassandra.db.BufferDeletedCell#reconcile()
-int
+std::strong_ordering
 compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     if (left.timestamp() != right.timestamp()) {
-        return left.timestamp() > right.timestamp() ? 1 : -1;
+        return left.timestamp() <=> right.timestamp();
     }
     if (left.is_live() != right.is_live()) {
-        return left.is_live() ? -1 : 1;
+        return left.is_live() ? std::strong_ordering::less : std::strong_ordering::greater;
     }
     if (left.is_live()) {
-        auto c = compare_unsigned(left.value(), right.value());
+        auto c = compare_unsigned(left.value(), right.value()) <=> 0;
         if (c != 0) {
             return c;
         }
         if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
             // prefer expiring cells.
-            return left.is_live_and_has_ttl() ? 1 : -1;
+            return left.is_live_and_has_ttl() ? std::strong_ordering::greater : std::strong_ordering::less;
         }
         if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
-            return left.expiry() < right.expiry() ? -1 : 1;
+            return left.expiry() <=> right.expiry();
         }
     } else {
         // Both are deleted
@@ -1395,10 +1392,10 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
             // comparing timestamps, which in case of deleted cells will hold
             // serialized expiry.
             return (uint64_t) left.deletion_time().time_since_epoch().count()
-                   < (uint64_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+                   <=> (uint64_t) right.deletion_time().time_since_epoch().count();
         }
     }
-    return 0;
+    return std::strong_ordering::equal;
 }
 
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
@@ -1444,8 +1441,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     if (querier_opt) {
         co_await querier_opt->close();
     }
-    if(ex) {
-        std::rethrow_exception(std::move(ex));
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
     }
 
     auto hit_rate = cf.get_global_cache_hit_rate();
@@ -1500,8 +1497,8 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     if (querier_opt) {
         co_await querier_opt->close();
     }
-    if(ex) {
-        std::rethrow_exception(std::move(ex));
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
     }
 
     auto hit_rate = cf.get_global_cache_hit_rate();
@@ -1871,8 +1868,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
     if (!s->is_synced()) {
-        throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
-                                 s->ks_name(), s->cf_name(), s->version()));
+        return make_exception_future<>(std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
+                s->ks_name(), s->cf_name(), s->version())));
     }
 
     sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());

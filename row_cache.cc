@@ -138,6 +138,8 @@ cache_tracker::setup_metrics() {
             sm::description("total number of rows in memtables which were merged with existing rows during cache update on memtable flush")),
         sm::make_derive("range_tombstone_reads", _stats.range_tombstone_reads,
             sm::description("total amount of range tombstones processed during read")),
+        sm::make_derive("row_tombstone_reads", _stats.row_tombstone_reads,
+            sm::description("total amount of row tombstones processed during read")),
     });
 }
 
@@ -953,7 +955,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
         });
-        coroutine update; // Destroy before cleanup to release snapshots before invalidating.
+        utils::coroutine update; // Destroy before cleanup to release snapshots before invalidating.
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
             with_allocator(_tracker.allocator(), [&] () {
@@ -1043,7 +1045,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else {
-            return make_empty_coroutine();
+            return utils::make_empty_coroutine();
         }
     });
 }
@@ -1063,7 +1065,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             _tracker.clear_continuity(*cache_i);
         }
         // FIXME: subtract gradually from acc.
-        return make_empty_coroutine();
+        return utils::make_empty_coroutine();
     });
 }
 
@@ -1230,7 +1232,8 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // When evicting a dummy with both sides continuous we don't need to break continuity.
         //
         auto still_continuous = continuous() && dummy();
-        it = it.erase_and_dispose(current_deleter<rows_entry>());
+        mutation_partition::rows_type::key_grabber kg(it);
+        kg.release(current_deleter<rows_entry>());
         if (!still_continuous) {
             it->set_continuous(false);
         }

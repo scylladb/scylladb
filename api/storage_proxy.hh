@@ -21,10 +21,13 @@
 
 #pragma once
 
+#include <seastar/core/sharded.hh>
 #include "api.hh"
+
+namespace service { class storage_service; }
 
 namespace api {
 
-void set_storage_proxy(http_context& ctx, routes& r);
+void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_service>& ss);
 
 }

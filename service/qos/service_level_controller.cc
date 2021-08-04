@@ -20,11 +20,12 @@
  */
 
 #include <algorithm>
+#include <seastar/core/sleep.hh>
 #include "service_level_controller.hh"
-#include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "utils/fb_utilities.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -409,5 +410,17 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
     }
     return make_ready_future();
 }
+
+void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
+
+void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint) {
+    if (this_shard_id() == global_controller && endpoint == utils::fb_utilities::get_broadcast_address()) {
+        _global_controller_db->dist_data_update_aborter.request_abort();
+    }
+}
+
+void service_level_controller::on_up(const gms::inet_address& endpoint) { }
+
+void service_level_controller::on_down(const gms::inet_address& endpoint) { }
 
 }

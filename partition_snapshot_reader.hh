@@ -26,17 +26,8 @@
 #include "clustering_key_filter.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
-struct partition_snapshot_reader_dummy_accounter {
-   void operator()(const clustering_row& cr) {}
-   void operator()(const static_row& sr) {}
-   void operator()(const range_tombstone& rt) {}
-   void operator()(const partition_start& ph) {}
-   void operator()(const partition_end& eop) {}
-};
-extern partition_snapshot_reader_dummy_accounter no_accounter;
-
-template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
-class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public MemoryAccounter {
+template <typename Accounter>
+class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public Accounter {
     struct rows_position {
         mutation_partition::rows_type::const_iterator _position;
         mutation_partition::rows_type::const_iterator _end;
@@ -245,11 +236,16 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 const std::optional<position_in_partition>& last_row,
                 const std::optional<position_in_partition>& last_rts,
                 position_in_partition_view pos) {
+            if (!_rt_stream.empty()) {
+                return _rt_stream.get_next(std::move(pos));
+            }
             return in_alloc_section([&] () -> mutation_fragment_opt {
                 maybe_refresh_state(ck_range, last_row, last_rts);
 
                 position_in_partition::less_compare rt_less(_schema);
-                while (has_more_range_tombstones() && !rt_less(pos, peek_range_tombstone().position())) {
+                while (has_more_range_tombstones()
+                        && !rt_less(pos, peek_range_tombstone().position())
+                        && (_rt_stream.empty() || !rt_less(_rt_stream.peek_next().position(), peek_range_tombstone().position()))) {
                     range_tombstone rt = pop_range_tombstone();
                     if (rt.trim(_schema,
                                 position_in_partition_view::for_range_start(ck_range),
@@ -279,7 +275,7 @@ private:
     bool _static_row_done = false;
     bool _no_more_rows_in_current_range = false;
 
-    MemoryAccounter& mem_accounter() {
+    Accounter& accounter() {
         return *this;
     }
 private:
@@ -315,7 +311,7 @@ private:
     }
 
     void emplace_mutation_fragment(mutation_fragment&& mfopt) {
-        mfopt.visit(mem_accounter());
+        mfopt.visit(accounter());
         push_mutation_fragment(std::move(mfopt));
     }
 
@@ -352,7 +348,7 @@ public:
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               boost::any pointer_to_container, Args&&... args)
         : impl(std::move(s), std::move(permit))
-        , MemoryAccounter(std::forward<Args>(args)...)
+        , Accounter(std::forward<Args>(args)...)
         , _container_guard(std::move(pointer_to_container))
         , _ck_ranges(std::move(crr))
         , _current_ck_range(_ck_ranges.begin())
@@ -396,7 +392,7 @@ public:
     }
 };
 
-template <typename MemoryAccounter, typename... Args>
+template <typename Accounter, typename... Args>
 inline flat_mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
                                     reader_permit permit,
@@ -410,27 +406,11 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(std::move(s), std::move(permit), std::move(dk),
+    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<Accounter>>(std::move(s), std::move(permit), std::move(dk),
             snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
     } else {
         return res;
     }
-}
-
-inline flat_mutation_reader
-make_partition_snapshot_flat_reader(schema_ptr s,
-                                    reader_permit permit,
-                                    dht::decorated_key dk,
-                                    query::clustering_key_filter_ranges crr,
-                                    partition_snapshot_ptr snp,
-                                    bool digest_requested,
-                                    logalloc::region& region,
-                                    logalloc::allocating_section& read_section,
-                                    boost::any pointer_to_container,
-                                    streamed_mutation::forwarding fwd)
-{
-    return make_partition_snapshot_flat_reader<partition_snapshot_reader_dummy_accounter>(std::move(s), std::move(permit),
-            std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, std::move(pointer_to_container), fwd);
 }

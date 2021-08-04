@@ -21,6 +21,7 @@
  */
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/app-template.hh>
 #include "db/system_distributed_keyspace.hh"
 #include "message/messaging_service.hh"
@@ -28,10 +29,7 @@
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
-#include "service/storage_service.hh"
-#include "service/raft/raft_group_registry.hh"
 #include "utils/fb_utilities.hh"
-#include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "log.hh"
 #include <seastar/core/thread.hh>
@@ -76,37 +74,16 @@ int main(int ac, char ** av) {
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             sharded<gms::feature_service> feature_service;
             feature_service.start(gms::feature_config_from_db_config(*cfg)).get();
-            sharded<db::system_distributed_keyspace> sys_dist_ks;
-            sharded<db::view::view_update_generator> view_update_generator;
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
             sharded<netw::messaging_service> messaging;
-            sharded<cql3::query_processor> qp;
-            sharded<service::raft_group_registry> raft_gr;
-            sharded<cdc::generation_service> cdc_generation_service;
-            sharded<service::migration_manager> migration_manager;
-            sharded<repair_service> repair;
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
             token_metadata.start().get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
             messaging.start(listen).get();
             gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
-
-            raft_gr.start(std::ref(messaging), std::ref(gms::get_gossiper()), std::ref(qp)).get();
-            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
-
-            service::init_storage_service(std::ref(abort_sources),
-                db, gms::get_gossiper(), sys_dist_ks,
-                view_update_generator, feature_service, sscfg,
-                migration_manager, token_metadata, messaging,
-                std::ref(cdc_generation_service),
-                std::ref(repair),
-                std::ref(raft_gr)
-                ).get();
 
             auto& server = messaging.local();
             auto port = server.port();

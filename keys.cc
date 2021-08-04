@@ -77,7 +77,7 @@ partition_key_view::legacy_form(const schema& s) const {
 std::strong_ordering
 partition_key_view::legacy_tri_compare(const schema& s, partition_key_view o) const {
     auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
-    return cmp(this->representation(), o.representation()) <=> 0;
+    return cmp(this->representation(), o.representation());
 }
 
 std::strong_ordering

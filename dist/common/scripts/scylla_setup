@@ -225,6 +225,8 @@ if __name__ == '__main__':
     group.add_argument('--no-raid-setup', action='store_true',
                         default=default_no_raid_setup,
                         help='skip raid setup')
+    parser.add_argument('--raid-level-5', action='store_true', default=False,
+                        help='use RAID5 for RAID volume')
     parser.add_argument('--nic',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
@@ -316,6 +318,7 @@ if __name__ == '__main__':
     bootparam_setup = not args.no_bootparam_setup
     ntp_setup = not args.no_ntp_setup
     raid_setup = not args.no_raid_setup
+    raid_level_5 = args.raid_level_5
     coredump_setup = not args.no_coredump_setup
     sysconfig_setup = not args.no_sysconfig_setup
     io_setup = args.io_setup
@@ -407,7 +410,7 @@ if __name__ == '__main__':
                     selinux_reboot_required=True
 
         if args.ami:
-            bootparam_setup = interactive_ask_service('Do you want add hugepages capability to the bootloader options?', 'Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step.', bootparam_setup)
+            bootparam_setup = interactive_ask_service('Do you want set clock source as bootloader option?', 'Yes - set clock source at boot time. No - skips this step.', bootparam_setup)
             args.no_bootparam_setup = not bootparam_setup
             if bootparam_setup:
                 run_setup_script('boot parameter', 'scylla_bootparam_setup --ami')
@@ -420,11 +423,13 @@ if __name__ == '__main__':
             else:
                 run_setup_script('NTP', 'scylla_ntp_setup')
 
-        res = interactive_ask_service('Do you want to setup RAID0 and XFS?', 'It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process.\nYes - choose a disk/disks to format and setup for RAID0 and XFS. No - skip this step.', raid_setup)
+        res = interactive_ask_service('Do you want to setup RAID and XFS?', 'It is recommended to use RAID and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process.\nYes - choose a disk/disks to format and setup for RAID and XFS. No - skip this step.', raid_setup)
         if res:
-            raid_setup = interactive_ask_service('Are you sure you want to setup RAID0 and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', raid_setup)
+            raid_setup = interactive_ask_service('Are you sure you want to setup RAID and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', raid_setup)
         else:
             raid_setup = False
+        if res and raid_setup:
+            raid_level_5 = interactive_ask_service('Do you want to change RAID level to RAID5?', 'If you choose Yes, change RAID level to RAID5. Otherwise we will use RAID0.', raid_level_5)
         if res and raid_setup and os.path.exists('/etc/systemd/system/var-lib-scylla.mount'):
             colorprint('{red}/etc/systemd/system/var-lib-scylla.mount already exists, skipping RAID setup.{nocolor}')
             raid_setup = False
@@ -472,7 +477,8 @@ if __name__ == '__main__':
 
         args.no_raid_setup = not raid_setup
         if raid_setup:
-            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot')
+            level = '5' if raid_level_5 else '0'
+            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot --raid-level={level}')
 
         coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', coredump_setup)
         args.no_coredump_setup = not coredump_setup

@@ -36,6 +36,7 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 #include "as_json_function.hh"
+#include "cql3/prepare_context.hh"
 
 #include "error_injection_fcts.hh"
 
@@ -430,9 +431,16 @@ functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_
 }
 
 void
-function_call::collect_marker_specification(variable_specifications& bound_names) const {
+function_call::fill_prepare_context(prepare_context& ctx) const {
+    if (ctx.is_processing_pk_restrictions() && !_fun->is_pure()) {
+        // Hacking around `const` specifier in the `collect_prepare_metadata`
+        // declaration since we also need to modify the current instance along
+        // with prepare metadata.
+        ctx.add_pk_function_call(static_pointer_cast<function_call>(
+            const_cast<function_call*>(this)->shared_from_this()));
+    }
     for (auto&& t : _terms) {
-        t->collect_marker_specification(bound_names);
+        t->fill_prepare_context(ctx);
     }
 }
 
@@ -454,7 +462,25 @@ function_call::bind_and_get(const query_options& options) {
         }
         buffers.push_back(to_bytes_opt(val));
     }
+    if (_id) {
+        // Populate the cache only for LWT statements. Note that this code
+        // works only in places where `function_call::raw` AST nodes are
+        // created.
+        // These cases do not include selection clause in SELECT statement,
+        // hence no database inputs are possibly allowed to the functions
+        // evaluated here.
+        // We can cache every non-deterministic call here as this code branch
+        // acts the same way as if all arguments are equivalent to literal
+        // values at this point (already calculated).
+        auto val = options.find_cached_pk_function_call(*_id);
+        if (val) {
+            return raw_value_view::make_temporary(raw_value::make_value(*val));
+        }
+    }
     auto result = execute_internal(options.get_cql_serialization_format(), *_fun, std::move(buffers));
+    if (_id) {
+        options.cache_pk_function_call(*_id, result);
+    }
     return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(result));
 }
 

@@ -46,6 +46,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 #include "auth/service.hh"
 #include "auth/common.hh"
 #include "db/config.hh"
@@ -63,12 +64,13 @@
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
-#include "service/storage_service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
 #include "debug.hh"
+#include <sys/time.h>
+#include <sys/resource.h>
 
 using namespace std::chrono_literals;
 
@@ -171,6 +173,22 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
+    static void adjust_rlimit() {
+        // Tests should use 1024 file descriptors, but don't punish them
+        // with weird behavior if they do.
+        //
+        // Since this more of a courtesy, don't make the situation worse if
+        // getrlimit/setrlimit fail for some reason.
+        struct rlimit lim;
+        int r = getrlimit(RLIMIT_NOFILE, &lim);
+        if (r == -1) {
+            return;
+        }
+        if (lim.rlim_cur < lim.rlim_max) {
+            lim.rlim_cur = lim.rlim_max;
+            setrlimit(RLIMIT_NOFILE, &lim);
+        }
+    }
 public:
     single_node_cql_env(
             sharded<database>& db,
@@ -189,7 +207,9 @@ public:
             , _mnotifier(mnotifier)
             , _sl_controller(sl_controller)
             , _mm(mm)
-    { }
+    {
+        adjust_rlimit();
+    }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
@@ -485,6 +505,10 @@ public:
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
 
+            sharded<service::endpoint_lifecycle_notifier> elc_notif;
+            elc_notif.start().get();
+            auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
+
             sharded<auth::service> auth_service;
 
             set_abort_on_internal_error(true);
@@ -538,7 +562,7 @@ public:
             raft_gr.start(std::ref(ms), std::ref(gms::get_gossiper()), std::ref(qp)).get();
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
-            auto& ss = service::get_storage_service();
+            sharded<service::storage_service> ss;
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
             ss.start(std::ref(abort_sources), std::ref(db),
@@ -549,7 +573,7 @@ public:
                 std::ref(token_metadata), std::ref(ms),
                 std::ref(cdc_generation_service),
                 std::ref(repair),
-                std::ref(raft_gr),
+                std::ref(raft_gr), std::ref(elc_notif),
                 true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
@@ -629,7 +653,7 @@ public:
                 view_update_generator.stop().get();
             });
 
-            distributed_loader::init_system_keyspace(db).get();
+            distributed_loader::init_system_keyspace(db, ss).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
@@ -680,8 +704,8 @@ public:
                 cdc.stop().get();
             });
 
-            service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
-            service::get_local_storage_service().join_cluster().get();
+            ss.local().init_server(service::bind_messaging_port(false)).get();
+            ss.local().join_cluster().get();
 
             auth::permissions_cache_config perm_cache_config;
             perm_cache_config.max_entries = cfg->permissions_cache_max_entries();

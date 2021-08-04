@@ -325,34 +325,29 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 
     auto& table = db.local().find_column_family(ks, cf);
 
-    return do_with(dht::ring_position::max(), dht::ring_position::min(), std::vector<sstables::shared_sstable>(),
-            [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (dht::ring_position& min, dht::ring_position& max, std::vector<sstables::shared_sstable>& new_sstables) {
-        return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &min, &max, &new_sstables] (sstables::shared_sstable sst) {
-            min = std::min(dht::ring_position(sst->get_first_decorated_key()), min, dht::ring_position_less_comparator(*table.schema()));
-            max = std::max(dht::ring_position(sst->get_last_decorated_key()) , max, dht::ring_position_less_comparator(*table.schema()));
-
+    return do_with(std::vector<sstables::shared_sstable>(),
+            [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (std::vector<sstables::shared_sstable>& new_sstables) {
+        return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &new_sstables] (sstables::shared_sstable sst) {
             auto gen = table.calculate_generation_for_new_table();
             dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
             return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, &new_sstables, sst] {
+                // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
+                sst->set_sstable_level(0);
                 new_sstables.push_back(std::move(sst));
                 return make_ready_future<>();
             });
-        }).then([&table, &min, &max, &new_sstables] {
+        }).then([&table, &new_sstables] {
             // nothing loaded
-            if (min.is_max() && max.is_min()) {
+            if (new_sstables.empty()) {
                 return make_ready_future<>();
             }
 
-            return table.get_row_cache().invalidate(row_cache::external_updater([&table, &new_sstables] () noexcept {
-                for (auto& sst : new_sstables) {
-                    try {
-                        table.load_sstable(sst, true);
-                    } catch (...) {
-                        dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), std::current_exception());
-                        abort();
-                    }
-                }
-            }), dht::partition_range::make({min, true}, {max, true}));
+            return do_for_each(new_sstables, [&table] (sstables::shared_sstable& sst) {
+                return table.add_sstable_and_update_cache(sst).handle_exception([&sst] (std::exception_ptr ep) {
+                    dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), ep);
+                    abort();
+                });
+            });
         }).then([&view_update_generator, &table, &new_sstables] {
             return parallel_for_each(new_sstables, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
                 if (sst->requires_view_building()) {
@@ -623,8 +618,8 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
     }
 }
 
-future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
-    return seastar::async([&db] {
+future<> distributed_loader::init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss) {
+    return seastar::async([&db, &ss] {
         // We need to init commitlog on shard0 before it is inited on other shards
         // because it obtains the list of pre-existing segments for replay, which must
         // not include reserve segments created by active commitlogs.
@@ -638,8 +633,8 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
             return db.init_commitlog();
         }).get();
 
-        db.invoke_on_all([] (database& db) {
-            return db::system_keyspace::make(db);
+        db.invoke_on_all([&ss] (database& db) {
+            return db::system_keyspace::make(db, ss.local());
         }).get();
 
         const auto& cfg = db.local().get_config();

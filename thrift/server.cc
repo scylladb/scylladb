@@ -68,11 +68,12 @@ public:
 
 thrift_server::thrift_server(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
+                             sharded<service::storage_service>& ss,
                              auth::service& auth_service,
                              service::memory_limiter& ml,
                              thrift_server_config config)
         : _stats(new thrift_stats(*this))
-        , _handler_factory(create_handler_factory(db, qp, auth_service, config.timeout_config, _current_permit).release())
+        , _handler_factory(create_handler_factory(db, qp, ss, auth_service, config.timeout_config, _current_permit).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
         , _memory_available(ml.get_semaphore())

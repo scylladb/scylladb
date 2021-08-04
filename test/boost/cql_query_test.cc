@@ -1663,30 +1663,30 @@ SEASTAR_TEST_CASE(test_table_compression) {
         e.require_table_exists("ks", "tb1").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb1")->get_compressor_params().get_compressor() == nullptr);
 
-        e.execute_cql("create table tb5 (foo text PRIMARY KEY, bar text) with compression = { 'class' : '' };").get();
+        e.execute_cql("create table tb5 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : '' };").get();
         e.require_table_exists("ks", "tb5").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb5")->get_compressor_params().get_compressor() == nullptr);
 
         BOOST_REQUIRE_THROW(e.execute_cql(
-                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'class' : 'LossyCompressor' };").get(),
+                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LossyCompressor' };").get(),
                 std::exception);
         BOOST_REQUIRE_THROW(e.execute_cql(
-                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'class' : 'LZ4Compressor', 'chunk_length_kb' : -1 };").get(),
+                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : -1 };").get(),
                 std::exception);
         BOOST_REQUIRE_THROW(e.execute_cql(
-                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'class' : 'LZ4Compressor', 'chunk_length_kb' : 3 };").get(),
+                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 3 };").get(),
                 std::exception);
 
-        e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'class' : 'LZ4Compressor', 'chunk_length_kb' : 2 };").get();
+        e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 2 };").get();
         e.require_table_exists("ks", "tb2").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().get_compressor() == compressor::lz4);
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().chunk_length() == 2 * 1024);
 
-        e.execute_cql("create table tb3 (foo text PRIMARY KEY, bar text) with compression = { 'class' : 'DeflateCompressor' };").get();
+        e.execute_cql("create table tb3 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'DeflateCompressor' };").get();
         e.require_table_exists("ks", "tb3").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb3")->get_compressor_params().get_compressor() == compressor::deflate);
 
-        e.execute_cql("create table tb4 (foo text PRIMARY KEY, bar text) with compression = { 'class' : 'org.apache.cassandra.io.compress.DeflateCompressor' };").get();
+        e.execute_cql("create table tb4 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'org.apache.cassandra.io.compress.DeflateCompressor' };").get();
         e.require_table_exists("ks", "tb4").get();
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb4")->get_compressor_params().get_compressor() == compressor::deflate);
 
@@ -3953,7 +3953,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
                 "    AND comment = ''\n"
                 "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-                "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
                 "    AND crc_check_chance = 1\n"
                 "    AND dclocal_read_repair_chance = 0.1\n"
                 "    AND default_time_to_live = 0\n"
@@ -3974,7 +3974,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
                 "    AND comment = ''\n"
                 "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-                "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
                 "    AND crc_check_chance = 1\n"
                 "    AND dclocal_read_repair_chance = 0.1\n"
                 "    AND default_time_to_live = 0\n"
@@ -3996,7 +3996,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
                 "    AND comment = ''\n"
                 "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-                "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
                 "    AND crc_check_chance = 1\n"
                 "    AND dclocal_read_repair_chance = 0.2\n"
                 "    AND default_time_to_live = 0\n"
@@ -4019,7 +4019,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
                 "    AND comment = ''\n"
                 "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-                "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
                 "    AND crc_check_chance = 1\n"
                 "    AND dclocal_read_repair_chance = 0.2\n"
                 "    AND default_time_to_live = 0\n"
@@ -4041,7 +4041,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
                 "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
                 "    AND comment = ''\n"
                 "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-                "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
                 "    AND crc_check_chance = 1\n"
                 "    AND dclocal_read_repair_chance = 0.2\n"
                 "    AND default_time_to_live = 0\n"
@@ -4084,7 +4084,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
                 "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
                 "    AND comment = ''\n"
                 "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-                "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
                 "    AND crc_check_chance = 1\n"
                 "    AND dclocal_read_repair_chance = 0.1\n"
                 "    AND default_time_to_live = 0\n"
@@ -4106,7 +4106,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
               "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
               "    AND comment = ''\n"
               "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
-              "    AND compression = {'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+              "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
               "    AND crc_check_chance = 1\n"
               "    AND dclocal_read_repair_chance = 0.1\n"
               "    AND default_time_to_live = 0\n"
@@ -4933,5 +4933,34 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get0();
         assert_that(msg).is_rows().with_rows({
         });
+    });
+}
+
+// Check that `current*()` CQL functions are re-evaluated on each execute
+// even for prepared statements.
+// Refs: #8816 (https://github.com/scylladb/scylla/issues/8816)
+SEASTAR_TEST_CASE(timeuuid_fcts_prepared_re_evaluation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // We don't test the `currentdate()` function since we don't
+        // have a way to supply a synthetic clock to query processor, hence
+        // can't move one day forward to demonstrate the desired behavior.
+        const std::vector<std::pair<std::string, std::string>> sub_tests = {
+            {"currenttimestamp", "timestamp"},
+            {"currenttime", "time"},
+            {"currenttimeuuid", "timeuuid"}
+        };
+        for (const auto& t : sub_tests) {
+            BOOST_TEST_CHECKPOINT(t.first);
+            e.execute_cql(format("CREATE TABLE test_{} (pk {} PRIMARY KEY)", t.first, t.second)).get();
+            auto drop_test_table = defer([&e, &t] { e.execute_cql(format("DROP TABLE test_{}", t.first)).get(); });
+            auto insert_stmt = e.prepare(format("INSERT INTO test_{0} (pk) VALUES ({0}())", t.first)).get();
+            e.execute_prepared(insert_stmt, {}).get();
+            sleep(1ms).get();
+            // Check that the second execution is evaluated again and yields a
+            // different value.
+            e.execute_prepared(insert_stmt, {}).get();
+            auto msg = e.execute_cql(format("SELECT * FROM test_{}", t.first)).get();
+            assert_that(msg).is_rows().with_size(2);
+        }
     });
 }

@@ -53,17 +53,17 @@ namespace raw {
 parsed_statement::~parsed_statement()
 { }
 
-variable_specifications& parsed_statement::get_bound_variables() {
-    return _variables;
+prepare_context& parsed_statement::get_prepare_context() {
+    return _prepare_ctx;
 }
 
-const variable_specifications& parsed_statement::get_bound_variables() const {
-    return _variables;
+const prepare_context& parsed_statement::get_prepare_context() const {
+    return _prepare_ctx;
 }
 
 // Used by the parser and preparable statement
 void parsed_statement::set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names) {
-    _variables.set_bound_variables(bound_names);
+    _prepare_ctx.set_bound_variables(bound_names);
 }
 
 }
@@ -74,12 +74,12 @@ prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, s
     , partition_key_bind_indices(std::move(partition_key_bind_indices))
 { }
 
-prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, const variable_specifications& names, const std::vector<uint16_t>& partition_key_bind_indices)
-    : prepared_statement(statement_, names.get_specifications(), partition_key_bind_indices)
+prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, const prepare_context& ctx, const std::vector<uint16_t>& partition_key_bind_indices)
+    : prepared_statement(statement_, ctx.get_variable_specifications(), partition_key_bind_indices)
 { }
 
-prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, variable_specifications&& names, std::vector<uint16_t>&& partition_key_bind_indices)
-    : prepared_statement(statement_, std::move(names).get_specifications(), std::move(partition_key_bind_indices))
+prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, prepare_context&& ctx, std::vector<uint16_t>&& partition_key_bind_indices)
+    : prepared_statement(statement_, std::move(ctx).get_variable_specifications(), std::move(partition_key_bind_indices))
 { }
 
 prepared_statement::prepared_statement(::shared_ptr<cql_statement>&& statement_)

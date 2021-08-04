@@ -734,7 +734,7 @@ BOOST_AUTO_TEST_CASE(test_create_reversed_type) {
     auto val_gt = bytes_type->decompose(data_value(bytes("b")));
     auto straight_comp = bytes_type->compare(bytes_view(val_lt), bytes_view(val_gt));
     auto reverse_comp = ri->compare(bytes_view(val_lt), bytes_view(val_gt));
-    BOOST_REQUIRE(straight_comp == -reverse_comp);
+    BOOST_REQUIRE(straight_comp == (0 <=> reverse_comp));
 }
 
 BOOST_AUTO_TEST_CASE(test_reversed_type_to_string) {
@@ -766,7 +766,7 @@ BOOST_AUTO_TEST_CASE(test_create_reverse_collection_type) {
 
     auto straight_comp = my_set_type->compare(bytes_view(bv1), bytes_view(bv2));
     auto reverse_comp = ri->compare(bytes_view(bv2), bytes_view(bv2));
-    BOOST_REQUIRE(straight_comp == -reverse_comp);
+    BOOST_REQUIRE(straight_comp == (0 <=> reverse_comp));
 }
 
 BOOST_AUTO_TEST_CASE(test_parse_reversed_type) {
@@ -782,7 +782,7 @@ BOOST_AUTO_TEST_CASE(test_parse_reversed_type) {
     auto val_gt = int32_type->decompose(2);
     auto straight_comp = int32_type->compare(bytes_view(val_lt), bytes_view(val_gt));
     auto reverse_comp = ri->compare(bytes_view(val_lt), bytes_view(val_gt));
-    BOOST_REQUIRE(straight_comp == -reverse_comp);
+    BOOST_REQUIRE(straight_comp == (0 <=> reverse_comp));
 }
 
 BOOST_AUTO_TEST_CASE(test_reversed_type_value_compatibility) {

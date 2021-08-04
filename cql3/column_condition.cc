@@ -68,7 +68,7 @@ void validate_operation_on_durations(const abstract_type& type, cql3::expr::oper
 int is_satisfied_by(cql3::expr::oper_t op, const abstract_type& cell_type,
         const abstract_type& param_type, const data_value& cell_value, const bytes& param) {
 
-        int rc;
+        std::strong_ordering rc = std::strong_ordering::equal;
         // For multi-cell sets and lists, cell value is represented as a map,
         // thanks to collections_as_maps flag in partition_slice. param, however,
         // is represented as a set or list type.
@@ -79,7 +79,7 @@ int is_satisfied_by(cql3::expr::oper_t op, const abstract_type& cell_type,
             const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
             assert(list_type.is_multi_cell());
             // Inverse comparison result since the order of arguments is inverse.
-            rc = -list_type.compare_with_map(map_type, param, map_type.decompose(cell_value));
+            rc = 0 <=> list_type.compare_with_map(map_type, param, map_type.decompose(cell_value));
         } else {
             rc = cell_type.compare(cell_type.decompose(cell_value), param);
         }
@@ -118,17 +118,17 @@ uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
 
 namespace cql3 {
 
-void column_condition::collect_marker_specificaton(variable_specifications& bound_names) const {
+void column_condition::collect_marker_specificaton(prepare_context& ctx) const {
     if (_collection_element) {
-        _collection_element->collect_marker_specification(bound_names);
+        _collection_element->fill_prepare_context(ctx);
     }
     if (!_in_values.empty()) {
         for (auto&& value : _in_values) {
-            value->collect_marker_specification(bound_names);
+            value->fill_prepare_context(ctx);
         }
     }
     if (_value) {
-        _value->collect_marker_specification(bound_names);
+        _value->fill_prepare_context(ctx);
     }
 }
 

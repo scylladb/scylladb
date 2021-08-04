@@ -757,7 +757,6 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _semaphore(reader_concurrency_semaphore::no_limits{}, "mx writer")
-        , _range_tombstones(range_tombstone_stream(_schema, _semaphore.make_tracking_only_permit(&s, "mx-writer")))
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
@@ -806,6 +805,10 @@ public:
         _pi_write_m.desired_block_size = cfg.promoted_index_block_size;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
         prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
+
+        // Initialize at the end of the constructor body, so we can delay making
+        // the semaphore used until we know that no more exceptions can be thrown.
+        _range_tombstones.emplace(range_tombstone_stream(_schema, _semaphore.make_tracking_only_permit(&s, "mx-writer")));
     }
 
     ~writer();

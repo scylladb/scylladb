@@ -62,7 +62,7 @@ future<> raft_sys_table_storage::store_term_and_vote(raft::term_t term, raft::se
 }
 
 future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_term_and_vote() {
-    static const auto load_cql = format("SELECT vote_term, vote FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
+    static const auto load_cql = format("SELECT vote_term, vote FROM system.{} WHERE group_id = ? LIMIT 1", db::system_keyspace::RAFT);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {_group_id.id});
     if (rs->empty()) {
         co_return std::pair(raft::term_t(), raft::server_id());
@@ -100,7 +100,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
 }
 
 future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
-    static const auto load_id_cql = format("SELECT snapshot_id FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
+    static const auto load_id_cql = format("SELECT snapshot_id FROM system.{} WHERE group_id = ? LIMIT 1", db::system_keyspace::RAFT);
     ::shared_ptr<cql3::untyped_result_set> id_rs = co_await _qp.execute_internal(load_id_cql, {_group_id.id});
     if (id_rs->empty() || !id_rs->one().has("snapshot_id")) {
         co_return raft::snapshot();

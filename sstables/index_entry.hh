@@ -38,6 +38,7 @@
 
 namespace sstables {
 
+using use_caching = bool_class<struct use_caching_tag>;
 using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
 using promoted_index_block_position = std::variant<composite, position_in_partition>;
 
@@ -236,7 +237,8 @@ public:
     std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
         reader_permit,
         tracing::trace_state_ptr,
-        file_input_stream_options);
+        file_input_stream_options,
+        use_caching);
 };
 
 // A partition index element.

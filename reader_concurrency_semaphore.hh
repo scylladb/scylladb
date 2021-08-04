@@ -86,8 +86,6 @@ public:
         uint64_t reads_admitted = 0;
         // Total number of reads enqueued to wait for admission.
         uint64_t reads_enqueued = 0;
-    };
-    struct permit_stats {
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -98,7 +96,10 @@ public:
         uint64_t blocked_permits = 0;
     };
 
-    struct permit_list;
+    using permit_list_type = bi::list<
+            reader_permit::impl,
+            bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
+            bi::constant_time_size<false>>;
 
     class inactive_read_handle;
 
@@ -188,10 +189,9 @@ private:
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<void()> _prethrow_action;
     inactive_reads_type _inactive_reads;
     stats _stats;
-    std::unique_ptr<permit_list> _permit_list;
+    permit_list_type _permit_list;
     bool _stopped = false;
     gate _close_readers_gate;
     gate _permit_gate;
@@ -239,8 +239,7 @@ public:
     reader_concurrency_semaphore(int count,
             ssize_t memory,
             sstring name,
-            size_t max_queue_length = std::numeric_limits<size_t>::max(),
-            std::function<void()> prethrow_action = nullptr);
+            size_t max_queue_length = std::numeric_limits<size_t>::max());
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
@@ -316,9 +315,6 @@ public:
     stats& get_stats() {
         return _stats;
     }
-
-    /// Return stats about the currently existing permits.
-    permit_stats get_permit_stats() const;
 
     /// Make an admitted permit
     ///

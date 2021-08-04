@@ -127,13 +127,13 @@ private:
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
         database& db,
         schema_ptr schema,
-        variable_specifications& bound_names,
+        prepare_context& ctx,
         ::shared_ptr<selection::selection> selection,
         bool for_view = false,
         bool allow_filtering = false);
 
     /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
-    ::shared_ptr<term> prepare_limit(database& db, variable_specifications& bound_names, ::shared_ptr<term::raw> limit);
+    ::shared_ptr<term> prepare_limit(database& db, prepare_context& ctx, ::shared_ptr<term::raw> limit);
 
     static void verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions);
 

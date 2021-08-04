@@ -111,15 +111,11 @@ bool lexicographical_compare(TypesIterator types, InputIt1 first1, InputIt1 last
 // Like std::lexicographical_compare but injects values from shared sequence
 // (types) to the comparator. Compare is an abstract_type-aware trichotomic
 // comparator, which takes the type as first argument.
-//
-// A trichotomic comparator returns an integer which is less, equal or greater
-// than zero when the first value is respectively smaller, equal or greater
-// than the second value.
 template <std::input_iterator TypesIterator, std::input_iterator InputIt1, std::input_iterator InputIt2, typename Compare>
 requires requires (TypesIterator types, InputIt1 i1, InputIt2 i2, Compare cmp) {
-    { cmp(*types, *i1, *i2) } -> std::same_as<int>;
+    { cmp(*types, *i1, *i2) } -> std::same_as<std::strong_ordering>;
 }
-int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_last,
+std::strong_ordering lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_last,
         InputIt1 first1, InputIt1 last1,
         InputIt2 first2, InputIt2 last2,
         Compare comp,
@@ -127,7 +123,7 @@ int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_l
         lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
     while (types_first != types_last && first1 != last1 && first2 != last2) {
         auto c = comp(*types_first, *first1, *first2);
-        if (c) {
+        if (c != 0) {
             return c;
         }
         ++first1;
@@ -137,30 +133,30 @@ int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_l
     bool e1 = first1 == last1;
     bool e2 = first2 == last2;
     if (e1 && e2) {
-        return static_cast<int>(relation1) - static_cast<int>(relation2);
+        return static_cast<int>(relation1) <=> static_cast<int>(relation2);
     }
     if (e2) {
-        return relation2 == lexicographical_relation::after_all_prefixed ? -1 : 1;
+        return relation2 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::less : std::strong_ordering::greater;
     } else if (e1) {
-        return relation1 == lexicographical_relation::after_all_prefixed ? 1 : -1;
+        return relation1 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::greater : std::strong_ordering::less;
     } else {
-        return 0;
+        return std::strong_ordering::equal;
     }
 }
 
 // Trichotomic version of std::lexicographical_compare()
-//
-// Returns an integer which is less, equal or greater than zero when the first value
-// is respectively smaller, equal or greater than the second value.
 template <typename InputIt1, typename InputIt2, typename Compare>
-int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
+requires requires (InputIt1 i1, InputIt2 i2, Compare c) {
+    { c(*i1, *i2) } -> std::same_as<std::strong_ordering>;
+}
+std::strong_ordering lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
         InputIt2 first2, InputIt2 last2,
         Compare comp,
         lexicographical_relation relation1 = lexicographical_relation::before_all_strictly_prefixed,
         lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
     while (first1 != last1 && first2 != last2) {
         auto c = comp(*first1, *first2);
-        if (c) {
+        if (c != 0) {
             return c;
         }
         ++first1;
@@ -169,12 +165,12 @@ int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
     bool e1 = first1 == last1;
     bool e2 = first2 == last2;
     if (e1 == e2) {
-        return static_cast<int>(relation1) - static_cast<int>(relation2);
+        return (static_cast<int>(relation1) - static_cast<int>(relation2)) <=> 0;
     }
     if (e2) {
-        return relation2 == lexicographical_relation::after_all_prefixed ? -1 : 1;
+        return relation2 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::less : std::strong_ordering::greater;
     } else {
-        return relation1 == lexicographical_relation::after_all_prefixed ? 1 : -1;
+        return relation1 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::greater : std::strong_ordering::less;
     }
 }
 
@@ -186,18 +182,21 @@ int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
 // type as first argument.
 //
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
-int prefix_equality_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
+requires requires (TypesIterator ti, InputIt1 i1, InputIt2 i2, Compare c) {
+    { c(*ti, *i1, *i2) } -> std::same_as<std::strong_ordering>;
+}
+std::strong_ordering prefix_equality_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
         InputIt2 first2, InputIt2 last2, Compare comp) {
     while (first1 != last1 && first2 != last2) {
         auto c = comp(*types, *first1, *first2);
-        if (c) {
+        if (c != 0) {
             return c;
         }
         ++first1;
         ++first2;
         ++types;
     }
-    return 0;
+    return std::strong_ordering::equal;
 }
 
 // Returns true iff the second sequence is a prefix of the first sequence
@@ -500,8 +499,8 @@ public:
     size_t hash(managed_bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
     bool equal(managed_bytes_view v1, managed_bytes_view v2) const;
-    int32_t compare(bytes_view v1, bytes_view v2) const;
-    int32_t compare(managed_bytes_view v1, managed_bytes_view v2) const;
+    std::strong_ordering compare(bytes_view v1, bytes_view v2) const;
+    std::strong_ordering compare(managed_bytes_view v1, managed_bytes_view v2) const;
 
 private:
     // Explicitly instantiated in .cc
@@ -729,15 +728,15 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 static inline
-int tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
+std::strong_ordering tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->compare(e1, e2);
 }
 
 inline
-int
+std::strong_ordering
 tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v2) {
     if (!v1 || !v2) {
-        return int(bool(v1)) - int(bool(v2));
+        return int(bool(v1)) - int(bool(v2)) <=> 0;
     } else {
         return tri_compare(std::move(t), *v1, *v2);
     }
@@ -869,11 +868,11 @@ class serialized_tri_compare {
     data_type _type;
 public:
     serialized_tri_compare(data_type type) : _type(type) {}
-    int operator()(const bytes_view& v1, const bytes_view& v2) const {
-        return _type->compare(v1, v2);
+    std::strong_ordering operator()(const bytes_view& v1, const bytes_view& v2) const {
+        return _type->compare(v1, v2) <=> 0;
     }
-    int operator()(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
-        return _type->compare(v1, v2);
+    std::strong_ordering operator()(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
+        return _type->compare(v1, v2) <=> 0;
     }
 };
 

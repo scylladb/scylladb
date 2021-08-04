@@ -30,7 +30,6 @@
 #include "db/write_type.hh"
 #include "exceptions/exceptions.hh"
 #include "service/query_state.hh"
-#include "service/storage_service.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>

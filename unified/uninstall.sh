@@ -73,6 +73,7 @@ rm -fv "$rsystemd"/{scylla-*.service,scylla-*.timer,scylla-*.slice}
 if ! $nonroot; then
     rm -rfv "$retc"/systemd/system/scylla-*.service.d
     rm -fv "$retc"/bash_completion.d/nodetool-completion
+    rm -fv "$retc"/supervisord.d/scylla-*.ini
     rm -fv "$rusr"/lib/sysctl.d/99-scylla-*.conf
     rm -fv "$rusr"/bin/{scylla,iotune,scyllatop}
     rm -fv "$rusr"/sbin/{scylla_*setup,node_exporter_install,node_health_check,scylla_ec2_check,scylla_kernel_check}

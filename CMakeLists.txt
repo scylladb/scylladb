@@ -323,6 +323,12 @@ set(scylla_sources
     cdc/split.cc
     clocks-impl.cc
     collection_mutation.cc
+    compaction/compaction.cc
+    compaction/compaction_manager.cc
+    compaction/compaction_strategy.cc
+    compaction/leveled_compaction_strategy.cc
+    compaction/size_tiered_compaction_strategy.cc
+    compaction/time_window_compaction_strategy.cc
     compress.cc
     connection_notifier.cc
     converting_mutation_partition_applier.cc
@@ -410,7 +416,7 @@ set(scylla_sources
     cql3/ut_name.cc
     cql3/util.cc
     cql3/values.cc
-    cql3/variable_specifications.cc
+    cql3/prepare_context.cc
     data/cell.cc
     database.cc
     db/batchlog_manager.cc
@@ -540,13 +546,9 @@ set(scylla_sources
     service/priority_manager.cc
     service/storage_proxy.cc
     service/storage_service.cc
-    sstables/compaction.cc
-    sstables/compaction_manager.cc
-    sstables/compaction_strategy.cc
     sstables/compress.cc
     sstables/integrity_checked_file_impl.cc
     sstables/kl/writer.cc
-    sstables/leveled_compaction_strategy.cc
     sstables/m_format_read_helpers.cc
     sstables/metadata_collector.cc
     sstables/mp_row_consumer.cc
@@ -554,12 +556,10 @@ set(scylla_sources
     sstables/partition.cc
     sstables/prepended_input_stream.cc
     sstables/random_access_reader.cc
-    sstables/size_tiered_compaction_strategy.cc
     sstables/sstable_directory.cc
     sstables/sstable_version.cc
     sstables/sstables.cc
     sstables/sstables_manager.cc
-    sstables/time_window_compaction_strategy.cc
     sstables/writer.cc
     streaming/progress_info.cc
     streaming/session_info.cc

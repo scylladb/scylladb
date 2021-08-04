@@ -106,18 +106,6 @@ namespace service {
 class storage_service;
 class migration_manager;
 
-extern distributed<storage_service> _the_storage_service;
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline distributed<storage_service>& get_storage_service() {
-    return _the_storage_service;
-}
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline storage_service& get_local_storage_service() {
-    return _the_storage_service.local();
-}
-
 enum class disk_error { regular, commit };
 
 struct bind_messaging_port_tag {};
@@ -229,6 +217,7 @@ public:
         sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
         raft_group_registry& raft_gr,
+        endpoint_lifecycle_notifier& elc_notif,
         /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
@@ -254,7 +243,7 @@ private:
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
-    static future<> update_topology(inet_address endpoint);
+    future<> update_topology(inet_address endpoint);
     future<> publish_schema_version();
     void install_schema_version_change_listener();
 
@@ -333,7 +322,7 @@ private:
     drain_progress _drain_progress{};
 
 
-    atomic_vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
+    endpoint_lifecycle_notifier& _lifecycle_notifier;
 
     std::unordered_set<token> _bootstrap_tokens;
 
@@ -354,10 +343,6 @@ private:
 
 public:
     void enable_all_features();
-
-    void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
-
-    future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
 
     // should only be called via JMX
     future<> stop_gossiping();
@@ -882,7 +867,7 @@ public:
 
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
-        return get_storage_service().invoke_on(0, [operation = std::move(operation),
+        return container().invoke_on(0, [operation = std::move(operation),
                 func = std::forward<Func>(func)] (storage_service& ss) mutable {
             if (!ss._operation_in_progress.empty()) {
                 throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
@@ -896,7 +881,7 @@ public:
 
     template <typename Func>
     auto run_with_no_api_lock(Func&& func) {
-        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+        return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
             return func(ss);
         });
     }
@@ -913,20 +898,5 @@ public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled();
 };
-
-future<> init_storage_service(sharded<abort_source>& abort_sources,
-    distributed<database>& db,
-    sharded<gms::gossiper>& gossiper,
-    sharded<db::system_distributed_keyspace>& sys_dist_ks,
-    sharded<db::view::view_update_generator>& view_update_generator,
-    sharded<gms::feature_service>& feature_service,
-    storage_service_config config,
-    sharded<service::migration_manager>& mm,
-    sharded<locator::shared_token_metadata>& stm,
-    sharded<netw::messaging_service>& ms,
-    sharded<cdc::generation_service>&,
-    sharded<repair_service>& repair,
-    sharded<raft_group_registry>& raft_gr);
-future<> deinit_storage_service();
 
 }

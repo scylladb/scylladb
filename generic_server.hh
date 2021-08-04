@@ -110,8 +110,6 @@ public:
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) = 0;
 
-    virtual future<> on_stop();
-
     virtual future<> advertise_new_connection(shared_ptr<connection> conn);
 
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);

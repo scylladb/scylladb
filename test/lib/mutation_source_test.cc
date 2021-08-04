@@ -1419,6 +1419,30 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
     }
 }
 
+void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    simple_schema s;
+    auto pkey = s.make_pkey();
+    sstring value(256, 'v');
+
+    // Enough to trigger is_buffer_full.
+    const size_t row_count = 1 + flat_mutation_reader_v2::default_max_buffer_size_in_bytes() / value.size();
+
+    std::vector<mutation> mutations {{s.schema(), pkey}};
+    mutation &m = mutations.front();
+
+    s.delete_range(m, s.make_ckey_range(0, row_count));
+    for (size_t i = 0; i < row_count; ++i) {
+        s.add_row(m, s.make_ckey(i), value);
+    }
+
+    auto ms = populate(s.schema(), mutations, gc_clock::now());
+
+    assert_that(downgrade_to_v1(ms.make_reader_v2(s.schema(), semaphore.make_permit())))
+            .produces_partition_start(pkey) // Read something.
+            .next_partition()               // Next partition clears buffer.
+            .produces_end_of_stream();      // Expect no active range tombstone at this point.
+}
+
 void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     simple_schema s;
     auto pkey = s.make_pkey();
@@ -1636,14 +1660,13 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
 
 void test_next_partition(tests::reader_concurrency_semaphore_wrapper&, populate_fn_ex);
 
-void run_mutation_reader_tests(populate_fn_ex populate) {
+void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     test_range_tombstones_v2(semaphore, populate);
+    test_downgrade_to_v1_clear_buffer(semaphore, populate);
     test_reader_conversions(semaphore, populate);
-    test_slicing_and_fast_forwarding(semaphore, populate);
     test_date_tiered_clustering_slicing(semaphore, populate);
-    test_fast_forwarding_across_partitions_to_empty_range(semaphore, populate);
     test_clustering_slices(semaphore, populate);
     test_mutation_reader_fragments_have_monotonic_positions(semaphore, populate);
     test_streamed_mutation_forwarding_across_range_tombstones(semaphore, populate);
@@ -1657,6 +1680,11 @@ void run_mutation_reader_tests(populate_fn_ex populate) {
     test_next_partition(semaphore, populate);
     test_streamed_mutation_forwarding_succeeds_with_no_data(semaphore, populate);
     test_slicing_with_overlapping_range_tombstones(semaphore, populate);
+    
+    if (with_partition_range_forwarding) {
+        test_fast_forwarding_across_partitions_to_empty_range(semaphore, populate);
+        test_slicing_and_fast_forwarding(semaphore, populate);
+    }
 }
 
 void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
@@ -1692,15 +1720,15 @@ void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore,
         .produces_end_of_stream();
 }
 
-void run_mutation_source_tests(populate_fn populate) {
+void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding) {
     auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
         return populate(std::move(s), muts);
     };
-    run_mutation_source_tests(std::move(populate_ex));
+    run_mutation_source_tests(std::move(populate_ex), with_partition_range_forwarding);
 }
 
-void run_mutation_source_tests(populate_fn_ex populate) {
-    run_mutation_reader_tests(populate);
+void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    run_mutation_reader_tests(populate, with_partition_range_forwarding);
 
     // ? -> v2 -> v1 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
@@ -1715,7 +1743,7 @@ void run_mutation_source_tests(populate_fn_ex populate) {
             return downgrade_to_v1(
                     ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
-    });
+    }, with_partition_range_forwarding);
 
     // ? -> v1 -> v2 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
@@ -1730,7 +1758,7 @@ void run_mutation_source_tests(populate_fn_ex populate) {
             return upgrade_to_v2(
                     ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
-    });
+    }, with_partition_range_forwarding);
 }
 
 struct mutation_sets {

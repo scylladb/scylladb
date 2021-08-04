@@ -202,29 +202,19 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
             throw exceptions::invalid_request_exception(format("Cannot use alias when defining a materialized view"));
         }
 
-        auto selectable = selector->selectable_;
-        if (dynamic_pointer_cast<selection::selectable::with_field_selection::raw>(selectable)) {
-            throw exceptions::invalid_request_exception(format("Cannot select out a part of type when defining a materialized view"));
-        }
-        if (dynamic_pointer_cast<selection::selectable::with_function::raw>(selectable)) {
-            throw exceptions::invalid_request_exception(format("Cannot use function when defining a materialized view"));
-        }
-        if (dynamic_pointer_cast<selection::selectable::writetime_or_ttl::raw>(selectable)) {
-            throw exceptions::invalid_request_exception(format("Cannot use function when defining a materialized view"));
-        }
+        auto& selectable = selector->selectable_;
+        shared_ptr<column_identifier::raw> identifier;
+        std::visit(overloaded_functor{
+            [&] (const expr::unresolved_identifier& ui) { identifier = ui.ident; },
+            [] (const auto& default_case) -> void { throw exceptions::invalid_request_exception(format("Cannot use general expressions when defining a materialized view")); },
+        }, selectable);
 
-        assert(dynamic_pointer_cast<column_identifier::raw>(selectable));
-        auto identifier = static_pointer_cast<column_identifier::raw>(selectable);
         auto* def = get_column_definition(*schema, *identifier);
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
         }
         return def;
     }));
-
-    if (!_variables.empty()) {
-        throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
-    }
 
     auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
     raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, nullptr, nullptr, {}, std::make_unique<cql3::attributes::raw>());
@@ -374,6 +364,9 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
 
 std::unique_ptr<cql3::statements::prepared_statement>
 create_view_statement::prepare(database& db, cql_stats& stats) {
+    if (!_prepare_ctx.get_variable_specifications().empty()) {
+        throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
+    }
     return std::make_unique<prepared_statement>(make_shared<create_view_statement>(*this));
 }
 

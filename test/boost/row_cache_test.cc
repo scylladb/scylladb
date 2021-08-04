@@ -3249,7 +3249,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     auto actual = *actual_opt;
 
                     auto&& ranges = slice.row_ranges(*s, actual.key());
-                    actual.partition().row_tombstones().trim(*s, ranges);
+                    actual.partition().mutable_row_tombstones().trim(*s, ranges);
 
                     auto n_to_consider = last_generation - oldest_generation + 1;
                     auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());

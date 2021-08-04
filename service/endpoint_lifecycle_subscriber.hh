@@ -42,6 +42,7 @@
 #pragma once
 
 #include "gms/inet_address.hh"
+#include "utils/atomic_vector.hh"
 
 namespace service {
 
@@ -86,6 +87,19 @@ public:
      * @param endpoint the endpoint marked DOWN.
      */
     virtual void on_down(const gms::inet_address& endpoint) = 0;
+};
+
+class endpoint_lifecycle_notifier {
+    atomic_vector<endpoint_lifecycle_subscriber*> _subscribers;
+
+public:
+    void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
+    future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
+
+    future<> notify_down(gms::inet_address endpoint);
+    future<> notify_left(gms::inet_address endpoint);
+    future<> notify_up(gms::inet_address endpoint);
+    future<> notify_joined(gms::inet_address endpoint);
 };
 
 }

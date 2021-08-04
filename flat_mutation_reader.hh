@@ -144,7 +144,7 @@ public:
         tracked_buffer _buffer;
         size_t _buffer_size = 0;
     protected:
-        size_t max_buffer_size_in_bytes = 8 * 1024;
+        size_t max_buffer_size_in_bytes = default_max_buffer_size_in_bytes();
         bool _end_of_stream = false;
         schema_ptr _schema;
         reader_permit _permit;
@@ -182,6 +182,7 @@ public:
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
         bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
+        static constexpr size_t default_max_buffer_size_in_bytes() { return 8 * 1024; }
 
         mutation_fragment pop_mutation_fragment() {
             auto mf = std::move(_buffer.front());
@@ -369,9 +370,9 @@ public:
             return _buffer_size;
         }
 
-        tracked_buffer detach_buffer() {
+        tracked_buffer detach_buffer() noexcept {
             _buffer_size = 0;
-            return std::exchange(_buffer, tracked_buffer(_permit));
+            return std::exchange(_buffer, tracked_buffer(tracking_allocator<mutation_fragment>(_permit)));
         }
 
         void move_buffer_content_to(impl& other) {
@@ -569,6 +570,9 @@ public:
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
+    static constexpr size_t default_max_buffer_size_in_bytes() {
+        return impl::default_max_buffer_size_in_bytes();
+    }
     mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
     void unpop_mutation_fragment(mutation_fragment mf) { _impl->unpop_mutation_fragment(std::move(mf)); }
     const schema_ptr& schema() const { return _impl->_schema; }
@@ -608,7 +612,7 @@ public:
     // until is_buffer_empty() returns true.
     // The reader will need to allocate a new buffer on the next fill_buffer()
     // call.
-    tracked_buffer detach_buffer() {
+    tracked_buffer detach_buffer() noexcept {
         return _impl->detach_buffer();
     }
     // Moves the buffer content to `other`.

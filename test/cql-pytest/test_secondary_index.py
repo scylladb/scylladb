@@ -21,6 +21,7 @@ import time
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
+from cassandra_tests.porting import assert_rows
 
 from util import new_test_table, unique_name
 
@@ -226,4 +227,31 @@ def test_too_large_indexed_value(cql, test_keyspace):
         cql.execute(f"CREATE INDEX ON {table}(v)")
         big = 'x'*66536
         with pytest.raises(WriteFailure):
-            cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
+            try:
+                cql.execute(f"INSERT INTO {table}(p,c,v) VALUES (0,1,'{big}')")
+            # Cassandra 4.0 uses a different error type - so a minor translation is needed
+            except InvalidRequest as ir:
+                raise WriteFailure(str(ir))
+
+# Selecting values using only clustering key should require filtering, but work correctly
+# Reproduces issue #8991
+def test_filter_cluster_key(cql, test_keyspace):
+    schema = 'p int, c1 int, c2 int, primary key (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(c2)")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2) VALUES (0, 1, 1)")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2) VALUES (0, 0, 1)")
+        
+        stmt = SimpleStatement(f"SELECT c1, c2 FROM {table} WHERE c1 = 1 and c2 = 1 ALLOW FILTERING")
+        rows = cql.execute(stmt)
+        assert_rows(rows, [1, 1])
+
+def test_multi_column_with_regular_index(cql, test_keyspace):
+    """Reproduces #9085."""
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, primary key(p,c1,c2)') as tbl:
+        cql.execute(f'CREATE INDEX ON {tbl}(r)')
+        cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 1, 1, 0)')
+        cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 1, 2, 1)')
+        cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 2, 1, 0)')
+        assert_rows(cql.execute(f'SELECT c1 FROM {tbl} WHERE (c1,c2)<(2,0) AND r=0 ALLOW FILTERING'), [1])
+        assert_rows(cql.execute(f'SELECT c1 FROM {tbl} WHERE p=1 AND (c1,c2)<(2,0) AND r=0 ALLOW FILTERING'), [1])

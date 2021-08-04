@@ -1198,7 +1198,7 @@ static unsigned cardinality(std::optional<int_range> ropt) {
 
 static std::optional<int_range> intersection(int_range a, int_range b) {
     auto int_tri_cmp = [] (int x, int y) {
-        return x < y ? -1 : (x > y ? 1 : 0);
+        return x <=> y;
     };
     return a.intersection(b, int_tri_cmp);
 }
@@ -1754,7 +1754,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
         dataset& ds = *ds_ptr;
         output_mgr->add_dataset_population(ds);
 
-        env.execute_cql(format("{} WITH compression = {{ 'class': '{}' }};",
+        env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }};",
             ds.create_table_statement(), cfg.compressor)).get();
 
         column_family& cf = find_table(db, ds);

@@ -90,8 +90,7 @@ shared_ptr<compressor> compressor::create(const sstring& name, const opt_getter&
 }
 
 shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& options) {
-  for (auto&& opt_name : {compression_parameters::CLASS, compression_parameters::SSTABLE_COMPRESSION_DEPRECATED}) {
-    auto i = options.find(opt_name);
+    auto i = options.find(compression_parameters::SSTABLE_COMPRESSION);
     if (i != options.end() && !i->second.empty()) {
         return create(i->second, [&options](const sstring& key) -> opt_string {
             auto i = options.find(key);
@@ -101,7 +100,6 @@ shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& opti
             return { i->second };
         });
     }
-  }
     return {};
 }
 
@@ -109,8 +107,7 @@ thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_pr
 thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(namespace_prefix + "SnappyCompressor");
 thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(namespace_prefix + "DeflateCompressor");
 
-const sstring compression_parameters::CLASS = "class";
-const sstring compression_parameters::SSTABLE_COMPRESSION_DEPRECATED = "sstable_compression";
+const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression";
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";
 const sstring compression_parameters::CHUNK_LENGTH_KB_ERR = "chunk_length_kb";
 const sstring compression_parameters::CRC_CHECK_CHANCE = "crc_check_chance";
@@ -128,7 +125,6 @@ compression_parameters::compression_parameters(compressor_ptr c)
 
 compression_parameters::compression_parameters(const std::map<sstring, sstring>& options) {
     _compressor = compressor::create(options);
-    _using_deprecated_sstable_compression_name = options.contains(SSTABLE_COMPRESSION_DEPRECATED) && !options.contains(CLASS);
 
     validate_options(options);
 
@@ -176,10 +172,7 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
     }
     auto opts = _compressor->options();
 
-    auto class_key = _using_deprecated_sstable_compression_name
-            ? compression_parameters::SSTABLE_COMPRESSION_DEPRECATED
-            : compression_parameters::CLASS;
-    opts.emplace(class_key, _compressor->name());
+    opts.emplace(compression_parameters::SSTABLE_COMPRESSION, _compressor->name());
     if (_chunk_length) {
         opts.emplace(sstring(CHUNK_LENGTH_KB), std::to_string(_chunk_length.value() / 1024));
     }
@@ -202,8 +195,7 @@ bool compression_parameters::operator!=(const compression_parameters& other) con
 void compression_parameters::validate_options(const std::map<sstring, sstring>& options) {
     // currently, there are no options specific to a particular compressor
     static std::set<sstring> keywords({
-        sstring(CLASS),
-        sstring(SSTABLE_COMPRESSION_DEPRECATED),
+        sstring(SSTABLE_COMPRESSION),
         sstring(CHUNK_LENGTH_KB),
         sstring(CHUNK_LENGTH_KB_ERR),
         sstring(CRC_CHECK_CHANCE),

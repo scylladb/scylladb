@@ -411,6 +411,11 @@ public:
 
     // Returns range tombstones overlapping with [start, end)
     range_tombstone_result range_tombstones(position_in_partition_view start, position_in_partition_view end);
+    // Invokes the callback for every range tombstones overlapping with [start, end) until
+    // the callback returns stop_iteration::yes or all tombstones are exhausted.
+    // Returns stop_iteration::yes if all range tombstones in the range were consumed.
+    stop_iteration range_tombstones(position_in_partition_view start, position_in_partition_view end,
+                                    std::function<stop_iteration(range_tombstone)> callback);
     // Returns all range tombstones
     range_tombstone_result range_tombstones();
 };
@@ -569,7 +574,7 @@ public:
     // The coroutine must be resumed with the region being unlocked.
     //
     // The coroutine cannot run concurrently with other apply() calls.
-    coroutine apply_to_incomplete(const schema& s,
+    utils::coroutine apply_to_incomplete(const schema& s,
         partition_entry&& pe,
         mutation_cleaner& pe_cleaner,
         logalloc::allocating_section&,

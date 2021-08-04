@@ -38,6 +38,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/algorithm.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -1613,7 +1614,7 @@ future<> remove_endpoint(gms::inet_address ep) {
 
 future<> update_tokens(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
-        throw std::invalid_argument("remove_endpoint should be used instead");
+        return make_exception_future<>(std::invalid_argument("remove_endpoint should be used instead"));
     }
 
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
@@ -1785,8 +1786,12 @@ future<> set_bootstrap_state(bootstrap_state state) {
 }
 
 class nodetool_status_table : public memtable_filling_virtual_table {
+private:
+    service::storage_service& _ss;
 public:
-    nodetool_status_table() : memtable_filling_virtual_table(build_schema()) {}
+    nodetool_status_table(service::storage_service& ss)
+            : memtable_filling_virtual_table(build_schema())
+            , _ss(ss) {}
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(NAME, "status");
@@ -1804,9 +1809,8 @@ public:
     }
 
     future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) override {
-        auto& ss = service::get_local_storage_service();
-        return ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
-            const locator::token_metadata& tm = ss.get_token_metadata();
+        return _ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
+            const locator::token_metadata& tm = _ss.get_token_metadata();
             gms::gossiper& gs = gms::get_local_gossiper();
 
             for (auto&& e : gs.endpoint_state_map) {
@@ -1841,16 +1845,106 @@ public:
     }
 };
 
+class describe_ring_table : public streaming_virtual_table {
+private:
+    service::storage_service& _ss;
+public:
+    describe_ring_table(service::storage_service& ss)
+            : streaming_virtual_table(build_schema())
+            , _ss(ss)
+    {
+        _shard_aware = true;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(NAME, "describe_ring");
+        return schema_builder(NAME, "describe_ring", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("start_token", utf8_type, column_kind::clustering_key)
+            .with_column("endpoint", inet_addr_type, column_kind::clustering_key)
+            .with_column("end_token", utf8_type)
+            .with_column("dc", utf8_type)
+            .with_column("rack", utf8_type)
+            .with_version(generate_schema_version(id))
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(const sstring& name) {
+        return dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(name).serialize_nonnull()));
+    }
+
+    clustering_key make_clustering_key(sstring start_token, gms::inet_address host) {
+        return clustering_key::from_exploded(*_s, {
+            data_value(start_token).serialize_nonnull(),
+            data_value(host).serialize_nonnull()
+        });
+    }
+
+    struct endpoint_details_cmp {
+        bool operator()(const dht::endpoint_details& l, const dht::endpoint_details& r) const {
+            return inet_addr_type->less(
+                data_value(l._host).serialize_nonnull(),
+                data_value(r._host).serialize_nonnull());
+        }
+    };
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        struct decorated_keyspace_name {
+            sstring name;
+            dht::decorated_key key;
+        };
+
+        auto keyspace_names = boost::copy_range<std::vector<decorated_keyspace_name>>(
+                _db->get_keyspaces() | boost::adaptors::transformed([this] (auto&& e) {
+                    return decorated_keyspace_name{e.first, make_partition_key(e.first)};
+        }));
+
+        boost::sort(keyspace_names, [less = dht::ring_position_less_comparator(*_s)]
+                (const decorated_keyspace_name& l, const decorated_keyspace_name& r) {
+            return less(l.key, r.key);
+        });
+
+        for (const decorated_keyspace_name& e : keyspace_names) {
+            auto&& dk = e.key;
+            if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk) || !_db->has_keyspace(e.name)) {
+                continue;
+            }
+
+            std::vector<dht::token_range_endpoints> ranges = _ss.describe_ring(e.name);
+
+            co_await result.emit_partition_start(dk);
+            boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
+                return l._start_token < r._start_token;
+            });
+
+            for (dht::token_range_endpoints& range : ranges) {
+                boost::sort(range._endpoint_details, endpoint_details_cmp());
+
+                for (const dht::endpoint_details& detail : range._endpoint_details) {
+                    clustering_row cr(make_clustering_key(range._start_token, detail._host));
+                    set_cell(cr.cells(), "end_token", sstring(range._end_token));
+                    set_cell(cr.cells(), "dc", sstring(detail._datacenter));
+                    set_cell(cr.cells(), "rack", sstring(detail._rack));
+                    co_await result.emit_row(std::move(cr));
+                }
+            }
+
+            co_await result.emit_partition_end();
+        }
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
-void register_virtual_tables() {
+void register_virtual_tables(service::storage_service& ss) {
     auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
         virtual_tables[tbl->schema()->id()] = std::move(tbl);
     };
 
     // Add built-in virtual tables here.
-    add_table(std::make_unique<nodetool_status_table>());
+    add_table(std::make_unique<nodetool_status_table>(ss));
+    add_table(std::make_unique<describe_ring_table>(ss));
 }
 
 std::vector<schema_ptr> all_tables() {
@@ -1900,8 +1994,8 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
             || s == v3::scylla_views_builds_in_progress();
 }
 
-future<> make(database& db) {
-    register_virtual_tables();
+future<> make(database& db, service::storage_service& ss) {
+    register_virtual_tables(ss);
 
     auto enable_cache = db.get_config().enable_cache();
     bool durable = db.get_config().data_file_directories().size() > 0;

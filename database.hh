@@ -86,6 +86,7 @@ class reconcilable_result;
 
 namespace service {
 class storage_proxy;
+class storage_service;
 class migration_notifier;
 class migration_manager;
 }
@@ -123,7 +124,7 @@ class data_listeners;
 class large_data_handler;
 
 namespace system_keyspace {
-future<> make(database& db);
+future<> make(database& db, service::storage_service& ss);
 }
 }
 
@@ -333,6 +334,8 @@ struct table_stats {
     int64_t pending_compactions = 0;
     int64_t memtable_partition_insertions = 0;
     int64_t memtable_partition_hits = 0;
+    int64_t memtable_range_tombstone_reads = 0;
+    int64_t memtable_row_tombstone_reads = 0;
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_and_histogram reads{256};
     utils::timed_rate_moving_average_and_histogram writes{256};
@@ -428,6 +431,8 @@ private:
     // This semaphore ensures that off-strategy compaction will be serialized and also
     // protects against candidates being picked more than once.
     seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
+    // Ensures that concurrent updates to sstable set will work correctly
+    seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
     std::optional<int64_t> _sstable_generation = {};
 
@@ -490,10 +495,6 @@ public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
-    sstables::shared_sstable get_staging_sstable(uint64_t generation) {
-        auto it = _sstables_staging.find(generation);
-        return it != _sstables_staging.end() ? it->second : nullptr;
-    }
     sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f,
             io_error_handler_gen error_handler_gen);
     sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
@@ -509,6 +510,25 @@ public:
     void notify_bootstrap_or_replace_start();
 
     void notify_bootstrap_or_replace_end();
+
+    // Ensures that concurrent preemptible mutations to sstable lists will produce correct results.
+    // User will hold this permit until done with all updates. As soon as it's released, another concurrent
+    // attempt to update the lists will be able to proceed.
+    struct sstable_list_builder {
+        using permit_t = semaphore_units<seastar::named_semaphore_exception_factory>;
+        permit_t permit;
+
+        explicit sstable_list_builder(permit_t p) : permit(std::move(p)) {}
+        sstable_list_builder& operator=(const sstable_list_builder&) = delete;
+        sstable_list_builder(const sstable_list_builder&) = delete;
+
+        // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
+        future<lw_shared_ptr<sstables::sstable_set>>
+        build_new_list(const sstables::sstable_set& current_sstables,
+                       sstables::sstable_set new_sstable_list,
+                       const std::vector<sstables::shared_sstable>& new_sstables,
+                       const std::vector<sstables::shared_sstable>& old_sstables);
+    };
 private:
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
@@ -527,7 +547,6 @@ private:
     void add_maintenance_sstable(sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
-    void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
@@ -554,16 +573,6 @@ private:
     static int64_t calculate_shard_from_sstable_generation(int64_t sstable_generation) {
         return sstable_generation % smp::count;
     }
-
-    // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
-    // As this function may preempt, its caller must guarantee that concurrent calls will be serialized in order
-    // to avoid corruption of the sstable set.
-    // Today, the serialization is always performed through row_cache's update semaphore.
-    future<lw_shared_ptr<sstables::sstable_set>>
-    build_new_sstable_list(const sstables::sstable_set& current_sstables,
-                        sstables::sstable_set new_sstable_list,
-                        const std::vector<sstables::shared_sstable>& new_sstables,
-                        const std::vector<sstables::shared_sstable>& old_sstables);
 
     future<>
     update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
@@ -1270,7 +1279,6 @@ private:
         uint64_t total_writes_timedout = 0;
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
-        uint64_t sstable_read_queue_overloaded = 0;
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
@@ -1357,7 +1365,7 @@ public:
 private:
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
-    friend future<> db::system_keyspace::make(database& db);
+    friend future<> db::system_keyspace::make(database& db, service::storage_service& ss);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 

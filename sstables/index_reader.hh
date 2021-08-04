@@ -312,8 +312,10 @@ public:
     {}
 };
 
-inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state) {
-    auto f = make_tracked_file(sst.index_file(), std::move(permit));
+inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state,
+                                    use_caching caching) {
+    auto f = caching ? sst.index_file() : sst.uncached_index_file();
+    f = make_tracked_file(std::move(f), std::move(permit));
     if (!trace_state) {
         return f;
     }
@@ -324,7 +326,8 @@ inline
 std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstable sst,
     reader_permit permit,
     tracing::trace_state_ptr trace_state,
-    file_input_stream_options options)
+    file_input_stream_options options,
+    use_caching caching)
 {
     std::optional<column_values_fixed_lengths> ck_values_fixed_lengths;
     if (sst->get_version() >= sstable_version_types::mc) {
@@ -333,13 +336,20 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
     }
 
     if (sst->get_version() >= sstable_version_types::mc && use_binary_search_in_promoted_index) {
+        seastar::shared_ptr<cached_file> cached_file_ptr = caching
+                ? sst->_cached_index_file
+                : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
+                                                    index_page_cache_metrics,
+                                                    sst->manager().get_cache_tracker().get_lru(),
+                                                    sst->manager().get_cache_tracker().region(),
+                                                    sst->_index_file_size);
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
             _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
-            *ck_values_fixed_lengths, *sst->_cached_index_file, options.io_priority_class, _num_blocks, trace_state);
+            *ck_values_fixed_lengths, cached_file_ptr, options.io_priority_class, _num_blocks, trace_state);
     }
 
-    auto file = make_tracked_index_file(*sst, permit, std::move(trace_state));
+    auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
     auto promoted_index_stream = make_file_input_stream(std::move(file), _promoted_index_start, _promoted_index_size,options);
     return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
         std::move(promoted_index_stream), _promoted_index_size, _num_blocks, ck_values_fixed_lengths);
@@ -428,9 +438,11 @@ class index_reader {
     reader_permit _permit;
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
+    std::unique_ptr<partition_index_cache> _local_index_cache; // Used when caching is disabled
     partition_index_cache& _index_cache;
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
+    use_caching _use_caching;
 
     struct reader {
         index_consumer _consumer;
@@ -445,11 +457,12 @@ class index_reader {
             return options;
         }
 
-        reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity)
+        reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity,
+               use_caching caching)
             : _consumer(sst->manager().get_cache_tracker().region(), sst->get_schema(), quantity)
             , _context(permit, _consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
-                       make_tracked_index_file(*sst, permit, trace_state),
+                       make_tracked_index_file(*sst, permit, trace_state, caching),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() >= sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
@@ -509,7 +522,7 @@ private:
                 end = summary.entries[summary_idx + 1].position;
             }
 
-            return do_with(std::make_unique<reader>(_sstable, _permit, _pc, _trace_state, position, end, quantity), [this, summary_idx] (auto& entries_reader) {
+            return do_with(std::make_unique<reader>(_sstable, _permit, _pc, _trace_state, position, end, quantity, _use_caching), [this, summary_idx] (auto& entries_reader) {
                 return entries_reader->_context.consume_input().then_wrapped([this, summary_idx, &entries_reader] (future<> f) {
                     std::exception_ptr ex;
                     if (f.failed()) {
@@ -735,13 +748,18 @@ private:
         return reset_clustered_cursor(b);
     }
 public:
-    index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state)
+    index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
+                 use_caching caching)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _pc(pc)
         , _trace_state(std::move(trace_state))
-        , _index_cache(*_sstable->_index_cache)
+        , _local_index_cache(caching ? nullptr
+            : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
+                                                      _sstable->manager().get_cache_tracker().region()))
+        , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
+        , _use_caching(caching)
     {
         sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
     }
@@ -790,7 +808,7 @@ public:
                 promoted_index* pi = e.get_promoted_index().get();
                 if (pi) {
                     bound.clustered_cursor = pi->make_cursor(_sstable, _permit, _trace_state,
-                        get_file_input_stream_options(_pc));
+                        get_file_input_stream_options(_pc), _use_caching);
                 }
             });
             if (!bound.clustered_cursor) {
@@ -961,6 +979,9 @@ public:
         return close(_lower_bound).then([this] {
             if (_upper_bound) {
                 return close(*_upper_bound);
+            }
+            if (_local_index_cache) {
+                return _local_index_cache->evict_gently();
             }
             return make_ready_future<>();
         });

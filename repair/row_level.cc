@@ -491,9 +491,22 @@ public:
     future<mutation_fragment_opt>
     read_mutation_fragment() {
         ++_reads_issued;
-        return _reader(db::no_timeout).then([this] (mutation_fragment_opt mfopt) {
-            ++_reads_finished;
-            return mfopt;
+        // Use a very long timeout for the reader to break out any eventual
+        // deadlock within the reader. Thirty minutes should be more than
+        // enough to read a single mutation fragment.
+        auto timeout = db::timeout_clock::now() + std::chrono::minutes(30);
+        return _reader(timeout).then_wrapped([this] (future<mutation_fragment_opt> f) {
+            try {
+                auto mfopt = f.get0();
+                ++_reads_finished;
+                return mfopt;
+            } catch (seastar::timed_out_error& e) {
+                rlogger.warn("Failed to read a fragment from the reader, keyspace={}, table={}, range={}: {}",
+                    _schema->ks_name(), _schema->cf_name(), _range, e);
+                throw;
+            } catch (...) {
+                throw;
+            }
         });
     }
 
@@ -2322,7 +2335,7 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
-future<> repair_service::init_row_level_ms_handlers() {
+future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
     ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
@@ -2490,7 +2503,7 @@ future<> repair_service::init_row_level_ms_handlers() {
     return make_ready_future<>();
 }
 
-future<> repair_service::uninit_row_level_ms_handlers() {
+future<> repair_service::uninit_ms_handlers() {
     auto& ms = this->_messaging;
 
     return when_all_succeed(
@@ -3032,27 +3045,16 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 }
 
 future<> repair_service::start() {
-    return when_all_succeed(
-            init_metrics(),
-            init_ms_handlers(),
-            init_row_level_ms_handlers()
-    ).discard_result();
+    co_await init_metrics();
+    co_await init_ms_handlers();
 }
 
 future<> repair_service::stop() {
-    return when_all_succeed(
-            uninit_ms_handlers(),
-            uninit_row_level_ms_handlers()
-    ).discard_result().then([this] {
-        if (this_shard_id() != 0) {
-            _stopped = true;
-            return make_ready_future<>();
-        }
-
-        return _gossiper.local().unregister_(_gossip_helper).then([this] {
-            _stopped = true;
-        });
-    });
+    co_await uninit_ms_handlers();
+    if (this_shard_id() == 0) {
+        co_await _gossiper.local().unregister_(_gossip_helper);
+    }
+    _stopped = true;
 }
 
 repair_service::~repair_service() {

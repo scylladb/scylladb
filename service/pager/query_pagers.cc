@@ -97,15 +97,18 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             _max = state->get_remaining();
             _last_pkey = state->get_partition_key();
             _last_ckey = state->get_clustering_key();
-            _cmd->query_uuid = state->get_query_uuid();
-            _cmd->is_first_page = query::is_first_page::no;
+            _query_uuid = state->get_query_uuid();
             _last_replicas = state->get_last_replicas();
             _query_read_repair_decision = state->get_query_read_repair_decision();
             _rows_fetched_for_last_partition = state->get_rows_fetched_for_last_partition();
-        } else {
-            _cmd->query_uuid = utils::make_random_uuid();
-            _cmd->is_first_page = query::is_first_page::yes;
         }
+
+        _cmd->is_first_page = query::is_first_page(!_query_uuid);
+        if (!_query_uuid) {
+            _query_uuid = utils::make_random_uuid();
+        }
+        _cmd->query_uuid = *_query_uuid;
+
         qlogger.trace("fetch_page query id {}", _cmd->query_uuid);
 
         if (_last_pkey) {

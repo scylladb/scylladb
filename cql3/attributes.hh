@@ -46,7 +46,7 @@
 namespace cql3 {
 
 class query_options;
-class variable_specifications;
+class prepare_context;
 
 /**
  * Utility class for the Parser to gather attributes for modification
@@ -74,7 +74,7 @@ public:
 
     db::timeout_clock::duration get_timeout(const query_options& options) const;
 
-    void collect_marker_specification(variable_specifications& bound_names) const;
+    void fill_prepare_context(prepare_context& ctx) const;
 
     class raw final {
     public:

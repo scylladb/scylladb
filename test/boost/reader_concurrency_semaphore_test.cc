@@ -844,9 +844,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
     auto stop_sem = deferred_stop(semaphore);
 
-    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 0);
-    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 0);
-    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
 
     auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
 
@@ -861,32 +861,32 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
             case 0:
                 used.emplace_back(permit);
 
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
                 break;
             case 1:
                 used.emplace_back(permit);
                 blocked.emplace_back(permit);
 
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
                 break;
             case 2:
                 blocked.emplace_back(permit);
 
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 0);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
                 break;
             case 3:
                 blocked.emplace_back(permit);
                 used.emplace_back(permit);
 
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
                 break;
             default:
                 count = tests::random::get_int<unsigned>(3, 100);
@@ -906,12 +906,12 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
             if (pop_used) {
                 used.pop_back();
                 if (used.empty()) {
-                    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 0);
+                    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
                 }
             } else {
                 blocked.pop_back();
                 if (blocked.empty()) {
-                    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+                    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
                 }
             }
         }

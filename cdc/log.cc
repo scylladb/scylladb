@@ -712,17 +712,17 @@ private:
        }
        return false;
     }
-    bool compare(const T&, const value_type& v);
+    std::strong_ordering compare(const T&, const value_type& v);
 };
 
 template<>
-bool maybe_back_insert_iterator<std::vector<std::pair<managed_bytes_view, managed_bytes_view>>, managed_bytes_view>::compare(
+std::strong_ordering maybe_back_insert_iterator<std::vector<std::pair<managed_bytes_view, managed_bytes_view>>, managed_bytes_view>::compare(
         const managed_bytes_view& t, const value_type& v) {
     return _type.compare(t, v.first);
 }
 
 template<>
-bool maybe_back_insert_iterator<std::vector<managed_bytes_view>, managed_bytes_view>::compare(const managed_bytes_view& t, const value_type& v) {
+std::strong_ordering maybe_back_insert_iterator<std::vector<managed_bytes_view>, managed_bytes_view>::compare(const managed_bytes_view& t, const value_type& v) {
     return _type.compare(t, v);
 }
 
