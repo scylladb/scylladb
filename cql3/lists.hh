@@ -87,6 +87,10 @@ public:
         virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const;
         friend class lists;
+
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+        }
     };
     /**
      * Basically similar to a Value, but with some non-pure function (that need
@@ -108,6 +112,11 @@ public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
         const std::vector<shared_ptr<term>>& get_elements() const {
             return _elements;
+        }
+
+        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(
+                fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
         }
     };
 

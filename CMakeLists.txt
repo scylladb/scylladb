@@ -407,6 +407,7 @@ set(scylla_sources
     cql3/statements/truncate_statement.cc
     cql3/statements/update_statement.cc
     cql3/statements/use_statement.cc
+    cql3/term.cc
     cql3/token_relation.cc
     cql3/tuples.cc
     cql3/type_json.cc

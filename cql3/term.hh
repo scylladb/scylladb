@@ -103,6 +103,9 @@ struct delayed_function_value {
     std::vector<new_term> arguments;
 };
 
+// Converts old term to new representation, in case of nullptr returns null_value
+new_term to_new_term(const shared_ptr<term>& old_term, cql_serialization_format);
+
 /**
  * A parsed, non prepared (thus untyped) term.
  *
@@ -200,6 +203,9 @@ public:
     using raw = term_raw;
 
     using multi_column_raw = multi_column_term_raw;
+
+    // Converts this term to new representation
+    virtual new_term to_new_term(cql_serialization_format) const = 0;
 };
 
 /**
@@ -241,6 +247,13 @@ public:
     }
 
     virtual sstring to_string() const = 0;
+
+    // Converts this terminal to matching cql_value or reversed_cql_value
+    virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const = 0;
+
+    virtual new_term to_new_term(cql_serialization_format sf) const override final {
+        return new_term(to_ordered_cql_value(sf));
+    }
 };
 
 class multi_item_terminal : public terminal {
@@ -274,6 +287,12 @@ public:
         }
         return cql3::raw_value_view::make_null();
     };
-};
 
+    // Converts this non terminal to matching delayed_cql_value
+    virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const = 0;
+
+    virtual new_term to_new_term(cql_serialization_format sf) const override final {
+        return new_term(to_delayed_cql_value(sf));
+    }
+};
 }

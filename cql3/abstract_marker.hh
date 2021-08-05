@@ -62,6 +62,11 @@ public:
 
     virtual bool contains_bind_marker() const override;
 
+    virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
+        throw std::runtime_error(
+            fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
     /**
      * A parsed, but non prepared, bind marker.
      */

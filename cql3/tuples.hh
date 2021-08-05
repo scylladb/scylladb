@@ -136,6 +136,10 @@ public:
         virtual sstring to_string() const override {
             return format("({})", join(", ", _elements));
         }
+
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+        }
     };
 
     /**
@@ -192,6 +196,11 @@ public:
             // We don't "need" that override but it saves us the allocation of a Value object if used
             return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(_type->build_value_fragmented(bind_internal(options))));
         }
+
+        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(
+                fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+        }
     };
 
     /**
@@ -218,6 +227,10 @@ public:
             std::vector<sstring> tuples(_elements.size());
             std::transform(_elements.begin(), _elements.end(), tuples.begin(), &tuples::tuple_to_string<managed_bytes_opt>);
             return tuple_to_string(tuples);
+        }
+
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
         }
     };
 

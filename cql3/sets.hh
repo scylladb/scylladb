@@ -83,6 +83,10 @@ public:
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const set_type_impl& st, const value& v);
         virtual sstring to_string() const override;
+
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+        }
     };
 
     // See Lists.DelayedValue
@@ -96,6 +100,11 @@ public:
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
         virtual shared_ptr<terminal> bind(const query_options& options);
+
+        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
+            throw std::runtime_error(
+                fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+        }
     };
 
     class marker : public abstract_marker {
