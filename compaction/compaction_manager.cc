@@ -644,18 +644,18 @@ future<> compaction_manager::perform_offstrategy(column_family* cf) {
                 _stats.active_tasks++;
                 task->compaction_running = true;
 
-                return cf->run_offstrategy_compaction().then_wrapped([this, task] (future<> f) mutable {
+                return cf->run_offstrategy_compaction().then_wrapped([this, task, schema = cf->schema()] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->compaction_running = false;
                     try {
                         f.get();
                         _stats.completed_tasks++;
                     } catch (sstables::compaction_stop_exception& e) {
-                        cmlog.info("off-strategy compaction was abruptly stopped, reason: {}", e.what());
+                        cmlog.info("off-strategy compaction of {}.{} was abruptly stopped, reason: {}", schema->ks_name(), schema->cf_name(), e.what());
                     } catch (...) {
                         _stats.errors++;
                         _stats.pending_tasks++;
-                        cmlog.error("off-strategy compaction failed due to {}, retrying...", std::current_exception());
+                        cmlog.error("off-strategy compaction of {}.{} failed due to {}, retrying...", schema->ks_name(), schema->cf_name(), std::current_exception());
                         return put_task_to_sleep(task).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
