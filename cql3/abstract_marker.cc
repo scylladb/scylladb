@@ -109,4 +109,10 @@ lw_shared_ptr<column_specification> abstract_marker::in_raw::make_in_receiver(co
     return ::make_shared<lists::marker>(_bind_index, make_in_receiver(*receiver));
 }
 
+delayed_cql_value abstract_marker::to_delayed_cql_value(cql_serialization_format) const {
+    return delayed_cql_value(delayed_marker_value{
+        .bind_index = _bind_index,
+        .receiver = _receiver
+    });
+}
 }
