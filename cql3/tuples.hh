@@ -111,13 +111,14 @@ public:
     class value : public multi_item_terminal {
     public:
         std::vector<managed_bytes_opt> _elements;
+        data_type _my_type;
     public:
-        value(std::vector<managed_bytes_opt> elements)
-                : _elements(std::move(elements)) {
+        value(std::vector<managed_bytes_opt> elements, data_type type)
+                : _elements(std::move(elements)), _my_type(std::move(type)) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
           return buffer.with_value([&] (const FragmentedView auto& view) {
-              return value(type.split_fragmented(view));
+              return value(type.split_fragmented(view), type.shared_from_this());
           });
         }
         virtual cql3::raw_value get(const query_options& options) override {
@@ -137,20 +138,18 @@ public:
             return format("({})", join(", ", _elements));
         }
 
-        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override;
     };
 
     /**
      * Similar to Value, but contains at least one NonTerminal, such as a non-pure functions or bind marker.
      */
     class delayed_value : public non_terminal {
-        tuple_type _type;
         std::vector<shared_ptr<term>> _elements;
+        data_type _my_type;
     public:
-        delayed_value(tuple_type type, std::vector<shared_ptr<term>> elements)
-                : _type(std::move(type)), _elements(std::move(elements)) {
+        delayed_value(std::vector<shared_ptr<term>> elements, data_type type)
+                : _elements(std::move(elements)), _my_type(std::move(type)) {
         }
 
         virtual bool contains_bind_marker() const override {
@@ -166,6 +165,14 @@ public:
         std::vector<managed_bytes_opt> bind_internal(const query_options& options) {
             std::vector<managed_bytes_opt> buffers;
             buffers.resize(_elements.size());
+
+            const abstract_type& not_reversed = _my_type->without_reversed();
+            const tuple_type_impl* my_tuple_type = dynamic_cast<const tuple_type_impl*>(&not_reversed);
+
+            if (my_tuple_type == nullptr) {
+                throw std::runtime_error("tuple::delayed_value has type that is not tuple_type_impl!");
+            }
+
             for (size_t i = 0; i < _elements.size(); ++i) {
                 const auto& value = _elements[i]->bind_and_get(options);
                 if (value.is_unset_value()) {
@@ -175,9 +182,9 @@ public:
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (options.get_cql_serialization_format() != cql_serialization_format::internal()
-                        && _type->type(i)->is_collection()) {
+                        && my_tuple_type->type(i)->is_collection()) {
                     if (buffers[i]) {
-                        buffers[i] = static_pointer_cast<const collection_type_impl>(_type->type(i))->reserialize(
+                        buffers[i] = static_pointer_cast<const collection_type_impl>(my_tuple_type->type(i))->reserialize(
                                 options.get_cql_serialization_format(),
                                 cql_serialization_format::internal(),
                                 managed_bytes_view(*buffers[i]));
@@ -189,18 +196,23 @@ public:
 
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            return ::make_shared<value>(bind_internal(options));
+            return ::make_shared<value>(bind_internal(options), _my_type);
         }
 
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
             // We don't "need" that override but it saves us the allocation of a Value object if used
-            return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(_type->build_value_fragmented(bind_internal(options))));
+            const abstract_type& not_reversed = _my_type->without_reversed();
+            const tuple_type_impl* my_tuple_type = dynamic_cast<const tuple_type_impl*>(&not_reversed);
+
+            if (my_tuple_type == nullptr) {
+                throw std::runtime_error("tuple::delayed_value has type that is not tuple_type_impl!");
+            }
+
+            return cql3::raw_value_view::make_temporary(
+                cql3::raw_value::make_value(my_tuple_type->build_value_fragmented(bind_internal(options))));
         }
 
-        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(
-                fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override;
     };
 
     /**
@@ -210,8 +222,12 @@ public:
     class in_value : public terminal {
     private:
         utils::chunked_vector<std::vector<managed_bytes_opt>> _elements;
+        tuple_type _elements_type;
     public:
-        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items) : _elements(std::move(items)) { }
+        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items,
+                 tuple_type elements_type)
+                : _elements(std::move(items)), _elements_type(std::move(elements_type)) {
+        }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
@@ -229,9 +245,7 @@ public:
             return tuple_to_string(tuples);
         }
 
-        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override;
     };
 
     /**
