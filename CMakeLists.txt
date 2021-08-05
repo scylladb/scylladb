@@ -340,6 +340,7 @@ set(scylla_sources
     cql3/column_specification.cc
     cql3/constants.cc
     cql3/cql3_type.cc
+    cql3/cql_value.cc
     cql3/expr/expression.cc
     cql3/functions/aggregate_fcts.cc
     cql3/functions/castas_fcts.cc
