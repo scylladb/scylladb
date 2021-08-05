@@ -45,12 +45,63 @@
 #include "cql3/query_options.hh"
 #include "cql3/values.hh"
 #include "cql3/cql_value.hh"
+#include "cql3/functions/scalar_function.hh"
 
 namespace cql3 {
 
 class term;
 class terminal;
 class prepare_context;
+
+struct delayed_marker_value;
+struct delayed_tuple_value;
+struct delayed_list_value;
+struct delayed_set_value;
+struct delayed_map_value;
+struct delayed_user_type_value;
+struct delayed_function_value;
+
+using delayed_cql_value = std::variant<
+    delayed_marker_value,
+    delayed_tuple_value,
+    delayed_list_value,
+    delayed_set_value,
+    delayed_map_value,
+    delayed_user_type_value,
+    delayed_function_value>;
+
+// New representation of term that will eventually replace the old one
+using new_term = std::variant<ordered_cql_value, delayed_cql_value>;
+
+struct delayed_marker_value {
+    int32_t bind_index;
+    lw_shared_ptr<column_specification> receiver;
+};
+
+struct delayed_tuple_value {
+    std::vector<new_term> elements;
+};
+
+struct delayed_list_value {
+    std::vector<new_term> elements;
+};
+
+struct delayed_set_value {
+    std::vector<new_term> elements;
+};
+
+struct delayed_map_value {
+    std::vector<std::pair<new_term, new_term>> elements;
+};
+
+struct delayed_user_type_value {
+    std::vector<new_term> field_values;
+};
+
+struct delayed_function_value {
+    shared_ptr<functions::scalar_function> function;
+    std::vector<new_term> arguments;
+};
 
 /**
  * A parsed, non prepared (thus untyped) term.
