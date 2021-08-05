@@ -778,6 +778,18 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'managed_bytes'
 
+class optional_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        if not self.val['_M_payload']['_M_engaged']:
+            return 'std::nullopt'
+        return str(self.val)
+
+    def display_hint(self):
+        return 'std::optional'
+
 
 class partition_entry_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
@@ -943,6 +955,7 @@ def build_pretty_printer():
     pp.add_printer('nonwrapping_interval', r'^nonwrapping_interval<.*$', nonwrapping_interval_printer)
     pp.add_printer('nonwrapping_range', r'^nonwrapping_range<.*$', nonwrapping_interval_printer) # scylla < 4.3 calls it nonwrapping_range
     pp.add_printer('ring_position', r'^dht::ring_position$', ring_position_printer)
+    pp.add_printer('optional', r'^std::_Optional_base.*', optional_printer)
     return pp
 
 
