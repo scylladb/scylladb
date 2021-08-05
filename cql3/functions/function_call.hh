@@ -72,9 +72,18 @@ public:
     virtual shared_ptr<terminal> bind(const query_options& options) override;
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 
-    virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
-        throw std::runtime_error(
-            fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
+    virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format sf) const override {
+        std::vector<new_term> new_arguments;
+        new_arguments.reserve(_terms.size());
+
+        for (const shared_ptr<term>& arg : _terms) {
+            new_arguments.push_back(cql3::to_new_term(arg, sf));
+        }
+
+        return delayed_cql_value(delayed_function_value{
+            .function = _fun,
+            .arguments = new_arguments
+        });
     }
 private:
     static bytes_opt execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params);
