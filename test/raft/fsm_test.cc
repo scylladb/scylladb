@@ -1701,13 +1701,13 @@ BOOST_AUTO_TEST_CASE(test_non_voter_voter_loop) {
         // If iteration count is large, this helps save some
         // memory
         if (rolladice(1./1000)) {
-            A.apply_snapshot(log_snapshot(A.get_log(), A.log_last_idx()), 0);
+            A.get_log().apply_snapshot(log_snapshot(A.get_log(), A.log_last_idx()), 0);
         }
         if (rolladice(1./100)) {
-            B.apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+            B.get_log().apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
         }
         if (rolladice(1./5000)) {
-            C.apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+            C.get_log().apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
         }
     }
     BOOST_CHECK(A.is_leader());
@@ -1743,7 +1743,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, false);
     A.tick();
     raft::snapshot A_snp{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
-    A.apply_snapshot(A_snp, 0);
+    A.apply_snapshot(A_snp, 0, true);
     A.tick();
     communicate(A, B, C);
     BOOST_CHECK(A.is_leader());
@@ -1768,7 +1768,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, true);
     A.tick();
     A_snp = raft::snapshot{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
-    A.apply_snapshot(A_snp, 0);
+    A.apply_snapshot(A_snp, 0, true);
     A.tick();
     communicate(A, B, C);
     BOOST_CHECK(A.is_leader());
@@ -2050,4 +2050,28 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_force_vote_request) {
     communicate(B, C);
     auto final_leader = select_leader(B, C);
     BOOST_CHECK(final_leader->id() == timeout_now_target_id);
+}
+
+// A follower should reject remote snapshots that are behind its current commit index.
+BOOST_AUTO_TEST_CASE(test_reject_outdated_remote_snapshot) {
+    server_id A_id = id(), B_id = id();
+    raft::configuration cfg({A_id, B_id});
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    communicate(A, B);
+
+    auto snp_idx = index_t{1};
+    BOOST_CHECK(B.log_last_idx() > snp_idx);
+    auto snp_term = B.get_log().term_for(snp_idx);
+    BOOST_CHECK(snp_term);
+    auto snp = raft::snapshot{.idx = index_t{1}, .term = *snp_term, .config = cfg};
+    BOOST_CHECK(!B.apply_snapshot(snp, 0, false));
+    // But it should apply this snapshot if it's locally generated
+    BOOST_CHECK(B.apply_snapshot(snp, 0, true));
 }

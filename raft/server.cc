@@ -645,7 +645,7 @@ future<> server_impl::applier_fiber() {
                    logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                    snp.id = co_await _state_machine->take_snapshot();
                    _last_loaded_snapshot_id = snp.id;
-                   _fsm->apply_snapshot(snp, _config.snapshot_trailing);
+                   _fsm->apply_snapshot(snp, _config.snapshot_trailing, true);
                    applied_since_snapshot = 0;
                    _stats.snapshots_taken++;
                }

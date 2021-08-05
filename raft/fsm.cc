@@ -910,16 +910,25 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
-    logger.trace("apply_snapshot[{}]: term: {}, idx: {}", _my_id, _current_term, snp.idx);
+bool fsm::apply_snapshot(snapshot snp, size_t trailing, bool local) {
+    logger.trace("apply_snapshot[{}]: current term: {}, term: {}, idx: {}, id: {}, local: {}",
+            _my_id, _current_term, snp.term, snp.idx, snp.id, local);
+    // If the snapshot is locally generated, all entries up to its index must have been locally applied,
+    // so in particular they must have been observed as committed.
+    // Remote snapshots are only applied if we're a follower.
+    assert((local && snp.idx <= _observed._commit_idx) || (!local && is_follower()));
+
+    // We don't apply snapshots older than the last applied one.
+    // Furthermore, for remote snapshots, we can *only* apply them if they are fresher than our commit index.
+    // Applying older snapshots could result in out-of-order command application to the replicated state machine,
+    // leading to serializability violations.
     const auto& current_snp = _log.get_snapshot();
-    // Uncommitted entries can not appear in the snapshot
-    assert(snp.idx <= _commit_idx || is_follower());
-    if (snp.idx <= current_snp.idx) {
-        logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}",
-                        _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx);
+    if (snp.idx <= current_snp.idx || (!local && snp.idx <= _commit_idx)) {
+        logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}, commit_idx={}",
+                        _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx, _commit_idx);
         return false;
     }
+
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);

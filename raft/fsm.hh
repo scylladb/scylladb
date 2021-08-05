@@ -417,7 +417,7 @@ public:
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
     // entry. Returns false if the snapshot is older than existing one.
-    bool apply_snapshot(snapshot snp, size_t traling);
+    bool apply_snapshot(snapshot snp, size_t traling, bool local);
 
     size_t in_memory_log_size() const {
         return _log.in_memory_size();
@@ -467,7 +467,7 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
         request_vote(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, install_snapshot>) {
         send_to(from, snapshot_reply{.current_term = _current_term,
-                    .success = apply_snapshot(std::move(msg.snp), 0)});
+                    .success = apply_snapshot(std::move(msg.snp), 0, false)});
     } else if constexpr (std::is_same_v<Message, timeout_now>) {
         // Leadership transfers never use pre-vote; we know we are not
         // recovering from a partition so there is no need for the
