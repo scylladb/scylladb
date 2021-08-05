@@ -74,9 +74,9 @@ public:
 
     class value : public multi_item_terminal {
         std::vector<managed_bytes_opt> _elements;
+        data_type _my_type;
     public:
-        explicit value(std::vector<managed_bytes_opt>);
-        explicit value(std::vector<managed_bytes_view_opt>);
+        explicit value(std::vector<managed_bytes_opt>, data_type type);
 
         static value from_serialized(const raw_value_view&, const user_type_impl&);
 
@@ -85,17 +85,15 @@ public:
         virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const override;
 
-        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override;
     };
 
     // Same purpose than Lists.DelayedValue, except we do handle bind marker in that case
     class delayed_value : public non_terminal {
-        user_type _type;
         std::vector<shared_ptr<term>> _values;
+        data_type _my_type;
     public:
-        delayed_value(user_type type, std::vector<shared_ptr<term>> values);
+        delayed_value(std::vector<shared_ptr<term>> values, data_type type);
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const;
     private:
@@ -104,10 +102,7 @@ public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 
-        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(
-                fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override;
     };
 
     class marker : public abstract_marker {

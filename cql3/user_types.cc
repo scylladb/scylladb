@@ -101,7 +101,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
         }
     }
 
-    delayed_value value(ut, values);
+    delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -146,8 +146,8 @@ sstring user_types::literal::to_string() const {
     return format("{{{}}}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
 }
 
-user_types::value::value(std::vector<managed_bytes_opt> elements)
-        : _elements(std::move(elements)) {
+user_types::value::value(std::vector<managed_bytes_opt> elements, data_type type)
+        : _elements(std::move(elements)), _my_type(std::move(type)) {
 }
 
 user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
@@ -158,7 +158,7 @@ user_types::value user_types::value::from_serialized(const raw_value_view& v, co
                     format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
         }
 
-        return value(std::move(elements));
+        return value(std::move(elements), type.shared_from_this());
     });
 }
 
@@ -178,8 +178,35 @@ sstring user_types::value::to_string() const {
     return format("({})", join(", ", _elements));
 }
 
-user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)
-        : _type(std::move(type)), _values(std::move(values)) {
+ordered_cql_value user_types::value::to_ordered_cql_value(cql_serialization_format) const {
+    std::vector<std::variant<managed_bytes, null_value>> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (const managed_bytes_opt& element : _elements) {
+        if (element.has_value()) {
+            new_elements.emplace_back(*element);
+        } else {
+            new_elements.emplace_back(null_value{});
+        }
+    }
+
+    const abstract_type& not_reversed = _my_type->without_reversed();
+    const user_type_impl* my_user_type = dynamic_cast<const user_type_impl*>(&not_reversed);
+
+    if (my_user_type == nullptr) {
+        throw std::runtime_error("user_type::value has type that is not user_type_impl!");
+    }
+
+    cql_value cql_val(user_type_value{
+        .field_values = std::move(new_elements),
+        .field_values_types = my_user_type->field_types()
+    });
+    
+   return reverse_if_needed(std::move(cql_val), _my_type->is_reversed());
+}
+
+user_types::delayed_value::delayed_value(std::vector<shared_ptr<term>> values, data_type type)
+        : _values(std::move(values)), _my_type(std::move(type)) {
 }
 bool user_types::delayed_value::contains_bind_marker() const {
     return boost::algorithm::any_of(_values, std::mem_fn(&term::contains_bind_marker));
@@ -194,24 +221,31 @@ void user_types::delayed_value::fill_prepare_context(prepare_context& ctx) const
 std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const query_options& options) {
     auto sf = options.get_cql_serialization_format();
 
+    const abstract_type& not_reversed = _my_type->without_reversed();
+    const user_type_impl* my_user_type = dynamic_cast<const user_type_impl*>(&not_reversed);
+
+    if (my_user_type == nullptr) {
+        throw std::runtime_error("user_type::delayed_value has type that is not user_type_impl!");
+    }
+
     // user_types::literal::prepare makes sure that every field gets a corresponding value.
     // For missing fields the values become nullopts.
-    assert(_type->size() == _values.size());
+    assert(my_user_type->size() == _values.size());
 
     std::vector<managed_bytes_opt> buffers;
-    for (size_t i = 0; i < _type->size(); ++i) {
+    for (size_t i = 0; i < my_user_type->size(); ++i) {
         const auto& value = _values[i]->bind_and_get(options);
-        if (!_type->is_multi_cell() && value.is_unset_value()) {
+        if (!my_user_type->is_multi_cell() && value.is_unset_value()) {
             throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}",
-                        _type->field_name_as_string(i), _type->get_name_as_string()));
+                        my_user_type->field_name_as_string(i), my_user_type->get_name_as_string()));
         }
 
         buffers.push_back(to_managed_bytes_opt(value));
 
         // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
         // version is in use since we're going to store directly that serialized value.
-        if (!sf.collection_format_unchanged() && _type->field_type(i)->is_collection() && buffers.back()) {
-            auto&& ctype = static_pointer_cast<const collection_type_impl>(_type->field_type(i));
+        if (!sf.collection_format_unchanged() && my_user_type->field_type(i)->is_collection() && buffers.back()) {
+            auto&& ctype = static_pointer_cast<const collection_type_impl>(my_user_type->field_type(i));
             buffers.back() = ctype->reserialize(sf, cql_serialization_format::latest(), managed_bytes_view(*buffers.back()));
         }
     }
@@ -219,11 +253,24 @@ std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const qu
 }
 
 shared_ptr<terminal> user_types::delayed_value::bind(const query_options& options) {
-    return ::make_shared<user_types::value>(bind_internal(options));
+    return ::make_shared<user_types::value>(bind_internal(options), _my_type);
 }
 
 cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
     return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value_fragmented(bind_internal(options))));
+}
+
+delayed_cql_value user_types::delayed_value::to_delayed_cql_value(cql_serialization_format sf) const {
+    std::vector<new_term> new_values;
+    new_values.reserve(_values.size());
+
+    for (const shared_ptr<term>& val : _values) {
+        new_values.push_back(cql3::to_new_term(val, sf));
+    }
+
+    return delayed_cql_value(delayed_user_type_value{
+        .field_values = std::move(new_values)
+    });
 }
 
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
