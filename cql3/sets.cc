@@ -49,10 +49,11 @@ sets::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
         }
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now. This branch works for frozen sets/maps only.
-        if (dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
-            // use empty_type for comparator, set is empty anyway.
-            std::map<managed_bytes, managed_bytes, serialized_compare> m(empty_type->as_less_comparator());
-            return ::make_shared<maps::value>(std::move(m));
+        const map_type_impl* map_typ = dynamic_cast<const map_type_impl*>(receiver->type.get());
+        if (map_typ != nullptr) {
+            const data_type& keys_type = map_typ->get_keys_type();
+            std::map<managed_bytes, managed_bytes, serialized_compare> m(keys_type->as_less_comparator());
+            return ::make_shared<maps::value>(std::move(m), receiver->type);
         }
     }
 

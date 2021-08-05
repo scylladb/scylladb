@@ -77,9 +77,10 @@ public:
     class value : public terminal, collection_terminal {
     public:
         std::map<managed_bytes, managed_bytes, serialized_compare> map;
+        data_type _my_type;
 
-        value(std::map<managed_bytes, managed_bytes, serialized_compare> map)
-            : map(std::move(map)) {
+        value(std::map<managed_bytes, managed_bytes, serialized_compare> map, data_type type)
+            : map(std::move(map)), _my_type(std::move(type)) {
         }
         static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
@@ -87,28 +88,22 @@ public:
         bool equals(const map_type_impl& mt, const value& v);
         virtual sstring to_string() const;
 
-        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(fmt::format("terminal::to_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override;
     };
 
     // See Lists.DelayedValue
     class delayed_value : public non_terminal {
-        serialized_compare _comparator;
         std::unordered_map<shared_ptr<term>, shared_ptr<term>> _elements;
+        data_type _my_type;
     public:
-        delayed_value(serialized_compare comparator,
-                      std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements)
-                : _comparator(std::move(comparator)), _elements(std::move(elements)) {
+        delayed_value(std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements, data_type type)
+                : _elements(std::move(elements)), _my_type(std::move(type)) {
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
         shared_ptr<terminal> bind(const query_options& options);
 
-        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override {
-            throw std::runtime_error(
-                fmt::format("non_terminal::to_delayed_cql_value not implemented! {}:{}", __FILE__, __LINE__));
-        }
+        virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override;
     };
 
     class marker : public abstract_marker {

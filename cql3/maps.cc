@@ -88,9 +88,8 @@ maps::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
 
         values.emplace(k, v);
     }
-    delayed_value value(
-            dynamic_cast<const map_type_impl&>(receiver->type->without_reversed()).get_keys_type()->as_less_comparator(),
-            values);
+
+    delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -176,7 +175,7 @@ maps::value::from_serialized(const raw_value_view& fragmented_value, const map_t
                             type.get_values_type()->decompose(e.second));
             }
         }
-        return maps::value(std::move(map));
+        return maps::value(std::move(map), type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -221,6 +220,23 @@ maps::value::to_string() const {
     abort();
 }
 
+ordered_cql_value maps::value::to_ordered_cql_value(cql_serialization_format sf) const {
+    const abstract_type& not_reversed = _my_type->without_reversed();
+    const map_type_impl* my_map_type = dynamic_cast<const map_type_impl*>(&not_reversed);
+
+    if (my_map_type == nullptr) {
+        throw std::runtime_error("maps::value has type that is not map_type_impl!");
+    }
+
+    cql_value cql_val(map_value{
+        .elements = map,
+        .keys_type = my_map_type->get_keys_type(),
+        .values_type = my_map_type->get_values_type()
+    });
+
+    return reverse_if_needed(std::move(cql_val), _my_type->is_reversed());
+}
+
 bool
 maps::delayed_value::contains_bind_marker() const {
     // False since we don't support them in collection
@@ -233,7 +249,15 @@ maps::delayed_value::fill_prepare_context(prepare_context& ctx) const {
 
 shared_ptr<terminal>
 maps::delayed_value::bind(const query_options& options) {
-    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(_comparator);
+    const abstract_type& not_reversed = _my_type->without_reversed();
+    const map_type_impl* my_map_type = dynamic_cast<const map_type_impl*>(&not_reversed);
+
+    if (my_map_type == nullptr) {
+        throw std::runtime_error("maps::delayed_value has type that is not map_type_impl!");
+    }
+
+    const data_type& keys_type = my_map_type->get_keys_type();
+    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(keys_type->as_less_comparator());
     for (auto&& entry : _elements) {
         auto&& key = entry.first;
         auto&& value = entry.second;
@@ -260,7 +284,21 @@ maps::delayed_value::bind(const query_options& options) {
         }
         buffers.emplace(*to_managed_bytes_opt(key_bytes), *to_managed_bytes_opt(value_bytes));
     }
-    return ::make_shared<value>(std::move(buffers));
+    return ::make_shared<value>(std::move(buffers), _my_type);
+}
+
+delayed_cql_value
+maps::delayed_value::to_delayed_cql_value(cql_serialization_format sf) const {
+    std::vector<std::pair<new_term, new_term>> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (const auto& [key, value] : _elements) {
+        new_elements.emplace_back(cql3::to_new_term(key, sf), cql3::to_new_term(value, sf));
+    }
+
+    return delayed_cql_value(delayed_map_value{
+        .elements = std::move(new_elements)
+    });
 }
 
 ::shared_ptr<terminal>
