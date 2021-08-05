@@ -261,13 +261,12 @@ class range_tombstone_accumulator {
     tombstone _partition_tombstone;
     std::deque<range_tombstone> _range_tombstones;
     tombstone _current_tombstone;
-    bool _reversed;
 private:
     void update_current_tombstone();
     void drop_unneeded_tombstones(const clustering_key_prefix& ck, int w = 0);
 public:
-    range_tombstone_accumulator(const schema& s, bool reversed)
-        : _cmp(s), _reversed(reversed) { }
+    explicit range_tombstone_accumulator(const schema& s)
+        : _cmp(s) { }
 
     void set_partition_tombstone(tombstone t) {
         _partition_tombstone = t;

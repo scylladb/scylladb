@@ -884,8 +884,7 @@ BOOST_AUTO_TEST_CASE(test_accumulator) {
     auto ts1 = 1;
     auto ts2 = 2;
 
-    testlog.info("Forward");
-    auto acc = range_tombstone_accumulator(*s, false);
+    auto acc = range_tombstone_accumulator(*s);
     acc.apply(rtie(0, 4, ts1));
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 0 })), tombstone(ts1, gc_now));
     acc.apply(rtie(1, 2, ts2));
@@ -904,26 +903,4 @@ BOOST_AUTO_TEST_CASE(test_accumulator) {
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 13 })), tombstone(ts2, gc_now));
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 14 })), tombstone());
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 15 })), tombstone());
-
-    testlog.info("Reversed");
-    acc = range_tombstone_accumulator(*s, true);
-
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 15 })), tombstone());
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 14 })), tombstone());
-    acc.apply(rtie(11, 14, ts2));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 13 })), tombstone(ts2, gc_now));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 12 })), tombstone(ts2, gc_now));
-    acc.apply(rtie(10, 12, ts1));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 11 })), tombstone(ts2, gc_now));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 10 })), tombstone(ts1, gc_now));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 9 })), tombstone());
-    acc.apply(rtie(6, 8, ts2));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 5 })), tombstone());
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 4 })), tombstone());
-    acc.apply(rtie(0, 4, ts1));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 3 })), tombstone(ts1, gc_now));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 2 })), tombstone(ts1, gc_now));
-    acc.apply(rtie(1, 2, ts2));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 1 })), tombstone(ts2, gc_now));
-    BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 0 })), tombstone(ts1, gc_now));
 }

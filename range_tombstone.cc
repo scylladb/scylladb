@@ -73,10 +73,6 @@ void range_tombstone_accumulator::update_current_tombstone() {
 
 void range_tombstone_accumulator::drop_unneeded_tombstones(const clustering_key_prefix& ck, int w) {
     auto cmp = [&] (const range_tombstone& rt, const clustering_key_prefix& ck, int w) {
-        if (_reversed) {
-            auto bv = rt.start_bound();
-            return _cmp(ck, w, bv.prefix(), weight(bv.kind()));
-        }
         auto bv = rt.end_bound();
         return _cmp(bv.prefix(), weight(bv.kind()), ck, w);
     };
@@ -91,15 +87,11 @@ void range_tombstone_accumulator::drop_unneeded_tombstones(const clustering_key_
 }
 
 void range_tombstone_accumulator::apply(range_tombstone rt) {
-    if (_reversed) {
-        drop_unneeded_tombstones(rt.end, weight(rt.end_kind));
-    } else {
-        drop_unneeded_tombstones(rt.start, weight(rt.start_kind));
-    }
+    drop_unneeded_tombstones(rt.start, weight(rt.start_kind));
     _current_tombstone.apply(rt.tomb);
 
     auto cmp = [&] (const range_tombstone& rt1, const range_tombstone& rt2) {
-        return _reversed ? _cmp(rt2.start_bound(), rt1.start_bound()) : _cmp(rt1.end_bound(), rt2.end_bound());
+        return _cmp(rt1.end_bound(), rt2.end_bound());
     };
     _range_tombstones.insert(boost::upper_bound(_range_tombstones, rt, cmp), std::move(rt));
 }

@@ -224,7 +224,7 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
-        , _range_tombstones(s, false)
+        , _range_tombstones(s)
         , _last_dk({dht::token(), partition_key::make_empty()})
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
@@ -238,7 +238,7 @@ public:
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(s.full_slice())
-        , _range_tombstones(s, false)
+        , _range_tombstones(s)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
     {

@@ -2889,7 +2889,7 @@ void check_clustering_row_summaries(const schema& schema, const clustering_row_s
 }
 
 void check_clustering_summaries(const schema& schema, const partition_summary& actual, const partition_summary& expected) {
-    range_tombstone_accumulator range_tombstones(schema, false);
+    range_tombstone_accumulator range_tombstones(schema);
     range_tombstones.set_partition_tombstone(expected.tomb);
 
     for (auto [actual_frag, expected_frag] : iterate_over_in_ordered_lockstep(actual.clustering_fragments, expected.clustering_fragments,
