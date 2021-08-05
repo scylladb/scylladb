@@ -829,6 +829,10 @@ public:
 };
 using reversed_type = shared_ptr<const reversed_type_impl>;
 
+// Reverse the sort order of the type by wrapping in or stripping reversed_type,
+// as needed.
+data_type reversed(data_type);
+
 class map_type_impl;
 using map_type = shared_ptr<const map_type_impl>;
 

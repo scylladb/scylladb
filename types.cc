@@ -3436,3 +3436,11 @@ std::ostream& operator<<(std::ostream& out, const data_value& v) {
 shared_ptr<const reversed_type_impl> reversed_type_impl::get_instance(data_type type) {
     return intern::get_instance(std::move(type));
 }
+
+data_type reversed(data_type type) {
+    if (type->is_reversed()) {
+        return type->underlying_type();
+    } else {
+        return reversed_type_impl::get_instance(type);
+    }
+}
