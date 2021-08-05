@@ -928,7 +928,9 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing, bool local) {
                         _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx, _commit_idx);
         return false;
     }
-
+    // If the snapshot is local, _commit_idx is larger than snp.idx.
+    // Otherwise snp.idx becomes the new commit nidex.
+    _commit_idx = std::max(_commit_idx, snp.idx);
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
