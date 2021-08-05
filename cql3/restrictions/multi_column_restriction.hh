@@ -301,10 +301,19 @@ public:
         , _values(std::move(value))
     {
         using namespace expr;
+
+        std::vector<data_type> column_types;
+        column_types.reserve(defs.size());
+        for (const column_definition* cdef : defs) {
+            column_types.push_back(cdef->type);
+        }
+
+        data_type list_elements_type = tuple_type_impl::get_instance(std::move(column_types));
+
         expression = binary_operator{
             column_value_tuple(_column_defs),
             oper_t::IN,
-            ::make_shared<lists::delayed_value>(_values)};
+            ::make_shared<lists::delayed_value>(_values, std::move(list_elements_type))};
     }
 };
 

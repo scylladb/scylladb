@@ -77,7 +77,8 @@ lists::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<col
         }
         values.push_back(std::move(t));
     }
-    delayed_value value(values);
+
+    delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -143,7 +144,7 @@ lists::value::from_serialized(const raw_value_view& val, const list_type_impl& t
                 elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
             }
         }
-        return value(std::move(elements));
+        return value(std::move(elements), type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -200,6 +201,33 @@ lists::value::to_string() const {
     return os.str();
 }
 
+ordered_cql_value
+lists::value::to_ordered_cql_value(cql_serialization_format sf) const {
+    utils::chunked_vector<std::variant<managed_bytes, null_value>> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (const managed_bytes_opt& element : _elements) {
+        if (!element.has_value()) {
+            new_elements.emplace_back(null_value{});
+        }
+
+        new_elements.emplace_back(*element);
+    }
+
+    const abstract_type& not_reversed = _my_type->without_reversed();
+    const list_type_impl* my_list_type = dynamic_cast<const list_type_impl*>(&not_reversed);
+    if (my_list_type == nullptr) {
+        throw std::runtime_error("lists::value has type that is not list_type_impl!");
+    }
+
+    cql_value cql_val(list_value{
+        .elements = std::move(new_elements),
+        .elements_type = my_list_type->get_elements_type()
+    });
+
+    return reverse_if_needed(std::move(cql_val), _my_type->is_reversed());
+}
+
 bool
 lists::delayed_value::contains_bind_marker() const {
     // False since we don't support them in collection
@@ -226,7 +254,21 @@ lists::delayed_value::bind(const query_options& options) {
 
         buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
     }
-    return ::make_shared<value>(buffers);
+    return ::make_shared<value>(buffers, _my_type);
+}
+
+delayed_cql_value
+lists::delayed_value::to_delayed_cql_value(cql_serialization_format sf) const {
+    std::vector<new_term> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (const shared_ptr<term>& element : _elements) {
+        new_elements.push_back(cql3::to_new_term(element, sf));
+    }
+
+    return delayed_cql_value(delayed_list_value {
+        .elements = std::move(new_elements)
+    });
 }
 
 ::shared_ptr<terminal>
