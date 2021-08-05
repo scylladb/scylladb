@@ -40,7 +40,10 @@ enum class bound_kind : uint8_t {
 
 std::ostream& operator<<(std::ostream& out, const bound_kind k);
 
+// Swaps start <-> end && incl <-> excl
 bound_kind invert_kind(bound_kind k);
+// Swaps start <-> end
+bound_kind reverse_kind(bound_kind k);
 int32_t weight(bound_kind k);
 
 class bound_view {
