@@ -134,6 +134,10 @@ class abstract_replication_strategy;
 
 } // namespace locator
 
+namespace wasm {
+class engine;
+}
+
 class mutation_reordered_with_truncate_exception : public std::exception {};
 
 using shared_memtable = lw_shared_ptr<memtable>;
@@ -1343,6 +1347,8 @@ private:
     bool _supports_infinite_bound_range_deletions = false;
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
+    wasm::engine* _wasm_engine;
+
     future<> init_commitlog();
 public:
     const gms::feature_service& features() const { return _feat; }
@@ -1350,6 +1356,14 @@ public:
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 
     void set_local_id(utils::UUID uuid) noexcept { _local_host_id = std::move(uuid); }
+
+    wasm::engine* wasm_engine() {
+        return _wasm_engine;
+    }
+
+    void set_wasm_engine(wasm::engine* engine) {
+        _wasm_engine = engine;
+    }
 
 private:
     using system_keyspace = bool_class<struct system_keyspace_tag>;
