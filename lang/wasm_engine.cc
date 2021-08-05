@@ -38,13 +38,13 @@ seastar::future<> init_sharded_engine(seastar::sharded<engine>& e) {
     // It's highly probable that a more generic support for yielding
     // can be contributed to wasmtime.  
     const uint64_t initial_fuel_amount = 20*1024;
-    e.start(initial_fuel_amount).get();
+    return e.start(initial_fuel_amount);
 }
 
 #else
 
 seastar::future<> init_sharded_engine(seastar::sharded<engine>& e) {
-    return seastar::make_ready_future<>();
+    return e.start();
 }
 
 
