@@ -90,45 +90,6 @@ public:
         throw exceptions::unsupported_operation_exception();
     }
 #endif
-
-    std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
-        auto values = possible_lhs_values(nullptr, expression, options);
-        if (values == expr::value_set(expr::value_list{})) {
-            return {};
-        }
-        const auto bounds = expr::to_range(values);
-        const auto start_token = bounds.start() ? bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
-                : dht::minimum_token();
-        auto end_token = bounds.end() ? bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
-                : dht::maximum_token();
-        const bool include_start = bounds.start() && bounds.start()->is_inclusive();
-        const auto include_end = bounds.end() && bounds.end()->is_inclusive();
-
-        /*
-         * If we ask SP.getRangeSlice() for (token(200), token(200)], it will happily return the whole ring.
-         * However, wrapping range doesn't really make sense for CQL, and we want to return an empty result in that
-         * case (CASSANDRA-5573). So special case to create a range that is guaranteed to be empty.
-         *
-         * In practice, we want to return an empty result set if either startToken > endToken, or both are equal but
-         * one of the bound is excluded (since [a, a] can contains something, but not (a, a], [a, a) or (a, a)).
-         */
-        if (start_token > end_token
-                || (start_token == end_token
-                    && (!include_start || !include_end))) {
-            return {};
-        }
-
-        typedef typename bounds_range_type::bound bound;
-
-        auto start = bound(include_start
-                           ? dht::ring_position::starting_at(start_token)
-                           : dht::ring_position::ending_at(start_token));
-        auto end = bound(include_end
-                           ? dht::ring_position::ending_at(end_token)
-                           : dht::ring_position::starting_at(end_token));
-
-        return { bounds_range_type(std::move(start), std::move(end)) };
-    }
 };
 
 }

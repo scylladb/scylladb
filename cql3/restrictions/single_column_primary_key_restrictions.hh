@@ -87,7 +87,6 @@ template<typename ValueType>
 class single_column_primary_key_restrictions : public primary_key_restrictions<ValueType> {
     using range_type = query::range<ValueType>;
     using range_bound = typename range_type::bound;
-    using bounds_range_type = typename primary_key_restrictions<ValueType>::bounds_range_type;
     template<typename OtherValueType>
     friend class single_column_primary_key_restrictions;
 private:
@@ -149,25 +148,6 @@ public:
         this->expression = make_conjunction(std::move(this->expression), restriction->expression);
     }
 
-    virtual size_t prefix_size() const override {
-        return primary_key_restrictions<ValueType>::prefix_size(*_schema);
-    }
-
-    ::shared_ptr<single_column_primary_key_restrictions<clustering_key>> get_longest_prefix_restrictions() {
-        static_assert(std::is_same_v<ValueType, clustering_key>, "Only clustering key can produce longest prefix restrictions");
-        size_t current_prefix_size = prefix_size();
-        if (current_prefix_size == restrictions().size()) {
-            return dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(this->shared_from_this());
-        }
-
-        auto longest_prefix_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key>>(_schema, _allow_filtering);
-        auto restriction_it = restrictions().begin();
-        for (size_t i = 0; i < current_prefix_size; ++i) {
-            longest_prefix_restrictions->merge_with((restriction_it++)->second);
-        }
-        return longest_prefix_restrictions;
-    }
-
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
         if (find_atom(restriction->expression, [] (const expr::binary_operator& b) {
                     return std::holds_alternative<expr::column_value_tuple>(*b.lhs);
@@ -207,108 +187,7 @@ public:
         return result;
     }
 
-private:
-    std::vector<range_type> compute_bounds(const query_options& options) const {
-        std::vector<range_type> ranges;
-
-        // TODO: rewrite this to simply invoke possible_lhs_values on each clustering column, find the first
-        // non-list, and take Cartesian product of that prefix.  No need for to_range() and std::get() here.
-        if (_restrictions->is_all_eq()) {
-            std::vector<managed_bytes> components;
-            components.reserve(_restrictions->size());
-            for (auto&& e : restrictions()) {
-                const column_definition* def = e.first;
-                assert(components.size() == _schema->position(*def));
-                // Because _restrictions is all EQ, possible_lhs_values must return a list, not a range.
-                const auto b = std::get<expr::value_list>(possible_lhs_values(e.first, e.second->expression, options));
-                // Furthermore, this list is either a single element (when all RHSs are the same) or empty (when at
-                // least two are different, so the restrictions cannot hold simultaneously -- ie, c=1 AND c=2).
-                if (b.empty()) {
-                    return {};
-                }
-                components.emplace_back(b.front());
-            }
-            return {range_type::make_singular(ValueType::from_exploded(*_schema, std::move(components)))};
-        }
-
-        std::vector<std::vector<managed_bytes_opt>> vec_of_values;
-        for (auto&& e : restrictions()) {
-            const column_definition* def = e.first;
-            auto&& r = e.second;
-
-            if (vec_of_values.size() != _schema->position(*def) || find_needs_filtering(r->expression)) {
-                // The prefixes built so far are the longest we can build,
-                // the rest of the constraints will have to be applied using filtering.
-                break;
-            }
-
-            if (has_slice(r->expression)) {
-                const auto values = possible_lhs_values(def, r->expression, options);
-                if (values == expr::value_set(expr::value_list{})) {
-                    return {};
-                }
-                const auto b = expr::to_range(values);
-                if (cartesian_product_is_empty(vec_of_values)) {
-                    // TODO: use b.transform().
-                    const auto make_bound = [&] (const std::optional<::range_bound<managed_bytes>>& bytes_bound) {
-                        return bytes_bound ?
-                                std::optional(range_bound(ValueType::from_single_value(*_schema, std::move(bytes_bound->value())),
-                                                          bytes_bound->is_inclusive())) :
-                                std::nullopt;
-                    };
-                    ranges.emplace_back(range_type(make_bound(b.start()), make_bound(b.end())));
-                    if (def->type->is_reversed()) {
-                        ranges.back().reverse();
-                    }
-                    return ranges;
-                }
-
-                auto size = cartesian_product_size(vec_of_values);
-                check_cartesian_product_size(size, max_cartesian_product_size(options.get_cql_config().restrictions),
-                        restricted_component_name_v<ValueType>);
-                ranges.reserve(size);
-                for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-                    // TODO: use ranges.transform().
-                    auto make_bound = [&prefix, this] (const std::optional<::range_bound<managed_bytes>>& bytes_bound) {
-                        if (bytes_bound) {
-                            prefix.emplace_back(bytes_bound->value());
-                            auto val = ValueType::from_optional_exploded(*_schema, prefix);
-                            prefix.pop_back();
-                            return range_bound(std::move(val), bytes_bound->is_inclusive());
-                        } else {
-                            return range_bound(ValueType::from_optional_exploded(*_schema, prefix));
-                        }
-                    };
-                    ranges.emplace_back(range_type(make_bound(b.start()), make_bound(b.end())));
-                    if (def->type->is_reversed()) {
-                        ranges.back().reverse();
-                    }
-                }
-
-                return ranges;
-            }
-
-            auto values = std::get<expr::value_list>(possible_lhs_values(def, r->expression, options));
-            if (values.empty()) {
-                return {};
-            }
-            vec_of_values.emplace_back(std::make_move_iterator(values.begin()), std::make_move_iterator(values.end()));
-        }
-
-        auto size = cartesian_product_size(vec_of_values);
-        check_cartesian_product_size(size, max_cartesian_product_size(options.get_cql_config().restrictions),
-                restricted_component_name_v<ValueType>);
-        ranges.reserve(size);
-        for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-            ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, std::move(prefix))));
-        }
-
-        return ranges;
-    }
-
 public:
-    std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override;
-
     std::vector<bytes_opt> values(const query_options& options) const {
         auto src = values_as_keys(options);
         std::vector<bytes_opt> res;
@@ -354,61 +233,6 @@ public:
     virtual bool needs_filtering(const schema& schema) const override;
     virtual unsigned int num_prefix_columns_that_need_not_be_filtered() const override;
 };
-
-template<>
-inline dht::partition_range_vector
-single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
-    dht::partition_range_vector ranges;
-    ranges.reserve(size());
-    for (query::range<partition_key>& r : compute_bounds(options)) {
-        if (!r.is_singular()) {
-            throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
-        }
-        ranges.emplace_back(std::move(r).transform(
-            [this] (partition_key&& k) -> query::ring_position {
-                auto token = dht::get_token(*_schema, k);
-                return { std::move(token), std::move(k) };
-            }));
-    }
-    return ranges;
-}
-
-template<>
-inline std::vector<query::clustering_range>
-single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
-    auto wrapping_bounds = compute_bounds(options);
-    auto bounds = boost::copy_range<query::clustering_row_ranges>(wrapping_bounds
-            | boost::adaptors::filtered([&](auto&& r) {
-                auto bounds = bound_view::from_range(r);
-                return !bound_view::compare(*_schema)(bounds.second, bounds.first);
-              })
-            | boost::adaptors::transformed([&](auto&& r) { return query::clustering_range(std::move(r));
-    }));
-    auto less_cmp = clustering_key_prefix::less_compare(*_schema);
-    std::sort(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
-        if (!x.start() && !y.start()) {
-            return false;
-        }
-        if (!x.start()) {
-            return true;
-        }
-        if (!y.start()) {
-            return false;
-        }
-        return less_cmp(x.start()->value(), y.start()->value());
-    });
-    auto eq_cmp = clustering_key_prefix::equality(*_schema);
-    bounds.erase(std::unique(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
-        if (!x.start() && !y.start()) {
-            return true;
-        }
-        if (!x.start() || !y.start()) {
-            return false;
-        }
-        return eq_cmp(x.start()->value(), y.start()->value());
-    }), bounds.end());
-    return bounds;
-}
 
 template<>
 inline bool single_column_primary_key_restrictions<partition_key>::needs_filtering(const schema& schema) const {

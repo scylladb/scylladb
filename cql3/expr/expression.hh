@@ -404,12 +404,44 @@ nested_expression::nested_expression(ExpressionElement auto e)
         : nested_expression(expression(std::move(e))) {
 }
 
+// Extracts all binary operators which have the given column on their left hand side.
+// Extracts only single-column restrictions.
+// Does not include multi-column restrictions.
+// Does not include token() restrictions.
+// Does not include boolean constant restrictions.
+// For example "WHERE c = 1 AND (a, c) = (2, 1) AND token(p) < 2 AND FALSE" will return {"c = 1"}.
+std::vector<expression> extract_single_column_restrictions_for_column(const expression&, const column_definition&);
+
 } // namespace expr
 
 } // namespace cql3
 
 /// Required for fmt::join() to work on expression.
-template <> struct fmt::formatter<cql3::expr::expression>;
+template <>
+struct fmt::formatter<cql3::expr::expression> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::expression& expr, FormatContext& ctx) {
+        std::ostringstream os;
+        os << expr;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
 
 /// Required for fmt::join() to work on column_value.
-template <> struct fmt::formatter<cql3::expr::column_value>;
+template <>
+struct fmt::formatter<cql3::expr::column_value> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::column_value& col, FormatContext& ctx) {
+        std::ostringstream os;
+        os << col;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};

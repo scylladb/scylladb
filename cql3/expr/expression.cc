@@ -1082,34 +1082,58 @@ std::ostream& operator<<(std::ostream& s, oper_t op) {
     __builtin_unreachable();
 }
 
+std::vector<expression> extract_single_column_restrictions_for_column(const expression& expr,
+                                                                      const column_definition& column) {
+    struct visitor {
+        std::vector<expression> restrictions;
+        const column_definition& column;
+        const binary_operator* current_binary_operator;
+
+        void operator()(bool) {}
+
+        void operator()(const conjunction& conj) {
+            for (const expression& child : conj.children) {
+                std::visit(*this, child);
+            }
+        }
+
+        void operator()(const binary_operator& oper) {
+            if (current_binary_operator != nullptr) {
+                on_internal_error(expr_logger,
+                    "extract_single_column_restrictions_for_column: nested binary operators are not supported");
+            }
+
+            current_binary_operator = &oper;
+            std::visit(*this, *oper.lhs);
+            current_binary_operator = nullptr;
+        }
+
+        void operator()(const column_value& cv) {
+            if (*cv.col == column && current_binary_operator != nullptr) {
+                restrictions.emplace_back(*current_binary_operator);
+            }
+        }
+
+        void operator()(const column_value_tuple&) {}
+        void operator()(const token&) {}
+        void operator()(const unresolved_identifier&) {}
+        void operator()(const column_mutation_attribute&) {}
+        void operator()(const function_call&) {}
+        void operator()(const cast&) {}
+        void operator()(const field_selection&) {}
+    };
+
+    visitor v {
+        .restrictions = std::vector<expression>(),
+        .column = column,
+        .current_binary_operator = nullptr,
+    };
+
+    std::visit(v, expr);
+
+    return std::move(v.restrictions);
+}
+
+
 } // namespace expr
 } // namespace cql3
-
-
-template <>
-struct fmt::formatter<cql3::expr::expression> {
-    constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
-    }
-
-    template <typename FormatContext>
-    auto format(const cql3::expr::expression& expr, FormatContext& ctx) {
-        std::ostringstream os;
-        os << expr;
-        return format_to(ctx.out(), "{}", os.str());
-    }
-};
-
-template <>
-struct fmt::formatter<cql3::expr::column_value> {
-    constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
-    }
-
-    template <typename FormatContext>
-    auto format(const cql3::expr::column_value& col, FormatContext& ctx) {
-        std::ostringstream os;
-        os << col;
-        return format_to(ctx.out(), "{}", os.str());
-    }
-};

@@ -359,3 +359,147 @@ SEASTAR_TEST_CASE(slice_single_column_mixed_order) {
                     singular({I(1), I(1)}), singular({I(1), I(2)})}));
     });
 }
+
+// Currently expression doesn't have operator==().
+// Implementing it is ugly, because there are shared pointers and the term base class.
+// For testing purposes checking stringified expressions is enough.
+static bool expression_eq(const expr::expression& e1, const expr::expression& e2) {
+    return to_string(e1) == to_string(e2);
+}
+
+static void assert_expr_vec_eq(
+    const std::vector<expr::expression>& v1,
+    const std::vector<expr::expression>& v2,
+    const std::experimental::source_location& loc = std::experimental::source_location::current()) {
+
+    if (std::equal(v1.begin(), v1.end(), v2.begin(), v2.end(), expression_eq)) {
+        return;
+    }
+
+    std::string error_msg = fmt::format("Location: {}:{}, Expression vectors not equal! [{}] != [{}]",
+                                        loc.file_name(), loc.line(), fmt::join(v1, ", "), fmt::join(v2, ", "));
+
+    BOOST_FAIL(error_msg);
+}
+
+// Unit tests for extract_column_restrictions function
+BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
+    using namespace expr;
+
+    auto make_column = [](const char* name, column_kind kind, int id) -> column_definition {
+        column_definition definition(name, int32_type, kind, id);
+
+        // column_definition has to have column_specifiction because to_string uses it for column name
+        ::shared_ptr<column_identifier> identifier = ::make_shared<column_identifier>(name, true);
+        column_specification specification("ks", "cf", std::move(identifier), int32_type);
+        definition.column_specification = std::move(specification);
+
+        return definition;
+    };
+
+    column_definition col_pk1 = make_column("pk1", column_kind::partition_key, 0);
+    column_definition col_pk2 = make_column("pk2", column_kind::partition_key, 1);
+    column_definition col_ck1 = make_column("ck1", column_kind::clustering_key, 0);
+    column_definition col_ck2 = make_column("ck2", column_kind::clustering_key, 1);
+    column_definition col_r1 = make_column("r2", column_kind::regular_column, 0);
+    column_definition col_r2 = make_column("r2", column_kind::regular_column, 1);
+    column_definition col_r3 = make_column("r3", column_kind::regular_column, 2);
+
+    // Empty input test
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(conjunction{}, col_pk1), {});
+
+    // BIG_WHERE test
+    // big_where contains:
+    // WHERE pk1 = 0 AND pk2 = 0 AND ck1 = 0 AND ck2 = 0 AND r1 = 0 AND r2 = 0
+    // AND (pk1, pk2) < (0, 0) AND (pk1, ck2, r1) = (0, 0, 0) AND (r1, r2) > 0
+    // AND ((c1, c2) < (0, 0) AND r1 < 0)
+    // AND pk2 > 0 AND r2 > 0
+    // AND token(pk1, pk2) > 0 AND token(pk1, pk2) < 0
+    // AND TRUE AND FALSE
+    // AND token(pk1, pk2)
+    // AND pk1 AND pk2
+    // AND (pk1, pk2)
+    std::vector<expression> big_where;
+    ::shared_ptr<constants::value> zero_value = ::make_shared<constants::value>(raw_value::make_value(I(0)));
+
+    expression pk1_restriction(binary_operator(column_value(&col_pk1), oper_t::EQ, zero_value));
+    expression pk2_restriction(binary_operator(column_value(&col_pk2), oper_t::EQ, zero_value));
+    expression pk2_restriction2(binary_operator(column_value(&col_pk2), oper_t::GT, zero_value));
+    expression ck1_restriction(binary_operator(column_value(&col_ck1), oper_t::EQ, zero_value));
+    expression ck2_restriction(binary_operator(column_value(&col_ck2), oper_t::EQ, zero_value));
+    expression r1_restriction(binary_operator(column_value(&col_r1), oper_t::EQ, zero_value));
+    expression r1_restriction2(binary_operator(column_value(&col_r1), oper_t::LT, zero_value));
+    expression r1_restriction3(binary_operator(column_value(&col_r1), oper_t::GT, zero_value));
+    expression r2_restriction(binary_operator(column_value(&col_r2), oper_t::EQ, zero_value));
+
+    auto make_multi_column_restriction = [](std::vector<const column_definition*> columns, oper_t oper) -> expression {
+        column_value_tuple column_tuple(columns);
+
+        std::vector<managed_bytes_opt> zeros_tuple_elems(columns.size(), managed_bytes_opt(I(0)));
+        ::shared_ptr<tuples::value> zeros_tuple = ::make_shared<tuples::value>(std::move(zeros_tuple_elems));
+
+        return binary_operator(column_tuple, oper, zeros_tuple);
+    };
+
+    expression pk1_pk2_restriction = make_multi_column_restriction({&col_pk1, &col_pk2}, oper_t::LT);
+    expression pk1_ck2_r1_restriction = make_multi_column_restriction({&col_pk1, &col_ck2, &col_r1}, oper_t::EQ);
+    expression r1_r2_restriction = make_multi_column_restriction({&col_r1, &col_r2}, oper_t::GT);
+
+    std::vector<expression> conjunction_elems;
+    expression ck1_ck2_restriction = make_multi_column_restriction({&col_ck1, &col_ck2}, oper_t::LT);
+    expression conjunction_expr = conjunction{std::vector{ck1_ck2_restriction, r1_restriction2}};
+
+    expression token_lt_restriction = binary_operator(token{}, oper_t::LT, zero_value);
+    expression token_gt_restriction = binary_operator(token{}, oper_t::GT, zero_value);
+
+    expression true_restriction(true);
+    expression false_restriction(false);
+    expression token_expr = token{};
+    expression pk1_expr = column_value(&col_pk1);
+    expression pk2_expr = column_value(&col_pk1);
+    expression pk1_pk2_expr = column_value_tuple({&col_pk1, &col_pk2});
+
+    big_where.push_back(pk1_restriction);
+    big_where.push_back(pk2_restriction);
+    big_where.push_back(ck1_restriction);
+    big_where.push_back(ck2_restriction);
+    big_where.push_back(r1_restriction);
+    big_where.push_back(r2_restriction);
+    big_where.push_back(pk1_pk2_restriction);
+    big_where.push_back(pk1_ck2_r1_restriction);
+    big_where.push_back(r1_r2_restriction);
+    big_where.push_back(conjunction_expr);
+    big_where.push_back(pk2_restriction2);
+    big_where.push_back(r1_restriction3);
+    big_where.push_back(token_lt_restriction);
+    big_where.push_back(token_gt_restriction);
+    big_where.push_back(true_restriction);
+    big_where.push_back(false_restriction);
+    big_where.push_back(token_expr);
+    big_where.push_back(pk1_expr);
+    big_where.push_back(pk2_expr);
+    big_where.push_back(pk1_pk2_expr);
+
+    expression big_where_expr = conjunction{std::move(big_where)};
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_pk1),
+        {pk1_restriction});
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_pk2),
+        {pk2_restriction, pk2_restriction2});
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_ck1),
+        {ck1_restriction});
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_ck2),
+        {ck2_restriction});
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_r1),
+        {r1_restriction, r1_restriction2, r1_restriction3});
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_r2),
+        {r2_restriction});
+
+    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_r3),
+        {});
+}

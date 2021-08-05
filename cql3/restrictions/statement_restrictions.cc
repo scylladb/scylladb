@@ -63,7 +63,6 @@ public:
         : _allow_filtering(allow_filtering) {
         this->expression = true;
     }
-    using bounds_range_type = typename primary_key_restrictions<T>::bounds_range_type;
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
         return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(schema, restriction);
@@ -78,10 +77,6 @@ public:
         throw exceptions::unsupported_operation_exception();
     }
     bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
-        return {};
-    }
-    std::vector<bounds_range_type> bounds_ranges(const query_options&) const override {
-        // throw? should not reach?
         return {};
     }
     std::vector<const column_definition*> get_column_defs() const override {
@@ -1532,8 +1527,8 @@ const single_column_restrictions::restrictions_map& statement_restrictions::get_
     return single_restrictions->restrictions();
 }
 
-void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool is_local) {
-    if (is_local || !_partition_range_is_simple) {
+void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema) {
+    if (!_partition_range_is_simple) {
         return;
     }
 
@@ -1558,6 +1553,43 @@ void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool 
         const auto pos = _schema->position(*col) + 1;
         (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
     }
+
+    add_clustering_restrictions_to_idx_ck_prefix(idx_tbl_schema);
+
+    (*_idx_tbl_ck_prefix)[0] = binary_operator(
+            column_value(token_column),
+            oper_t::EQ,
+            // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
+            // handy mechanism for doing that in query_options.
+            ::make_shared<constants::value>(raw_value::make_unset_value()));
+}
+
+void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
+    if (!_partition_range_is_simple) {
+        return;
+    }
+
+    // Local index clustering key is (indexed column, base clustering key)
+    _idx_tbl_ck_prefix = std::vector<expr::expression>();
+    _idx_tbl_ck_prefix->reserve(1 + _clustering_prefix_restrictions.size());
+
+    const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::clustering_key, 0);
+    const column_definition& indexed_column_base_schema = *_schema->get_column_definition(indexed_column.name());
+
+    // Find index column restrictions in the WHERE clause
+    std::vector<expr::expression> idx_col_restrictions =
+        extract_single_column_restrictions_for_column(*_where, indexed_column_base_schema);
+    expr::expression idx_col_restriction_expr = expr::expression(expr::conjunction{std::move(idx_col_restrictions)});
+
+    // Translate the restriction to use column from the index schema and add it
+    expr::expression replaced_idx_restriction = replace_column_def(idx_col_restriction_expr, &indexed_column);
+    _idx_tbl_ck_prefix->push_back(replaced_idx_restriction);
+
+    // Add restrictions for the clustering key
+    add_clustering_restrictions_to_idx_ck_prefix(idx_tbl_schema);
+}
+
+void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema) {
     for (const auto& e : _clustering_prefix_restrictions) {
         if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
@@ -1570,12 +1602,6 @@ void statement_restrictions::prepare_indexed(const schema& idx_tbl_schema, bool 
         const auto col = std::get<column_value>(*any_binop->lhs).col;
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
-    (*_idx_tbl_ck_prefix)[0] = binary_operator(
-            column_value(token_column),
-            oper_t::EQ,
-            // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
-            // handy mechanism for doing that in query_options.
-            ::make_shared<constants::value>(raw_value::make_unset_value()));
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
@@ -1609,6 +1635,8 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     // overwritten.
     const_cast<::shared_ptr<term>&>(std::get<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
             ::make_shared<constants::value>(raw_value::make_value(*token_bytes));
+
+    // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
 }
 
@@ -1629,6 +1657,18 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_to
         return get_index_v1_token_range_clustering_bounds(options, token_column, _idx_tbl_ck_prefix->at(0));
     }
 
+    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
+}
+
+std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
+        const query_options& options,
+        const schema& idx_tbl_schema) const {
+    if (!_idx_tbl_ck_prefix.has_value()) {
+        on_internal_error(
+            rlogger, "statement_restrictions::get_local_index_clustering_ranges called with unprepared index");
+    }
+
+    // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
 }
 
