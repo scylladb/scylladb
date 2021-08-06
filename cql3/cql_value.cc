@@ -165,32 +165,60 @@ raw_value to_raw_value(const null_value&) {
     return raw_value::make_null();
 }
 
-raw_value to_raw_value(const int16_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const bool_value& val) {
+    managed_bytes result(managed_bytes::initialized_later{}, 1);
+    result[0] = val.value ? 1 : 0;
+    return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const int32_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const int8_value& val) {
+    return raw_value::make_value(managed_bytes(&val.value, 1));
 }
 
-raw_value to_raw_value(const int64_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const int16_value& val) {
+    int16_t be_value = cpu_to_be(val.value);
+    managed_bytes result((int8_t*)&be_value, sizeof(be_value));
+    return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const counter_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const int32_value& val) {
+    int32_t be_value = cpu_to_be(val.value);
+    managed_bytes result((int8_t*)&be_value, sizeof(be_value));
+    return raw_value::make_value(std::move(result));
+}
+
+raw_value to_raw_value(const int64_value& val) {
+    int64_t be_value = cpu_to_be(val.value);
+    managed_bytes result((int8_t*)&be_value, sizeof(be_value));
+    return raw_value::make_value(std::move(result));
+}
+
+raw_value to_raw_value(const counter_value& val) {
+    int64_t be_value = cpu_to_be(val.value);
+    managed_bytes result((int8_t*)&be_value, sizeof(be_value));
+    return raw_value::make_value(std::move(result));
 }
 
 raw_value to_raw_value(const varint_value&) {
     throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
 }
 
-raw_value to_raw_value(const float_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const float_value& val) {
+    int32_t cpu_value;
+    memcpy(&cpu_value, &val.value, sizeof(cpu_value));
+
+    int32_t be_value = cpu_to_be(cpu_value);
+    managed_bytes result((int8_t*)&be_value, sizeof(be_value));
+    return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const double_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const double_value& val) {
+    int64_t cpu_value;
+    memcpy(&cpu_value, &val.value, sizeof(cpu_value));
+
+    int64_t be_value = cpu_to_be(cpu_value);
+    managed_bytes result((int8_t*)&be_value, sizeof(be_value));
+    return raw_value::make_value(std::move(result));
 }
 
 raw_value to_raw_value(const decimal_value&) {
