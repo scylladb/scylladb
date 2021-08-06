@@ -1479,17 +1479,17 @@ usertypeLiteral returns [shared_ptr<cql3::user_types::literal> ut]
     : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
     ;
 
-tupleLiteral returns [shared_ptr<cql3::tuples::literal> tt]
-    @init{ std::vector<shared_ptr<cql3::term::raw>> l; }
-    @after{ $tt = ::make_shared<cql3::tuples::literal>(std::move(l)); }
-    : '(' t1=term { l.push_back(t1); } ( ',' tn=term { l.push_back(tn); } )* ')'
+tupleLiteral returns [cql3::expr::expression tt]
+    @init{ std::vector<cql3::expr::expression> l; }
+    @after{ $tt = cql3::expr::tuple_constructor{std::move(l)}; }
+    : '(' t1=term { l.push_back(cql3::expr::as_expression(t1)); } ( ',' tn=term { l.push_back(cql3::expr::as_expression(tn)); } )* ')'
     ;
 
 value returns [::shared_ptr<cql3::term::raw> value]
     : c=constant           { $value = cql3::expr::as_term_raw(std::move(c)); }
     | l=collectionLiteral  { $value = l; }
     | u=usertypeLiteral    { $value = u; }
-    | t=tupleLiteral       { $value = t; }
+    | t=tupleLiteral       { $value = cql3::expr::as_term_raw(t); }
     | K_NULL               { $value = cql3::expr::as_term_raw(cql3::expr::null()); }
     | ':' id=ident         { $value = cql3::expr::as_term_raw(new_bind_variables(id)); }
     | QMARK                { $value = cql3::expr::as_term_raw(new_bind_variables(shared_ptr<cql3::column_identifier>{})); }
@@ -1666,7 +1666,7 @@ relation[std::vector<cql3::relation_ptr>& clauses]
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'
-              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, std::vector<shared_ptr<cql3::tuples::literal>>())); }
+              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, std::vector<shared_ptr<cql3::term::raw>>())); }
           | tupleInMarker=inMarkerForTuple /* (a, b, c) IN ? */
               { $clauses.emplace_back(cql3::multi_column_relation::create_single_marker_in_relation(ids, tupleInMarker)); }
           | literals=tupleOfTupleLiterals /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
@@ -1678,11 +1678,11 @@ relation[std::vector<cql3::relation_ptr>& clauses]
           )
       | type=relationType literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, literal));
+              $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, cql3::expr::as_term_raw(literal)));
           }
       | type=relationType K_SCYLLA_CLUSTERING_BOUND literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.emplace_back(cql3::multi_column_relation::create_scylla_clustering_bound_non_in_relation(ids, type, literal));
+              $clauses.emplace_back(cql3::multi_column_relation::create_scylla_clustering_bound_non_in_relation(ids, type, cql3::expr::as_term_raw(literal)));
           }
       | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
           { $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, tupleMarker)); }
@@ -1707,8 +1707,8 @@ singleColumnInValues returns [std::vector<::shared_ptr<cql3::term::raw>> terms]
     : '(' ( t1 = term { $terms.push_back(t1); } (',' ti=term { $terms.push_back(ti); })* )? ')'
     ;
 
-tupleOfTupleLiterals returns [std::vector<::shared_ptr<cql3::tuples::literal>> literals]
-    : '(' t1=tupleLiteral { $literals.emplace_back(t1); } (',' ti=tupleLiteral { $literals.emplace_back(ti); })* ')'
+tupleOfTupleLiterals returns [std::vector<shared_ptr<cql3::term::raw>> literals]
+    : '(' t1=tupleLiteral { $literals.emplace_back(cql3::expr::as_term_raw(t1)); } (',' ti=tupleLiteral { $literals.emplace_back(cql3::expr::as_term_raw(ti)); })* ')'
     ;
 
 markerForTuple returns [shared_ptr<cql3::term::raw> marker]

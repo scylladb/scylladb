@@ -55,29 +55,6 @@ namespace cql3 {
  */
 class tuples {
 public:
-    static lw_shared_ptr<column_specification> component_spec_of(const column_specification& column, size_t component);
-
-    /**
-     * A raw, literal tuple.  When prepared, this will become a Tuples.Value or Tuples.DelayedValue, depending
-     * on whether the tuple holds NonTerminals.
-     */
-    class literal : public term::raw {
-        std::vector<shared_ptr<term::raw>> _elements;
-        shared_ptr<term> prepare_nontuple(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const;
-        shared_ptr<term> prepare_tuple(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const;
-    public:
-        literal(std::vector<shared_ptr<term::raw>> elements)
-                : _elements(std::move(elements)) {
-        }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-
-    private:
-        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
-    public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
-        virtual sstring to_string() const override;
-    };
-
     /**
      * A tuple of terminal values (e.g (123, 'abc')).
      */

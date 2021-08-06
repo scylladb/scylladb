@@ -563,6 +563,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const untyped_constant&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: untyped_constant cannot serve as the LHS of a binary expression");
             },
+            [] (const tuple_constructor&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: tuple_constructor cannot serve as the LHS of a binary expression (yet!)");
+            },
         }, *opr.lhs);
 }
 
@@ -610,6 +613,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const untyped_constant&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: an untyped constant cannot serve as a restriction by itself");
+            },
+            [] (const tuple_constructor&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a tuple constructor cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -859,6 +865,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const untyped_constant&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: untyped constants are not supported as the LHS of a binary expression");
                         },
+                        [] (const tuple_constructor&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: tuple constructors are not supported as the LHS of a binary expression yet");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -896,6 +905,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const untyped_constant&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: an untyped constant cannot serve as a restriction by itself");
+            },
+            [] (const tuple_constructor&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: an tuple constructor cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -966,6 +978,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const untyped_constant&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: untyped constants are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const tuple_constructor&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: tuple constructors are not supported as the LHS of a binary expression yet");
                         },
                     }, *oper.lhs);
             },
@@ -1056,6 +1071,9 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                     fmt::print(os, "{}", uc.raw_text);
                 }
             },
+            [&] (const tuple_constructor& tc) {
+                fmt::print(os, "({})", join(", ", tc.elements));
+            },
         }, expr);
     return os;
 }
@@ -1101,6 +1119,15 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const null&) { return expr; },
             [&] (const bind_variable&) { return expr; },
             [&] (const untyped_constant&) { return expr; },
+            [&] (const tuple_constructor& tc) {
+                 return expression{
+                     tuple_constructor{
+                        boost::copy_range<std::vector<expression>>(
+                            tc.elements | boost::adaptors::transformed(std::bind(replace_column_def, std::placeholders::_1, new_cdef))
+                        )
+                     }
+                 };
+            },
         }, expr);
 }
 
@@ -1153,6 +1180,11 @@ expression replace_token(const expression& expr, const column_definition* new_cd
             },
             [&] (const untyped_constant&) -> expression {
                 return expr;
+            },
+            [&] (const tuple_constructor& tc) -> expression {
+                return tuple_constructor{boost::copy_range<std::vector<expression>>(
+                    tc.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef))
+                )};
             },
         }, expr);
 }
@@ -1244,6 +1276,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const null&) {}
         void operator()(const bind_variable&) {}
         void operator()(const untyped_constant&) {}
+        void operator()(const tuple_constructor&) {}
     };
 
     visitor v {

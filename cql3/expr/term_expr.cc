@@ -30,10 +30,11 @@
 #include "cql3/tuples.hh"
 #include "types/list.hh"
 
-namespace cql3 {
+namespace cql3::expr {
 
+static
 lw_shared_ptr<column_specification>
-tuples::component_spec_of(const column_specification& column, size_t component) {
+component_spec_of(const column_specification& column, size_t component) {
     return make_lw_shared<column_specification>(
             column.ks_name,
             column.cf_name,
@@ -41,19 +42,20 @@ tuples::component_spec_of(const column_specification& column, size_t component) 
             static_pointer_cast<const tuple_type_impl>(column.type->underlying_type())->type(component));
 }
 
+static
 void
-tuples::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
+tuple_constructor_validate_assignable_to(const tuple_constructor& tc, database& db, const sstring& keyspace, const column_specification& receiver) {
     auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver.type->underlying_type());
     if (!tt) {
         throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
     }
-    for (size_t i = 0; i < _elements.size(); ++i) {
+    for (size_t i = 0; i < tc.elements.size(); ++i) {
         if (i >= tt->size()) {
             throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: too many elements. Type {} expects {:d} but got {:d}",
-                                                            receiver.name, tt->as_cql3_type(), tt->size(), _elements.size()));
+                                                            receiver.name, tt->as_cql3_type(), tt->size(), tc.elements.size()));
         }
 
-        auto&& value = _elements[i];
+        auto&& value = as_term_raw(tc.elements[i]);
         auto&& spec = component_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *spec))) {
             throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", receiver.name, i, spec->type->as_cql3_type()));
@@ -61,81 +63,76 @@ tuples::literal::validate_assignable_to(database& db, const sstring& keyspace, c
     }
 }
 
+static
 assignment_testable::test_result
-tuples::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+tuple_constructor_test_assignment(const tuple_constructor& tc, database& db, const sstring& keyspace, const column_specification& receiver) {
     try {
-        validate_assignable_to(db, keyspace, receiver);
+        tuple_constructor_validate_assignable_to(tc, db, keyspace, receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     } catch (exceptions::invalid_request_exception& e) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
 }
 
+static
 shared_ptr<term>
-tuples::literal::prepare_nontuple(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, *receiver);
+tuple_constructor_prepare_nontuple(const tuple_constructor& tc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    tuple_constructor_validate_assignable_to(tc, db, keyspace, *receiver);
     std::vector<shared_ptr<term>> values;
     bool all_terminal = true;
-    for (size_t i = 0; i < _elements.size(); ++i) {
-        auto&& value = _elements[i]->prepare(db, keyspace, component_spec_of(*receiver, i));
+    for (size_t i = 0; i < tc.elements.size(); ++i) {
+        auto&& value = as_term_raw(tc.elements[i])->prepare(db, keyspace, component_spec_of(*receiver, i));
         if (dynamic_pointer_cast<non_terminal>(value)) {
             all_terminal = false;
         }
         values.push_back(std::move(value));
     }
-    delayed_value value(static_pointer_cast<const tuple_type_impl>(receiver->type), values);
+    tuples::delayed_value value(static_pointer_cast<const tuple_type_impl>(receiver->type), values);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared<delayed_value>(std::move(value));
+        return make_shared<tuples::delayed_value>(std::move(value));
     }
 }
 
+static
 shared_ptr<term>
-tuples::literal::prepare_tuple(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const {
-    if (_elements.size() != receivers.size()) {
-        throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), _elements.size(), *this));
+tuple_constructor_prepare_tuple(const tuple_constructor& tc, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+    if (tc.elements.size() != receivers.size()) {
+        throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), tc.elements.size(), tc));
     }
 
     std::vector<shared_ptr<term>> values;
     std::vector<data_type> types;
     bool all_terminal = true;
-    for (size_t i = 0; i < _elements.size(); ++i) {
-        auto&& t = _elements[i]->prepare(db, keyspace, receivers[i]);
+    for (size_t i = 0; i < tc.elements.size(); ++i) {
+        auto&& t = as_term_raw(tc.elements[i])->prepare(db, keyspace, receivers[i]);
         if (dynamic_pointer_cast<non_terminal>(t)) {
             all_terminal = false;
         }
         values.push_back(t);
         types.push_back(receivers[i]->type);
     }
-    delayed_value value(tuple_type_impl::get_instance(std::move(types)), std::move(values));
+    tuples::delayed_value value(tuple_type_impl::get_instance(std::move(types)), std::move(values));
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared<delayed_value>(std::move(value));
+        return make_shared<tuples::delayed_value>(std::move(value));
     }
 }
 
+static
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+tuple_constructor_prepare_term(const tuple_constructor& tc, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
     return std::visit(overloaded_functor{
         [&] (const lw_shared_ptr<column_specification>& nontuple) {
-            return prepare_nontuple(db, keyspace, nontuple);
+            return tuple_constructor_prepare_nontuple(tc, db, keyspace, nontuple);
         },
         [&] (const std::vector<lw_shared_ptr<column_specification>>& tuple) {
-            return prepare_tuple(db, keyspace, tuple);
+            return tuple_constructor_prepare_tuple(tc, db, keyspace, tuple);
         },
     }, receiver);
 }
-
-sstring
-tuples::literal::to_string() const {
-    return tuple_to_string(_elements);
-}
-
-}
-
-namespace cql3::expr {
 
 static
 std::ostream&
@@ -485,6 +482,9 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const untyped_constant& uc) -> ::shared_ptr<term> {
             return untyped_constant_prepare_term(uc, db, keyspace, receiver);
         },
+        [&] (const tuple_constructor& tc) -> ::shared_ptr<term> {
+            return tuple_constructor_prepare_term(tc, db, keyspace, receiver);
+        },
     }, _expr);
 }
 
@@ -536,6 +536,9 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         },
         [&] (const untyped_constant& uc) -> test_result {
             return untyped_constant_test_assignment(uc, db, keyspace, receiver);
+        },
+        [&] (const tuple_constructor& tc) -> test_result {
+            return tuple_constructor_test_assignment(tc, db, keyspace, receiver);
         },
     }, _expr);
 }
