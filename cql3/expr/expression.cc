@@ -560,6 +560,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const bind_variable&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: bind_variable cannot serve as the LHS of a binary expression");
             },
+            [] (const untyped_constant&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: untyped_constant cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -604,6 +607,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const bind_variable&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a bind variable cannot serve as a restriction by itself");
+            },
+            [] (const untyped_constant&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: an untyped constant cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -850,6 +856,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const bind_variable&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: bind variables are not supported as the LHS of a binary expression");
                         },
+                        [] (const untyped_constant&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: untyped constants are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -884,6 +893,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const bind_variable&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a bind variable cannot serve as a restriction by itself");
+            },
+            [] (const untyped_constant&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: an untyped constant cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -951,6 +963,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const bind_variable&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: bind variables are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const untyped_constant&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: untyped constants are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -1034,6 +1049,13 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                 // FIXME: store and present bind variable name
                 fmt::print(os, "?");
             },
+            [&] (const untyped_constant& uc) {
+                if (uc.partial_type == untyped_constant::type_class::string) {
+                    fmt::print(os, "'{}'", uc.raw_text);
+                } else {
+                    fmt::print(os, "{}", uc.raw_text);
+                }
+            },
         }, expr);
     return os;
 }
@@ -1078,6 +1100,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
             [&] (const term_raw_ptr&) { return expr; },
             [&] (const null&) { return expr; },
             [&] (const bind_variable&) { return expr; },
+            [&] (const untyped_constant&) { return expr; },
         }, expr);
 }
 
@@ -1126,6 +1149,9 @@ expression replace_token(const expression& expr, const column_definition* new_cd
                 return expr;
             },
             [&] (const bind_variable&) -> expression {
+                return expr;
+            },
+            [&] (const untyped_constant&) -> expression {
                 return expr;
             },
         }, expr);
@@ -1217,6 +1243,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const term_raw_ptr&) {}
         void operator()(const null&) {}
         void operator()(const bind_variable&) {}
+        void operator()(const untyped_constant&) {}
     };
 
     visitor v {

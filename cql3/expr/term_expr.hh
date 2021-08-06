@@ -46,4 +46,15 @@ public:
 };
 
 
+// Temporary: if a term_raw_expr is an untyped_constant, return it
+inline
+const untyped_constant*
+as_untyped_constant(::shared_ptr<term::raw> t) {
+    if (auto tre = dynamic_pointer_cast<term_raw_expr>(t)) {
+        return std::get_if<untyped_constant>(&tre->as_expression());
+    } else {
+        return nullptr;
+    }
+}
+
 }

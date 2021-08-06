@@ -217,6 +217,9 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
         [&] (const expr::bind_variable&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "bind_variable found its way to selector context");
         },
+        [&] (const expr::untyped_constant&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "untyped_constant found its way to selector context");
+        },
     }, raw_selectable);
 }
 
@@ -268,6 +271,9 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
         },
         [&] (const expr::bind_variable&) -> bool {
             on_internal_error(slogger, "bind_variable found its way to selector context");
+        },
+        [&] (const expr::untyped_constant&) -> bool {
+            on_internal_error(slogger, "untyped_constant found its way to selector context");
         },
     }, raw_selectable);
 };

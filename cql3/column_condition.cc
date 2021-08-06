@@ -49,6 +49,7 @@
 #include "types/list.hh"
 #include "utils/like_matcher.hh"
 #include "expr/expression.hh"
+#include "expr/term_expr.hh"
 
 namespace {
 
@@ -325,10 +326,10 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     }
 
     if (_op == expr::oper_t::LIKE) {
-        auto literal_term = dynamic_pointer_cast<constants::literal>(_value);
+        auto literal_term = expr::as_untyped_constant(_value);
         if (literal_term) {
             // Pass matcher object
-            const sstring& pattern = literal_term->get_raw_text();
+            const sstring& pattern = literal_term->raw_text;
             return column_condition::condition(receiver, collection_element_term,
                     _value->prepare(db, keyspace, value_spec),
                     std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size())),

@@ -84,11 +84,12 @@ class field_selection;
 using term_raw_ptr = ::shared_ptr<term_raw>;
 struct null;
 struct bind_variable;
+struct untyped_constant;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection, term_raw_ptr, null, bind_variable>;
+                                field_selection, term_raw_ptr, null, bind_variable, untyped_constant>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -205,6 +206,14 @@ struct bind_variable {
     int32_t bind_index;
 };
 
+// A constant which does not yet have a date type. It is partially typed
+// (we know if it's floating or int) but not sized.
+struct untyped_constant {
+    enum type_class { integer, floating_point, string, boolean, duration, uuid, hex };
+    type_class partial_type;
+    sstring raw_text;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -305,6 +314,9 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [&] (const bind_variable&) -> const binary_operator* {
                 return nullptr;
             },
+            [&] (const untyped_constant&) -> const binary_operator* {
+                return nullptr;
+            },
         }, e);
 }
 
@@ -340,6 +352,9 @@ size_t count_if(const expression& e, Fn f) {
                 return 0;
             },
             [&] (const bind_variable&) -> size_t {
+                return 0;
+            },
+            [&] (const untyped_constant&) -> size_t {
                 return 0;
             },
         }, e);

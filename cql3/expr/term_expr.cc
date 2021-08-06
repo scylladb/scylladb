@@ -30,54 +30,57 @@
 #include "cql3/tuples.hh"
 #include "types/list.hh"
 
-namespace cql3 {
+namespace cql3::expr {
 
+static
 std::ostream&
-operator<<(std::ostream&out, constants::type t)
+operator<<(std::ostream&out, untyped_constant::type_class t)
 {
     switch (t) {
-        case constants::type::STRING:   return out << "STRING";
-        case constants::type::INTEGER:  return out << "INTEGER";
-        case constants::type::UUID:     return out << "UUID";
-        case constants::type::FLOAT:    return out << "FLOAT";
-        case constants::type::BOOLEAN:  return out << "BOOLEAN";
-        case constants::type::HEX:      return out << "HEX";
-        case constants::type::DURATION: return out << "DURATION";
+        case untyped_constant::type_class::string:   return out << "STRING";
+        case untyped_constant::type_class::integer:  return out << "INTEGER";
+        case untyped_constant::type_class::uuid:     return out << "UUID";
+        case untyped_constant::type_class::floating_point:    return out << "FLOAT";
+        case untyped_constant::type_class::boolean:  return out << "BOOLEAN";
+        case untyped_constant::type_class::hex:      return out << "HEX";
+        case untyped_constant::type_class::duration: return out << "DURATION";
     }
     abort();
 }
 
+static
 bytes
-constants::literal::parsed_value(data_type validator) const
+untyped_constant_parsed_value(const untyped_constant uc, data_type validator)
 {
     try {
-        if (_type == type::HEX && validator == bytes_type) {
-            auto v = static_cast<sstring_view>(_text);
+        if (uc.partial_type == untyped_constant::type_class::hex && validator == bytes_type) {
+            auto v = static_cast<sstring_view>(uc.raw_text);
             v.remove_prefix(2);
             return validator->from_string(v);
         }
         if (validator->is_counter()) {
-            return long_type->from_string(_text);
+            return long_type->from_string(uc.raw_text);
         }
-        return validator->from_string(_text);
+        return validator->from_string(uc.raw_text);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
 }
 
+static
 assignment_testable::test_result
-constants::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const
+untyped_constant_test_assignment(const untyped_constant& uc, database& db, const sstring& keyspace, const column_specification& receiver)
 {
     auto receiver_type = receiver.type->as_cql3_type();
     if (receiver_type.is_collection() || receiver_type.is_user_type()) {
-        return test_result::NOT_ASSIGNABLE;
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
     if (!receiver_type.is_native()) {
-        return test_result::WEAKLY_ASSIGNABLE;
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
     auto kind = receiver_type.get_kind();
-    switch (_type) {
-        case type::STRING:
+    switch (uc.partial_type) {
+        case untyped_constant::type_class::string:
             if (cql3_type::kind_enum_set::frozen<
                     cql3_type::kind::ASCII,
                     cql3_type::kind::TEXT,
@@ -88,7 +91,7 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, const
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
-        case type::INTEGER:
+        case untyped_constant::type_class::integer:
             if (cql3_type::kind_enum_set::frozen<
                     cql3_type::kind::BIGINT,
                     cql3_type::kind::COUNTER,
@@ -104,14 +107,14 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, const
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
-        case type::UUID:
+        case untyped_constant::type_class::uuid:
             if (cql3_type::kind_enum_set::frozen<
                     cql3_type::kind::UUID,
                     cql3_type::kind::TIMEUUID>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
-        case type::FLOAT:
+        case untyped_constant::type_class::floating_point:
             if (cql3_type::kind_enum_set::frozen<
                     cql3_type::kind::DECIMAL,
                     cql3_type::kind::DOUBLE,
@@ -119,17 +122,17 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, const
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
-        case type::BOOLEAN:
+        case untyped_constant::type_class::boolean:
             if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BOOLEAN>()) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
-        case type::HEX:
+        case untyped_constant::type_class::hex:
             if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BLOB>()) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
-        case type::DURATION:
+        case untyped_constant::type_class::duration:
             if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::DURATION>()) {
                 return assignment_testable::test_result::EXACT_MATCH;
             }
@@ -138,20 +141,17 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, const
     return assignment_testable::test_result::NOT_ASSIGNABLE;
 }
 
+static
 ::shared_ptr<term>
-constants::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const
+untyped_constant_prepare_term(const untyped_constant& uc, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_)
 {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-    if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
+    if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
-            _type, _text, *receiver->name, receiver->type->as_cql3_type().to_string()));
+            uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
     }
-    return ::make_shared<value>(cql3::raw_value::make_value(parsed_value(receiver->type)));
+    return ::make_shared<constants::value>(cql3::raw_value::make_value(untyped_constant_parsed_value(uc, receiver->type)));
 }
-
-}
-
-namespace cql3::expr {
 
 static
 assignment_testable::test_result
@@ -377,6 +377,9 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
             }
             on_internal_error(expr_logger, "unexpected shape in bind_variable");
         },
+        [&] (const untyped_constant& uc) -> ::shared_ptr<term> {
+            return untyped_constant_prepare_term(uc, db, keyspace, receiver);
+        },
     }, _expr);
 }
 
@@ -425,6 +428,9 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         [&] (const bind_variable& bv) -> test_result {
             // Same for all bind_variable::shape:s
             return bind_variable_test_assignment(bv, db, keyspace, receiver);
+        },
+        [&] (const untyped_constant& uc) -> test_result {
+            return untyped_constant_test_assignment(uc, db, keyspace, receiver);
         },
     }, _expr);
 }

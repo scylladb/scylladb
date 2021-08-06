@@ -233,7 +233,7 @@ struct uninitialized {
             if (!entry.first || !entry.second) {
                 break;
             }
-            auto left = dynamic_pointer_cast<cql3::constants::literal>(entry.first);
+            auto left = cql3::expr::as_untyped_constant(entry.first);
             if (!left) {
                 sstring msg = "Invalid property name: " + entry.first->to_string();
                 auto expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(entry.first);
@@ -243,7 +243,7 @@ struct uninitialized {
                 add_recognition_error(msg);
                 break;
             }
-            auto right = dynamic_pointer_cast<cql3::constants::literal>(entry.second);
+            auto right = cql3::expr::as_untyped_constant(entry.second);
             if (!right) {
                 sstring msg = "Invalid property value: " + entry.first->to_string() + " for property: " + entry.second->to_string();
                 auto expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(entry.second);
@@ -253,7 +253,7 @@ struct uninitialized {
                 add_recognition_error(msg);
                 break;
             }
-            res.emplace(left->get_raw_text(), right->get_raw_text());
+            res.emplace(left->raw_text, right->raw_text);
         }
         return res;
     }
@@ -487,7 +487,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
 
 jsonValue returns [::shared_ptr<cql3::term::raw> value]
     :
-    | s=STRING_LITERAL { $value = cql3::constants::literal::string(sstring{$s.text}); }
+    | s=STRING_LITERAL { $value = cql3::expr::as_term_raw(cql3::expr::untyped_constant{cql3::expr::untyped_constant::string, $s.text}); }
     | ':' id=ident     { $value = cql3::expr::as_term_raw(new_bind_variables(id)); }
     | QMARK            { $value = cql3::expr::as_term_raw(new_bind_variables(shared_ptr<cql3::column_identifier>{})); }
     ;
@@ -1421,16 +1421,25 @@ idxName[cql3::index_name& name]
     | QMARK {add_recognition_error("Bind variables cannot be used for index names");}
     ;
 
-constant returns [shared_ptr<cql3::constants::literal> constant]
+constant returns [cql3::expr::untyped_constant constant]
     @init{std::string sign;}
-    : t=STRING_LITERAL { $constant = cql3::constants::literal::string(sstring{$t.text}); }
-    | t=INTEGER        { $constant = cql3::constants::literal::integer(sstring{$t.text}); }
-    | t=FLOAT          { $constant = cql3::constants::literal::floating_point(sstring{$t.text}); }
-    | t=BOOLEAN        { $constant = cql3::constants::literal::bool_(sstring{$t.text}); }
-    | t=DURATION       { $constant = cql3::constants::literal::duration(sstring{$t.text}); }
-    | t=UUID           { $constant = cql3::constants::literal::uuid(sstring{$t.text}); }
-    | t=HEXNUMBER      { $constant = cql3::constants::literal::hex(sstring{$t.text}); }
-    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::constants::literal::floating_point(sstring{sign + $t.text}); }
+    : t=STRING_LITERAL {
+                    // This is a workaround for antlr3 not distinguishing between
+                    // calling in lexer setText() with an empty string and not calling
+                    // setText() at all.
+                    auto text = $t.text;
+                    if (text.size() == 1 && text[0] == '\xFF') {
+                        text = {};
+                    }
+                    $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::string, std::move(text)};
+                }
+    | t=INTEGER        { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::integer, $t.text}; }
+    | t=FLOAT          { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::floating_point, $t.text}; }
+    | t=BOOLEAN        { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::boolean, $t.text}; }
+    | t=DURATION       { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::duration, $t.text}; }
+    | t=UUID           { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::uuid, $t.text}; }
+    | t=HEXNUMBER      { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::hex, $t.text}; }
+    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::floating_point, sign + $t.text}; }
     ;
 
 mapLiteral returns [shared_ptr<cql3::maps::literal> map]
@@ -1477,7 +1486,7 @@ tupleLiteral returns [shared_ptr<cql3::tuples::literal> tt]
     ;
 
 value returns [::shared_ptr<cql3::term::raw> value]
-    : c=constant           { $value = c; }
+    : c=constant           { $value = cql3::expr::as_term_raw(std::move(c)); }
     | l=collectionLiteral  { $value = l; }
     | u=usertypeLiteral    { $value = u; }
     | t=tupleLiteral       { $value = t; }
@@ -1488,7 +1497,7 @@ value returns [::shared_ptr<cql3::term::raw> value]
 
 intValue returns [::shared_ptr<cql3::term::raw> value]
     :
-    | t=INTEGER     { $value = cql3::constants::literal::integer(sstring{$t.text}); }
+    | t=INTEGER     { $value = cql3::expr::as_term_raw(cql3::expr::untyped_constant{cql3::expr::untyped_constant::integer, $t.text}); }
     | ':' id=ident  { $value = cql3::expr::as_term_raw(new_bind_variables(id)); }
     | QMARK         { $value = cql3::expr::as_term_raw(new_bind_variables(shared_ptr<cql3::column_identifier>{})); }
     ;
@@ -1564,7 +1573,7 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
               // We don't yet allow a '+' in front of an integer, but we could in the future really, so let's be future-proof in our error message
               add_recognition_error("Only expressions of the form X = X " + sstring($i.text[0] == '-' ? "-" : "+") + " <value> are supported.");
           }
-          add_raw_update(operations, key, std::make_unique<cql3::operation::addition>(cql3::constants::literal::integer($i.text)));
+          add_raw_update(operations, key, std::make_unique<cql3::operation::addition>(cql3::expr::as_term_raw(cql3::expr::untyped_constant{cql3::expr::untyped_constant::integer, $i.text})));
       }
     | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
@@ -1619,7 +1628,7 @@ property[cql3::statements::property_definitions& props]
     ;
 
 propertyValue returns [sstring str]
-    : c=constant           { $str = c->get_raw_text(); }
+    : c=constant           { $str = c.raw_text; }
     // FIXME: unreserved keywords below are indistinguishable from their string representation,
     // which might be problematic in the future. A possible solution is to use a more complicated
     // type for storing property values instead of just plain strings. For the specific case
