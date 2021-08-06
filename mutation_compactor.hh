@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "compaction_garbage_collector.hh"
+#include "compaction/compaction_garbage_collector.hh"
 #include "mutation_fragment.hh"
 
 static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
