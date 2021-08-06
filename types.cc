@@ -620,6 +620,20 @@ size_t collection_value_len(cql_serialization_format sf) {
     return sizeof(uint16_t);
 }
 
+size_t max_collection_size(cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        return std::numeric_limits<int32_t>::max();
+    }
+    return std::numeric_limits<uint16_t>::max();
+}
+
+size_t max_collection_value_size(cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        return std::numeric_limits<int32_t>::max();
+    }
+    return std::numeric_limits<uint16_t>::max();
+}
+
 
 int read_collection_size(bytes_view& in, cql_serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {

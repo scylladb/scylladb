@@ -1175,6 +1175,8 @@ inline sstring read_simple_short_string(bytes_view& v) {
 
 size_t collection_size_len(cql_serialization_format sf);
 size_t collection_value_len(cql_serialization_format sf);
+size_t max_collection_size(cql_serialization_format sf);
+size_t max_collection_value_size(cql_serialization_format sf);
 void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf);
 void write_collection_size(managed_bytes_mutable_view&, int size, cql_serialization_format sf);
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes);

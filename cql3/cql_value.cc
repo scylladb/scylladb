@@ -303,8 +303,51 @@ raw_value to_raw_value(const tuple_value& val) {
     return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const list_value&, cql_serialization_format) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const list_value& val, cql_serialization_format sf) {
+    size_t max_list_size = max_collection_size(sf);
+    size_t max_element_size = max_collection_value_size(sf);
+
+    if (val.elements.size() > max_list_size) {
+        throw std::runtime_error(fmt::format("list_value length is too big to be serialized ({} > {})",
+                                              val.elements.size(), max_list_size));
+    }
+
+    size_t serialized_size = collection_size_len(sf);
+    for (const std::variant<managed_bytes, null_value>& element : val.elements) {
+        // Addition overflow shouldn't happen unless size_t is 32bit or serialized_size reaches 10^6 TB
+        if (auto element_bytes = std::get_if<managed_bytes>(&element)) {
+            if (element_bytes->size() > max_element_size) {
+                throw std::runtime_error(
+                    fmt::format("list_value element length is too big to be serialized ({} > {})",
+                    element_bytes->size(), max_element_size));
+            }
+
+            serialized_size += collection_value_len(sf) + element_bytes->size();
+        } else {
+            serialized_size += collection_value_len(sf);
+        }
+    }
+
+    managed_bytes result(managed_bytes::initialized_later{}, serialized_size);
+    managed_bytes_mutable_view result_view(result);
+
+    write_collection_size(result_view, val.elements.size(), sf);
+
+    for (const std::variant<managed_bytes, null_value>& element : val.elements) {
+        if (auto element_bytes = std::get_if<managed_bytes>(&element)) {
+            write_collection_value(result_view, sf, managed_bytes_view(*element_bytes));
+        } else {
+            if (sf.using_32_bits_for_collections()) {
+                write<int32_t>(result_view, -1);
+            } else {
+                // NULL is represented by negative length.
+                // In old format value length is represented as uint16_t.
+                throw std::runtime_error("list_value unable to encode null in old serialization format");
+            }
+        }
+    }
+
+    return raw_value::make_value(std::move(result));
 }
 
 raw_value to_raw_value(const set_value&, cql_serialization_format) {
