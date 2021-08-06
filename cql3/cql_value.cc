@@ -118,4 +118,146 @@ bool is_0_bytes_value_empty_value(abstract_type::kind type_kind) {
                 fmt::format("is_0_bytes_value_empty_value - unhandled type kind: {}", type_kind));
     }
 }
+
+raw_value to_raw_value(const cql_value& value, cql_serialization_format serialization_format) {
+    return std::visit(overloaded_functor{
+        [](const empty_value& val) {return to_raw_value(val);},
+        [](const unset_value& val) {return to_raw_value(val);},
+        [](const null_value& val) {return to_raw_value(val);},
+        [](const bool_value& val) {return to_raw_value(val);},
+        [](const int8_value& val) {return to_raw_value(val);},
+        [](const int16_value& val) {return to_raw_value(val);},
+        [](const int32_value& val) {return to_raw_value(val);},
+        [](const int64_value& val) {return to_raw_value(val);},
+        [](const counter_value& val) {return to_raw_value(val);},
+        [](const varint_value& val) {return to_raw_value(val);},
+        [](const float_value& val) {return to_raw_value(val);},
+        [](const double_value& val) {return to_raw_value(val);},
+        [](const decimal_value& val) {return to_raw_value(val);},
+        [](const ascii_value& val) {return to_raw_value(val);},
+        [](const utf8_value& val) {return to_raw_value(val);},
+        [](const date_value& val) {return to_raw_value(val);},
+        [](const simple_date_value& val) {return to_raw_value(val);},
+        [](const duration_value& val) {return to_raw_value(val);},
+        [](const time_value& val) {return to_raw_value(val);},
+        [](const timestamp_value& val) {return to_raw_value(val);},
+        [](const timeuuid_value& val) {return to_raw_value(val);},
+        [](const blob_value& val) {return to_raw_value(val);},
+        [](const inet_value& val) {return to_raw_value(val);},
+        [](const uuid_value& val) {return to_raw_value(val);},
+        [&](const tuple_value& val) {return to_raw_value(val);},
+        [&](const list_value& val) {return to_raw_value(val, serialization_format);},
+        [&](const set_value& val) {return to_raw_value(val, serialization_format);},
+        [&](const map_value& val) {return to_raw_value(val, serialization_format);},
+        [](const user_type_value& val) {return to_raw_value(val);}
+        }, value);
+}
+
+raw_value to_raw_value(const empty_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const unset_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const null_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const int16_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const int32_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const int64_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const counter_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const varint_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const float_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const double_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const decimal_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const ascii_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const utf8_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const date_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const simple_date_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const duration_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const time_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const timestamp_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const timeuuid_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const blob_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const inet_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const uuid_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const tuple_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const list_value&, cql_serialization_format) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const set_value&, cql_serialization_format) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const map_value&, cql_serialization_format) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
+
+raw_value to_raw_value(const user_type_value&) {
+    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+}
 }

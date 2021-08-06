@@ -295,6 +295,40 @@ namespace cql3 {
     cql_value into_cql_value(ordered_cql_value&&);
 
 
+    // Converts a cql_value to its serialized representation
+    raw_value to_raw_value(const cql_value&, cql_serialization_format);
+    
+    raw_value to_raw_value(const empty_value&);
+    raw_value to_raw_value(const unset_value&);
+    raw_value to_raw_value(const null_value&);
+    raw_value to_raw_value(const bool_value&);
+    raw_value to_raw_value(const int8_value&);
+    raw_value to_raw_value(const int16_value&);
+    raw_value to_raw_value(const int32_value&);
+    raw_value to_raw_value(const int64_value&);
+    raw_value to_raw_value(const counter_value&);
+    raw_value to_raw_value(const varint_value&);
+    raw_value to_raw_value(const float_value&);
+    raw_value to_raw_value(const double_value&);
+    raw_value to_raw_value(const decimal_value&);
+    raw_value to_raw_value(const ascii_value&);
+    raw_value to_raw_value(const utf8_value&);
+    raw_value to_raw_value(const date_value&);
+    raw_value to_raw_value(const simple_date_value&);
+    raw_value to_raw_value(const duration_value&);
+    raw_value to_raw_value(const time_value&);
+    raw_value to_raw_value(const timestamp_value&);
+    raw_value to_raw_value(const timeuuid_value&);
+    raw_value to_raw_value(const blob_value&);
+    raw_value to_raw_value(const inet_value&);
+    raw_value to_raw_value(const uuid_value&);
+    raw_value to_raw_value(const tuple_value&);
+    raw_value to_raw_value(const list_value&, cql_serialization_format);
+    raw_value to_raw_value(const set_value&, cql_serialization_format);
+    raw_value to_raw_value(const map_value&, cql_serialization_format);
+    raw_value to_raw_value(const user_type_value&);
+
+
     template<FragmentedView View>
     bool_value bool_value::from_serialized(View serialized_bytes) {
         return bool_value {
