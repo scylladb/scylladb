@@ -199,8 +199,8 @@ raw_value to_raw_value(const counter_value& val) {
     return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const varint_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const varint_value& val) {
+    return raw_value::make_value(val.value);
 }
 
 raw_value to_raw_value(const float_value& val) {
@@ -221,52 +221,52 @@ raw_value to_raw_value(const double_value& val) {
     return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const decimal_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const decimal_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const ascii_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const ascii_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const utf8_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const utf8_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const date_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const date_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const simple_date_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const simple_date_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const duration_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const duration_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const time_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const time_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const timestamp_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const timestamp_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const timeuuid_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const timeuuid_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const blob_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const blob_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const inet_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const inet_value& val) {
+    return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const uuid_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const uuid_value& val) {
+    return raw_value::make_value(val.value);
 }
 
 raw_value to_raw_value(const tuple_value&) {
