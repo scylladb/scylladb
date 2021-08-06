@@ -89,6 +89,8 @@ private:
     server_id _id;
     server::configuration _config;
     std::optional<promise<>> _stepdown_promise;
+    // Index of the last entry applied to `_state_machine`.
+    index_t _applied_idx;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
     queue<std::variant<std::vector<log_entry_ptr>, snapshot>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot>>(10);
@@ -245,9 +247,8 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
 future<> server_impl::start() {
     auto [term, vote] = co_await _persistence->load_term_and_vote();
     auto snapshot  = co_await _persistence->load_snapshot();
-    auto snp_id = snapshot.id;
     auto log_entries = co_await _persistence->load_log();
-    auto log = raft::log(std::move(snapshot), std::move(log_entries));
+    auto log = raft::log(snapshot, std::move(log_entries));
     raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
     _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
@@ -257,9 +258,11 @@ future<> server_impl::start() {
                                      .enable_prevoting = _config.enable_prevoting
                                  });
 
-    if (snp_id) {
-        co_await _state_machine->load_snapshot(snp_id);
-        _last_loaded_snapshot_id = snp_id;
+    _applied_idx = index_t{0};
+    if (snapshot.id) {
+        co_await _state_machine->load_snapshot(snapshot.id);
+        _last_loaded_snapshot_id = snapshot.id;
+        _applied_idx = snapshot.idx;
     }
 
     if (!rpc_config.current.empty()) {
@@ -615,12 +618,17 @@ future<> server_impl::applier_fiber() {
 
             if (std::holds_alternative<std::vector<log_entry_ptr>>(v)) {
                 auto& batch = std::get<0>(v);
+                if (batch.empty()) {
+                    logger.trace("[{}] applier fiber: received empty batch", _id);
+                    continue;
+                }
 
                 std::vector<command_cref> commands;
                 commands.reserve(batch.size());
 
                 index_t last_idx = batch.back()->idx;
                 term_t last_term = batch.back()->term;
+                assert(last_idx == _applied_idx + batch.size());
 
                 boost::range::copy(
                        batch |
@@ -633,17 +641,19 @@ future<> server_impl::applier_fiber() {
                   co_await _state_machine->apply(std::move(commands));
                   _stats.applied_entries += size;
                 }
+
+               _applied_idx = last_idx;
                notify_waiters(_awaited_applies, batch);
 
                // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
                // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
                auto last_snap_idx = _fsm->log_last_snapshot_idx();
-               if (last_idx >= last_snap_idx && last_idx - last_snap_idx >= _config.snapshot_threshold) {
+               if (_applied_idx >= last_snap_idx && _applied_idx - last_snap_idx >= _config.snapshot_threshold) {
                    snapshot snp;
                    snp.term = last_term;
-                   snp.idx = last_idx;
-                   snp.config = _fsm->log_last_conf_for(last_idx);
+                   snp.idx = _applied_idx;
+                   snp.config = _fsm->log_last_conf_for(_applied_idx);
                    logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                    snp.id = co_await _state_machine->take_snapshot();
                    _last_loaded_snapshot_id = snp.id;
@@ -658,12 +668,14 @@ future<> server_impl::applier_fiber() {
                }
             } else {
                 snapshot& snp = std::get<1>(v);
+                assert(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
                 co_await _state_machine->load_snapshot(snp.id);
                 _state_machine->drop_snapshot(_last_loaded_snapshot_id);
                 drop_waiters(snp.idx);
                 _last_loaded_snapshot_id = snp.id;
+                _applied_idx = snp.idx;
                 _stats.sm_load_snapshot++;
             }
         }
