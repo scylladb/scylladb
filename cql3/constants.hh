@@ -72,8 +72,6 @@ public:
         cql3::raw_value _bytes;
         data_type _my_type;
         value(cql3::raw_value bytes_, data_type my_type) : _bytes(std::move(bytes_)), _my_type(std::move(my_type)) {}
-        virtual cql3::raw_value get(const query_options& options) override { return _bytes; }
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override { return _bytes.to_view(); }
         virtual sstring to_string() const override { return _bytes.to_view().with_value([] (const FragmentedView auto& v) { return to_hex(v); }); }
 
         virtual ordered_cql_value to_ordered_cql_value(cql_serialization_format) const override;
@@ -182,7 +180,7 @@ public:
             assert(!_receiver->type->is_collection() && !_receiver->type->is_user_type());
         }
 
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
+        cql3::raw_value_view bind_and_get_internal(const query_options& options) {
             try {
                 auto value = options.get_value_at(_bind_index);
                 if (value) {
@@ -196,7 +194,7 @@ public:
         }
 
         virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            auto bytes = bind_and_get(options);
+            auto bytes = bind_and_get_internal(options);
             if (bytes.is_null()) {
                 return ::shared_ptr<terminal>{};
             }

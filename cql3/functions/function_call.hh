@@ -70,7 +70,7 @@ public:
         _id = id;
     }
     virtual shared_ptr<terminal> bind(const query_options& options) override;
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
+    cql3::raw_value_view  bind_and_get_internal(const query_options& options);
 
     virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format sf) const override {
         std::vector<new_term> new_arguments;

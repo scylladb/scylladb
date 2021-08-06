@@ -154,11 +154,6 @@ sets::value::from_serialized(const raw_value_view& val, const set_type_impl& typ
     }
 }
 
-cql3::raw_value
-sets::value::get(const query_options& options) {
-    return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
-}
-
 managed_bytes
 sets::value::get_with_protocol_version(cql_serialization_format sf) {
     return collection_type_impl::pack_fragmented(_elements.begin(), _elements.end(),

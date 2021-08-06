@@ -162,10 +162,6 @@ user_types::value user_types::value::from_serialized(const raw_value_view& v, co
     });
 }
 
-cql3::raw_value user_types::value::get(const query_options&) {
-    return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
-}
-
 const std::vector<managed_bytes_opt>& user_types::value::get_elements() const {
     return _elements;
 }
@@ -254,10 +250,6 @@ std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const qu
 
 shared_ptr<terminal> user_types::delayed_value::bind(const query_options& options) {
     return ::make_shared<user_types::value>(bind_internal(options), _my_type);
-}
-
-cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
-    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value_fragmented(bind_internal(options))));
 }
 
 delayed_cql_value user_types::delayed_value::to_delayed_cql_value(cql_serialization_format sf) const {

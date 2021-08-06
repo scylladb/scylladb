@@ -150,11 +150,6 @@ lists::value::from_serialized(const raw_value_view& val, const list_type_impl& t
     }
 }
 
-cql3::raw_value
-lists::value::get(const query_options& options) {
-    return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
-}
-
 managed_bytes
 lists::value::get_with_protocol_version(cql_serialization_format sf) {
     // Can't use boost::indirect_iterator, because optional is not an iterator

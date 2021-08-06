@@ -121,9 +121,6 @@ public:
               return value(type.split_fragmented(view), type.shared_from_this());
           });
         }
-        virtual cql3::raw_value get(const query_options& options) override {
-            return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
-        }
 
         const std::vector<managed_bytes_opt>& get_elements() const {
             return _elements;
@@ -199,19 +196,6 @@ public:
             return ::make_shared<value>(bind_internal(options), _my_type);
         }
 
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
-            // We don't "need" that override but it saves us the allocation of a Value object if used
-            const abstract_type& not_reversed = _my_type->without_reversed();
-            const tuple_type_impl* my_tuple_type = dynamic_cast<const tuple_type_impl*>(&not_reversed);
-
-            if (my_tuple_type == nullptr) {
-                throw std::runtime_error("tuple::delayed_value has type that is not tuple_type_impl!");
-            }
-
-            return cql3::raw_value_view::make_temporary(
-                cql3::raw_value::make_value(my_tuple_type->build_value_fragmented(bind_internal(options))));
-        }
-
         virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override;
     };
 
@@ -230,10 +214,6 @@ public:
         }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
-
-        virtual cql3::raw_value get(const query_options& options) override {
-            throw exceptions::unsupported_operation_exception();
-        }
 
         utils::chunked_vector<std::vector<managed_bytes_opt>> get_split_values() const {
             return _elements;

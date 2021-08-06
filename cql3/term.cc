@@ -49,4 +49,13 @@ new_term to_new_term(const shared_ptr<term>& old_term, cql_serialization_format 
 
     return old_term->to_new_term(sf);
 }
+
+raw_value_view term::bind_and_get(const query_options& options) {
+    shared_ptr<terminal> bound = bind(options);
+    if (bound.get() == nullptr) {
+        return raw_value_view::make_null();
+    }
+
+    return raw_value_view::make_temporary(bound->get(options));
+}
 }

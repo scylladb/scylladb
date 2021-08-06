@@ -83,7 +83,6 @@ public:
             : map(std::move(map)), _my_type(std::move(type)) {
         }
         static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
-        virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf);
         bool equals(const map_type_impl& mt, const value& v);
         virtual sstring to_string() const;

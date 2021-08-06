@@ -181,7 +181,7 @@ public:
      * object between the bind and the get (note that we still want to be able
      * to separate bind and get for collections).
      */
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) = 0;
+    cql3::raw_value_view bind_and_get(const query_options& options);
 
     /**
      * Whether or not that term contains at least one bind marker.
@@ -240,10 +240,9 @@ public:
     /**
      * @return the serialized value of this terminal.
      */
-    virtual cql3::raw_value get(const query_options& options) = 0;
-
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
-        return raw_value_view::make_temporary(get(options));
+    cql3::raw_value get(const query_options& options) {
+        cql_value cql_val = into_cql_value(this->to_ordered_cql_value(options.get_cql_serialization_format()));
+        return to_raw_value(cql_val, options.get_cql_serialization_format());
     }
 
     virtual sstring to_string() const = 0;
@@ -280,14 +279,6 @@ public:
  */
 class non_terminal : public term {
 public:
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
-        auto t = bind(options);
-        if (t) {
-            return cql3::raw_value_view::make_temporary(t->get(options));
-        }
-        return cql3::raw_value_view::make_null();
-    };
-
     // Converts this non terminal to matching delayed_cql_value
     virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const = 0;
 

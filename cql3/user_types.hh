@@ -80,7 +80,6 @@ public:
 
         static value from_serialized(const raw_value_view&, const user_type_impl&);
 
-        virtual cql3::raw_value get(const query_options&) override;
         const std::vector<managed_bytes_opt>& get_elements() const;
         virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const override;
@@ -100,7 +99,6 @@ public:
         std::vector<managed_bytes_opt> bind_internal(const query_options& options);
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 
         virtual delayed_cql_value to_delayed_cql_value(cql_serialization_format) const override;
     };
