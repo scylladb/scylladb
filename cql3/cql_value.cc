@@ -418,7 +418,37 @@ raw_value to_raw_value(const map_value& val, cql_serialization_format sf) {
     return raw_value::make_value(std::move(result));
 }
 
-raw_value to_raw_value(const user_type_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const user_type_value& val) {
+    size_t serialized_size = 0;
+    for (const std::variant<managed_bytes, null_value>& field_value : val.field_values) {
+        // Addition overflow shouldn't happen unless size_t is 32bit or serialized_size reaches 10^6 TB
+        serialized_size += 4;
+
+        if (auto elem = std::get_if<managed_bytes>(&field_value)) {
+            if (elem->size() > std::numeric_limits<int32_t>::max()) {
+                throw std::runtime_error(fmt::format("user_type_value element size is too big to be serialized ({} > {})",
+                                                     elem->size(), std::numeric_limits<int32_t>::max()));
+            }
+
+            serialized_size += elem->size(); 
+        }
+    }
+
+    managed_bytes result(managed_bytes::initialized_later{}, serialized_size);
+    managed_bytes_mutable_view result_view(result);
+
+    for (const std::variant<managed_bytes, null_value>& field_value : val.field_values) {
+        std::visit(overloaded_functor{
+            [&](const managed_bytes& elem) {
+                write<int32_t>(result_view, elem.size());
+                write_fragmented(result_view, managed_bytes_view(elem));
+            },
+            [&](const null_value&) {
+                write<int32_t>(result_view, -1);
+            }
+        }, field_value);
+    }
+
+    return raw_value::make_value(std::move(result));
 }
 }
