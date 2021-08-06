@@ -269,8 +269,38 @@ raw_value to_raw_value(const uuid_value& val) {
     return raw_value::make_value(val.value);
 }
 
-raw_value to_raw_value(const tuple_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+raw_value to_raw_value(const tuple_value& val) {
+    size_t serialized_size = 0;
+    for (const std::variant<managed_bytes, null_value>& element : val.elements) {
+        // Addition overflow shouldn't happen unless size_t is 32bit or serialized_size reaches 10^6 TB
+        serialized_size += 4;
+
+        if (auto elem = std::get_if<managed_bytes>(&element)) {
+            if (elem->size() > std::numeric_limits<int32_t>::max()) {
+                throw std::runtime_error(fmt::format("tuple_value element size is too big to be serialized ({} > {})",
+                                                     elem->size(), std::numeric_limits<int32_t>::max()));
+            }
+
+            serialized_size += elem->size();
+        }
+    }
+
+    managed_bytes result(managed_bytes::initialized_later{}, serialized_size);
+    managed_bytes_mutable_view result_view(result);
+
+    for (const std::variant<managed_bytes, null_value>& element : val.elements) {
+        std::visit(overloaded_functor{
+            [&](const managed_bytes& elem) {
+                write<int32_t>(result_view, elem.size());
+                write_fragmented(result_view, managed_bytes_view(elem));
+            },
+            [&](const null_value&) {
+                write<int32_t>(result_view, -1);
+            }
+        }, element);
+    }
+
+    return raw_value::make_value(std::move(result));
 }
 
 raw_value to_raw_value(const list_value&, cql_serialization_format) {
