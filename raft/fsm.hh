@@ -153,6 +153,7 @@ class fsm {
     server_id _voted_for;
     // Index of the highest log entry known to be committed.
     // Currently not persisted.
+    // Invariant: _commit_idx >= _log.get_snapshot().idx
     index_t _commit_idx = index_t(0);
     // Log entries; each entry contains a command for state machine,
     // and the term when the entry was received by the leader.

@@ -2075,3 +2075,37 @@ BOOST_AUTO_TEST_CASE(test_reject_outdated_remote_snapshot) {
     // But it should apply this snapshot if it's locally generated
     BOOST_CHECK(B.apply_snapshot(snp, 0, true));
 }
+
+// A server should sometimes become a candidate even though it is outside the current configuration,
+// for example if it's the only server that can become a leader (due to log lengths).
+BOOST_AUTO_TEST_CASE(test_candidate_outside_configuration) {
+    server_id A_id = id(), B_id = id();
+    raft::server_address_set addrset{raft::server_address{A_id}, raft::server_address{B_id}};
+    raft::configuration cfg(addrset);
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    discrete_failure_detector fd;
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    raft::configuration newcfg({B_id});
+    A.add_entry(newcfg);
+    BOOST_CHECK(!B.get_log().get_configuration().is_joint());
+    communicate_until([&A, &B] () { return !A.get_configuration().is_joint() && B.get_log().get_configuration().is_joint(); }, A, B);
+    BOOST_CHECK(!A.get_configuration().is_joint());
+    BOOST_CHECK(B.get_log().get_configuration().is_joint());
+    fd.mark_dead(B_id);
+    election_timeout(A);
+    // A steps down because it cannot communicate with a quorum in the current configuration ({B}).
+    BOOST_CHECK(!A.is_leader());
+    fd.mark_alive(B_id);
+    election_timeout(A);
+    // A should become a candidate - it is the only server that can become a leader;
+    // B's configuration is joint and it can't receive a vote from A due to shorter log.
+    BOOST_CHECK(A.is_candidate());
+    communicate_until([&A] () { return A.is_leader(); }, A, B);
+    BOOST_CHECK(A.is_leader());
+    communicate(A, B);
+    BOOST_CHECK(B.is_leader());
+}
