@@ -72,37 +72,10 @@ public:
         virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
 
     private:
-        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
-            auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver.type->underlying_type());
-            if (!tt) {
-                throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
-            }
-            for (size_t i = 0; i < _elements.size(); ++i) {
-                if (i >= tt->size()) {
-                    throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: too many elements. Type {} expects {:d} but got {:d}",
-                                                                    receiver.name, tt->as_cql3_type(), tt->size(), _elements.size()));
-                }
-
-                auto&& value = _elements[i];
-                auto&& spec = component_spec_of(receiver, i);
-                if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *spec))) {
-                    throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", receiver.name, i, spec->type->as_cql3_type()));
-                }
-            }
-        }
+        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
-            try {
-                validate_assignable_to(db, keyspace, receiver);
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            } catch (exceptions::invalid_request_exception& e) {
-                return assignment_testable::test_result::NOT_ASSIGNABLE;
-            }
-        }
-
-        virtual sstring to_string() const override {
-            return tuple_to_string(_elements);
-        }
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
+        virtual sstring to_string() const override;
     };
 
     /**
