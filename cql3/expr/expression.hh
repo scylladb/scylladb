@@ -224,7 +224,7 @@ struct tuple_constructor {
 
 // Constructs a collection of same-typed elements
 struct collection_constructor {
-    enum class style_type { list };
+    enum class style_type { list, set, map };
     style_type style;
     std::vector<expression> elements;
 };

@@ -221,33 +221,36 @@ struct uninitialized {
         return token->getText();
     }
 
-    std::map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
-        if (!map || map->entries.empty()) {
+    std::map<sstring, sstring> convert_property_map(shared_ptr<cql3::term::raw> map_term_raw) {
+        if (!map_term_raw) {
+            return std::map<sstring, sstring>{};
+        }
+        auto map = std::get<cql3::expr::collection_constructor>(cql3::expr::as_expression(map_term_raw));
+        if (map.elements.empty()) {
             return std::map<sstring, sstring>{};
         }
         std::map<sstring, sstring> res;
-        for (auto&& entry : map->entries) {
+        for (auto&& entry : map.elements) {
+            auto entry_tuple = std::get_if<cql3::expr::tuple_constructor>(&entry);
             // Because the parser tries to be smart and recover on error (to
-            // allow displaying more than one error I suppose), we have null
-            // entries in there. Just skip those, a proper error will be thrown in the end.
-            if (!entry.first || !entry.second) {
+            // allow displaying more than one error I suppose), we have default-constructed
+            // entries in map.elements. Just skip those, a proper error will be thrown in the end.
+            if (!entry_tuple || entry_tuple->elements.size() != 2) {
                 break;
             }
-            auto left = cql3::expr::as_untyped_constant(entry.first);
+            auto left = std::get_if<cql3::expr::untyped_constant>(&entry_tuple->elements[0]);
             if (!left) {
-                sstring msg = "Invalid property name: " + entry.first->to_string();
-                auto expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(entry.first);
-                if (expr && std::holds_alternative<cql3::expr::bind_variable>(expr->as_expression())) {
+                sstring msg = fmt::format("Invalid property name: {}", entry_tuple->elements[0]);
+                if (std::holds_alternative<cql3::expr::bind_variable>(entry_tuple->elements[0])) {
                     msg += " (bind variables are not supported in DDL queries)";
                 }
                 add_recognition_error(msg);
                 break;
             }
-            auto right = cql3::expr::as_untyped_constant(entry.second);
+            auto right = std::get_if<cql3::expr::untyped_constant>(&entry_tuple->elements[1]);
             if (!right) {
-                sstring msg = "Invalid property value: " + entry.first->to_string() + " for property: " + entry.second->to_string();
-                auto expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(entry.second);
-                if (expr && std::holds_alternative<cql3::expr::bind_variable>(expr->as_expression())) {
+                sstring msg = fmt::format("Invalid property value: {} for property: {}", entry_tuple->elements[0], entry_tuple->elements[1]);
+                if (std::holds_alternative<cql3::expr::bind_variable>(entry_tuple->elements[1])) {
                     msg += " (bind variables are not supported in DDL queries)";
                 }
                 add_recognition_error(msg);
@@ -1442,23 +1445,22 @@ constant returns [cql3::expr::untyped_constant constant]
     | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::expr::untyped_constant{cql3::expr::untyped_constant::floating_point, sign + $t.text}; }
     ;
 
-mapLiteral returns [shared_ptr<cql3::maps::literal> map]
-    @init{std::vector<std::pair<::shared_ptr<cql3::term::raw>, ::shared_ptr<cql3::term::raw>>> m;}
+mapLiteral returns [shared_ptr<cql3::term::raw> map]
+    @init{std::vector<cql3::expr::expression> m;}
     : '{' { }
-          ( k1=term ':' v1=term { m.push_back(std::pair<shared_ptr<cql3::term::raw>, shared_ptr<cql3::term::raw>>{k1, v1}); } ( ',' kn=term ':' vn=term { m.push_back(std::pair<shared_ptr<cql3::term::raw>, shared_ptr<cql3::term::raw>>{kn, vn}); } )* )?
-      '}' { $map = ::make_shared<cql3::maps::literal>(m); }
+          ( k1=term ':' v1=term { m.push_back(cql3::expr::tuple_constructor{{cql3::expr::as_expression(k1), cql3::expr::as_expression(v1)}}); }
+            ( ',' kn=term ':' vn=term { m.push_back(cql3::expr::tuple_constructor{{cql3::expr::as_expression(kn), cql3::expr::as_expression(vn)}}); } )*  )?
+      '}' { $map = cql3::expr::as_term_raw(cql3::expr::collection_constructor{cql3::expr::collection_constructor::style_type::map, std::move(m)}); }
     ;
 
 setOrMapLiteral[shared_ptr<cql3::term::raw> t] returns [shared_ptr<cql3::term::raw> value]
-	@init{ std::vector<std::pair<shared_ptr<cql3::term::raw>, shared_ptr<cql3::term::raw>>> m;
-	       std::vector<shared_ptr<cql3::term::raw>> s;
-	}
-    : ':' v=term { m.push_back({t, v}); }
-          ( ',' kn=term ':' vn=term { m.push_back({kn, vn}); } )*
-      { $value = ::make_shared<cql3::maps::literal>(std::move(m)); }
-    | { s.push_back(t); }
-          ( ',' tn=term { s.push_back(tn); } )*
-      { $value = ::make_shared<cql3::sets::literal>(std::move(s)); }
+	@init{ std::vector<cql3::expr::expression> e; }
+    : ':' v=term { e.push_back(cql3::expr::tuple_constructor{{cql3::expr::as_expression(t), cql3::expr::as_expression(v)}}); }
+          ( ',' kn=term ':' vn=term { e.push_back(cql3::expr::tuple_constructor{{cql3::expr::as_expression(kn), cql3::expr::as_expression(vn)}}); } )*
+      { $value = cql3::expr::as_term_raw(cql3::expr::collection_constructor{cql3::expr::collection_constructor::style_type::map, std::move(e)}); }
+    | { e.push_back(cql3::expr::as_expression(t)); }
+          ( ',' tn=term { e.push_back(cql3::expr::as_expression(tn)); } )*
+      { $value = cql3::expr::as_term_raw(cql3::expr::collection_constructor{cql3::expr::collection_constructor::style_type::set, std::move(e)}); }
     ;
 
 collectionLiteral returns [shared_ptr<cql3::term::raw> value]
@@ -1473,7 +1475,7 @@ collectionLiteral returns [shared_ptr<cql3::term::raw> value]
     | '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
-    | '{' '}' { $value = ::make_shared<cql3::sets::literal>(std::vector<shared_ptr<cql3::term::raw>>()); }
+    | '{' '}' { $value = cql3::expr::as_term_raw(cql3::expr::collection_constructor{cql3::expr::collection_constructor::style_type::set, {}}); }
     ;
 
 usertypeLiteral returns [shared_ptr<cql3::user_types::literal> ut]

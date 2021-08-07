@@ -58,19 +58,6 @@ class sets {
 public:
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
-    class literal : public term::raw {
-        std::vector<shared_ptr<term::raw>> _elements;
-    public:
-        explicit literal(std::vector<shared_ptr<term::raw>> elements)
-                : _elements(std::move(elements)) {
-        }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
-        assignment_testable::test_result
-        test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const;
-        virtual sstring to_string() const override;
-    };
-
     class value : public terminal, collection_terminal {
     public:
         std::set<managed_bytes, serialized_compare> _elements;

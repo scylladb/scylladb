@@ -1092,6 +1092,27 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const collection_constructor& cc) {
                 switch (cc.style) {
                 case collection_constructor::style_type::list: fmt::print(os, "{}", std::to_string(cc.elements)); return;
+                case collection_constructor::style_type::set: {
+                    fmt::print(os, "{{{}}}", fmt::join(cc.elements, ", "));
+                    return;
+                }
+                case collection_constructor::style_type::map: {
+                    fmt::print(os, "{{");
+                    bool first = true;
+                    for (auto& e : cc.elements) {
+                        if (!first) {
+                            fmt::print(os, ", ");
+                        }
+                        first = false;
+                        auto& tuple = std::get<tuple_constructor>(e);
+                        if (tuple.elements.size() != 2) {
+                            on_internal_error(expr_logger, "map constructor element is not a tuple of arity 2");
+                        }
+                        fmt::print(os, "{}:{}", tuple.elements[0], tuple.elements[1]);
+                    }
+                    fmt::print(os, "}}");
+                    return;
+                }
                 }
                 on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(cc.style)));
             },
