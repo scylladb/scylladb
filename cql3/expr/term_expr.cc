@@ -29,6 +29,222 @@
 #include "cql3/user_types.hh"
 #include "cql3/tuples.hh"
 #include "types/list.hh"
+#include "types/set.hh"
+#include "types/map.hh"
+
+namespace cql3 {
+
+lw_shared_ptr<column_specification>
+maps::key_spec_of(const column_specification& column) {
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(format("key({})", *column.name), true),
+                dynamic_cast<const map_type_impl&>(column.type->without_reversed()).get_keys_type());
+}
+
+lw_shared_ptr<column_specification>
+maps::value_spec_of(const column_specification& column) {
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(format("value({})", *column.name), true),
+                 dynamic_cast<const map_type_impl&>(column.type->without_reversed()).get_values_type());
+}
+
+sstring
+maps::literal::to_string() const {
+    sstring result = "{";
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += entries[i].first->to_string();
+        result += ":";
+        result += entries[i].second->to_string();
+    }
+    result += "}";
+    return result;
+}
+
+void
+maps::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!receiver.type->without_reversed().is_map()) {
+        throw exceptions::invalid_request_exception(format("Invalid map literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
+    }
+    auto&& key_spec = maps::key_spec_of(receiver);
+    auto&& value_spec = maps::value_spec_of(receiver);
+    for (auto&& entry : entries) {
+        if (!is_assignable(entry.first->test_assignment(db, keyspace, *key_spec))) {
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: key {} is not of type {}", *receiver.name, *entry.first, key_spec->type->as_cql3_type()));
+        }
+        if (!is_assignable(entry.second->test_assignment(db, keyspace, *value_spec))) {
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: value {} is not of type {}", *receiver.name, *entry.second, value_spec->type->as_cql3_type()));
+        }
+    }
+}
+
+assignment_testable::test_result
+maps::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const map_type_impl>(receiver.type)) {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
+    // If there is no elements, we can't say it's an exact match (an empty map if fundamentally polymorphic).
+    if (entries.empty()) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+    auto key_spec = maps::key_spec_of(receiver);
+    auto value_spec = maps::value_spec_of(receiver);
+    // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
+    auto res = assignment_testable::test_result::EXACT_MATCH;
+    for (auto entry : entries) {
+        auto t1 = entry.first->test_assignment(db, keyspace, *key_spec);
+        auto t2 = entry.second->test_assignment(db, keyspace, *value_spec);
+        if (t1 == assignment_testable::test_result::NOT_ASSIGNABLE || t2 == assignment_testable::test_result::NOT_ASSIGNABLE)
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
+        if (t1 != assignment_testable::test_result::EXACT_MATCH || t2 != assignment_testable::test_result::EXACT_MATCH)
+            res = assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+    return res;
+}
+
+::shared_ptr<term>
+maps::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+    validate_assignable_to(db, keyspace, *receiver);
+
+    auto key_spec = maps::key_spec_of(*receiver);
+    auto value_spec = maps::value_spec_of(*receiver);
+    std::unordered_map<shared_ptr<term>, shared_ptr<term>> values;
+    values.reserve(entries.size());
+    bool all_terminal = true;
+    for (auto&& entry : entries) {
+        auto k = entry.first->prepare(db, keyspace, key_spec);
+        auto v = entry.second->prepare(db, keyspace, value_spec);
+
+        if (k->contains_bind_marker() || v->contains_bind_marker()) {
+            throw exceptions::invalid_request_exception(format("Invalid map literal for {}: bind variables are not supported inside collection literals", *receiver->name));
+        }
+
+        if (dynamic_pointer_cast<non_terminal>(k) || dynamic_pointer_cast<non_terminal>(v)) {
+            all_terminal = false;
+        }
+
+        values.emplace(k, v);
+    }
+    delayed_value value(
+            dynamic_cast<const map_type_impl&>(receiver->type->without_reversed()).get_keys_type()->as_less_comparator(),
+            values);
+    if (all_terminal) {
+        return value.bind(query_options::DEFAULT);
+    } else {
+        return make_shared<delayed_value>(std::move(value));
+    }
+}
+
+lw_shared_ptr<column_specification>
+sets::value_spec_of(const column_specification& column) {
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
+            ::make_shared<column_identifier>(format("value({})", *column.name), true),
+            dynamic_cast<const set_type_impl&>(column.type->without_reversed()).get_elements_type());
+}
+
+sstring
+sets::literal::to_string() const {
+    return "{" + join(", ", _elements) + "}";
+}
+
+void
+sets::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!receiver.type->without_reversed().is_set()) {
+        // We've parsed empty maps as a set literal to break the ambiguity so
+        // handle that case now
+        if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && _elements.empty()) {
+            return;
+        }
+
+        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
+    }
+
+    auto&& value_spec = value_spec_of(receiver);
+    for (shared_ptr<term::raw> rt : _elements) {
+        if (!is_assignable(rt->test_assignment(db, keyspace, *value_spec))) {
+            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver.name, *rt, value_spec->type->as_cql3_type()));
+        }
+    }
+}
+
+assignment_testable::test_result
+sets::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!receiver.type->without_reversed().is_set()) {
+        // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
+        if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && _elements.empty()) {
+            return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+        }
+
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
+
+    // If there is no elements, we can't say it's an exact match (an empty set if fundamentally polymorphic).
+    if (_elements.empty()) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+
+    auto&& value_spec = value_spec_of(receiver);
+    // FIXME: make assignment_testable::test_all() accept ranges
+    std::vector<shared_ptr<assignment_testable>> to_test(_elements.begin(), _elements.end());
+    return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
+}
+
+shared_ptr<term>
+sets::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+    validate_assignable_to(db, keyspace, *receiver);
+
+    if (_elements.empty()) {
+
+        // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
+        // other words a non-frozen collection only exists if it has elements.  Return nullptr right
+        // away to simplify predicate evaluation.  See also
+        // https://issues.apache.org/jira/browse/CASSANDRA-5141
+        if (receiver->type->is_multi_cell()) {
+            return cql3::constants::NULL_VALUE;
+        }
+        // We've parsed empty maps as a set literal to break the ambiguity so
+        // handle that case now. This branch works for frozen sets/maps only.
+        if (dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
+            // use empty_type for comparator, set is empty anyway.
+            std::map<managed_bytes, managed_bytes, serialized_compare> m(empty_type->as_less_comparator());
+            return ::make_shared<maps::value>(std::move(m));
+        }
+    }
+
+    auto value_spec = value_spec_of(*receiver);
+    std::vector<shared_ptr<term>> values;
+    values.reserve(_elements.size());
+    bool all_terminal = true;
+    for (shared_ptr<term::raw> rt : _elements)
+    {
+        auto t = rt->prepare(db, keyspace, value_spec);
+
+        if (t->contains_bind_marker()) {
+            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: bind variables are not supported inside collection literals", *receiver->name));
+        }
+
+        if (dynamic_pointer_cast<non_terminal>(t)) {
+            all_terminal = false;
+        }
+
+        values.push_back(std::move(t));
+    }
+    auto compare = dynamic_cast<const set_type_impl&>(receiver->type->without_reversed())
+            .get_elements_type()->as_less_comparator();
+
+    auto value = ::make_shared<delayed_value>(compare, std::move(values));
+    if (all_terminal) {
+        return value->bind(query_options::DEFAULT);
+    } else {
+        return value;
+    }
+}
+
+}
 
 namespace cql3::expr {
 
