@@ -30,6 +30,7 @@
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
 #include "cql3/term.hh"
+#include "cql3/column_identifier.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
 #include "database_fwd.hh"
@@ -87,12 +88,13 @@ struct bind_variable;
 struct untyped_constant;
 struct tuple_constructor;
 struct collection_constructor;
+struct usertype_constructor;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
                                 field_selection, term_raw_ptr, null, bind_variable, untyped_constant,
-                                tuple_constructor, collection_constructor>;
+                                tuple_constructor, collection_constructor, usertype_constructor>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -229,6 +231,12 @@ struct collection_constructor {
     std::vector<expression> elements;
 };
 
+// Constructs an object of a user-defined type
+struct usertype_constructor {
+    using elements_map_type = std::unordered_map<column_identifier, nested_expression>;
+    elements_map_type elements;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -348,6 +356,14 @@ const binary_operator* find_atom(const expression& e, Fn f) {
                 }
                 return nullptr;
             },
+            [&] (const usertype_constructor& c) -> const binary_operator* {
+                for (auto& [k, v] : c.elements) {
+                    if (auto found = find_atom(*v, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
         }, e);
 }
 
@@ -395,6 +411,10 @@ size_t count_if(const expression& e, Fn f) {
             [&] (const collection_constructor& c) -> size_t {
                 return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
                                        [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
+            },
+            [&] (const usertype_constructor& c) -> size_t {
+                return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
+                                       [&] (size_t acc, const usertype_constructor::elements_map_type::value_type& e) { return acc + count_if(*e.second, f); });
             },
         }, e);
 }

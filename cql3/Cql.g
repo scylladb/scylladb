@@ -1478,11 +1478,11 @@ collectionLiteral returns [shared_ptr<cql3::term::raw> value]
     | '{' '}' { $value = cql3::expr::as_term_raw(cql3::expr::collection_constructor{cql3::expr::collection_constructor::style_type::set, {}}); }
     ;
 
-usertypeLiteral returns [shared_ptr<cql3::user_types::literal> ut]
-    @init{ cql3::user_types::literal::elements_map_type m; }
-    @after{ $ut = ::make_shared<cql3::user_types::literal>(std::move(m)); }
+usertypeLiteral returns [shared_ptr<cql3::term::raw> ut]
+    @init{ cql3::expr::usertype_constructor::elements_map_type m; }
+    @after{ $ut = cql3::expr::as_term_raw(cql3::expr::usertype_constructor{std::move(m)}); }
     // We don't allow empty literals because that conflicts with sets/maps and is currently useless since we don't allow empty user types
-    : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
+    : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), cql3::expr::as_expression(std::move(v1))); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), cql3::expr::as_expression(std::move(vn))); } )* '}'
     ;
 
 tupleLiteral returns [cql3::expr::expression tt]

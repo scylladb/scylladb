@@ -569,6 +569,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const collection_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: collection_constructor cannot serve as the LHS of a binary expression");
             },
+            [] (const usertype_constructor&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: usertype_constructor cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -622,6 +625,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const collection_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a collection constructor cannot serve as a restriction by itself");
+            },
+            [] (const usertype_constructor&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a user type constructor cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -877,6 +883,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const collection_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: collection constructors are not supported as the LHS of a binary expression");
                         },
+                        [] (const usertype_constructor&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -920,6 +929,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const collection_constructor&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a collection constructor cannot serve as a restriction by itself");
+            },
+            [] (const usertype_constructor&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -996,6 +1008,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const collection_constructor&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: collection constructors are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const usertype_constructor&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: user type constructors are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -1116,6 +1131,18 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                 }
                 on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(cc.style)));
             },
+            [&] (const usertype_constructor& uc) {
+                fmt::print(os, "{{");
+                bool first = true;
+                for (auto& [k, v] : uc.elements) {
+                    if (!first) {
+                        fmt::print(os, ", ");
+                    }
+                    first = false;
+                    fmt::print(os, "{}:{}", k, *v);
+                }
+                fmt::print(os, "}}");
+            },
         }, expr);
     return os;
 }
@@ -1179,6 +1206,13 @@ expression replace_column_def(const expression& expr, const column_definition* n
                         )
                     }
                 };
+            },
+            [&] (const usertype_constructor& uc) {
+                usertype_constructor::elements_map_type m;
+                for (auto& [k, v] : uc.elements) {
+                    m.emplace(k, replace_column_def(*v, new_cdef));
+                }
+                return expression{usertype_constructor{std::move(m)}};
             },
         }, expr);
 }
@@ -1244,6 +1278,13 @@ expression replace_token(const expression& expr, const column_definition* new_cd
                     boost::copy_range<std::vector<expression>>(
                         c.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef)))
                 };
+            },
+            [&] (const usertype_constructor& uc) -> expression {
+                usertype_constructor::elements_map_type m;
+                for (auto& [k, v] : uc.elements) {
+                    m.emplace(k, replace_token(*v, new_cdef));
+                }
+                return usertype_constructor{std::move(m)};
             },
         }, expr);
 }
@@ -1337,6 +1378,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const untyped_constant&) {}
         void operator()(const tuple_constructor&) {}
         void operator()(const collection_constructor&) {}
+        void operator()(const usertype_constructor&) {}
     };
 
     visitor v {

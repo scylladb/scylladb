@@ -226,6 +226,9 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
         [&] (const expr::collection_constructor&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "collection_constructor found its way to selector context");
         },
+        [&] (const expr::usertype_constructor&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "usertype_constructor found its way to selector context");
+        },
     }, raw_selectable);
 }
 
@@ -285,6 +288,9 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
             on_internal_error(slogger, "tuple_constructor found its way to selector context");
         },
         [&] (const expr::collection_constructor&) -> bool {
+            on_internal_error(slogger, "collection_constructor found its way to selector context");
+        },
+        [&] (const expr::usertype_constructor&) -> bool {
             on_internal_error(slogger, "collection_constructor found its way to selector context");
         },
     }, raw_selectable);

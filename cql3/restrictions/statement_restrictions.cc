@@ -250,6 +250,10 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const collection_constructor&) {
             on_internal_error(rlogger, "extract_partition_range(collection_constructor)");
         }
+
+        void operator()(const usertype_constructor&) {
+            on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -358,6 +362,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const collection_constructor&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(collection_constructor)");
+        }
+
+        void operator()(const usertype_constructor&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
         }
     } v;
     std::visit(v, where_clause);
@@ -1077,6 +1085,10 @@ struct multi_column_range_accumulator {
     }
 
     void operator()(const collection_constructor&) {
+        on_internal_error(rlogger, "collection constructor encountered outside binary operator");
+    }
+
+    void operator()(const usertype_constructor&) {
         on_internal_error(rlogger, "collection constructor encountered outside binary operator");
     }
 

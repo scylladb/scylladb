@@ -35,10 +35,11 @@
 
 #include <boost/range/algorithm/count.hpp>
 
-namespace cql3 {
+namespace cql3::expr {
 
+static
 lw_shared_ptr<column_specification>
-user_types::field_spec_of(const column_specification& column, size_t field) {
+usertype_field_spec_of(const column_specification& column, size_t field) {
     auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
     auto&& name = ut->field_name(field);
     auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
@@ -49,23 +50,9 @@ user_types::field_spec_of(const column_specification& column, size_t field) {
                                    ut->field_type(field));
 }
 
-sstring
-user_types::literal::to_string() const {
-    auto kv_to_str = [] (auto&& kv) { return format("{}:{}", kv.first, kv.second); };
-    return format("{{{}}}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
-}
-
-sstring
-user_types::literal::assignment_testable_source_context() const {
-    return to_string();
-}
-
-user_types::literal::literal(elements_map_type entries)
-        : _entries(std::move(entries)) {
-}
-
+static
 void
-user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
+usertype_constructor_validate_assignable_to(const usertype_constructor& u, database& db, const sstring& keyspace, const column_specification& receiver) {
     if (!receiver.type->is_user_type()) {
         throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
     }
@@ -73,47 +60,49 @@ user_types::literal::validate_assignable_to(database& db, const sstring& keyspac
     auto ut = static_pointer_cast<const user_type_impl>(receiver.type);
     for (size_t i = 0; i < ut->size(); i++) {
         column_identifier field(to_bytes(ut->field_name(i)), utf8_type);
-        if (!_entries.contains(field)) {
+        if (!u.elements.contains(field)) {
             continue;
         }
-        const shared_ptr<term::raw>& value = _entries.at(field);
-        auto&& field_spec = field_spec_of(receiver, i);
+        const shared_ptr<term::raw>& value = as_term_raw(*u.elements.at(field));
+        auto&& field_spec = usertype_field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *field_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
         }
     }
 }
 
+static
 assignment_testable::test_result
-user_types::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+usertype_constructor_test_assignment(const usertype_constructor& u, database& db, const sstring& keyspace, const column_specification& receiver) {
     try {
-        validate_assignable_to(db, keyspace, receiver);
+        usertype_constructor_validate_assignable_to(u, db, keyspace, receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     } catch (exceptions::invalid_request_exception& e) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
 }
 
+static
 shared_ptr<term>
-user_types::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+usertype_constructor_prepare_term(const usertype_constructor& u, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-    validate_assignable_to(db, keyspace, *receiver);
+    usertype_constructor_validate_assignable_to(u, db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
     std::vector<shared_ptr<term>> values;
-    values.reserve(_entries.size());
+    values.reserve(u.elements.size());
     size_t found_values = 0;
     for (size_t i = 0; i < ut->size(); ++i) {
         auto&& field = column_identifier(to_bytes(ut->field_name(i)), utf8_type);
-        auto iraw = _entries.find(field);
+        auto iraw = u.elements.find(field);
         shared_ptr<term::raw> raw;
-        if (iraw == _entries.end()) {
+        if (iraw == u.elements.end()) {
             raw = expr::as_term_raw(expr::null());
         } else {
-            raw = iraw->second;
+            raw = expr::as_term_raw(*iraw->second);
             ++found_values;
         }
-        auto&& value = raw->prepare(db, keyspace, field_spec_of(*receiver, i));
+        auto&& value = raw->prepare(db, keyspace, usertype_field_spec_of(*receiver, i));
 
         if (dynamic_cast<non_terminal*>(value.get())) {
             all_terminal = false;
@@ -121,9 +110,9 @@ user_types::literal::prepare(database& db, const sstring& keyspace, const column
 
         values.push_back(std::move(value));
     }
-    if (found_values != _entries.size()) {
+    if (found_values != u.elements.size()) {
         // We had some field that are not part of the type
-        for (auto&& id_val : _entries) {
+        for (auto&& id_val : u.elements) {
             auto&& id = id_val.first;
             if (!boost::range::count(ut->field_names(), id.bytes_)) {
                 throw exceptions::invalid_request_exception(format("Unknown field '{}' in value of user defined type {}", id, ut->get_name_as_string()));
@@ -131,17 +120,13 @@ user_types::literal::prepare(database& db, const sstring& keyspace, const column
         }
     }
 
-    delayed_value value(ut, values);
+    user_types::delayed_value value(ut, values);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared<delayed_value>(std::move(value));
+        return make_shared<user_types::delayed_value>(std::move(value));
     }
 }
-
-}
-
-namespace cql3::expr {
 
 extern logging::logger expr_logger;
 
@@ -897,6 +882,9 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
             }
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
+        [&] (const usertype_constructor& uc) -> ::shared_ptr<term> {
+            return usertype_constructor_prepare_term(uc, db, keyspace, receiver);
+        },
     }, _expr);
 }
 
@@ -960,6 +948,9 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
             }
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
+        [&] (const usertype_constructor& uc) -> test_result {
+            return usertype_constructor_test_assignment(uc, db, keyspace, receiver);
+        },
     }, _expr);
 }
 
@@ -1006,6 +997,11 @@ maps::value_spec_of(const column_specification& column) {
 lw_shared_ptr<column_specification>
 sets::value_spec_of(const column_specification& column) {
     return cql3::expr::set_value_spec_of(column);
+}
+
+lw_shared_ptr<column_specification>
+user_types::field_spec_of(const column_specification& column, size_t field) {
+    return cql3::expr::usertype_field_spec_of(column, field);
 }
 
 }

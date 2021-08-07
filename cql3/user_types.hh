@@ -57,21 +57,6 @@ class user_types {
 public:
     static lw_shared_ptr<column_specification> field_spec_of(const column_specification& column, size_t field);
 
-    class literal : public term::raw {
-    public:
-        using elements_map_type = std::unordered_map<column_identifier, shared_ptr<term::raw>>;
-        elements_map_type _entries;
-
-        literal(elements_map_type entries);
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const override;
-    private:
-        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
-    public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
-        virtual sstring assignment_testable_source_context() const override;
-        virtual sstring to_string() const override;
-    };
-
     class value : public multi_item_terminal {
         std::vector<managed_bytes_opt> _elements;
     public:
