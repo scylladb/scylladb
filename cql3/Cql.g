@@ -1465,7 +1465,11 @@ collectionLiteral returns [shared_ptr<cql3::term::raw> value]
 	@init{ std::vector<shared_ptr<cql3::term::raw>> l; }
     : '['
           ( t1=term { l.push_back(t1); } ( ',' tn=term { l.push_back(tn); } )* )?
-      ']' { $value = ::make_shared<cql3::lists::literal>(std::move(l)); }
+      ']' { $value = cql3::expr::as_term_raw(
+                        cql3::expr::collection_constructor{
+                            cql3::expr::collection_constructor::style_type::list,
+                            boost::copy_range<std::vector<cql3::expr::expression>>(std::move(l) | boost::adaptors::transformed(cql3::expr::as_expression))
+                        }); }
     | '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).

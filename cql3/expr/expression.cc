@@ -566,6 +566,9 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const tuple_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: tuple_constructor cannot serve as the LHS of a binary expression (yet!)");
             },
+            [] (const collection_constructor&) -> bool {
+                on_internal_error(expr_logger, "is_satisified_by: collection_constructor cannot serve as the LHS of a binary expression");
+            },
         }, *opr.lhs);
 }
 
@@ -616,6 +619,9 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             },
             [] (const tuple_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a tuple constructor cannot serve as a restriction by itself");
+            },
+            [] (const collection_constructor&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a collection constructor cannot serve as a restriction by itself");
             },
         }, restr);
 }
@@ -868,6 +874,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const tuple_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: tuple constructors are not supported as the LHS of a binary expression yet");
                         },
+                        [] (const collection_constructor&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: collection constructors are not supported as the LHS of a binary expression");
+                        },
                     }, *oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -908,6 +917,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const tuple_constructor&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: an tuple constructor cannot serve as a restriction by itself");
+            },
+            [] (const collection_constructor&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a collection constructor cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -981,6 +993,9 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const tuple_constructor&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: tuple constructors are not supported as the LHS of a binary expression yet");
+                        },
+                        [&] (const collection_constructor&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: collection constructors are not supported as the LHS of a binary expression");
                         },
                     }, *oper.lhs);
             },
@@ -1074,6 +1089,12 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const tuple_constructor& tc) {
                 fmt::print(os, "({})", join(", ", tc.elements));
             },
+            [&] (const collection_constructor& cc) {
+                switch (cc.style) {
+                case collection_constructor::style_type::list: fmt::print(os, "{}", std::to_string(cc.elements)); return;
+                }
+                on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(cc.style)));
+            },
         }, expr);
     return os;
 }
@@ -1127,6 +1148,16 @@ expression replace_column_def(const expression& expr, const column_definition* n
                         )
                      }
                  };
+            },
+            [&] (const collection_constructor& c) {
+                return expression{
+                    collection_constructor{
+                        c.style,
+                        boost::copy_range<std::vector<expression>>(
+                            c.elements | boost::adaptors::transformed(std::bind(replace_column_def, std::placeholders::_1, new_cdef))
+                        )
+                    }
+                };
             },
         }, expr);
 }
@@ -1185,6 +1216,13 @@ expression replace_token(const expression& expr, const column_definition* new_cd
                 return tuple_constructor{boost::copy_range<std::vector<expression>>(
                     tc.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef))
                 )};
+            },
+            [&] (const collection_constructor& c) -> expression {
+                return collection_constructor{
+                    c.style,
+                    boost::copy_range<std::vector<expression>>(
+                        c.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef)))
+                };
             },
         }, expr);
 }
@@ -1277,6 +1315,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const bind_variable&) {}
         void operator()(const untyped_constant&) {}
         void operator()(const tuple_constructor&) {}
+        void operator()(const collection_constructor&) {}
     };
 
     visitor v {

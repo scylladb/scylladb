@@ -30,73 +30,72 @@
 #include "cql3/tuples.hh"
 #include "types/list.hh"
 
-namespace cql3 {
+namespace cql3::expr {
 
-sstring
-lists::literal::to_string() const {
-    return std::to_string(_elements);
-}
-
+static
 lw_shared_ptr<column_specification>
-lists::value_spec_of(const column_specification& column) {
+list_value_spec_of(const column_specification& column) {
     return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
                 dynamic_cast<const list_type_impl&>(column.type->without_reversed()).get_elements_type());
 }
 
+static
 void
-lists::literal::validate_assignable_to(database& db, const sstring keyspace, const column_specification& receiver) const {
+list_validate_assignable_to(const collection_constructor& c, database& db, const sstring keyspace, const column_specification& receiver) {
     if (!receiver.type->without_reversed().is_list()) {
         throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
                 *receiver.name, receiver.type->as_cql3_type()));
     }
-    auto&& value_spec = value_spec_of(receiver);
-    for (auto rt : _elements) {
-        if (!is_assignable(rt->test_assignment(db, keyspace, *value_spec))) {
+    auto&& value_spec = list_value_spec_of(receiver);
+    for (auto& rt : c.elements) {
+        if (!is_assignable(as_term_raw(rt)->test_assignment(db, keyspace, *value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: value {} is not of type {}",
-                    *receiver.name, *rt, value_spec->type->as_cql3_type()));
+                    *receiver.name, rt, value_spec->type->as_cql3_type()));
         }
     }
 }
 
+static
 assignment_testable::test_result
-lists::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+list_test_assignment(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification& receiver) {
     if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
 
     // If there is no elements, we can't say it's an exact match (an empty list if fundamentally polymorphic).
-    if (_elements.empty()) {
+    if (c.elements.empty()) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
 
-    auto&& value_spec = value_spec_of(receiver);
+    auto&& value_spec = list_value_spec_of(receiver);
     std::vector<shared_ptr<assignment_testable>> to_test;
-    to_test.reserve(_elements.size());
-    std::copy(_elements.begin(), _elements.end(), std::back_inserter(to_test));
+    to_test.reserve(c.elements.size());
+    boost::copy(c.elements | boost::adaptors::transformed(as_term_raw), std::back_inserter(to_test));
     return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
 }
 
 
+static
 shared_ptr<term>
-lists::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+list_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
     auto receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-    validate_assignable_to(db, keyspace, *receiver);
+    list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
     // other words a non-frozen collection only exists if it has elements. Return nullptr right
     // away to simplify predicate evaluation. See also
     // https://issues.apache.org/jira/browse/CASSANDRA-5141
-    if (receiver->type->is_multi_cell() &&  _elements.empty()) {
+    if (receiver->type->is_multi_cell() &&  c.elements.empty()) {
         return cql3::constants::NULL_VALUE;
     }
 
-    auto&& value_spec = value_spec_of(*receiver);
+    auto&& value_spec = list_value_spec_of(*receiver);
     std::vector<shared_ptr<term>> values;
-    values.reserve(_elements.size());
+    values.reserve(c.elements.size());
     bool all_terminal = true;
-    for (auto rt : _elements) {
-        auto&& t = rt->prepare(db, keyspace, value_spec);
+    for (auto& rt : c.elements) {
+        auto&& t = as_term_raw(rt)->prepare(db, keyspace, value_spec);
 
         if (t->contains_bind_marker()) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -106,17 +105,13 @@ lists::literal::prepare(database& db, const sstring& keyspace, const column_spec
         }
         values.push_back(std::move(t));
     }
-    delayed_value value(values);
+    lists::delayed_value value(values);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared<delayed_value>(std::move(value));
+        return make_shared<lists::delayed_value>(std::move(value));
     }
 }
-
-}
-
-namespace cql3::expr {
 
 static
 lw_shared_ptr<column_specification>
@@ -571,6 +566,12 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const tuple_constructor& tc) -> ::shared_ptr<term> {
             return tuple_constructor_prepare_term(tc, db, keyspace, receiver);
         },
+        [&] (const collection_constructor& c) -> ::shared_ptr<term> {
+            switch (c.style) {
+            case collection_constructor::style_type::list: return list_prepare_term(c, db, keyspace, receiver);
+            }
+            on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
+        },
     }, _expr);
 }
 
@@ -626,6 +627,12 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         [&] (const tuple_constructor& tc) -> test_result {
             return tuple_constructor_test_assignment(tc, db, keyspace, receiver);
         },
+        [&] (const collection_constructor& c) -> test_result {
+            switch (c.style) {
+            case collection_constructor::style_type::list: return list_test_assignment(c, db, keyspace, receiver);
+            }
+            on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
+        },
     }, _expr);
 }
 
@@ -649,5 +656,14 @@ term_raw_expr::assignment_testable_source_context() const {
     }, _expr);
 }
 
+
+}
+
+namespace cql3 {
+
+lw_shared_ptr<column_specification>
+lists::value_spec_of(const column_specification& column) {
+    return cql3::expr::list_value_spec_of(column);
+}
 
 }

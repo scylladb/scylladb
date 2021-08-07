@@ -86,12 +86,13 @@ struct null;
 struct bind_variable;
 struct untyped_constant;
 struct tuple_constructor;
+struct collection_constructor;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
                                 field_selection, term_raw_ptr, null, bind_variable, untyped_constant,
-                                tuple_constructor>;
+                                tuple_constructor, collection_constructor>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -221,6 +222,13 @@ struct tuple_constructor {
     std::vector<expression> elements;
 };
 
+// Constructs a collection of same-typed elements
+struct collection_constructor {
+    enum class style_type { list };
+    style_type style;
+    std::vector<expression> elements;
+};
+
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
@@ -332,6 +340,14 @@ const binary_operator* find_atom(const expression& e, Fn f) {
                 }
                 return nullptr;
             },
+            [&] (const collection_constructor& c) -> const binary_operator* {
+                for (auto& e : c.elements) {
+                    if (auto found = find_atom(e, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
         }, e);
 }
 
@@ -374,6 +390,10 @@ size_t count_if(const expression& e, Fn f) {
             },
             [&] (const tuple_constructor& t) -> size_t {
                 return std::accumulate(t.elements.cbegin(), t.elements.cend(), size_t{0},
+                                       [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
+            },
+            [&] (const collection_constructor& c) -> size_t {
+                return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
                                        [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
             },
         }, e);
