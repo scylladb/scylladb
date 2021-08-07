@@ -30,6 +30,92 @@
 #include "cql3/tuples.hh"
 #include "types/list.hh"
 
+namespace cql3 {
+
+sstring
+lists::literal::to_string() const {
+    return std::to_string(_elements);
+}
+
+lw_shared_ptr<column_specification>
+lists::value_spec_of(const column_specification& column) {
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
+            ::make_shared<column_identifier>(format("value({})", *column.name), true),
+                dynamic_cast<const list_type_impl&>(column.type->without_reversed()).get_elements_type());
+}
+
+void
+lists::literal::validate_assignable_to(database& db, const sstring keyspace, const column_specification& receiver) const {
+    if (!receiver.type->without_reversed().is_list()) {
+        throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
+                *receiver.name, receiver.type->as_cql3_type()));
+    }
+    auto&& value_spec = value_spec_of(receiver);
+    for (auto rt : _elements) {
+        if (!is_assignable(rt->test_assignment(db, keyspace, *value_spec))) {
+            throw exceptions::invalid_request_exception(format("Invalid list literal for {}: value {} is not of type {}",
+                    *receiver.name, *rt, value_spec->type->as_cql3_type()));
+        }
+    }
+}
+
+assignment_testable::test_result
+lists::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
+
+    // If there is no elements, we can't say it's an exact match (an empty list if fundamentally polymorphic).
+    if (_elements.empty()) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+
+    auto&& value_spec = value_spec_of(receiver);
+    std::vector<shared_ptr<assignment_testable>> to_test;
+    to_test.reserve(_elements.size());
+    std::copy(_elements.begin(), _elements.end(), std::back_inserter(to_test));
+    return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
+}
+
+
+shared_ptr<term>
+lists::literal::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) const {
+    auto receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+    validate_assignable_to(db, keyspace, *receiver);
+
+    // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
+    // other words a non-frozen collection only exists if it has elements. Return nullptr right
+    // away to simplify predicate evaluation. See also
+    // https://issues.apache.org/jira/browse/CASSANDRA-5141
+    if (receiver->type->is_multi_cell() &&  _elements.empty()) {
+        return cql3::constants::NULL_VALUE;
+    }
+
+    auto&& value_spec = value_spec_of(*receiver);
+    std::vector<shared_ptr<term>> values;
+    values.reserve(_elements.size());
+    bool all_terminal = true;
+    for (auto rt : _elements) {
+        auto&& t = rt->prepare(db, keyspace, value_spec);
+
+        if (t->contains_bind_marker()) {
+            throw exceptions::invalid_request_exception(format("Invalid list literal for {}: bind variables are not supported inside collection literals", *receiver->name));
+        }
+        if (dynamic_pointer_cast<non_terminal>(t)) {
+            all_terminal = false;
+        }
+        values.push_back(std::move(t));
+    }
+    delayed_value value(values);
+    if (all_terminal) {
+        return value.bind(query_options::DEFAULT);
+    } else {
+        return make_shared<delayed_value>(std::move(value));
+    }
+}
+
+}
+
 namespace cql3::expr {
 
 static
