@@ -123,7 +123,7 @@ template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
 void fsm::advance_commit_idx(index_t leader_commit_idx) {
 
-    auto new_commit_idx = std::min(leader_commit_idx, _log.stable_idx());
+    auto new_commit_idx = std::min(leader_commit_idx, _log.last_idx());
 
     logger.trace("advance_commit_idx[{}]: leader_commit_idx={}, new_commit_idx={}",
         _my_id, leader_commit_idx, new_commit_idx);
@@ -169,7 +169,6 @@ void fsm::become_leader() {
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
     logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
-    replicate();
 }
 
 void fsm::become_follower(server_id leader) {
@@ -303,6 +302,10 @@ fsm_output fsm::get_output() {
             broadcast_read_quorum(leader_state().last_read_id);
             leader_state().last_read_id_changed = false;
         }
+        // replicate accumulated entries
+        if (diff) {
+            replicate();
+        }
     }
 
     fsm_output output = std::exchange(_output, fsm_output{});
@@ -388,7 +391,6 @@ void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
     logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
-        replicate();
         auto leader_progress = leader_state().tracker.find(_my_id);
         if (leader_progress) {
             // If this server is leader and is part of the current
@@ -517,10 +519,10 @@ void fsm::tick_leader() {
             case follower_progress::state::SNAPSHOT:
                 continue;
             }
-            if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
-                logger.trace("tick[{}]: replicate to {} because match={} < stable={} || "
+            if (progress.match_idx < _log.last_idx() || progress.commit_idx < _commit_idx) {
+                logger.trace("tick[{}]: replicate to {} because match={} < last_idx={} || "
                     "follower commit_idx={} < commit_idx={}",
-                    _my_id, progress.id, progress.match_idx, _log.stable_idx(),
+                    _my_id, progress.id, progress.match_idx, _log.last_idx(),
                     progress.commit_idx, _commit_idx);
 
                 replicate_to(progress, true);
@@ -835,10 +837,10 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
     while (progress.can_send_to()) {
         index_t next_idx = progress.next_idx;
-        if (progress.next_idx > _log.stable_idx()) {
+        if (progress.next_idx > _log.last_idx()) {
             next_idx = index_t(0);
-            logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
-                    _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
+            logger.trace("replicate_to[{}->{}]: next past last next={} stable={}, empty={}",
+                    _my_id, progress.id, progress.next_idx, _log.last_idx(), allow_empty);
             if (!allow_empty) {
                 // Send out only persisted entries.
                 return;
@@ -882,7 +884,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         if (next_idx) {
             size_t size = 0;
-            while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
+            while (next_idx <= _log.last_idx() && size < _config.append_request_threshold) {
                 const auto& entry = _log[next_idx];
                 req.entries.push_back(entry);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",

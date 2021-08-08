@@ -714,6 +714,11 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
     BOOST_CHECK(output.committed.empty());
+    // accept dummy entry, otherwise no more entries will be sent
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    auto msg = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = msg.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     raft::configuration newcfg({id1, id2, id3});
     // Suggest a confchange.
@@ -729,14 +734,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     // Once it's committed, it will be replicated.
     // The output must contain messages both for id2 and id3
     BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
-    // Calling get_output() again indicates the previous output
-    // is handled, i.e. the log entry is committed, so now
-    // the leader will replicate the confchange
-    output = fsm.get_output();
-    // Append entry for id2
-    BOOST_CHECK_EQUAL(output.messages.size(), 1);
-    auto msg = std::get<raft::append_request>(output.messages.back().second);
-    auto idx = msg.entries.back().get()->idx;
+    // Append entry for id2 and id3
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    msg = std::get<raft::append_request>(output.messages.back().second);
+    idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
     // Strictly speaking the new node needs to install a snapshot,
@@ -754,7 +755,6 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     output = fsm.get_output();
     // A log entry for the final configuration
     BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
-    output = fsm.get_output();
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
     msg = std::get<raft::append_request>(output.messages.back().second);
@@ -801,6 +801,12 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
+    // accept dummy entry, otherwise no more entries will be sent
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    auto msg = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = msg.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    fsm.step(id3, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     raft::configuration newcfg({id1, id2});
     // Suggest a confchange.
@@ -817,48 +823,35 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
         BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
     }
     BOOST_CHECK_EQUAL(output.messages.size(), 2); // Configuration change sent to id2 and id3
-    raft::append_request msg;
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
     BOOST_CHECK_EQUAL(msg.entries.size(), 1);
-    auto idx = msg.entries.back().get()->idx;
+    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    idx = msg.entries.back().get()->idx;
+    BOOST_CHECK_EQUAL(idx, 102);
+    // Ack AppendEntries for the joint configuration
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
+    // Final configuration is proposed
     output = fsm.get_output();
     // AppendEntries messages for the final configuration
-    BOOST_CHECK(output.messages.size() >= 1);
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
 
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+    // A log entry for the final configuration
     BOOST_CHECK_EQUAL(msg.entries.size(), 1);
-    if (msg.entries.size()) {
+    if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
     }
-    idx = msg.entries.back().get()->idx;
-    BOOST_CHECK_EQUAL(idx, 102);
-    // Ack AppendEntries for the joint configuration
-    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
-    output = fsm.get_output();
-    // A log entry for the final configuration
-    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
-    if (output.log_entries.size()) {
-        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
-    }
+    idx = msg.entries.back().get()->idx;
+    BOOST_CHECK_EQUAL(idx, 103);
 
     BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 
-    output = fsm.get_output();
-    BOOST_CHECK_EQUAL(output.messages.size(), 1);
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
-    if (msg.entries.size()) {
-        BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
-    }
-    idx = msg.entries.back().get()->idx;
-    BOOST_CHECK_EQUAL(idx, 103);
-    // Ack AppendEntries for the final configuration
+    // Ack AppendEntries for final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     // Check that we can start a new confchange
@@ -892,6 +885,12 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
     BOOST_CHECK(output.committed.empty());
+    // accept dummy entry, otherwise no more entries will be sent
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    auto msg = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = msg.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    fsm.step(id3, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     raft::configuration newcfg({id1, id2, id4});
     // Suggest a confchange.
@@ -901,31 +900,18 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 3);
     output = fsm.get_output();
-    BOOST_CHECK_EQUAL(output.messages.size(), 2);
-    raft::append_request msg;
-    if (output.messages.size() > 0) {
-        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
-    }
-    if (output.messages.size() > 1) {
-        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[1].second));
-        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
-    }
-
-    output = fsm.get_output();
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    auto idx = msg.entries.back().get()->idx;
+    idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need two ACK, since there is a quorum overlap.
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     BOOST_CHECK(!fsm.get_configuration().is_joint());
-    // Joint config to log
+    // final config to log
     output = fsm.get_output();
     BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
     }
-    output = fsm.get_output();
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
     msg = std::get<raft::append_request>(output.messages.back().second);
@@ -959,7 +945,6 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     BOOST_CHECK(fsm.is_leader());
 
     // make id2's match idx to be up-to-date
-    (void)fsm.get_output(); // Replication will not start until first get_output() call
     output = fsm.get_output();
     auto append = std::get<raft::append_request>(output.messages.back().second);
     auto idx = append.entries.back()->idx;
@@ -984,7 +969,6 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     output = fsm.get_output();
     fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
     BOOST_CHECK(fsm.is_leader());
-    (void)fsm.get_output(); // causes dummy to be replicate
     output = fsm.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
@@ -1020,7 +1004,6 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
     BOOST_CHECK(fsm.is_leader());
     // Commit dummy entry
-    (void)fsm.get_output(); // causes dummy to be replicate
     output = fsm.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
@@ -1029,14 +1012,12 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     // Drop the leader from the current config and see that stepdown message is sent
     raft::configuration newcfg({{id2}, {id3, false}});
     fsm.add_entry(newcfg);
-    (void)fsm.get_output(); // send it out
     output = fsm.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
     // Accept joint config entry on id2
     fsm.step(id2, raft::append_reply{fsm.get_current_term(), idx, raft::append_reply::accepted{idx}});
     // fms added new config to the log
-    (void)fsm.get_output(); // send it out
     output = fsm.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
@@ -1055,12 +1036,10 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
 
     raft::fsm fsm2(id1, term_t{1}, /* voted for */ server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
 
-
     election_timeout(fsm2);
     // Turn to a leader
     fsm2.step(id2, raft::vote_reply{fsm2.get_current_term(), true});
     BOOST_CHECK(fsm2.is_leader());
-    (void)fsm2.get_output(); // send out dummy entry
     output = fsm2.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
@@ -1072,7 +1051,6 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     // Drop the leader from the current config and see that stepdown message is sent
     raft::configuration newcfg2({{id2}, {id3}});
     fsm2.add_entry(newcfg2);
-    (void)fsm2.get_output(); // send it out
     output = fsm2.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
@@ -1080,12 +1058,13 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
     // Accept joint config entry on id3
     fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
-    // fms added new config to the log
-    (void)fsm2.get_output(); // send it out
-    fsm2.add_entry(raft::command{}); // add one more command that will be not replicated yet
+    // fsm added new config entry
     output = fsm2.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
+
+    fsm2.add_entry(raft::command{}); // add one more command that will be not replicated yet
+
     // Accept new config entry on id2
     fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
     // Accept new config entry on id3
@@ -2187,9 +2166,7 @@ BOOST_AUTO_TEST_CASE(test_read_barrier) {
     // Enter joint config
     raft::configuration newcfg({A_id, E_id});
     A.add_entry(newcfg);
-    // Process log storing event
-    output = A.get_output();
-    // Drop append_entries messages
+    // Process log storing event and drop append_entries messages
     output = A.get_output();
 
     // start read barrier

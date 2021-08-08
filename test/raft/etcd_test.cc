@@ -63,26 +63,29 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     // Dummy entry local
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(output.messages.size() == 1);
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    // accept dummy entry
+    auto msg = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = msg.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     const raft::follower_progress& fprogress = fsm.get_progress(id1);
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 1; i < 6; ++i) {
         // NOTE: in etcd leader's own progress seems to be PIPELINE
         BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
-        BOOST_CHECK(fprogress.match_idx == i + 1);
-        BOOST_CHECK(fprogress.next_idx == i + 2);
+        BOOST_CHECK(fprogress.match_idx == i);
+        BOOST_CHECK(fprogress.next_idx == i + 1);
 
-        raft::command cmd = create_command(i + 1);
+        raft::command cmd = create_command(i);
         raft::log_entry le = fsm.add_entry(std::move(cmd));
 
-        do {
-            output = fsm.get_output();
-        } while (output.messages.size() == 0);  // Should only loop twice
+        output = fsm.get_output();
 
-        auto msg = std::get<raft::append_request>(output.messages.back().second);
-        auto idx = msg.entries.back()->idx;
-        BOOST_CHECK(idx == i + 1);
+        msg = std::get<raft::append_request>(output.messages.back().second);
+        idx = msg.entries.back()->idx;
+        BOOST_CHECK_EQUAL(idx, i + 1);
         fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     }
 }
@@ -110,14 +113,24 @@ BOOST_AUTO_TEST_CASE(test_progress_resume_by_append_resp) {
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
     const raft::follower_progress& fprogress2 = fsm.get_progress(id2);
-    BOOST_CHECK(!fprogress2.probe_sent);
+    // get dummy entry
+    output = fsm.get_output();
+    BOOST_CHECK(fprogress2.probe_sent); // dummy entry
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    auto dummy = std::get<raft::append_request>(output.messages.back().second);
+
     raft::command cmd = create_command(1);
     raft::log_entry le = fsm.add_entry(std::move(cmd));
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.empty());
 
-    BOOST_CHECK(fprogress2.probe_sent);
+    // ack dummy entry
+    fsm.step(id2, raft::append_reply{dummy.current_term, dummy.entries[0]->idx, raft::append_reply::accepted{dummy.entries[0]->idx}});
+
+    // After the ack mode becomes pipeline and ssending resumes
+    BOOST_CHECK(fprogress.state == raft::follower_progress::state::PIPELINE);
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
 }
 
 // TestProgressPaused
@@ -136,16 +149,11 @@ BOOST_AUTO_TEST_CASE(test_progress_paused) {
     fsm.step(id2, raft::vote_reply{current_term, true});
     BOOST_CHECK(fsm.is_leader());
 
-    fsm.step(id2, raft::vote_reply{current_term, true});
-
     fsm.add_entry(create_command(1));
     fsm.add_entry(create_command(2));
     fsm.add_entry(create_command(3));
-    fsm.tick();
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
-    BOOST_CHECK(output.messages.size() == 1);
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
 }
 
 // TestProgressFlowControl
@@ -167,8 +175,6 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(fsm.is_leader());
 
     fsm.step(id2, raft::vote_reply{current_term, true});
-    // Throw away all the messages relating to the initial election.
-    output = fsm.get_output();
     const raft::follower_progress& fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
@@ -178,9 +184,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     for (auto i = 0; i < 10; ++i) {
         fsm.add_entry(cmd_blob);
     }
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
+    output = fsm.get_output();
 
     BOOST_CHECK(output.messages.size() == 1);
 
@@ -200,9 +204,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     const raft::follower_progress& fprogress2 = fsm.get_progress(id2);
     BOOST_CHECK(fprogress2.state == raft::follower_progress::state::PIPELINE);
 
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
+    output = fsm.get_output();
     // 10 entries: first in 1 msg, then 10 remaining 2 per msg = 5
     BOOST_CHECK(output.messages.size() == 5);
 
@@ -385,7 +387,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     BOOST_CHECK(output.log_entries.size() == 1);
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     BOOST_CHECK(output.committed.size() == 0);
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     index_t dummy_idx{1};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
@@ -408,7 +409,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     fsm.add_entry(std::move(cmd));
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     index_t entry_idx{2};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
@@ -447,7 +447,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     fsm.step(id2, raft::vote_reply{current_term, true});
     BOOST_CHECK(fsm.is_leader());
     output = fsm.get_output();
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     index_t dummy_idx{1};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
@@ -462,7 +461,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     fsm.add_entry(std::move(cmd));
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     // ACK 1st entry
     fsm.step(id2, raft::append_reply{current_term, index_t{2}, raft::append_reply::accepted{index_t{2}}});
@@ -479,7 +477,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     fsm.add_entry(std::move(cmd));
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     // ACK 2nd entry
     index_t second_idx{3};
@@ -781,7 +778,6 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     lep = output1.log_entries.back();
     BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
-    output1 = fsm1.get_output();
 
     // fsm1 dummy, send, gets specified number of replies (would commit if quorum)
     BOOST_CHECK(output1.messages.size() == nodes - 1);
@@ -806,8 +802,6 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     BOOST_CHECK(output1.log_entries.size() == 1);
 
-    // entry propagates
-    output1 = fsm1.get_output();
     // Send append to nodes who accepted dummy
     BOOST_CHECK(output1.messages.size() == accepting.size());
     for (auto& [id, msg] : output1.messages) {
