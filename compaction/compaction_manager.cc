@@ -595,7 +595,7 @@ void compaction_manager::submit(column_family* cf) {
             _stats.pending_tasks--;
             _stats.active_tasks++;
             task->compaction_running = true;
-            return cf.run_compaction(std::move(descriptor)).then_wrapped([this, task, compacting = std::move(compacting), weight_r = std::move(weight_r)] (future<> f) mutable {
+            return cf.compact_sstables(std::move(descriptor)).then_wrapped([this, task, compacting = std::move(compacting), weight_r = std::move(weight_r)] (future<> f) mutable {
                 _stats.active_tasks--;
                 task->compaction_running = false;
 
@@ -724,7 +724,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
                 return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
                     return with_scheduling_group(_maintenance_sg.cpu, [this, &cf, descriptor = std::move(descriptor)]() mutable {
-                        return cf.run_compaction(std::move(descriptor));
+                        return cf.compact_sstables(std::move(descriptor));
                     });
                 });
             }).then_wrapped([this, task, compacting] (future<> f) mutable {
