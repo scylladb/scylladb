@@ -45,6 +45,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/relation.hh"
 #include "cql3/attributes.hh"
+#include "db/config.hh"
 #include <seastar/core/shared_ptr.hh>
 
 namespace cql3 {
@@ -150,7 +151,10 @@ private:
     bool is_reversed(const schema& schema) const;
 
     /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
-    void check_needs_filtering(const restrictions::statement_restrictions& restrictions);
+    void check_needs_filtering(
+            const restrictions::statement_restrictions& restrictions,
+            db::tri_mode_restriction_t::mode strict_allow_filtering,
+            std::vector<sstring>& warnings);
 
     void ensure_filtering_columns_retrieval(database& db,
                                             selection::selection& selection,

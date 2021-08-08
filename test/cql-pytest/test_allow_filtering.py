@@ -121,7 +121,6 @@ def test_allow_filtering_regular_column(cql, table1):
 # partition it needs to inspect the promoted index and in the worst case,
 # also read a chunk of rows to look for the matching clustering-column value.
 # Reproduces issue #7608.
-@pytest.mark.xfail(reason="issue #7608")
 def test_allow_filtering_clustering_key(cql, table1):
     check_af_mandatory(cql, table1, 'c=2', lambda row: row.c==2)
     check_af_mandatory(cql, table1, 'c>2', lambda row: row.c>2)
@@ -136,7 +135,6 @@ def test_allow_filtering_clustering_key(cql, table1):
 # ranges - because although they are finite, they may still contain a lot
 # of partitions.
 # Reproduces issue #7608.
-@pytest.mark.xfail(reason="issue #7608")
 def test_allow_filtering_clustering_key_token_range(cql, table1):
     # TODO: the current implementation of check_af_mandatory() doesn't know
     # how to request or compare results with the token, so we pass None to
@@ -153,7 +151,6 @@ def test_allow_filtering_clustering_key_token_range(cql, table1):
 # this case. Note that 'c=2 AND k = 123' (without the "token"), which
 # is guaranteed to match just one partition, doesn't need ALLOW FILTERING.
 # Reproduces issue #7608.
-@pytest.mark.xfail(reason="issue #7608")
 def test_allow_filtering_clustering_key_token_specific(cql, table1):
     check_af_mandatory(cql, table1, 'c=2 AND token(k) = 123', None)
     check_af_optional(cql, table1, 'c=2 AND k = 123', None)
@@ -236,6 +233,12 @@ def table3(cql, test_keyspace):
     wait_for_index(cql, table, 'b', everything)
     yield (table, everything)
     cql.execute("DROP TABLE " + table)
+
+def test_allow_filtering_multi_column(cql, table3):
+    """Multi-column restrictions are just like other clustering restrictions"""
+    check_af_mandatory(cql, table3, '(c1,c2)=(10,10)', lambda row: row.c1==10 and row.c2==10)
+    check_af_optional(cql, table3, '(c1,c2)=(10,10) and k1=1 and k2=1',
+            lambda row: row.c1==10 and row.c2==10 and row.k1==1 and row.k2==1)
 
 # In test_allow_filtering_indexed_a_and_k() above we noted that the
 # combination of an indexed column and the partition key can be searched

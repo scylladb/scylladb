@@ -73,9 +73,11 @@ public:
     std::vector<uint16_t> partition_key_bind_indices;
     std::vector<sstring> warnings;
 
-    prepared_statement(seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_, std::vector<uint16_t> partition_key_bind_indices);
+    prepared_statement(seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
+                       std::vector<uint16_t> partition_key_bind_indices, std::vector<sstring> warnings = {});
 
-    prepared_statement(seastar::shared_ptr<cql_statement> statement_, const prepare_context& ctx, const std::vector<uint16_t>& partition_key_bind_indices);
+    prepared_statement(seastar::shared_ptr<cql_statement> statement_, const prepare_context& ctx, const std::vector<uint16_t>& partition_key_bind_indices,
+                       std::vector<sstring> warnings = {});
 
     prepared_statement(seastar::shared_ptr<cql_statement> statement_, prepare_context&& ctx, std::vector<uint16_t>&& partition_key_bind_indices);
 

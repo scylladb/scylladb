@@ -26,6 +26,7 @@
 
 #include "cql3/cql_config.hh"
 #include "cql3/values.hh"
+#include "db/config.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"
@@ -926,4 +927,52 @@ SEASTAR_THREAD_TEST_CASE(tuples) {
         require_rows(e, "select q from t where q>=(2) allow filtering", {{make_tuple({int32_type}, {2})}});
         require_rows(e, "select q from t where q>(99) allow filtering", {});
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(strict_allow_filtering) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_allow_filtering(db::tri_mode_restriction_t::mode::TRUE);
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c int, primary key (p,c))");
+        require_rows(e, "select p from t where c>0 allow filtering", {});
+        BOOST_REQUIRE_EXCEPTION(
+                e.execute_cql("select p from t where c>0").get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("use ALLOW FILTERING"));
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(nonstrict_allow_filtering) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_allow_filtering(db::tri_mode_restriction_t::mode::FALSE);
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c int, primary key (p,c))");
+        require_rows(e, "select p from t where c>0 allow filtering", {});
+        require_rows(e, "select p from t where c>0", {});
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(warn_strict_allow_filtering) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_allow_filtering(db::tri_mode_restriction_t::mode::WARN);
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c int, primary key (p,c))");
+        require_rows(e, "select p from t where c>0 allow filtering", {});
+        require_rows(e, "select p from t where c>0", {});
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(strict_allow_filtering_live_update) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_allow_filtering(db::tri_mode_restriction_t::mode::FALSE);
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c int, primary key (p,c))");
+        const char* stmt = "select p from t where c>0";
+        require_rows(e, stmt, {});
+        cfg->strict_allow_filtering(db::tri_mode_restriction_t::mode::TRUE);
+        BOOST_REQUIRE_EXCEPTION(
+                e.execute_cql(stmt).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("use ALLOW FILTERING"));
+    }, cfg).get();
 }
