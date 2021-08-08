@@ -1832,7 +1832,7 @@ SEASTAR_TEST_CASE(test_filtering_indexed_column) {
             });
         });
         eventually([&] {
-            auto msg = cquery_nofail(e, "select d from ks.test_index where c > 25;");
+            auto msg = cquery_nofail(e, "select d from ks.test_index where c > 25 allow filtering;");
             assert_that(msg).is_rows().with_rows({{int32_type->decompose(44)}});
         });
     });
@@ -1850,16 +1850,16 @@ SEASTAR_TEST_CASE(indexed_multicolumn_where) {
         cquery_nofail(e, "create index i1 on t(c1)");
         cquery_nofail(e, "insert into t(p, c1, c2) values (1, 11, 21)");
         cquery_nofail(e, "insert into t(p, c1, c2) values (2, 12, 22)");
-        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21)", {{I(11)}});
-        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22)", {});
-        eventually_require_rows(e, "select c1 from t where (c1)=(12)", {{I(12)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21) allow filtering", {{I(11)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22) allow filtering", {});
+        eventually_require_rows(e, "select c1 from t where (c1)=(12) allow filtering", {{I(12)}});
         cquery_nofail(e, "create index i2 on t(c2)");
-        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21)", {{I(11)}});
-        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22)", {});
-        eventually_require_rows(e, "select c1 from t where (c1)=(12)", {{I(12)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21) allow filtering", {{I(11)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22) allow filtering", {});
+        eventually_require_rows(e, "select c1 from t where (c1)=(12) allow filtering", {{I(12)}});
         cquery_nofail(e, "drop index i1");
-        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21)", {{I(11)}});
-        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22)", {});
-        eventually_require_rows(e, "select c1 from t where (c1)=(12)", {{I(12)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21) allow filtering", {{I(11)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22) allow filtering", {});
+        eventually_require_rows(e, "select c1 from t where (c1)=(12) allow filtering", {{I(12)}});
     });
 }
