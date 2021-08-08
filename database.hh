@@ -882,7 +882,10 @@ public:
     void trigger_compaction();
     void try_trigger_compaction() noexcept;
     future<> run_compaction(sstables::compaction_descriptor descriptor);
+
+    // Trigger offstrategy compaction in the background
     void trigger_offstrategy_compaction();
+    // Perform offstrategy compaction
     future<> perform_offstrategy_compaction();
 
 private:
