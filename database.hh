@@ -53,7 +53,7 @@
 #include "memtable.hh"
 #include "mutation_reader.hh"
 #include "row_cache.hh"
-#include "compaction_strategy.hh"
+#include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"
 #include "sstables/sstable_set.hh"
 #include <seastar/core/metrics_registration.hh>

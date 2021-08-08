@@ -38,7 +38,7 @@
 #include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
 #include "types/map.hh"
-#include "compaction_garbage_collector.hh"
+#include "compaction/compaction_garbage_collector.hh"
 #include "utils/exceptions.hh"
 #include "clustering_key_filter.hh"
 #include "mutation_partition_view.hh"

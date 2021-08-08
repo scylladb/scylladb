@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "compaction_garbage_collector.hh"
+#include "compaction/compaction_garbage_collector.hh"
 #include "mutation_fragment.hh"
 
 static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
@@ -538,8 +538,6 @@ struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no,
 
 template<emit_only_live_rows OnlyLive>
 using compact_for_query_state = compact_mutation_state<OnlyLive, compact_for_sstables::no>;
-using compact_for_mutation_query_state = compact_for_query_state<emit_only_live_rows::no>;
-using compact_for_data_query_state = compact_for_query_state<emit_only_live_rows::yes>;
 
 template<typename Consumer, typename GCConsumer = noop_compacted_fragments_consumer>
 requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>

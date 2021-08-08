@@ -81,7 +81,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
 
-#include "compaction_strategy.hh"
+#include "compaction/compaction_strategy.hh"
 #include "utils/joinpoint.hh"
 #include "view_info.hh"
 #include "cql_type_parser.hh"

@@ -23,7 +23,7 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 #include "mutation_partition.hh"
-#include "compaction_garbage_collector.hh"
+#include "compaction/compaction_garbage_collector.hh"
 #include "combine.hh"
 
 #include "collection_mutation.hh"
