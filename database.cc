@@ -67,6 +67,7 @@
 #include <seastar/util/memory_diagnostics.hh>
 
 #include "locator/abstract_replication_strategy.hh"
+#include "timeout_config.hh"
 
 using namespace std::chrono_literals;
 using namespace db;

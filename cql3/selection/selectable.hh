@@ -48,7 +48,6 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function.hh"
 #include "cql3/functions/function_name.hh"
-#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -96,8 +95,6 @@ public:
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 };
 
-expr::expression make_count_rows_function_expression();
-
 class selectable::with_anonymous_function : public selectable {
     shared_ptr<functions::function> _function;
     std::vector<shared_ptr<selectable>> _args;
@@ -123,9 +120,6 @@ public:
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 };
-
-shared_ptr<selectable> prepare_selectable(const schema& s, const expr::expression& raw_selectable);
-bool selectable_processes_selection(const expr::expression& raw_selectable);
 
 }
 

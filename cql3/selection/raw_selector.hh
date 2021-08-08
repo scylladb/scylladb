@@ -43,6 +43,7 @@
 #pragma once
 
 #include "cql3/selection/selectable.hh"
+#include "cql3/selection/selectable-expr.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/column_identifier.hh"
 
