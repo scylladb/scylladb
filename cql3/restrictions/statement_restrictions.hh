@@ -520,6 +520,8 @@ public:
     /// Calculates clustering ranges for querying a local-index table.
     std::vector<query::clustering_range> get_local_index_clustering_ranges(
             const query_options& options, const schema& idx_tbl_schema) const;
+
+    sstring to_string() const;
 };
 
 }
