@@ -558,17 +558,12 @@ make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serializatio
 ::shared_ptr<term>
 prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
-    std::vector<shared_ptr<assignment_testable>> args;
-    args.reserve(fc.args.size());
-    std::transform(fc.args.begin(), fc.args.end(), std::back_inserter(args),
-            [] (auto&& x) -> shared_ptr<assignment_testable> {
-        return expr::as_term_raw(x);
-    });
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<function>& func) {
             return func;
         },
         [&] (const function_name& name) {
+            auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
             auto fun = functions::functions::get(db, keyspace, name, args, receiver->ks_name, receiver->cf_name, receiver.get());
             if (!fun) {
                 throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
@@ -600,7 +595,7 @@ prepare_function_call(const expr::function_call& fc, database& db, const sstring
     parameters.reserve(fc.args.size());
     bool all_terminal = true;
     for (size_t i = 0; i < fc.args.size(); ++i) {
-        auto&& t = expr::as_term_raw(fc.args[i])->prepare(db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+        auto&& t = prepare_term(fc.args[i], db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
         if (dynamic_cast<non_terminal*>(t.get())) {
             all_terminal = false;
         }
@@ -637,9 +632,9 @@ test_assignment_function_call(const cql3::expr::function_call& fc, database& db,
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
     // later with a more helpful error message that if we were to return false here.
     try {
-        auto args = boost::copy_range<std::vector<::shared_ptr<term::raw>>>(fc.args | boost::adaptors::transformed(expr::as_term_raw));
         auto&& fun = std::visit(overloaded_functor{
             [&] (const function_name& name) {
+                auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
                 return functions::get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
             },
             [] (const shared_ptr<function>& func) {
