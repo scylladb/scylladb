@@ -23,7 +23,7 @@
 
 #include "cql3/statements/function_statement.hh"
 #include "cql3/cql3_type.hh"
-#include "cql3/term.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -44,13 +44,13 @@ class create_aggregate_statement final : public create_function_statement_base {
     sstring _sfunc;
     shared_ptr<cql3_type::raw> _stype;
     sstring _ffunc;
-    shared_ptr<cql3::term::raw> _ival;
+    expr::expression _ival;
 
     mutable shared_ptr<functions::user_aggregate> _aggregate{};
 
 public:
     create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
-            sstring sfunc, shared_ptr<cql3_type::raw> stype, sstring ffunc, shared_ptr<cql3::term::raw> ival, bool or_replace, bool if_not_exists);
+            sstring sfunc, shared_ptr<cql3_type::raw> stype, sstring ffunc, expr::expression ival, bool or_replace, bool if_not_exists);
 };
 }
 }

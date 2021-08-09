@@ -57,7 +57,7 @@ void create_aggregate_statement::create(service::storage_proxy& proxy, functions
 
     auto dummy_ident = ::make_shared<column_identifier>("", true);
     auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
-    auto initcond_term = _ival->prepare(db, _name.keyspace, {column_spec});
+    auto initcond_term = prepare_term(_ival, db, _name.keyspace, {column_spec});
     bytes_opt initcond = to_bytes(*to_managed_bytes_opt(initcond_term->bind_and_get(cql3::query_options::DEFAULT)));
 
     _aggregate = ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
@@ -79,7 +79,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_aggregate_stateme
 }
 
 create_aggregate_statement::create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
-            sstring sfunc, shared_ptr<cql3_type::raw> stype, sstring ffunc, shared_ptr<cql3::term::raw> ival, bool or_replace, bool if_not_exists)
+            sstring sfunc, shared_ptr<cql3_type::raw> stype, sstring ffunc, expr::expression ival, bool or_replace, bool if_not_exists)
         : create_function_statement_base(std::move(name), std::move(arg_types), or_replace, if_not_exists)
         , _sfunc(std::move(sfunc))
         , _stype(std::move(stype))
