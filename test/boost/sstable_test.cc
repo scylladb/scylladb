@@ -471,7 +471,7 @@ SEASTAR_TEST_CASE(wrong_range) {
     return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto& env, auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata")), [&env, sstp] (auto& range) {
             auto s = columns_schema();
-            return with_closeable(sstp->make_reader_v1(s, env.make_reader_permit(), range, s->full_slice()), [sstp, s] (flat_mutation_reader& rd) {
+            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), range, s->full_slice()), [sstp, s] (auto& rd) {
               return read_mutation_from_flat_mutation_reader(rd, db::no_timeout).then([sstp, s] (auto mutation) {
                 return make_ready_future<>();
               });
@@ -608,7 +608,7 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
     return seastar::async([&env, sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
-        auto rd = sstp->make_reader_v1(s, env.make_reader_permit(), pr, ps);
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, ps);
         auto close_rd = deferred_close(rd);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
@@ -630,7 +630,7 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
 static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sstring key) {
     return seastar::async([&env, sstp, s, key] () mutable {
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
-        auto rd = sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice());
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
         auto close_rd = deferred_close(rd);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
@@ -653,7 +653,7 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
 static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
     return seastar::async([&env, sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto reader = sstp->make_reader_v1(s, env.make_reader_permit(), query::full_partition_range, ps);
+        auto reader = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, ps);
         auto close_reader = deferred_close(reader);
         int nrows = 0;
         auto mfopt = reader(db::no_timeout).get0();

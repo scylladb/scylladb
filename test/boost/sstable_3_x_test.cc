@@ -5207,7 +5207,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
-            assert_that(sst->make_reader_v1(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))
+            assert_that(sst->make_reader(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))
                 .produces_partition_start(dk)
                 .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
                 .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})

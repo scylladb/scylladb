@@ -189,7 +189,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, sst, mt, verifier, tomb, &static_set_col, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 11).then([&env, s, verifier, tomb, &static_set_col] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, verifier, tomb, &static_set_col] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
                         auto verify_set = [&tomb] (const collection_mutation_description& m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
@@ -219,7 +219,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                     });
                 }).then([&env, sstp, s, verifier] {
                     return do_with(dht::partition_range::make_singular(make_dkey(s, "key2")), [&env, sstp, s, verifier] (auto& pr) {
-                        auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                        auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                         return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, verifier, rd] (auto mutation) {
                             auto m = verifier(mutation);
                             BOOST_REQUIRE(!m.tomb);
@@ -254,7 +254,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, tomb, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 12).then([&env, s, tomb] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
@@ -292,7 +292,7 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
         return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s, tomb, generation, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, generation).then([&env, s, tomb] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
@@ -375,7 +375,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 37).then([&env, s, tmpdir_path] (auto sstp) {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
 
@@ -412,7 +412,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 38).then([&env, s] (auto sstp) {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
@@ -450,7 +450,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 39).then([&env, s] (auto sstp) {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto& row = mp.clustered_row(*s, clustering_key::make_empty());
@@ -485,7 +485,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, tomb, tmpdir_path] {
             return env.reusable_sst(s, tmpdir_path, 41).then([&env, s, tomb] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader_v1(s, env.make_reader_permit(), pr, s->full_slice()));
+                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
                     return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
