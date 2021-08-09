@@ -415,10 +415,16 @@ schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info
     }
 }
 
-schema::schema(const schema& o)
+schema::schema(const schema& o, const std::function<void(schema&)>& transform)
     : _raw(o._raw)
     , _offsets(o._offsets)
 {
+    // Do the transformation after all the raw fields are initialized, but
+    // *before* the derived fields are generated (from the raw ones).
+    if (transform) {
+        transform(*this);
+    }
+
     rebuild();
     if (o.is_view()) {
         _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
@@ -426,6 +432,11 @@ schema::schema(const schema& o)
             _view_info->set_base_info(o.view_info()->base_info());
         }
     }
+}
+
+schema::schema(const schema& o)
+    : schema(o, {})
+{
 }
 
 lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
