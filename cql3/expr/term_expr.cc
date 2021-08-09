@@ -805,20 +805,17 @@ shared_ptr<term>
 cast_prepare_term(const cast& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
     auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
-    auto term = as_term_raw(*c.arg);
-    if (!is_assignable(term->test_assignment(db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
-        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", term, type));
+    if (!is_assignable(test_assignment(*c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
+        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", *c.arg, type));
     }
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
-    return term->prepare(db, keyspace, receiver);
+    return prepare_term(*c.arg, db, keyspace, receiver);
 }
 
-// A term::raw that is implemented using an expression
-
 ::shared_ptr<term>
-term_raw_expr::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+prepare_term(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::prepare()");
@@ -885,11 +882,17 @@ term_raw_expr::prepare(database& db, const sstring& keyspace, const column_speci
         [&] (const usertype_constructor& uc) -> ::shared_ptr<term> {
             return usertype_constructor_prepare_term(uc, db, keyspace, receiver);
         },
-    }, _expr);
+    }, expr);
+}
+
+::shared_ptr<term>
+term_raw_expr::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
+    return prepare_term(_expr, db, keyspace, receiver);
 }
 
 assignment_testable::test_result
-term_raw_expr::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver) {
+    using test_result = assignment_testable::test_result;
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> test_result {
             on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::test_assignment()");
@@ -951,7 +954,12 @@ term_raw_expr::test_assignment(database& db, const sstring& keyspace, const colu
         [&] (const usertype_constructor& uc) -> test_result {
             return usertype_constructor_test_assignment(uc, db, keyspace, receiver);
         },
-    }, _expr);
+    }, expr);
+}
+
+assignment_testable::test_result
+term_raw_expr::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    return expr::test_assignment(_expr, db, keyspace, receiver);
 }
 
 sstring

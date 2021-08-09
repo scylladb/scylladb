@@ -489,6 +489,20 @@ extern ::shared_ptr<term_raw> as_term_raw(const expression& e);
 
 extern expression as_expression(::shared_ptr<term::raw> t);
 
+extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver);
+
+
+/**
+ * @return whether this object can be assigned to the provided receiver. We distinguish
+ * between 3 values: 
+ *   - EXACT_MATCH if this object is exactly of the type expected by the receiver
+ *   - WEAKLY_ASSIGNABLE if this object is not exactly the expected type but is assignable nonetheless
+ *   - NOT_ASSIGNABLE if it's not assignable
+ * Most caller should just call the is_assignable() method on the result, though functions have a use for
+ * testing "strong" equality to decide the most precise overload to pick when multiple could match.
+ */
+extern assignment_testable::test_result test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver);
+
 extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
 
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
