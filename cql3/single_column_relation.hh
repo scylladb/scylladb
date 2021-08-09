@@ -64,12 +64,12 @@ namespace cql3 {
 class single_column_relation final : public relation {
 private:
     ::shared_ptr<column_identifier::raw> _entity;
-    ::shared_ptr<term::raw> _map_key;
-    ::shared_ptr<term::raw> _value;
-    std::vector<::shared_ptr<term::raw>> _in_values;
+    std::optional<expr::expression> _map_key;
+    std::optional<expr::expression> _value;
+    std::vector<expr::expression> _in_values;
 public:
-    single_column_relation(::shared_ptr<column_identifier::raw> entity, ::shared_ptr<term::raw> map_key,
-        expr::oper_t type, ::shared_ptr<term::raw> value, std::vector<::shared_ptr<term::raw>> in_values)
+    single_column_relation(::shared_ptr<column_identifier::raw> entity, std::optional<expr::expression> map_key,
+        expr::oper_t type, std::optional<expr::expression> value, std::vector<expr::expression> in_values)
             : relation(type)
             , _entity(std::move(entity))
             , _map_key(std::move(map_key))
@@ -85,8 +85,8 @@ public:
      * @param type the type that describes how this entity relates to the value.
      * @param value the value being compared.
      */
-    single_column_relation(::shared_ptr<column_identifier::raw> entity, ::shared_ptr<term::raw> map_key,
-        expr::oper_t type, ::shared_ptr<term::raw> value)
+    single_column_relation(::shared_ptr<column_identifier::raw> entity, std::optional<expr::expression> map_key,
+        expr::oper_t type, std::optional<expr::expression> value)
             : single_column_relation(std::move(entity), std::move(map_key), type, std::move(value), {})
     { }
 
@@ -97,20 +97,20 @@ public:
      * @param type the type that describes how this entity relates to the value.
      * @param value the value being compared.
      */
-    single_column_relation(::shared_ptr<column_identifier::raw> entity, expr::oper_t type, ::shared_ptr<term::raw> value)
+    single_column_relation(::shared_ptr<column_identifier::raw> entity, expr::oper_t type, expr::expression value)
         : single_column_relation(std::move(entity), {}, type, std::move(value))
     { }
 
     static ::shared_ptr<single_column_relation> create_in_relation(::shared_ptr<column_identifier::raw> entity,
-                                                                   std::vector<::shared_ptr<term::raw>> in_values) {
-        return ::make_shared<single_column_relation>(std::move(entity), nullptr, expr::oper_t::IN, nullptr, std::move(in_values));
+                                                                   std::vector<expr::expression> in_values) {
+        return ::make_shared<single_column_relation>(std::move(entity), std::nullopt, expr::oper_t::IN, std::nullopt, std::move(in_values));
     }
 
     ::shared_ptr<column_identifier::raw> get_entity() {
         return _entity;
     }
 
-    ::shared_ptr<term::raw> get_value() {
+    const std::optional<expr::expression>& get_value() {
         return _value;
     }
 
@@ -134,14 +134,14 @@ protected:
     virtual sstring to_string() const override {
         auto entity_as_string = _entity->to_cql_string();
         if (_map_key) {
-            entity_as_string = format("{}[{}]", std::move(entity_as_string), _map_key->to_string());
+            entity_as_string = format("{}[{}]", std::move(entity_as_string), *_map_key);
         }
 
         if (is_IN()) {
             return format("{} IN ({})", entity_as_string, join(", ", _in_values));
         }
 
-        return format("{} {} {}", entity_as_string, _relation_type, _value->to_string());
+        return format("{} {} {}", entity_as_string, _relation_type, *_value);
     }
 
 protected:
@@ -169,7 +169,8 @@ protected:
             throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
         }
 
-        auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
+        auto v_term = as_term_raw(*_value);
+        auto term = to_term(to_receivers(*schema, column_def), *v_term, db, schema->ks_name(), ctx);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         r->expression = expr::binary_operator{&column_def, _relation_type, std::move(term)};
         return r;
@@ -179,7 +180,8 @@ protected:
                                                  prepare_context& ctx,
                                                  bool is_key) override {
         auto&& column_def = to_column_definition(*schema, *_entity);
-        auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
+        auto v_term = as_term_raw(*_value);
+        auto term = to_term(to_receivers(*schema, column_def), *v_term, db, schema->ks_name(), ctx);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         r->expression = expr::binary_operator{
                 &column_def, is_key ? expr::oper_t::CONTAINS_KEY : expr::oper_t::CONTAINS, std::move(term)};

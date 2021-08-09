@@ -415,11 +415,7 @@ statement_restrictions::statement_restrictions(database& db,
                 }
                 // currently, the grammar only allows the NULL argument to be
                 // "IS NOT", so this assertion should not be able to fail
-                assert([&] {
-                    auto raw_term = r->get_value();
-                    auto raw_term_expr = dynamic_pointer_cast<expr::term_raw_expr>(raw_term);
-                    return raw_term_expr && std::holds_alternative<expr::null>(raw_term_expr->as_expression());
-                }());
+                assert(std::holds_alternative<expr::null>(*r->get_value()));
 
                 auto col_id = r->get_entity()->prepare_column_identifier(*schema);
                 const auto *cd = get_column_definition(*schema, *col_id);
