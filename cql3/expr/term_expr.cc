@@ -63,9 +63,9 @@ usertype_constructor_validate_assignable_to(const usertype_constructor& u, datab
         if (!u.elements.contains(field)) {
             continue;
         }
-        const shared_ptr<term::raw>& value = as_term_raw(*u.elements.at(field));
+        const expression& value = *u.elements.at(field);
         auto&& field_spec = usertype_field_spec_of(receiver, i);
-        if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *field_spec))) {
+        if (!assignment_testable::is_assignable(test_assignment(value, db, keyspace, *field_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
         }
     }
@@ -95,14 +95,14 @@ usertype_constructor_prepare_term(const usertype_constructor& u, database& db, c
     for (size_t i = 0; i < ut->size(); ++i) {
         auto&& field = column_identifier(to_bytes(ut->field_name(i)), utf8_type);
         auto iraw = u.elements.find(field);
-        shared_ptr<term::raw> raw;
+        expression raw;
         if (iraw == u.elements.end()) {
-            raw = expr::as_term_raw(expr::null());
+            raw = expr::null();
         } else {
-            raw = expr::as_term_raw(*iraw->second);
+            raw = *iraw->second;
             ++found_values;
         }
-        auto&& value = raw->prepare(db, keyspace, usertype_field_spec_of(*receiver, i));
+        auto&& value = prepare_term(raw, db, keyspace, usertype_field_spec_of(*receiver, i));
 
         if (dynamic_cast<non_terminal*>(value.get())) {
             all_terminal = false;
@@ -159,10 +159,10 @@ map_validate_assignable_to(const collection_constructor& c, database& db, const 
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
-        if (!is_assignable(as_term_raw(entry_tuple.elements[0])->test_assignment(db, keyspace, *key_spec))) {
+        if (!is_assignable(test_assignment(entry_tuple.elements[0], db, keyspace, *key_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid map literal for {}: key {} is not of type {}", *receiver.name, entry_tuple.elements[0], key_spec->type->as_cql3_type()));
         }
-        if (!is_assignable(as_term_raw(entry_tuple.elements[1])->test_assignment(db, keyspace, *value_spec))) {
+        if (!is_assignable(test_assignment(entry_tuple.elements[1], db, keyspace, *value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid map literal for {}: value {} is not of type {}", *receiver.name, entry_tuple.elements[1], value_spec->type->as_cql3_type()));
         }
     }
@@ -187,8 +187,8 @@ map_test_assignment(const collection_constructor& c, database& db, const sstring
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
-        auto t1 = as_term_raw(entry_tuple.elements[0])->test_assignment(db, keyspace, *key_spec);
-        auto t2 = as_term_raw(entry_tuple.elements[1])->test_assignment(db, keyspace, *value_spec);
+        auto t1 = test_assignment(entry_tuple.elements[0], db, keyspace, *key_spec);
+        auto t2 = test_assignment(entry_tuple.elements[1], db, keyspace, *value_spec);
         if (t1 == assignment_testable::test_result::NOT_ASSIGNABLE || t2 == assignment_testable::test_result::NOT_ASSIGNABLE)
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         if (t1 != assignment_testable::test_result::EXACT_MATCH || t2 != assignment_testable::test_result::EXACT_MATCH)
@@ -213,8 +213,8 @@ map_prepare_term(const collection_constructor& c, database& db, const sstring& k
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
-        auto k = as_term_raw(entry_tuple.elements[0])->prepare(db, keyspace, key_spec);
-        auto v = as_term_raw(entry_tuple.elements[1])->prepare(db, keyspace, value_spec);
+        auto k = prepare_term(entry_tuple.elements[0], db, keyspace, key_spec);
+        auto v = prepare_term(entry_tuple.elements[1], db, keyspace, value_spec);
 
         if (k->contains_bind_marker() || v->contains_bind_marker()) {
             throw exceptions::invalid_request_exception(format("Invalid map literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -259,9 +259,8 @@ set_validate_assignable_to(const collection_constructor& c, database& db, const 
 
     auto&& value_spec = set_value_spec_of(receiver);
     for (auto& e: c.elements) {
-        auto rt = as_term_raw(e);
-        if (!is_assignable(rt->test_assignment(db, keyspace, *value_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver.name, *rt, value_spec->type->as_cql3_type()));
+        if (!is_assignable(test_assignment(e, db, keyspace, *value_spec))) {
+            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver.name, e, value_spec->type->as_cql3_type()));
         }
     }
 }
@@ -284,9 +283,7 @@ set_test_assignment(const collection_constructor& c, database& db, const sstring
     }
 
     auto&& value_spec = set_value_spec_of(receiver);
-    // FIXME: make assignment_testable::test_all() accept ranges
-    auto to_test = boost::copy_range<std::vector<shared_ptr<assignment_testable>>>(c.elements | boost::adaptors::transformed(as_term_raw));
-    return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
+    return test_assignment_all(c.elements, db, keyspace, *value_spec);
 }
 
 static
@@ -317,9 +314,9 @@ set_prepare_term(const collection_constructor& c, database& db, const sstring& k
     std::vector<shared_ptr<term>> values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
-    for (shared_ptr<term::raw> rt : c.elements | boost::adaptors::transformed(as_term_raw))
+    for (auto& e : c.elements)
     {
-        auto t = rt->prepare(db, keyspace, value_spec);
+        auto t = prepare_term(e, db, keyspace, value_spec);
 
         if (t->contains_bind_marker()) {
             throw exceptions::invalid_request_exception(format("Invalid set literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -358,10 +355,10 @@ list_validate_assignable_to(const collection_constructor& c, database& db, const
                 *receiver.name, receiver.type->as_cql3_type()));
     }
     auto&& value_spec = list_value_spec_of(receiver);
-    for (auto& rt : c.elements) {
-        if (!is_assignable(as_term_raw(rt)->test_assignment(db, keyspace, *value_spec))) {
+    for (auto& e : c.elements) {
+        if (!is_assignable(test_assignment(e, db, keyspace, *value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: value {} is not of type {}",
-                    *receiver.name, rt, value_spec->type->as_cql3_type()));
+                    *receiver.name, e, value_spec->type->as_cql3_type()));
         }
     }
 }
@@ -379,10 +376,7 @@ list_test_assignment(const collection_constructor& c, database& db, const sstrin
     }
 
     auto&& value_spec = list_value_spec_of(receiver);
-    std::vector<shared_ptr<assignment_testable>> to_test;
-    to_test.reserve(c.elements.size());
-    boost::copy(c.elements | boost::adaptors::transformed(as_term_raw), std::back_inserter(to_test));
-    return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
+    return test_assignment_all(c.elements, db, keyspace, *value_spec);
 }
 
 
@@ -404,8 +398,8 @@ list_prepare_term(const collection_constructor& c, database& db, const sstring& 
     std::vector<shared_ptr<term>> values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
-    for (auto& rt : c.elements) {
-        auto&& t = as_term_raw(rt)->prepare(db, keyspace, value_spec);
+    for (auto& e : c.elements) {
+        auto&& t = prepare_term(e, db, keyspace, value_spec);
 
         if (t->contains_bind_marker()) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -446,9 +440,9 @@ tuple_constructor_validate_assignable_to(const tuple_constructor& tc, database& 
                                                             receiver.name, tt->as_cql3_type(), tt->size(), tc.elements.size()));
         }
 
-        auto&& value = as_term_raw(tc.elements[i]);
+        auto&& value = tc.elements[i];
         auto&& spec = component_spec_of(receiver, i);
-        if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *spec))) {
+        if (!assignment_testable::is_assignable(test_assignment(value, db, keyspace, *spec))) {
             throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", receiver.name, i, spec->type->as_cql3_type()));
         }
     }
@@ -472,7 +466,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, database& db, co
     std::vector<shared_ptr<term>> values;
     bool all_terminal = true;
     for (size_t i = 0; i < tc.elements.size(); ++i) {
-        auto&& value = as_term_raw(tc.elements[i])->prepare(db, keyspace, component_spec_of(*receiver, i));
+        auto&& value = prepare_term(tc.elements[i], db, keyspace, component_spec_of(*receiver, i));
         if (dynamic_pointer_cast<non_terminal>(value)) {
             all_terminal = false;
         }
@@ -497,7 +491,7 @@ tuple_constructor_prepare_tuple(const tuple_constructor& tc, database& db, const
     std::vector<data_type> types;
     bool all_terminal = true;
     for (size_t i = 0; i < tc.elements.size(); ++i) {
-        auto&& t = as_term_raw(tc.elements[i])->prepare(db, keyspace, receivers[i]);
+        auto&& t = prepare_term(tc.elements[i], db, keyspace, receivers[i]);
         if (dynamic_pointer_cast<non_terminal>(t)) {
             all_terminal = false;
         }
@@ -785,7 +779,6 @@ static
 assignment_testable::test_result
 cast_test_assignment(const cast& c, database& db, const sstring& keyspace, const column_specification& receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
-    auto term = as_term_raw(*c.arg);
     try {
         auto&& casted_type = type->prepare(db, keyspace).get_type();
         if (receiver.type == casted_type) {
