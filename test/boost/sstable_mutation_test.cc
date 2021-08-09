@@ -819,32 +819,35 @@ SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
   test_env::do_with_async([] (test_env& env) {
     auto s = buffer_overflow_schema();
     auto sstp = ka_sst(env, s, "test/resource/sstables/buffer_overflow", 5).get0();
-    auto r = sstp->make_reader_v1(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+    auto r = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
     auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
     auto dk1 = dht::decorate_key(*s, pk1);
     auto pk2 = partition_key::from_exploded(*s, { int32_type->decompose(3) });
     auto dk2 = dht::decorate_key(*s, pk2);
     auto ck1 = clustering_key::from_exploded(*s, {int32_type->decompose(2), int32_type->decompose(2)});
     auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(2)});
-    tombstone tomb(api::new_timestamp(), gc_clock::now());
-    range_tombstone rt1(clustering_key::from_exploded(*s, {int32_type->decompose(2)}),
-                        clustering_key::from_exploded(*s, {int32_type->decompose(2)}),
-                        tomb);
-    range_tombstone rt2(clustering_key::from_exploded(*s, {int32_type->decompose(1)}),
-                        clustering_key::from_exploded(*s, {int32_type->decompose(1)}),
-                        tomb);
+    auto tk1 = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+    auto tk2 = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
+    range_tombstone_change rt1_before(position_in_partition_view(tk1, bound_weight::before_all_prefixed),
+                                      tombstone{1564482368866800, gc_clock::from_time_t(1564482368)});
+    range_tombstone_change rt1_after(position_in_partition_view(tk1, bound_weight::after_all_prefixed), tombstone());
+    range_tombstone_change rt2_before(position_in_partition_view(tk2, bound_weight::before_all_prefixed),
+                                      tombstone{1564482374781792, gc_clock::from_time_t(1564482374)});
+    range_tombstone_change rt2_after(position_in_partition_view(tk2, bound_weight::after_all_prefixed), tombstone());
     r.set_max_buffer_size(std::max(
-                mutation_fragment(*s, env.make_reader_permit(), partition_start(dk1, tomb)).memory_usage()
-                    + mutation_fragment(*s, env.make_reader_permit(), range_tombstone(rt1)).memory_usage(),
-                mutation_fragment(*s, env.make_reader_permit(), clustering_row(ck1)).memory_usage()));
-    flat_reader_assertions rd(std::move(r));
+                mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(dk1, rt1_before.tombstone())).memory_usage()
+                    + mutation_fragment_v2(*s, env.make_reader_permit(), range_tombstone_change(rt1_before)).memory_usage(),
+                mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ck1)).memory_usage()));
+    flat_reader_assertions_v2 rd(std::move(r));
     rd.produces_partition_start(dk1)
-        .produces_range_tombstone(rt1)
+        .produces_range_tombstone_change(rt1_before)
         .produces_row_with_key(ck1)
+        .produces_range_tombstone_change(rt1_after)
         .produces_partition_end()
         .produces_partition_start(dk2)
-        .produces_range_tombstone(rt2)
+        .produces_range_tombstone_change(rt2_before)
         .produces_row_with_key(ck2)
+        .produces_range_tombstone_change(rt2_after)
         .produces_partition_end()
         .produces_end_of_stream();
   }).get();
