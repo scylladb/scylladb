@@ -1332,8 +1332,8 @@ select_statement::select_statement(cf_name cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
-                                   ::shared_ptr<term::raw> limit,
-                                   ::shared_ptr<term::raw> per_partition_limit,
+                                   std::optional<expr::expression> limit,
+                                   std::optional<expr::expression> per_partition_limit,
                                    std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
                                    std::unique_ptr<attributes::raw> attrs)
     : cf_statement(cf_name)
@@ -1477,13 +1477,13 @@ select_statement::prepare_restrictions(database& db,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::prepare_limit(database& db, prepare_context& ctx, ::shared_ptr<term::raw> limit)
+select_statement::prepare_limit(database& db, prepare_context& ctx, const std::optional<expr::expression>& limit)
 {
     if (!limit) {
         return {};
     }
 
-    auto prep_limit = limit->prepare(db, keyspace(), limit_receiver());
+    auto prep_limit = prepare_term(*limit, db, keyspace(), limit_receiver());
     prep_limit->fill_prepare_context(ctx);
     return prep_limit;
 }

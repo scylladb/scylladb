@@ -408,8 +408,8 @@ useStatement returns [std::unique_ptr<raw::use_statement> stmt]
 selectStatement returns [std::unique_ptr<raw::select_statement> expr]
     @init {
         bool is_distinct = false;
-        ::shared_ptr<cql3::term::raw> limit;
-        ::shared_ptr<cql3::term::raw> per_partition_limit;
+        std::optional<cql3::expr::expression> limit;
+        std::optional<cql3::expr::expression> per_partition_limit;
         raw::select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
         bool is_json = false;
@@ -425,8 +425,8 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_WHERE wclause=whereClause )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
-      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = rows; } )?
-      ( K_LIMIT rows=intValue { limit = rows; } )?
+      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = cql3::expr::as_expression(rows); } )?
+      ( K_LIMIT rows=intValue { limit = cql3::expr::as_expression(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
       ( usingClause[attrs] )?
