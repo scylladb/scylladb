@@ -930,6 +930,68 @@ public:
             });
         });
     }
+    // To find the (reverse) start of a clustering range in a reversed read, this method
+    // advances the upper bound to the end of the current partition (start of the next one)
+    future<> advance_reverse_to_next_partition() {
+        return advance_reverse(position_in_partition_view::before_all_clustered_rows());
+    }
+    // Advances the upper bound to the start of the first promoted index block after pos,
+    // or to the next partition. Because in reverse reads the positions are decreasing,
+    // we recreate the upper bound if it already exists.
+    future<> advance_reverse(position_in_partition_view pos) {
+        if (eof()) {
+            return make_ready_future<>();
+        }
+        if (_upper_bound) {
+            return close(*_upper_bound).then([this, pos] {
+                _upper_bound.reset();
+                return advance_reverse(pos);
+            });
+        }
+
+        // We advance cursor within the current lower bound partition
+        // So need to make sure first that it is read
+        if (!partition_data_ready(_lower_bound)) {
+            return read_partition_data().then([this, pos] {
+                assert(partition_data_ready());
+                return advance_reverse(pos);
+            });
+        }
+        // the position is a start of a reverse range, so it has its bound_weight reversed
+        // we use the non-reversed schema in the index_reader, so we need to reverse it again
+        bound_weight new_weight = pos.get_bound_weight() == bound_weight::before_all_prefixed ? bound_weight::after_all_prefixed
+                                : pos.get_bound_weight() == bound_weight::after_all_prefixed ? bound_weight::before_all_prefixed
+                                : bound_weight::equal;
+        const clustering_key_prefix* new_key = !pos.has_key() ? nullptr : &pos.key();
+        pos = position_in_partition_view(pos.region(), new_weight, new_key);
+
+        _upper_bound = _lower_bound;
+
+        index_entry& e = current_partition_entry(*_upper_bound);
+        auto e_pos = e.position();
+        auto cur = static_cast<sstables::mc::bsearch_clustered_cursor*>(current_clustered_cursor(*_upper_bound));
+
+        if (!cur) {
+            sstlog.trace("index {}: no promoted index", fmt::ptr(this));
+            return advance_to_next_partition(*_upper_bound);
+        }
+
+        return cur->advance_past(pos).then([this, e_pos] (std::optional<clustered_index_cursor::skip_info> si) {
+            if (!si) {
+                return advance_to_next_partition(*_upper_bound);
+            }
+            if (!si->active_tombstone) {
+                // End open marker can be only engaged in SSTables 3.x ('mc' format) and never in ka/la
+                _upper_bound->end_open_marker.reset();
+            } else {
+                _upper_bound->end_open_marker = open_rt_marker{std::move(si->active_tombstone_pos), si->active_tombstone};
+            }
+            _upper_bound->data_file_position = e_pos + si->offset;
+            _upper_bound->element = indexable_element::cell;
+            sstlog.trace("index {}: advanced end after cell, _data_file_position={}", fmt::ptr(this), _upper_bound->data_file_position);
+            return make_ready_future<>();
+        });
+    }
 
     // Moves the cursor to the beginning of next partition.
     // Can be called only when !eof().
@@ -966,6 +1028,10 @@ public:
 
     std::optional<open_rt_marker> end_open_marker() const {
         return _lower_bound.end_open_marker;
+    }
+
+    std::optional<open_rt_marker> reverse_end_open_marker() const {
+        return _upper_bound->end_open_marker;
     }
 
     bool eof() const {

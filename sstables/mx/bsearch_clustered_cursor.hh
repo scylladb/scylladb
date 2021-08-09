@@ -539,6 +539,39 @@ public:
         });
     }
 
+    future<std::optional<skip_info>> advance_past(position_in_partition_view pos) {
+        return advance_to_upper_bound(pos).then([this] {
+            if (_current_idx == _blocks_count) {
+                return make_ready_future<std::optional<skip_info>>(std::nullopt);
+            }
+            return _promoted_index.get_block(_current_idx, _trace_state).then([this] (promoted_index_block* block) {
+                offset_in_partition datafile_offset = block->data_file_offset;
+                if (_current_idx == 0) {
+                    return make_ready_future<std::optional<skip_info>>(skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()});
+                }
+                return _promoted_index.get_block(_current_idx - 1, _trace_state)
+                        .then([this, datafile_offset] (promoted_index_block* block) -> std::optional<skip_info> {
+                    _promoted_index.invalidate_prior(block, _trace_state);
+                    if (!block->end_open_marker) {
+                        return skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
+                    }
+                    auto tomb = tombstone(*block->end_open_marker);
+                    return skip_info{datafile_offset, tomb, *block->end};
+                });
+            });
+        });
+    }
+
+    future<std::optional<uint64_t>> last_block_offset() {
+        if (_blocks_count == 0) {
+            return make_ready_future<std::optional<uint64_t>>();
+        }
+        return _promoted_index.get_block(_blocks_count - 1, _trace_state)
+                .then([this] (promoted_index_block* block) {
+            return std::optional<uint64_t>(block->data_file_offset);
+        });
+    }
+
     future<> close() noexcept override {
         return make_ready_future<>();
     }
