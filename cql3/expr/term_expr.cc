@@ -974,6 +974,22 @@ term_raw_expr::assignment_testable_source_context() const {
     }, _expr);
 }
 
+class assignment_testable_expression : public assignment_testable {
+    expression _e;
+public:
+    explicit assignment_testable_expression(expression e) : _e(std::move(e)) {}
+    virtual test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
+        return as_term_raw(_e)->test_assignment(db, keyspace, receiver);
+    }
+    virtual sstring assignment_testable_source_context() const override {
+        return fmt::format("{}", _e);
+    }
+
+};
+
+::shared_ptr<assignment_testable> as_assignment_testable(expression e) {
+    return ::make_shared<assignment_testable_expression>(std::move(e));
+}
 
 }
 

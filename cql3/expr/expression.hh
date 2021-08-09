@@ -489,6 +489,8 @@ extern ::shared_ptr<term_raw> as_term_raw(const expression& e);
 
 extern expression as_expression(::shared_ptr<term::raw> t);
 
+extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
+
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :
