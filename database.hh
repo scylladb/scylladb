@@ -884,7 +884,13 @@ public:
     future<> run_compaction(sstables::compaction_descriptor descriptor);
     void trigger_offstrategy_compaction();
     future<> perform_offstrategy_compaction();
-    future<> run_offstrategy_compaction();
+
+private:
+    // Called internally by the compaction manager.
+    future<> do_run_offstrategy_compaction();
+
+    friend class compaction_manager;
+public:
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;

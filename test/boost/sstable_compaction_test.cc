@@ -3878,7 +3878,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            cf->run_offstrategy_compaction().get();
+            cf->perform_offstrategy_compaction().get();
 
             // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
             cf->stop().get();

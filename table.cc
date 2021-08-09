@@ -969,7 +969,7 @@ future<> table::perform_offstrategy_compaction() {
     return _compaction_manager.perform_offstrategy(this);
 }
 
-future<> table::run_offstrategy_compaction() {
+future<> table::do_run_offstrategy_compaction() {
     // This procedure will reshape sstables in maintenance set until it's ready for
     // integration into main set.
     // It may require N reshape rounds before the set satisfies the strategy invariant.

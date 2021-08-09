@@ -644,7 +644,7 @@ future<> compaction_manager::perform_offstrategy(column_family* cf) {
                 _stats.active_tasks++;
                 task->compaction_running = true;
 
-                return cf->run_offstrategy_compaction().then_wrapped([this, task, schema = cf->schema()] (future<> f) mutable {
+                return cf->do_run_offstrategy_compaction().then_wrapped([this, task, schema = cf->schema()] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->compaction_running = false;
                     try {
