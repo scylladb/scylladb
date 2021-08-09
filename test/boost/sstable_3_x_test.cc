@@ -95,7 +95,7 @@ public:
         return sstables::test(_sst).read_indexes(_env.make_reader_permit());
     }
     flat_mutation_reader make_reader() {
-        return _sst->make_reader(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
+        return _sst->make_reader_v1(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
     }
 
     const stats_metadata& get_stats_metadata() const {
@@ -114,15 +114,15 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor()) {
-        return _sst->make_reader(_sst->_schema,
-                                          _env.make_reader_permit(),
-                                          range,
-                                          slice,
-                                          pc,
-                                          std::move(trace_state),
-                                          fwd,
-                                          fwd_mr,
-                                          monitor);
+        return _sst->make_reader_v1(_sst->_schema,
+                                    _env.make_reader_permit(),
+                                    range,
+                                    slice,
+                                    pc,
+                                    std::move(trace_state),
+                                    fwd,
+                                    fwd_mr,
+                                    monitor);
     }
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
@@ -5207,7 +5207,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
-            assert_that(sst->make_reader(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))
+            assert_that(sst->make_reader_v1(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))
                 .produces_partition_start(dk)
                 .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
                 .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})

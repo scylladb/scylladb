@@ -3813,8 +3813,8 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
         auto permit = env.make_reader_permit();
         auto q = sst_set.make_min_position_reader_queue(
             [s, &pr, fwd, permit] (sstable& sst) {
-                return sst.make_reader(s, permit, pr,
-                            s->full_slice(), seastar::default_priority_class(), nullptr, fwd);
+                return sst.make_reader_v1(s, permit, pr,
+                                          s->full_slice(), seastar::default_priority_class(), nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
             pk, s, permit, fwd);

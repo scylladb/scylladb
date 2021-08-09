@@ -21,13 +21,13 @@
 
 #pragma once
 
-#include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
 
 namespace sstables {
 namespace mx {
 
-flat_mutation_reader make_reader(
+flat_mutation_reader_v2 make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,

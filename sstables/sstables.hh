@@ -206,7 +206,18 @@ public:
     }
 
     // Returns a mutation_reader for given range of partitions
-    flat_mutation_reader make_reader(
+    flat_mutation_reader_v2 make_reader(
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = {},
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+            read_monitor& monitor = default_read_monitor());
+
+    flat_mutation_reader make_reader_v1(
             schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
