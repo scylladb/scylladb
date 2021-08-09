@@ -503,6 +503,10 @@ extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, con
  */
 extern assignment_testable::test_result test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver);
 
+// Test all elements of exprs for assignment. If all are exact match, return exact match. If any is not assignable,
+// return not assignable. Otherwise, return weakly assignable.
+extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, database& db, const sstring& keyspace, const column_specification& receiver);
+
 extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
 
 inline oper_t pick_operator(statements::bound b, bool inclusive) {

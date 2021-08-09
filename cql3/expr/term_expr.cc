@@ -982,6 +982,22 @@ term_raw_expr::assignment_testable_source_context() const {
     }, _expr);
 }
 
+assignment_testable::test_result
+test_assignment_all(const std::vector<expression>& to_test, database& db, const sstring& keyspace, const column_specification& receiver) {
+    using test_result = assignment_testable::test_result;
+    test_result res = test_result::EXACT_MATCH;
+    for (auto&& e : to_test) {
+        test_result t = test_assignment(e, db, keyspace, receiver);
+        if (t == test_result::NOT_ASSIGNABLE) {
+            return test_result::NOT_ASSIGNABLE;
+        }
+        if (t == test_result::WEAKLY_ASSIGNABLE) {
+            res = test_result::WEAKLY_ASSIGNABLE;
+        }
+    }
+    return res;
+}
+
 class assignment_testable_expression : public assignment_testable {
     expression _e;
 public:
