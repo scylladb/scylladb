@@ -52,9 +52,6 @@
 
 namespace cql3 {
 
-template <typename Range>
-concept range_of_term_raw = std::ranges::range<Range> && std::convertible_to<std::ranges::range_value_t<Range>, shared_ptr<term::raw>>;
-
 /**
  * A relation using the tuple notation, which typically affects multiple columns.
  * Examples:
@@ -68,14 +65,14 @@ public:
     using mode = expr::comparison_order;
 private:
     std::vector<shared_ptr<column_identifier::raw>> _entities;
-    shared_ptr<term::raw> _values_or_marker;
-    std::vector<shared_ptr<term::raw>> _in_values;
-    shared_ptr<term::raw> _in_marker;
+    std::optional<expr::expression> _values_or_marker;
+    std::vector<expr::expression> _in_values;
+    std::optional<expr::expression> _in_marker;
     mode _mode;
 public:
     multi_column_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-        expr::oper_t relation_type, shared_ptr<term::raw> values_or_marker,
-        std::vector<shared_ptr<term::raw>> in_values, shared_ptr<term::raw> in_marker, mode m = mode::cql)
+        expr::oper_t relation_type, std::optional<expr::expression> values_or_marker,
+        std::vector<expr::expression> in_values, std::optional<expr::expression> in_marker, mode m = mode::cql)
         : relation(relation_type)
         , _entities(std::move(entities))
         , _values_or_marker(std::move(values_or_marker))
@@ -86,8 +83,8 @@ public:
 
     static shared_ptr<multi_column_relation> create_multi_column_relation(
         std::vector<shared_ptr<column_identifier::raw>> entities, expr::oper_t relation_type,
-        shared_ptr<term::raw> values_or_marker, std::vector<shared_ptr<term::raw>> in_values,
-        shared_ptr<term::raw> in_marker, mode m = mode::cql) {
+        std::optional<expr::expression> values_or_marker, std::vector<expr::expression> in_values,
+        std::optional<expr::expression> in_marker, mode m = mode::cql) {
         return ::make_shared<multi_column_relation>(std::move(entities), relation_type, std::move(values_or_marker),
             std::move(in_values), std::move(in_marker), m);
     }
@@ -101,7 +98,7 @@ public:
      * @return a new <code>MultiColumnRelation</code> instance
      */
     static shared_ptr<multi_column_relation> create_non_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                    expr::oper_t relation_type, shared_ptr<term::raw> values_or_marker) {
+                                                                    expr::oper_t relation_type, expr::expression values_or_marker) {
         assert(relation_type != expr::oper_t::IN);
         return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {});
     }
@@ -110,7 +107,7 @@ public:
      * Same as above, but sets the magic mode that causes us to treat the restrictions as "raw" clustering bounds
      */
     static shared_ptr<multi_column_relation> create_scylla_clustering_bound_non_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                    expr::oper_t relation_type, shared_ptr<term::raw> values_or_marker) {
+                                                                    expr::oper_t relation_type, expr::expression values_or_marker) {
         assert(relation_type != expr::oper_t::IN);
         return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {}, mode::clustering);
     }
@@ -123,9 +120,7 @@ public:
      * @return a new <code>MultiColumnRelation</code> instance
      */
     static shared_ptr<multi_column_relation> create_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                range_of_term_raw auto in_values) {
-        std::vector<shared_ptr<term::raw>> values(in_values.size());
-        std::copy(in_values.begin(), in_values.end(), values.begin());
+                                                                std::vector<expr::expression> values) {
         return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, std::move(values), {});
     }
 
@@ -137,7 +132,7 @@ public:
      * @return a new <code>MultiColumnRelation</code> instance
      */
     static shared_ptr<multi_column_relation> create_single_marker_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                              shared_ptr<term::raw> in_marker) {
+                                                                              expr::expression in_marker) {
         return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, {}, std::move(in_marker));
     }
 
@@ -150,8 +145,8 @@ private:
      * For non-IN relations, returns the Tuples.Literal or Tuples.Raw marker for a single tuple.
      * @return a Tuples.Literal for non-IN relations or Tuples.Raw marker for a single tuple.
      */
-    shared_ptr<term::raw> get_value() {
-        return _relation_type == expr::oper_t::IN ? _in_marker : _values_or_marker;
+    const expr::expression& get_value() {
+        return _relation_type == expr::oper_t::IN ? *_in_marker : *_values_or_marker;
     }
 public:
     virtual bool is_multi_column() const override { return true; }
@@ -164,7 +159,8 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), ctx);
+        auto v_term = as_term_raw(get_value());
+        auto t = to_term(col_specs, *v_term, db, schema->ks_name(), ctx);
         return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, t);
     }
 
@@ -176,12 +172,12 @@ protected:
             return cs->column_specification;
         });
         if (_in_marker) {
-            auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), ctx);
+            auto v_term = as_term_raw(get_value());
+            auto t = to_term(col_specs, *v_term, db, schema->ks_name(), ctx);
             auto as_abstract_marker = static_pointer_cast<abstract_marker>(t);
             return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, as_abstract_marker);
         } else {
-            std::vector<::shared_ptr<term::raw>> raws(_in_values.size());
-            std::copy(_in_values.begin(), _in_values.end(), raws.begin());
+            auto raws = boost::copy_range<std::vector<shared_ptr<term::raw>>>(_in_values | boost::adaptors::transformed(expr::as_term_raw));
             auto ts = to_terms(col_specs, raws, db, schema->ks_name(), ctx);
             // Convert a single-item IN restriction to an EQ restriction
             if (ts.size() == 1) {
@@ -199,7 +195,8 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), ctx);
+        auto v_term = as_term_raw(get_value());
+        auto t = to_term(col_specs, *v_term, db, schema->ks_name(), ctx);
         return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t, _mode);
     }
 
@@ -257,7 +254,7 @@ protected:
             str += !_in_marker ? "?" : tuples::tuple_to_string(_in_values);
             return str;
         }
-        return format("{} {} {}", str, _relation_type, _values_or_marker->to_string());
+        return format("{} {} {}", str, _relation_type, *_values_or_marker);
     }
 };
 

@@ -1672,15 +1672,15 @@ relation[std::vector<cql3::relation_ptr>& clauses]
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'
-              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, std::vector<shared_ptr<cql3::term::raw>>())); }
+              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, std::vector<cql3::expr::expression>())); }
           | tupleInMarker=inMarkerForTuple /* (a, b, c) IN ? */
               { $clauses.emplace_back(cql3::multi_column_relation::create_single_marker_in_relation(ids, tupleInMarker)); }
           | literals=tupleOfTupleLiterals /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
               {
-                  $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, literals));
+                  $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, boost::copy_range<std::vector<cql3::expr::expression>>(literals | boost::adaptors::transformed(cql3::expr::as_expression))));
               }
           | markers=tupleOfMarkersForTuples /* (a, b, c) IN (?, ?, ...) */
-              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, markers)); }
+              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, boost::copy_range<std::vector<cql3::expr::expression>>(markers | boost::adaptors::transformed(cql3::expr::as_expression)))); }
           )
       | type=relationType literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
