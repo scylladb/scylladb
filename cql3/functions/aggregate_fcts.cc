@@ -42,6 +42,7 @@
 
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
+#include "user_aggregate.hh"
 #include "functions.hh"
 #include "native_aggregate_function.hh"
 #include "exceptions/exceptions.hh"
@@ -49,6 +50,10 @@
 using namespace cql3;
 using namespace functions;
 using namespace aggregate_fcts;
+
+namespace cql3::functions {
+    extern logging::logger log;
+}
 
 namespace {
 class impl_count_function : public aggregate_function::aggregate {
@@ -108,6 +113,31 @@ struct accumulator_for : public std::conditional_t<std::is_integral_v<T>,
                                                    int128_accumulator_for<T>,
                                                    same_type_accumulator_for<T>>
 { };
+
+class impl_user_aggregate : public aggregate_function::aggregate {
+    ::shared_ptr<scalar_function> _sfunc;
+    ::shared_ptr<scalar_function> _finalfunc;
+    const bytes_opt _initcond;
+    bytes_opt _acc;
+public:
+    impl_user_aggregate(bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc)
+            : _sfunc(std::move(sfunc))
+            , _finalfunc(std::move(finalfunc))
+            , _initcond(std::move(initcond))
+            , _acc(_initcond)
+        {}
+    virtual void reset() override {
+        _acc = _initcond;
+    }
+    virtual opt_bytes compute(cql_serialization_format sf) override {
+        return _finalfunc->execute(sf, std::vector<bytes_opt>{_acc});
+    }
+    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+        std::vector<bytes_opt> args{_acc};
+        args.insert(args.end(), values.begin(), values.end());
+        _acc = _sfunc->execute(sf, args);
+    }
+};
 
 template <typename Type>
 class impl_sum_function_for final : public aggregate_function::aggregate {
@@ -467,6 +497,33 @@ static shared_ptr<aggregate_function> make_count_function() {
     return make_shared<count_function_for<Type>>();
 }
 }
+
+// Drops the first arg type from the types declaration (which denotes the accumulator)
+// in order to compute the actual type of given user-defined-aggregate (UDA)
+static std::vector<data_type> state_arg_types_to_uda_arg_types(const std::vector<data_type>& arg_types) {
+    if(arg_types.size() != 2) {
+        on_internal_error(cql3::functions::log, "State function for user-defined aggregates needs at least two arguments");
+    }
+    std::vector<data_type> types;
+    types.insert(types.end(), std::next(arg_types.begin()), arg_types.end());
+    return types;
+}
+
+user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> finalfunc)
+        : abstract_function(std::move(fname), state_arg_types_to_uda_arg_types(sfunc->arg_types()), finalfunc->return_type())
+        , _initcond(std::move(initcond))
+        , _sfunc(std::move(sfunc))
+        , _finalfunc(std::move(finalfunc))
+{}
+
+std::unique_ptr<aggregate_function::aggregate> user_aggregate::new_aggregate() {
+    return std::make_unique<impl_user_aggregate>(_initcond, _sfunc, _finalfunc);
+}
+
+bool user_aggregate::is_pure() const { return _sfunc->is_pure() && _finalfunc->is_pure(); }
+bool user_aggregate::is_native() const { return false; }
+bool user_aggregate::is_aggregate() const { return true; }
+bool user_aggregate::requires_thread() const { return _sfunc->requires_thread() || _finalfunc->requires_thread(); }
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_count_rows_function() {
