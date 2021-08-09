@@ -4154,6 +4154,30 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             }
 
+            // Implementing a proper contiguity check is hard, because it requires
+            // is_successor(range_bound<dht::ring_position> a, range_bound<dht::ring_position> b)
+            // relation to be defined. It is needed for intervals for which their possibly adjacent
+            // bounds are either both exclusive or inclusive.
+            // For example: is_adjacent([a, b], [c, d]) requires checking is_successor(b, c).
+            // Defining a successor relationship for dht::ring_position is hard, because
+            // dht::ring_position can possibly contain partition key.
+            // Luckily, a full contiguity check here is not needed.
+            // Ranges that we want to merge here are formed by dividing a bigger ranges using
+            // query_ranges_to_vnodes_generator. By knowing query_ranges_to_vnodes_generator internals,
+            // it can be assumed that usually, mergable ranges are of the form [a, b) [b, c).
+            // Therefore, for the most part, contiguity check is reduced to equality & inclusivity test.
+            // It's fine, that we don't detect contiguity of some other possibly contiguous
+            // ranges (like [a, b] [b+1, c]), because not merging contiguous ranges (as opposed
+            // to merging discontiguous ones) is not a correctness problem.
+            bool maybe_discontiguous = !next_range.start() || !(
+                range.end()->value().equal(*schema, next_range.start()->value()) ?
+                (range.end()->is_inclusive() || next_range.start()->is_inclusive()) : false
+            );
+            // Do not merge ranges that may be discontiguous with each other
+            if (maybe_discontiguous) {
+                break;
+            }
+
             inet_address_vector_replica_set merged = intersection(live_endpoints, next_endpoints);
             inet_address_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
 
