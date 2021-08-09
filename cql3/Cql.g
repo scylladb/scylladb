@@ -543,9 +543,9 @@ usingClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     ;
 
 usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
-    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
-    | K_TTL t=intValue { attrs->time_to_live = t; }
-    | K_TIMEOUT to=term { attrs->timeout = to; }
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = cql3::expr::as_expression(ts); }
+    | K_TTL t=intValue { attrs->time_to_live = cql3::expr::as_expression(t); }
+    | K_TIMEOUT to=term { attrs->timeout = cql3::expr::as_expression(to); }
     ;
 
 /**

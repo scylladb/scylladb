@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/term.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -78,9 +79,9 @@ public:
 
     class raw final {
     public:
-        ::shared_ptr<term::raw> timestamp;
-        ::shared_ptr<term::raw> time_to_live;
-        ::shared_ptr<term::raw> timeout;
+        std::optional<cql3::expr::expression> timestamp;
+        std::optional<cql3::expr::expression> time_to_live;
+        std::optional<cql3::expr::expression> timeout;
 
         std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) const;
     private:
