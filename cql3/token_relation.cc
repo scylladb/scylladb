@@ -83,7 +83,8 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         database& db, schema_ptr schema,
         prepare_context& ctx) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
+    auto v_term = as_term_raw(_value);
+    auto term = to_term(to_receivers(*schema, column_defs), *v_term, db,
             schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
@@ -105,7 +106,8 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         statements::bound bound,
         bool inclusive) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
+    auto v_term = as_term_raw(_value);
+    auto term = to_term(to_receivers(*schema, column_defs), *v_term, db,
             schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
