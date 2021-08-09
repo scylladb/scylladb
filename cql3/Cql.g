@@ -505,15 +505,15 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
     @init {
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
-        std::vector<::shared_ptr<cql3::term::raw>> values;
+        std::vector<cql3::expr::expression> values;
         bool if_not_exists = false;
         bool default_unset = false;
-        ::shared_ptr<cql3::term::raw> json_value;
+        std::optional<cql3::expr::expression> json_value;
     }
     : K_INSERT K_INTO cf=columnFamilyName
         ('(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
             K_VALUES
-            '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
+            '(' v1=term { values.push_back(cql3::expr::as_expression(v1)); } ( ',' vn=term { values.push_back(cql3::expr::as_expression(vn)); } )* ')'
             ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
             ( usingClause[attrs] )?
               {
@@ -524,14 +524,14 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
                                                        if_not_exists);
               }
         | K_JSON
-          json_token=jsonValue { json_value = $json_token.value; }
+          json_token=jsonValue { json_value = cql3::expr::as_expression($json_token.value); }
             ( K_DEFAULT K_UNSET { default_unset = true; } | K_DEFAULT K_NULL )?
             ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
             ( usingClause[attrs] )?
               {
               $expr = std::make_unique<raw::insert_json_statement>(std::move(cf),
                                                        std::move(attrs),
-                                                       std::move(json_value),
+                                                       std::move(*json_value),
                                                        if_not_exists,
                                                        default_unset);
               }

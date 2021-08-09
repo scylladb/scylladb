@@ -48,7 +48,6 @@
 #include "cql3/operation_impl.hh"
 #include "cql3/type_json.hh"
 #include "cql3/single_column_relation.hh"
-#include "cql3/expr/term_expr.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
@@ -292,7 +291,7 @@ namespace raw {
 insert_statement::insert_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<::shared_ptr<column_identifier::raw>> column_names,
-                                   std::vector<::shared_ptr<term::raw>> column_values,
+                                   std::vector<expr::expression> column_values,
                                    bool if_not_exists)
     : raw::modification_statement{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
     , _column_names{std::move(column_names)}
@@ -349,12 +348,12 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
 
 insert_json_statement::insert_json_statement(cf_name name,
                                              std::unique_ptr<attributes::raw> attrs,
-                                             ::shared_ptr<term::raw> json_value,
+                                             expr::expression json_value,
                                              bool if_not_exists,
                                              bool default_unset)
     : raw::modification_statement{name, std::move(attrs), conditions_vector{}, if_not_exists, false}
     , _name(name)
-    , _json_value(json_value)
+    , _json_value(std::move(json_value))
     , _if_not_exists(if_not_exists)
     , _default_unset(default_unset) { }
 
@@ -364,10 +363,9 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
 {
     // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
     (void)_if_not_exists;
-    auto json_value_expr = dynamic_pointer_cast<cql3::expr::term_raw_expr>(_json_value);
-    assert(json_value_expr && (std::holds_alternative<cql3::expr::untyped_constant>(json_value_expr->as_expression()) || std::holds_alternative<cql3::expr::bind_variable>(json_value_expr->as_expression())));
+    assert(std::holds_alternative<cql3::expr::untyped_constant>(_json_value) || std::holds_alternative<cql3::expr::bind_variable>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
-    auto prepared_json_value = _json_value->prepare(db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
+    auto prepared_json_value = prepare_term(_json_value, db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->fill_prepare_context(ctx);
     auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(ctx.bound_variables_size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, ctx, *stmt);

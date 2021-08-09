@@ -44,6 +44,7 @@
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/term.hh"
+#include "cql3/expr/expression.hh"
 
 #include "database_fwd.hh"
 
@@ -60,7 +61,7 @@ namespace raw {
 class insert_statement : public raw::modification_statement {
 private:
     const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
-    const std::vector<::shared_ptr<term::raw>> _column_values;
+    const std::vector<expr::expression> _column_values;
 public:
     /**
      * A parsed <code>INSERT</code> statement.
@@ -73,7 +74,7 @@ public:
     insert_statement(cf_name name,
                   std::unique_ptr<attributes::raw> attrs,
                   std::vector<::shared_ptr<column_identifier::raw>> column_names,
-                  std::vector<::shared_ptr<term::raw>> column_values,
+                  std::vector<expr::expression> column_values,
                   bool if_not_exists);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
@@ -84,7 +85,7 @@ public:
 class insert_json_statement : public raw::modification_statement {
 private:
     cf_name _name;
-    ::shared_ptr<term::raw> _json_value;
+    expr::expression _json_value;
     bool _if_not_exists;
     bool _default_unset;
 public:
@@ -95,7 +96,7 @@ public:
      * @param json_value JSON string representing names and values
      * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
      */
-    insert_json_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, ::shared_ptr<term::raw> json_value, bool if_not_exists, bool default_unset);
+    insert_json_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, expr::expression json_value, bool if_not_exists, bool default_unset);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
                 prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
