@@ -159,8 +159,7 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto v_term = as_term_raw(get_value());
-        auto t = to_term(col_specs, *v_term, db, schema->ks_name(), ctx);
+        auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
         return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, t);
     }
 
@@ -172,12 +171,12 @@ protected:
             return cs->column_specification;
         });
         if (_in_marker) {
-            auto v_term = as_term_raw(get_value());
-            auto t = to_term(col_specs, *v_term, db, schema->ks_name(), ctx);
+            auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
             auto as_abstract_marker = static_pointer_cast<abstract_marker>(t);
             return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, as_abstract_marker);
         } else {
-            auto raws = boost::copy_range<std::vector<shared_ptr<term::raw>>>(_in_values | boost::adaptors::transformed(expr::as_term_raw));
+            std::vector<expr::expression> raws(_in_values.size());
+            std::copy(_in_values.begin(), _in_values.end(), raws.begin());
             auto ts = to_terms(col_specs, raws, db, schema->ks_name(), ctx);
             // Convert a single-item IN restriction to an EQ restriction
             if (ts.size() == 1) {
@@ -195,8 +194,7 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto v_term = as_term_raw(get_value());
-        auto t = to_term(col_specs, *v_term, db, schema->ks_name(), ctx);
+        auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
         return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t, _mode);
     }
 
@@ -218,9 +216,9 @@ protected:
     }
 
     virtual shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                     const term::raw& raw, database& db, const sstring& keyspace,
+                                     const expr::expression& raw, database& db, const sstring& keyspace,
                                      prepare_context& ctx) const override {
-        auto t = raw.prepare(db, keyspace, receivers);
+        auto t = prepare_term(raw, db, keyspace, receivers);
         t->fill_prepare_context(ctx);
         return t;
     }

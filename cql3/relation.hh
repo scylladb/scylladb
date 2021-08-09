@@ -250,7 +250,7 @@ protected:
      * @throws InvalidRequestException if the <code>Raw</code> term is not valid
      */
     virtual ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                       const term::raw& raw,
+                                       const expr::expression& raw,
                                        database& db,
                                        const sstring& keyspace,
                                        prepare_context& ctx) const = 0;
@@ -266,13 +266,13 @@ protected:
      * @throws InvalidRequestException if the <code>Raw</code> terms are not valid
      */
     std::vector<::shared_ptr<term>> to_terms(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                             const std::vector<::shared_ptr<term::raw>>& raws,
+                                             const std::vector<expr::expression>& raws,
                                              database& db,
                                              const sstring& keyspace,
                                              prepare_context& ctx) const {
         std::vector<::shared_ptr<term>> terms;
         for (const auto& r : raws) {
-            terms.emplace_back(to_term(receivers, *r, db, keyspace, ctx));
+            terms.emplace_back(to_term(receivers, r, db, keyspace, ctx));
         }
         return terms;
     }

@@ -124,7 +124,7 @@ public:
 
 protected:
     ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                       const term::raw& raw,
+                                       const expr::expression& raw,
                                        database& db,
                                        const sstring& keyspace,
                                        prepare_context& ctx) const override;
