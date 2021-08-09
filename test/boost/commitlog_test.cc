@@ -301,7 +301,7 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     constexpr auto max_size_mb = 2;
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 1;
-    cfg.commitlog_sync_period_in_ms = 1;
+    cfg.commitlog_sync_period_in_ms = 1000;
     return cl_test(cfg, [](commitlog& log) {
             auto sem = make_lw_shared<semaphore>(0);
             auto segments = make_lw_shared<std::set<sstring>>();
@@ -761,7 +761,6 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     // ensure total size per shard is not multiple of segment size.
     cfg.commitlog_total_space_in_mb = 5 * smp::count;
-    cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -836,7 +835,6 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     // ensure total size per shard is not multiple of segment size.
     cfg.commitlog_total_space_in_mb = 5 * smp::count;
-    cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -903,7 +901,6 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
-    cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -952,7 +949,6 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
-    cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 

@@ -465,16 +465,8 @@ public:
     void discard_unused_segments() noexcept;
     void discard_completed_segments(const cf_id_type&) noexcept;
     void discard_completed_segments(const cf_id_type&, const rp_set&) noexcept;
-    
+
     future<> force_new_active_segment() noexcept;
-
-    void on_timer();
-
-    void arm(uint32_t extra = 0) {
-        if (!_shutdown) {
-            _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
-        }
-    }
 
     std::vector<sstring> get_active_names() const;
     uint64_t get_num_dirty_segments() const;
@@ -589,6 +581,7 @@ private:
 
     future<> handle_writes() noexcept;
     void do_periodic_syncs() noexcept;
+    void do_periodic_flush_callbacks() noexcept;
 
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0, _low_id = 0;
@@ -598,7 +591,6 @@ private:
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
-    timer<clock_type> _timer;
     future<> replenish_reserve();
     future<> _reserve_replenisher;
     future<> _background_sync;
@@ -1607,12 +1599,14 @@ future<> db::commitlog::segment_manager::message_loop() {
             }, m);
         }
 
-        if (cfg.mode == sync_mode::PERIODIC) { 
-            now = message_clock::now();
-            if (now >= next_wakeup || (now - last_sync) >= sync_period) {
+        now = message_clock::now();
+        if (now >= next_wakeup || (now - last_sync) >= sync_period) {
+            if (cfg.mode == sync_mode::PERIODIC) { 
                 do_periodic_syncs();
-                last_sync = now;
             }
+            // do not do this too often.
+            do_periodic_flush_callbacks();
+            last_sync = now;
         }
 
         co_await do_pending_deletes();
@@ -1651,6 +1645,55 @@ void db::commitlog::segment_manager::do_periodic_syncs() noexcept {
         if (!s->is_written_and_flushed()) {
             s->reset_sync_time();
             send(s->make_write_request(true));
+        }
+    }
+}
+
+void db::commitlog::segment_manager::do_periodic_flush_callbacks() noexcept {
+    // TODO: remove this once shutdown is properly moved to message loop
+    if (_shutdown) {
+        return;
+    }
+
+    byte_flow<uint64_t> curr = totals;
+    auto diff = curr - std::exchange(last_bytes, curr);
+    auto now = std::chrono::high_resolution_clock::now();
+    auto seconds = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time).count();
+    auto rate = diff / seconds;
+
+    // not using yet. but should maybe, adjust for time windows etc.
+    // for now, use simple "timer frequency" based diffs (i.e. rate per 10s)
+    // to try to predict where disk foot print will be by the next timer call.
+    bytes_rate = rate;
+    last_time = now;
+
+    clogger.debug("Rate: {} / s ({} s)", rate, seconds);
+
+    // IFF a new segment was put in use since last we checked, and we're
+    // above threshold, request flush.
+    if (_new_counter > 0) {
+        auto max = disk_usage_threshold;
+        auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
+        uint64_t extra = 0;
+
+        // TODO: better heuristics? Do a semi-pessimistic approach, guess that half
+        // of flush request will manage to finish by next lap, so count it as half.
+        auto returned = diff.bytes_released + diff.bytes_flush_requested/2;
+        if (diff.bytes_written > returned) {
+            // we are guessing we are gonna add at least this.
+            extra = (diff.bytes_written - returned);
+        }
+
+        // do not just measure current footprint, but maybe include expected
+        // footprint that will be added.
+        if (max != 0 && (cur + extra) >= max) {
+            clogger.debug("Used size on disk {} MB ({} MB projected) exceeds local threshold {} MB"
+                , (cur) / (1024 * 1024)
+                , (cur+extra) / (1024 * 1024)
+                , max / (1024 * 1024)
+            );
+            _new_counter = 0;
+            flush_segments(cur + extra - max);
         }
     }
 }
@@ -1760,14 +1803,12 @@ future<> db::commitlog::segment_manager::init() {
     _low_id = id;
 
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
-    _timer.set_callback(std::bind(&segment_manager::on_timer, this));
     _message_loop = message_loop();
     auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
     clogger.trace("Delaying timer loop {} ms", delay);
     // We need to wait until we have scanned all other segments to actually start serving new
     // segments. We are ready now
     _reserve_replenisher = with_scheduling_group(cfg.sched_group, [this] { return replenish_reserve(); });
-    arm(delay);
 }
 
 void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
@@ -2096,8 +2137,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // if we have no reserve and we're above/at limits, make background task a little more eager.
         auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
         if (!_shutdown && cur >= disk_usage_threshold) {
-            _timer.cancel();
-            _timer.arm(std::chrono::milliseconds(0));
+            wakeup();
         }
     }
 
@@ -2284,7 +2324,6 @@ future<> db::commitlog::segment_manager::shutdown() {
         try {
             co_await std::move(block_new_requests);
 
-            _timer.cancel(); // no more timer calls
             _shutdown = true; // no re-arm, no create new segments.
 
             // do a discard + delete sweep to force 
@@ -2489,58 +2528,6 @@ future<> db::commitlog::segment_manager::clear() {
         s->mark_clean();
     }
     co_await orphan_all();
-}
-
-void db::commitlog::segment_manager::on_timer() {
-    // Gate, because we are starting potentially blocking ops
-    // without waiting for them, so segement_manager could be shut down
-    // while they are running.
-    (void)seastar::with_gate(_gate, [this] {
-
-        byte_flow<uint64_t> curr = totals;
-        auto diff = curr - std::exchange(last_bytes, curr);
-        auto now = std::chrono::high_resolution_clock::now();
-        auto seconds = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time).count();
-        auto rate = diff / seconds;
-
-        // not using yet. but should maybe, adjust for time windows etc.
-        // for now, use simple "timer frequency" based diffs (i.e. rate per 10s)
-        // to try to predict where disk foot print will be by the next timer call.
-        bytes_rate = rate;
-        last_time = now;
-
-        clogger.debug("Rate: {} / s ({} s)", rate, seconds);
-
-        // IFF a new segment was put in use since last we checked, and we're
-        // above threshold, request flush.
-        if (_new_counter > 0) {
-            auto max = disk_usage_threshold;
-            auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
-            uint64_t extra = 0;
-
-            // TODO: better heuristics? Do a semi-pessimistic approach, guess that half
-            // of flush request will manage to finish by next lap, so count it as half.
-            auto returned = diff.bytes_released + diff.bytes_flush_requested/2;
-            if (diff.bytes_written > returned) {
-                // we are guessing we are gonna add at least this.
-                extra = (diff.bytes_written - returned);
-            }
-
-            // do not just measure current footprint, but maybe include expected
-            // footprint that will be added.
-            if (max != 0 && (cur + extra) >= max) {
-                clogger.debug("Used size on disk {} MB ({} MB projected) exceeds local threshold {} MB"
-                    , (cur) / (1024 * 1024)
-                    , (cur+extra) / (1024 * 1024)
-                    , max / (1024 * 1024)
-                );
-                _new_counter = 0;
-                flush_segments(cur + extra - max);
-            }
-        }
-        return do_pending_deletes();
-    });
-    arm();
 }
 
 std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
