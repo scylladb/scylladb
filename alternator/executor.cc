@@ -21,7 +21,7 @@
 
 #include <regex>
 
-#include "base64.hh"
+#include "utils/base64.hh"
 
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"

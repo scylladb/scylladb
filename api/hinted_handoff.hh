@@ -26,5 +26,6 @@
 namespace api {
 
 void set_hinted_handoff(http_context& ctx, routes& r);
+void unset_hinted_handoff(http_context& ctx, routes& r);
 
 }

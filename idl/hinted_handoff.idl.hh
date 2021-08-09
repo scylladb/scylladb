@@ -23,20 +23,22 @@ namespace db {
 
 namespace hints {
 
-struct sync_point_create_request {
-    utils::UUID sync_point_id;
-    std::vector<gms::inet_address> target_endpoints;
-    lowres_clock::time_point mark_deadline;
+// Contains per-endpoint and per-shard information about replay positions
+// for a particular type of hint queues (regular mutation hints or MV update hints)
+struct per_manager_sync_point_v1 {
+    std::vector<gms::inet_address> addresses;
+    std::vector<db::replay_position> flattened_rps;
 };
 
-struct sync_point_create_response {};
+struct sync_point_v1 {
+    utils::UUID host_id;
+    uint16_t shard_count;
 
-struct sync_point_check_request {
-    utils::UUID sync_point_id;
-};
+    // Sync point information for regular mutation hints
+    db::hints::per_manager_sync_point_v1 regular_sp;
 
-struct sync_point_check_response {
-    bool expired;
+    // Sync point information for materialized view hints
+    db::hints::per_manager_sync_point_v1 mv_sp;
 };
 
 }

@@ -24,7 +24,7 @@
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/memory.hh>
-#include "alternator/base64.hh"
+#include "utils/base64.hh"
 
 static bytes_view to_bytes_view(const std::string& s) {
     return bytes_view(reinterpret_cast<const signed char*>(s.c_str()), s.size());

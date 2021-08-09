@@ -27,12 +27,12 @@
 #include <list>
 #include <chrono>
 #include <optional>
+#include <map>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
-#include <seastar/core/expiring_fifo.hh>
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
@@ -40,8 +40,13 @@
 #include "utils/loading_shared_values.hh"
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
+#include "db/hints/sync_point.hh"
 
 class fragmented_temporary_buffer;
+
+namespace seastar {
+class abort_source;
+}
 
 namespace utils {
 class directories;
@@ -54,7 +59,6 @@ using node_to_hint_store_factory_type = utils::loading_shared_values<gms::inet_a
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
 using timer_clock_type = seastar::lowres_clock;
-using time_point_type = timer_clock_type::time_point;
 
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.
@@ -95,9 +99,6 @@ private:
     class drain_tag {};
     using drain = seastar::bool_class<drain_tag>;
 
-    class force_segment_list_update_tag {};
-    using force_segment_list_update = seastar::bool_class<force_segment_list_update_tag>;
-
     friend class space_watchdog;
 
 public:
@@ -128,15 +129,24 @@ public:
                 std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
                 seastar::gate file_send_gate;
                 std::optional<db::replay_position> first_failed_rp;
-                std::optional<db::replay_position> last_attempted_rp;
+                std::optional<db::replay_position> last_succeeded_rp;
+                std::set<db::replay_position> in_progress_rps;
                 bool segment_replay_failed = false;
 
+                void mark_hint_as_in_progress(db::replay_position rp);
+                void on_hint_send_success(db::replay_position rp) noexcept;
                 void on_hint_send_failure(db::replay_position rp) noexcept;
+
+                // Returns a position below which hints were successfully replayed.
+                db::replay_position get_replayed_bound() const noexcept;
             };
 
         private:
             std::list<sstring> _segments_to_replay;
+            // Segments to replay which were not created on this shard but were moved during rebalancing
+            std::list<sstring> _foreign_segments_to_replay;
             replay_position _last_not_complete_rp;
+            replay_position _sent_upper_bound_rp;
             std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
             state_set _state;
             future<> _stopped;
@@ -151,26 +161,12 @@ public:
             seastar::scheduling_group _hints_cpu_sched_group;
             gms::gossiper& _gossiper;
             seastar::shared_mutex& _file_update_mutex;
-            uint64_t _total_replayed_segments_count = 0;
 
-            struct segment_waiter {
-                const uint64_t target_segment_count;
-                promise<> pr;
-
-                segment_waiter(uint64_t segment_count) : target_segment_count(segment_count) {}
-
-                struct expirer {
-                    inline void operator()(segment_waiter& sw) const {
-                        sw.pr.set_exception(seastar::timed_out_error{});
-                    }
-                };
-            };
-
-            // A queue of promises which wait until a particular number of segments is replayed
-            seastar::expiring_fifo<segment_waiter, segment_waiter::expirer, timer_clock_type> _segment_waiters;
+            std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
 
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;
+            ~sender();
 
             /// \brief A constructor that should be called from the copy/move-constructor of end_point_hints_manager.
             ///
@@ -195,22 +191,28 @@ public:
             /// \brief Add a new segment ready for sending.
             void add_segment(sstring seg_name);
 
-            /// \brief Overrides the current list of segments with a new one.
-            ///
-            /// If there are some segments to replay present, then the first one
-            /// is not erased because we might be sending it at the moment. However,
-            /// this function makes sure that if the first segment is in the `seg_names`
-            /// list, then it is not added twice.
-            void update_segment_list(std::vector<sstring> seg_names);
+            /// \brief Add a new segment originating from another shard, ready for sending.
+            void add_foreign_segment(sstring seg_name);
 
             /// \brief Check if there are still unsent segments.
             /// \return TRUE if there are still unsent segments.
-            bool have_segments() const noexcept { return !_segments_to_replay.empty(); };
+            bool have_segments() const noexcept { return !_segments_to_replay.empty() || !_foreign_segments_to_replay.empty(); };
 
-            /// \brief Waits until all current hints on disk for this endpoints are replayed, timeout is reached or hint replay becomes stuck.
-            future<> wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter);
+            /// \brief Sets the sent_upper_bound_rp marker to indicate that the hints were replayed _up to_ given position.
+            void rewind_sent_replay_position_to(db::replay_position rp);
+
+            /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
+            future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp);
 
         private:
+            /// \brief Gets the name of the current segment that should be sent.
+            ///
+            /// If there are no segments to be sent, nullptr will be returned.
+            const sstring* name_of_current_segment() const;
+
+            /// \brief Removes the current segment from the queue.
+            void pop_current_segment();
+
             /// \brief Send hints collected so far.
             ///
             /// Send hints aggregated so far. This function is going to try to deplete
@@ -296,6 +298,12 @@ public:
             /// \return future that resolves when the mutation sending processing is complete.
             future<> send_one_mutation(frozen_mutation_and_schema m);
 
+            /// \brief Notifies replay waiters for which the target replay position was reached.
+            void notify_replay_waiters() noexcept;
+
+            /// \brief Dismisses ALL current replay waiters with an exception.
+            void dismiss_replay_waiters() noexcept;
+
             /// \brief Get the last modification time stamp for a given file.
             /// \param fname File name
             /// \return The last modification time stamp for \param fname.
@@ -316,12 +324,6 @@ public:
             /// \brief Return the amount of time we want to sleep after the current iteration.
             /// \return The time till the soonest event: flushing or re-sending.
             clock::duration next_sleep_duration() const;
-
-            /// Notifies waiters from the _segment_waiters list.
-            void notify_segment_waiters();
-
-            /// Dismisses all current _segment_waiters with given exception
-            void dismiss_all_segment_waiters(std::exception_ptr ep);
         };
 
     private:
@@ -346,6 +348,7 @@ public:
         state_set _state;
         const fs::path _hints_dir;
         uint64_t _hints_in_progress = 0;
+        db::replay_position _last_written_rp;
         sender _sender;
 
     public:
@@ -360,7 +363,7 @@ public:
         /// \brief Get the corresponding hints_store object. Create it if needed.
         /// \note Must be called under the \ref _file_update_mutex.
         /// \return The corresponding hints_store object.
-        future<hints_store_ptr> get_or_load(force_segment_list_update force_update = force_segment_list_update::no);
+        future<hints_store_ptr> get_or_load();
 
         /// \brief Store a single mutation hint.
         /// \param s column family descriptor
@@ -432,6 +435,18 @@ public:
             return _state.contains(state::stopped);
         }
 
+        /// \brief Returns replay position of the most recently written hint.
+        ///
+        /// If there weren't any hints written during this endpoint manager's lifetime, a zero replay_position is returned.
+        db::replay_position last_written_replay_position() const {
+            return _last_written_rp;
+        }
+
+        /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
+        future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+            return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
+        }
+
         /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
         ///
         /// Runs a given functor under the file_update_mutex of the given end_point_hints_manager instance.
@@ -451,11 +466,6 @@ public:
             return _hints_dir;
         }
 
-        /// \brief Waits until all current hints on disk for this endpoints are replayed or the timeout is reached.
-        future<> wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter) {
-            return _sender.wait_until_hints_are_replayed(timeout, flush_limiter);
-        }
-
     private:
         seastar::shared_mutex& file_update_mutex() noexcept {
             return _file_update_mutex;
@@ -468,13 +478,13 @@ public:
         /// - Populate _segments_to_replay if it's empty.
         ///
         /// \return A new hints store object.
-        future<commitlog> add_store(force_segment_list_update force_update = force_segment_list_update::no) noexcept;
+        future<commitlog> add_store() noexcept;
 
         /// \brief Flushes all hints written so far to the disk.
         ///  - Repopulates the _segments_to_replay list if needed.
         ///
         /// \return Ready future when the procedure above completes.
-        future<> flush_current_hints(force_segment_list_update force_update = force_segment_list_update::no) noexcept;
+        future<> flush_current_hints() noexcept;
 
         struct stats& shard_stats() {
             return _shard_manager._stats;
@@ -635,6 +645,12 @@ public:
         _state.set(state::replay_allowed);
     }
 
+    /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
+    sync_point::shard_rps calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const;
+
+    /// \brief Waits until hint replay reach replay positions described in `rps`.
+    future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
+
     /// \brief Creates an object which aids in hints directory initialization.
     /// This object can saafely be copied and used from any shard.
     /// \arg dirs The utils::directories object, used to create and lock hints directories
@@ -655,11 +671,6 @@ public:
     /// \param hints_directory A hints directory to rebalance
     /// \return A future that resolves when the operation is complete.
     static future<> rebalance(sstring hints_directory);
-
-    /// \brief Waits until all current hints on disk for given endpoints are replayed or the timeout is reached.
-    /// \param endpoints list of endpoints whose hints need to be waited on
-    /// \param timeout if hints are not replayed until the timeout, the function will return with an exception
-    future<> wait_until_hints_are_replayed(const std::vector<gms::inet_address>& endpoints, time_point_type timeout = time_point_type::max());
 
 private:
     future<> compute_hints_dir_device_id();

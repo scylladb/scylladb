@@ -268,7 +268,6 @@ endforeach()
 set(scylla_sources
     absl-flat_hash_map.cc
     alternator/auth.cc
-    alternator/base64.cc
     alternator/conditions.cc
     alternator/executor.cc
     alternator/expressions.cc
@@ -599,6 +598,7 @@ set(scylla_sources
     utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
     utils/array-search.cc
     utils/ascii.cc
+    utils/base64.cc
     utils/big_decimal.cc
     utils/bloom_calculations.cc
     utils/bloom_filter.cc

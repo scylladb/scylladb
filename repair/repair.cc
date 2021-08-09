@@ -26,7 +26,8 @@
 #include "dht/sharder.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
-#include "service/storage_proxy.hh"
+#include "utils/fb_utilities.hh"
+#include "gms/gossiper.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
@@ -1015,34 +1016,6 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
     });
 }
 
-static future<> try_wait_for_hints_to_be_replayed(repair_uniq_id id, std::vector<gms::inet_address> source_nodes, std::vector<gms::inet_address> target_nodes) {
-    auto get_elapsed_seconds = [start_time = lowres_clock::now()] {
-        return std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
-    };
-    auto& sp = service::get_local_storage_proxy();
-    rlogger.info("repair id {}: started replaying hints before repair, source nodes: {}, target nodes: {}", id, source_nodes, target_nodes);
-    try {
-        seastar::abort_source combined_as;
-        auto attach = [&] (seastar::abort_source& as) {
-            as.check();
-            return as.subscribe([&] () noexcept {
-                if (!combined_as.abort_requested()) {
-                    combined_as.request_abort();
-                }
-            });
-        };
-
-        const auto shutdown_sub = attach(repair_tracker().get_shutdown_abort_source());
-        const auto abort_all_sub = attach(repair_tracker().get_abort_all_abort_source());
-
-        co_await sp.wait_for_hints_to_be_replayed(id.uuid, std::move(source_nodes), std::move(target_nodes), combined_as);
-        rlogger.info("repair id {}: finished replaying hints (took {}s), continuing with repair", id, get_elapsed_seconds());
-    } catch (...) {
-        rlogger.warn("repair id {}: failed to replay hints before repair (took {}s): {}, the repair will continue", id, get_elapsed_seconds(), std::current_exception());
-    }
-    co_return;
-}
-
 // repair_start() can run on any cpu; It runs on cpu0 the function
 // do_repair_start(). The benefit of always running that function on the same
 // CPU is that it allows us to keep some state (like a list of ongoing
@@ -1144,15 +1117,6 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
-
-        if (db.local().get_config().wait_for_hint_replay_before_repair()) {
-            auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
-            std::erase_if(waiting_nodes, [&] (const auto& addr) {
-                return ignore_nodes.contains(addr);
-            });
-            try_wait_for_hints_to_be_replayed(id, std::move(waiting_nodes), participants).get();
-        }
-
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);

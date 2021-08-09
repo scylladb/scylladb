@@ -58,7 +58,6 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/hints/manager.hh"
-#include "db/hints/messages.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -101,7 +100,6 @@
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
 #include "seastar/core/coroutine.hh"
-#include "seastar/core/with_timeout.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
@@ -5210,16 +5208,6 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-
-    ms.register_hint_sync_point_create([this] (db::hints::sync_point_create_request request) -> future<db::hints::sync_point_create_response> {
-        co_await create_hint_queue_sync_point(request.sync_point_id, std::move(request.target_endpoints), request.mark_deadline);
-        co_return db::hints::sync_point_create_response{};
-    });
-
-    ms.register_hint_sync_point_check([this] (db::hints::sync_point_check_request request) -> future<db::hints::sync_point_check_response> {
-        const bool expired = co_await check_hint_queue_sync_point(request.sync_point_id);
-        co_return db::hints::sync_point_check_response{expired};
-    });
 }
 
 future<> storage_proxy::uninit_messaging_service() {
@@ -5237,9 +5225,7 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
-        ms.unregister_paxos_prune(),
-        ms.unregister_hint_sync_point_create(),
-        ms.unregister_hint_sync_point_check()
+        ms.unregister_paxos_prune()
     ).discard_result();
 
 }
@@ -5338,111 +5324,97 @@ const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
     return _hints_manager.get_host_filter();
 }
 
-future<> storage_proxy::create_hint_queue_sync_point(utils::UUID sync_point_id, std::vector<gms::inet_address> endpoints, clock_type::time_point deadline) {
-    return container().invoke_on(0, [sync_point_id, endpoints = std::move(endpoints), deadline] (storage_proxy& sp) mutable {
-        auto [it, was_inserted] = sp._hint_queue_checkpoints.emplace(sync_point_id);
-        if (!was_inserted) {
-            return make_exception_future<>(std::runtime_error(format("Hint sync point {} already exists", sync_point_id)));
-        }
-
-        // Waited indirectly by keeping a pointer to the storage_proxy.
-        // When drain_on_shutdown is triggered, hints manager will report an error
-        // and this future will resolve.
-        (void)sp.container().invoke_on_all([endpoints = std::move(endpoints), sync_point_id, deadline] (storage_proxy& sp) {
-            auto wait_for_hints_manager = [&endpoints, sync_point_id, deadline] (db::hints::manager& mgr, const char* mgr_name) {
-                return mgr.wait_until_hints_are_replayed(endpoints, deadline).then_wrapped([mgr_name, sync_point_id] (future<>&& f) {
-                    if (!f.failed()) {
-                        slogger.debug("Hint sync point {} for {} reached", sync_point_id, mgr_name);
-                        f.get();
-                    } else {
-                        slogger.debug("An error occured when waiting for hint sync point {} for {} to resolve: {}", sync_point_id, mgr_name, f.get_exception());
-                    }
-                });
-            };
-
-            return when_all(
-                wait_for_hints_manager(sp._hints_manager, "hints manager"),
-                wait_for_hints_manager(sp._hints_for_views_manager, "hints for view manager")
-            ).discard_result();
-        }).then([&sp, sync_point_id, guard = sp.shared_from_this()] {
-            sp._hint_queue_checkpoints.erase(sync_point_id);
+future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::vector<gms::inet_address> target_hosts) const {
+    db::hints::sync_point spoint;
+    spoint.regular_per_shard_rps.resize(smp::count);
+    spoint.mv_per_shard_rps.resize(smp::count);
+    spoint.host_id = co_await db::system_keyspace::get_local_host_id();
+    co_await parallel_for_each(boost::irange<unsigned>(0, smp::count), [this, &target_hosts, &spoint] (unsigned shard) {
+        const auto& sharded_sp = container();
+        // sharded::invoke_on does not have a const-method version, so we cannot use it here
+        return smp::submit_to(shard, [&sharded_sp, &target_hosts] {
+            const storage_proxy& sp = sharded_sp.local();
+            auto regular_rp = sp._hints_manager.calculate_current_sync_point(target_hosts);
+            auto mv_rp = sp._hints_for_views_manager.calculate_current_sync_point(target_hosts);
+            return std::make_pair(std::move(regular_rp), std::move(mv_rp));
+        }).then([shard, &spoint] (auto p) {
+            spoint.regular_per_shard_rps[shard] = std::move(p.first);
+            spoint.mv_per_shard_rps[shard] = std::move(p.second);
         });
-
-        return make_ready_future<>();
     });
+    co_return spoint;
 }
 
-future<bool> storage_proxy::check_hint_queue_sync_point(utils::UUID sync_point) {
-    return container().invoke_on(0, [sync_point] (storage_proxy& sp) {
-        return !sp._hint_queue_checkpoints.contains(sync_point);
-    });
-}
+future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline) {
+    const utils::UUID my_host_id = co_await db::system_keyspace::get_local_host_id();
+    if (spoint.host_id != my_host_id) {
+        throw std::runtime_error(format("The hint sync point was created on another node, with host ID {}. This node's host ID is {}",
+                spoint.host_id, my_host_id));
+    }
 
-future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints, seastar::abort_source& as) {
-    const auto deadline = lowres_clock::time_point::max();
+    std::vector<abort_source> sources;
+    sources.resize(smp::count);
 
-    slogger.debug("Coordinating a request to wait until all hints are sent on {} nodes", source_endpoints.size());
-
-    co_await parallel_for_each(source_endpoints, [this, operation_id, &target_endpoints_ = target_endpoints, deadline_ = deadline, &as] (gms::inet_address addr) -> future<> {
-        const auto deadline = deadline_;
-        const auto& target_endpoints = target_endpoints_;
-
-        const auto start_time = lowres_clock::now();
-        const std::chrono::seconds wait_duration{1};
-
-        // Step 1: Create a hint queue sync point
-        try {
-            db::hints::sync_point_create_request request;
-            request.sync_point_id = operation_id;
-            request.target_endpoints = target_endpoints;
-            request.mark_deadline = deadline;
-            co_await _messaging.send_hint_sync_point_create({ addr, 0 }, deadline, std::move(request));
-        } catch (...) {
-            slogger.debug("Failed to create a sync point for {}. I won't wait for hints to be replayed on this node");
-            throw;
-        }
-
-        // Step 2: Wait until hints are replayed
-        // Sleep 1 second between checks
-        bool reached_sync_point = false;
-        while (!reached_sync_point && !as.abort_requested() && lowres_clock::now() < deadline) {
-            // Check if the destination is alive
-            if (!gms::get_local_gossiper().is_alive(addr)) {
-                slogger.debug("Node {} is no longer alive, won't wait anymore for its hint sync point", addr);
-                break;
-            }
-
-            slogger.debug("Waiting for all hints from endpoint {} to be sent out; time spent so far: {}s, targets: {}",
-                    addr, std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count(), target_endpoints);
-            try {
-                db::hints::sync_point_check_request request;
-                request.sync_point_id = operation_id;
-                const auto response = co_await _messaging.send_hint_sync_point_check({ addr, 0 }, deadline, std::move(request));
-                reached_sync_point = response.expired;
-                if (reached_sync_point) {
-                    break;
+    // If the timer is triggered, it will spawn a discarded future which triggers
+    // abort sources on all shards. We need to make sure that this future
+    // completes before exiting - we use a gate for that.
+    seastar::gate timer_gate;
+    seastar::timer<lowres_clock> t;
+    t.set_callback([&timer_gate, &sources] {
+        // The gate is waited on at the end of the wait_for_hint_sync_point function
+        // The gate is guaranteed to be open at this point
+        (void)with_gate(timer_gate, [&sources] {
+            return smp::invoke_on_all([&sources] {
+                unsigned shard = this_shard_id();
+                if (!sources[shard].abort_requested()) {
+                    sources[shard].request_abort();
                 }
-            } catch (rpc::timeout_error&) {
-                slogger.debug("Caught a timeout error while sending hint queue query at {}", addr);
-                // RPC timeout should be set to the deadline, so we can assume here that the deadline is reached
-                break;
-            } catch (rpc::closed_error&) {
-                slogger.debug("Caught a connection closed error while sending hint queue query at {}", addr);
-            } catch (...) {
-                slogger.debug("Caught an unexpected error while sending hint queue query at {}: {}. Won't wait anymore", addr, std::current_exception());
-                throw;
-            }
-
-            co_await sleep_abortable(wait_duration, as);
-        }
-
-        if (reached_sync_point) {
-            slogger.debug("Finished waiting for all hints from endpoint {} to be sent out - all segments waited on were sent", addr);
-        } else {
-            slogger.debug("Finished waiting for all hints from endpoint {} to be sent out - stopped waiting before all segments were sent", addr);
-        }
-        co_return;
+            });
+        });
     });
+    t.arm(deadline);
+
+    bool was_aborted = false;
+    unsigned original_shard = this_shard_id();
+    co_await container().invoke_on_all([this, original_shard, &sources, &spoint, &was_aborted] (storage_proxy& sp) {
+        auto wait_for = [&sources, original_shard, &was_aborted] (db::hints::manager& mgr, const std::vector<db::hints::sync_point::shard_rps>& shard_rps) {
+            const unsigned shard = this_shard_id();
+            if (shard_rps.size() < shard) {
+                return make_ready_future<>();
+            }
+            return mgr.wait_for_sync_point(sources[shard], shard_rps[shard]).handle_exception([original_shard, &sources, &was_aborted] (auto eptr) {
+                // Make sure other blocking operations are cancelled soon
+                // by requesting an abort on all shards
+                return smp::invoke_on_all([&sources] {
+                    unsigned shard = this_shard_id();
+                    if (!sources[shard].abort_requested()) {
+                        sources[shard].request_abort();
+                    }
+                }).then([eptr = std::move(eptr), &was_aborted, original_shard] () mutable {
+                    try {
+                        std::rethrow_exception(std::move(eptr));
+                    } catch (abort_requested_exception&) {
+                        return smp::submit_to(original_shard, [&was_aborted] { was_aborted = true; });
+                    } catch (...) {
+                        return make_exception_future<>(std::current_exception());
+                    }
+                    return make_ready_future<>();
+                });
+            });
+        };
+
+        return when_all_succeed(
+            wait_for(sp._hints_manager, spoint.regular_per_shard_rps),
+            wait_for(sp._hints_for_views_manager, spoint.mv_per_shard_rps)
+        ).discard_result();
+    }).finally([&t, &timer_gate] {
+        t.cancel();
+        return timer_gate.close();
+    });
+
+    if (was_aborted) {
+        throw timed_out_error{};
+    }
 
     co_return;
 }

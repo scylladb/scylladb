@@ -313,8 +313,6 @@ private:
     cdc::cdc_service* _cdc = nullptr;
 
     cdc_stats _cdc_stats;
-
-    std::unordered_set<utils::UUID> _hint_queue_checkpoints;
 private:
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -443,9 +441,6 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
-
-    future<> create_hint_queue_sync_point(utils::UUID sync_point_id, std::vector<gms::inet_address> endpoints, clock_type::time_point deadline);
-    future<bool> check_hint_queue_sync_point(utils::UUID sync_point);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
@@ -483,9 +478,6 @@ public:
     }
     void init_messaging_service(shared_ptr<migration_manager>);
     future<> uninit_messaging_service();
-
-    // Waits until `source_endpoints` replay their current hints towards `target_endpoints`.
-    future<> wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints, seastar::abort_source& as);
 
 private:
     // Applies mutation on this node.
@@ -621,6 +613,9 @@ public:
 
     future<> change_hints_host_filter(db::hints::host_filter new_filter);
     const db::hints::host_filter& get_hints_host_filter() const;
+
+    future<db::hints::sync_point> create_hint_sync_point(const std::vector<gms::inet_address> target_hosts) const;
+    future<> wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline);
 
     const stats& get_stats() const {
         return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);

@@ -25,6 +25,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/div_ceil.hh"
@@ -40,9 +41,9 @@
 #include "database.hh"
 #include "service_permit.hh"
 #include "utils/directories.hh"
-#include "utils/UUID_gen.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation_partition_view.hh"
+#include "utils/runtime.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -167,6 +168,60 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     });
 }
 
+sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const {
+    sync_point::shard_rps rps;
+    for (auto addr : target_hosts) {
+        auto it = _ep_managers.find(addr);
+        if (it != _ep_managers.end()) {
+            const end_point_hints_manager& ep_man = it->second;
+            rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
+        }
+    }
+    return rps;
+}
+
+future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps) {
+    abort_source local_as;
+
+    auto sub = as.subscribe([&local_as] () noexcept {
+        if (!local_as.abort_requested()) {
+            local_as.request_abort();
+        }
+    });
+
+    bool was_aborted = false;
+    co_await parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
+        const auto addr = p.first;
+        auto& ep_man = p.second;
+
+        db::replay_position rp;
+        auto it = rps.find(addr);
+        if (it != rps.end()) {
+            rp = it->second;
+        }
+
+        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception([&local_as, &was_aborted] (auto eptr) {
+            if (!local_as.abort_requested()) {
+                local_as.request_abort();
+            }
+            try {
+                std::rethrow_exception(std::move(eptr));
+            } catch (abort_requested_exception&) {
+                was_aborted = true;
+            } catch (...) {
+                return make_exception_future<>(std::current_exception());
+            }
+            return make_ready_future();
+        });
+    });
+
+    if (was_aborted) {
+        throw abort_requested_exception();
+    }
+
+    co_return;
+}
+
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
@@ -180,7 +235,11 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
                     return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
                 }).then([this, tr_state] (db::rp_handle rh) {
-                    rh.release();
+                    auto rp = rh.release();
+                    if (_last_written_rp < rp) {
+                        _last_written_rp = rp;
+                        manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+                    }
                     ++shard_stats().written;
 
                     manager_logger.trace("Hint to {} was stored", end_point_key());
@@ -257,6 +316,9 @@ manager::end_point_hints_manager::end_point_hints_manager(const key_type& key, m
     , _file_update_mutex(*_file_update_mutex_ptr)
     , _state(state_set::of<state::stopped>())
     , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
+    // Approximate the position of the last written hint by using the same formula as for segment id calculation in commitlog
+    // TODO: Should this logic be deduplicated with what is in the commitlog?
+    , _last_written_rp(this_shard_id(), std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count())
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
 {}
 
@@ -274,10 +336,10 @@ manager::end_point_hints_manager::~end_point_hints_manager() {
     assert(stopped());
 }
 
-future<hints_store_ptr> manager::end_point_hints_manager::get_or_load(manager::force_segment_list_update force_update) {
+future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
-        return _shard_manager.store_factory().get_or_load(_key, [this, force_update] (const key_type&) noexcept {
-            return add_store(force_update);
+        return _shard_manager.store_factory().get_or_load(_key, [this] (const key_type&) noexcept {
+            return add_store();
         }).then([this] (hints_store_ptr log_ptr) {
             _hints_store_anchor = log_ptr;
             return make_ready_future<hints_store_ptr>(std::move(log_ptr));
@@ -323,11 +385,11 @@ bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const froze
     }
 }
 
-future<db::commitlog> manager::end_point_hints_manager::add_store(manager::force_segment_list_update force_update) noexcept {
+future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
-    return futurize_invoke([this, force_update] {
-        return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this, force_update] () {
+    return futurize_invoke([this] {
+        return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
             commitlog::config cfg;
 
             cfg.commit_log_location = _hints_dir.c_str();
@@ -351,37 +413,77 @@ future<db::commitlog> manager::end_point_hints_manager::add_store(manager::force
             // a hard limit.
             cfg.allow_going_over_size_limit = true;
 
-            return commitlog::create_commitlog(std::move(cfg)).then([this, force_update] (commitlog l) {
+            return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
                 // When this happens we want to refill _sender's segments only if it has finished with the segments he had before.
-                // However, if segment list update is explicitly requested, then we refill it anyway.
-                if (!force_update && _sender.have_segments()) {
+                if (_sender.have_segments()) {
                     return make_ready_future<commitlog>(std::move(l));
                 }
 
-                _sender.update_segment_list(l.get_segments_to_replay());
+                std::vector<sstring> segs_vec = l.get_segments_to_replay();
+
+                if (segs_vec.empty()) {
+                    // If the segs_vec is empty, this means that there are no more
+                    // hints to be replayed. We can safely skip to the position of the
+                    // last written hint.
+                    //
+                    // This is necessary: remember that we artificially set
+                    // the last replayed position based on the creation time
+                    // of the endpoint manager. If we replay all segments from
+                    // previous runtimes but won't write any new hints during
+                    // this runtime, then without the logic below the hint replay
+                    // tracker won't reach the hint written tracker.
+                    auto rp = _last_written_rp;
+                    rp.pos++;
+                    _sender.rewind_sent_replay_position_to(rp);
+                    return make_ready_future<commitlog>(std::move(l));
+                }
+
+                std::vector<std::pair<db::segment_id_type, sstring>> local_segs_vec;
+                local_segs_vec.reserve(segs_vec.size());
+
+                // Divide segments into those that were created on this shard
+                // and those which were moved to it during rebalancing.
+                for (auto& seg : segs_vec) {
+                    db::commitlog::descriptor desc(seg, manager::FILENAME_PREFIX);
+                    unsigned shard_id = db::replay_position(desc).shard_id();
+                    if (shard_id == this_shard_id()) {
+                        local_segs_vec.emplace_back(desc.id, std::move(seg));
+                    } else {
+                        _sender.add_foreign_segment(std::move(seg));
+                    }
+                }
+
+                // Sort local segments by their segment ids, which should
+                // correspond to the chronological order.
+                std::sort(local_segs_vec.begin(), local_segs_vec.end());
+
+                for (auto& [segment_id, seg] : local_segs_vec) {
+                    _sender.add_segment(std::move(seg));
+                }
+
                 return make_ready_future<commitlog>(std::move(l));
             });
         });
     });
 }
 
-future<> manager::end_point_hints_manager::flush_current_hints(manager::force_segment_list_update force_update) noexcept {
+future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hints_store_anchor) {
-        return futurize_invoke([this, force_update] {
-            return with_lock(file_update_mutex(), [this, force_update]() -> future<> {
+        return futurize_invoke([this] {
+            return with_lock(file_update_mutex(), [this]() -> future<> {
                 return get_or_load().then([] (hints_store_ptr cptr) {
                     return cptr->shutdown().finally([cptr] {
                         return cptr->release();
                     }).finally([cptr] {});
-                }).then([this, force_update] {
+                }).then([this] {
                     // Un-hold the commitlog object. Since we are under the exclusive _file_update_mutex lock there are no
                     // other hints_store_ptr copies and this would destroy the commitlog shared value.
                     _hints_store_anchor = nullptr;
 
                     // Re-create the commitlog instance - this will re-populate the _segments_to_replay if needed.
-                    return get_or_load(force_update).discard_result();
+                    return get_or_load().discard_result();
                 });
             });
         });
@@ -650,6 +752,10 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
+manager::end_point_hints_manager::sender::~sender() {
+    dismiss_replay_waiters();
+}
+
 
 future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
@@ -681,11 +787,6 @@ future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noex
             send_hints_maybe();
             manager_logger.trace("Draining for {}: end", end_point_key());
         }
-
-        // Dismiss all segment waiters with an error
-        auto ep = std::make_exception_ptr(std::runtime_error("hints manager is stopped"));
-        dismiss_all_segment_waiters(std::move(ep));
-
         manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
     });
 }
@@ -694,61 +795,8 @@ void manager::end_point_hints_manager::sender::add_segment(sstring seg_name) {
     _segments_to_replay.emplace_back(std::move(seg_name));
 }
 
-void manager::end_point_hints_manager::sender::update_segment_list(std::vector<sstring> seg_names) {
-    if (!have_segments()) {
-        for (auto seg_name : seg_names) {
-            add_segment(std::move(seg_name));
-        }
-        return;
-    }
-
-    // We can't safely remove the first segment from the list because we might be sending it at the moment.
-    // Remove the rest, and append any segments which are not equal to the first one.
-    const sstring& first_seg_name = _segments_to_replay.front();
-    _segments_to_replay.erase(std::next(_segments_to_replay.begin()), _segments_to_replay.end());
-
-    for (auto seg_name : seg_names) {
-        if (seg_name != first_seg_name) {
-            add_segment(std::move(seg_name));
-        }
-    }
-}
-
-future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter) {
-    if (stopping()) {
-        throw std::runtime_error("hints manager is stopped");
-    }
-
-    // Flush current hints in order to update the segment list and synchronize
-    co_await with_semaphore(flush_limiter, 1, [&] {
-        return _ep_manager.flush_current_hints(force_segment_list_update::yes);
-    });
-
-    const uint64_t segments_to_replay_count = _segments_to_replay.size();
-
-    if (segments_to_replay_count == 0) {
-        manager_logger.debug("There are no hints towards {} on disk, no need to wait", end_point_key());
-        co_return;
-    }
-
-    const uint64_t replayed_segment_count_target = _total_replayed_segments_count + segments_to_replay_count;
-    segment_waiter sw{replayed_segment_count_target};
-    future<> f = sw.pr.get_future();
-    _segment_waiters.push_back(std::move(sw), timeout);
-
-    manager_logger.debug("Waiting for hints towards {}: {} segments were replayed so far, waiting until we replay up to segment #{}",
-            end_point_key(), _total_replayed_segments_count, replayed_segment_count_target);
-
-    try {
-        co_await std::move(f);
-        manager_logger.debug("Successfully replayed hints towards {} up to segment #{}",
-            end_point_key(), replayed_segment_count_target);
-    } catch (...) {
-        manager_logger.debug("Failed to replay hints towards {} up to segment #{}: {}",
-            end_point_key(), replayed_segment_count_target, std::current_exception());
-        throw;
-    }
-    co_return;
+void manager::end_point_hints_manager::sender::add_foreign_segment(sstring seg_name) {
+    _foreign_segments_to_replay.emplace_back(std::move(seg_name));
 }
 
 manager::end_point_hints_manager::sender::clock::duration manager::end_point_hints_manager::sender::next_sleep_duration() const {
@@ -760,20 +808,6 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
 
     // Don't sleep for less than 10 ticks of the "clock" if we are planning to sleep at all - the sleep() function is not perfect.
     return clock::duration(10 * div_ceil(d.count(), 10));
-}
-
-void manager::end_point_hints_manager::sender::notify_segment_waiters() {
-    while (!_segment_waiters.empty() && _segment_waiters.front().target_segment_count <= _total_replayed_segments_count) {
-        _segment_waiters.front().pr.set_value();
-        _segment_waiters.pop_front();
-    }
-}
-
-void manager::end_point_hints_manager::sender::dismiss_all_segment_waiters(std::exception_ptr ep) {
-    while (!_segment_waiters.empty()) {
-        _segment_waiters.front().pr.set_exception(ep);
-        _segment_waiters.pop_front();
-    }
 }
 
 void manager::end_point_hints_manager::sender::start() {
@@ -810,8 +844,9 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
-    ctx_ptr->last_attempted_rp = rp;
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
+        ctx_ptr->mark_hint_as_in_progress(rp);
+
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
@@ -830,7 +865,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
-                    ctx_ptr->on_hint_send_failure(rp);
+                    return make_exception_future<>(std::move(eptr));
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
@@ -844,22 +879,134 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
                 ++this->shard_stats().discarded;
             } catch (...) {
-                manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, std::current_exception());
-                ctx_ptr->on_hint_send_failure(rp);
+                auto eptr = std::current_exception();
+                manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, eptr);
+                return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
-        }).finally([units = std::move(units), ctx_ptr] {});
+        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr] (future<>&& f) {
+            // Information about the error was already printed somewhere higher.
+            // We just need to account in the ctx that sending of this hint has failed.
+            if (!f.failed()) {
+                ctx_ptr->on_hint_send_success(rp);
+                auto new_bound = ctx_ptr->get_replayed_bound();
+                // Segments from other shards are replayed first and are considered to be "before" replay position 0.
+                // Update the sent upper bound only if it is a local segment.
+                if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
+                    _sent_upper_bound_rp = new_bound;
+                    notify_replay_waiters();
+                }
+            } else {
+                ctx_ptr->on_hint_send_failure(rp);
+            }
+            f.ignore_ready_future();
+        });
     }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
 }
 
+void manager::end_point_hints_manager::sender::notify_replay_waiters() noexcept {
+    if (!_foreign_segments_to_replay.empty()) {
+        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
+        return;
+    }
+
+    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
+    while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
+        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        auto ptr = _replay_waiters.begin()->second;
+        (**ptr).set_value();
+        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
+        _replay_waiters.erase(_replay_waiters.begin());
+    }
+}
+
+void manager::end_point_hints_manager::sender::dismiss_replay_waiters() noexcept {
+    for (auto& p : _replay_waiters) {
+        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
+        auto ptr = p.second;
+        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", end_point_key())));
+        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
+    }
+    _replay_waiters.clear();
+}
+
+future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
+    if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
+        return make_ready_future<>();
+    }
+
+    if (as.abort_requested()) {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", end_point_key());
+        return make_exception_future<>(abort_requested_exception());
+    }
+
+    auto ptr = make_lw_shared<std::optional<promise<>>>(promise<>());
+    auto it = _replay_waiters.emplace(up_to_rp, ptr);
+    auto sub = as.subscribe([this, ptr, it] () noexcept {
+        if (!ptr->has_value()) {
+            // The promise already was resolved by `notify_replay_waiters` and removed from the map
+            return;
+        }
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", end_point_key());
+        _replay_waiters.erase(it);
+        (**ptr).set_exception(abort_requested_exception());
+    });
+
+    return (**ptr).get_future().finally([this, sub = std::move(sub)] {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", end_point_key());
+    });
+}
+
+void manager::end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
+    in_progress_rps.insert(rp);
+}
+
+void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
+    in_progress_rps.erase(rp);
+    if (!last_succeeded_rp || *last_succeeded_rp < rp) {
+        last_succeeded_rp = rp;
+    }
+}
+
 void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
+    in_progress_rps.erase(rp);
     segment_replay_failed = true;
     if (!first_failed_rp || rp < *first_failed_rp) {
         first_failed_rp = rp;
     }
+}
+
+db::replay_position manager::end_point_hints_manager::sender::send_one_file_ctx::get_replayed_bound() const noexcept {
+    // We are sure that all hints were sent _below_ the position which is the minimum of the following:
+    // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
+    // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
+    // - Position of the lowest hint which is being currently sent (in_progress_rps.begin()).
+
+    db::replay_position rp;
+    if (first_failed_rp) {
+        rp = *first_failed_rp;
+    } else if (last_succeeded_rp) {
+        // It is always true that `first_failed_rp` <= `last_succeeded_rp`, so no need to compare
+        rp = *last_succeeded_rp;
+        // We replayed _up to_ `last_attempted_rp`, so the bound is not strict; we can increase `pos` by one
+        rp.pos++;
+    }
+
+    if (!in_progress_rps.empty() && *in_progress_rps.begin() < rp) {
+        rp = *in_progress_rps.begin();
+    }
+
+    return rp;
+}
+
+void manager::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
+    _sent_upper_bound_rp = rp;
+    notify_replay_waiters();
 }
 
 // runs in a seastar::async context
@@ -910,8 +1057,8 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     if (ctx_ptr->segment_replay_failed) {
         // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
         // If there was an error thrown by read_log_file function itself, we will retry sending from
-        // the last entry that was successfully read from commitlog (last_attempted_rp).
-        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_attempted_rp.value_or(_last_not_complete_rp));
+        // the last hint that was successfully sent (last_succeeded_rp).
+        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
         manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
         return false;
     }
@@ -929,43 +1076,51 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     return true;
 }
 
+const sstring* manager::end_point_hints_manager::sender::name_of_current_segment() const {
+    // Foreign segments are replayed first
+    if (!_foreign_segments_to_replay.empty()) {
+        return &_foreign_segments_to_replay.front();
+    }
+    if (!_segments_to_replay.empty()) {
+        return &_segments_to_replay.front();
+    }
+    return nullptr;
+}
+
+void manager::end_point_hints_manager::sender::pop_current_segment() {
+    if (!_foreign_segments_to_replay.empty()) {
+        _foreign_segments_to_replay.pop_front();
+    } else if (!_segments_to_replay.empty()) {
+        _segments_to_replay.pop_front();
+    }
+}
+
 // Runs in the seastar::async context
 void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
-    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size());
+    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
     int replayed_segments_count = 0;
-    bool sending_succeeded = true;
 
     try {
-        while (replay_allowed() && have_segments() && can_send()) {
-            if (!send_one_file(*_segments_to_replay.begin())) {
-                sending_succeeded = false;
+        while (true) {
+            const sstring* seg_name = name_of_current_segment();
+            if (!seg_name || !replay_allowed() || !can_send()) {
                 break;
             }
-            _segments_to_replay.pop_front();
+            if (!send_one_file(*seg_name)) {
+                break;
+            }
+            pop_current_segment();
             ++replayed_segments_count;
-            ++_total_replayed_segments_count;
 
-            manager_logger.debug("send_hints(): replayed {} segments towards {} so far", _total_replayed_segments_count, end_point_key());
-
-            notify_segment_waiters();
+            notify_replay_waiters();
         }
 
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
     // Exceptions are not expected here during the regular operation, so just log them.
     } catch (...) {
-        sending_succeeded = false;
         manager_logger.trace("send_hints(): got the exception: {}", std::current_exception());
-    }
-
-    // If something blocks us and we cannot send hints now (e.g. destination is DOWN),
-    // then it's better to dismiss anybody who waits for hints to be replayed,
-    // because we don't know how much time it will take until we get unblocked.
-    // In such case, dismiss any segment waiters.
-    if ((!sending_succeeded || !can_send()) && !_segment_waiters.empty()) {
-        auto ep = std::runtime_error(format("hint replay failed: cannot currently send to destination {}", end_point_key()));
-        dismiss_all_segment_waiters(std::make_exception_ptr(std::move(ep)));
     }
 
     if (have_segments()) {
@@ -1137,17 +1292,6 @@ future<> manager::rebalance(sstring hints_directory) {
 
         // Remove the directories of shards that are not present anymore - they should not have any segments by now
         remove_irrelevant_shards_directories(hints_directory);
-    });
-}
-
-future<> manager::wait_until_hints_are_replayed(const std::vector<gms::inet_address>& endpoints, time_point_type timeout) {
-    const std::unordered_set<gms::inet_address> endpoints_set(endpoints.begin(), endpoints.end());
-    seastar::semaphore flush_limiter{1};
-    co_return co_await parallel_for_each(_ep_managers, [&] (auto& pair) {
-        if (endpoints_set.contains(pair.first)) {
-            return pair.second.wait_until_hints_are_replayed(timeout, flush_limiter);
-        }
-        return make_ready_future<>();
     });
 }
 
