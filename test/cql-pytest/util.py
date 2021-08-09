@@ -66,6 +66,27 @@ def new_test_table(cql, keyspace, schema, extra=""):
     finally:
         cql.execute("DROP TABLE " + table)
 
+
+# A utility function for creating a new temporary user-defined function.
+@contextmanager
+def new_function(cql, keyspace, body):
+    fun = unique_name()
+    cql.execute(f"CREATE FUNCTION {keyspace}.{fun} {body}")
+    try:
+        yield fun
+    finally:
+        cql.execute(f"DROP FUNCTION {keyspace}.{fun}")
+
+# A utility function for creating a new temporary user-defined aggregate.
+@contextmanager
+def new_aggregate(cql, keyspace, body):
+    aggr = unique_name()
+    cql.execute(f"CREATE AGGREGATE {keyspace}.{aggr} {body}")
+    try:
+        yield aggr
+    finally:
+        cql.execute(f"DROP AGGREGATE {keyspace}.{aggr}")
+
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""
     return [getattr(r, column_name_string) for r in rows]
