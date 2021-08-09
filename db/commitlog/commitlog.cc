@@ -397,13 +397,6 @@ public:
     void discard_unused_segments();
     void discard_completed_segments(const cf_id_type&);
     void discard_completed_segments(const cf_id_type&, const rp_set&);
-    void on_timer();
-
-    void arm(uint32_t extra = 0) {
-        if (!_shutdown) {
-            _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
-        }
-    }
 
     std::vector<sstring> get_active_names() const;
     uint64_t get_num_dirty_segments() const;
@@ -526,6 +519,7 @@ private:
 
     void handle_writes(messages&, pending_tasks&);
     void do_periodic_syncs(pending_tasks&);
+    void do_periodic_flush_callbacks(pending_tasks&);
 
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
@@ -536,7 +530,6 @@ private:
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
-    timer<clock_type> _timer;
     future<> replenish_reserve();
     future<> _reserve_replenisher;
     future<> _background_sync;
@@ -1509,6 +1502,7 @@ future<> db::commitlog::segment_manager::message_loop() {
         }
         
         do_periodic_syncs(tasks);
+        do_periodic_flush_callbacks(tasks);
 
         assert(msgs.empty());
     }
@@ -1562,6 +1556,26 @@ void db::commitlog::segment_manager::do_periodic_syncs(pending_tasks& tasks) {
         }
     }
     def_copy = {};
+}
+
+void db::commitlog::segment_manager::do_periodic_flush_callbacks(pending_tasks& tasks) {
+    // TODO: remove this once shutdown is properly moved to message loop
+    if (_shutdown) {
+        return;
+    }
+    if (_new_counter > 0) {
+        auto max = disk_usage_threshold;
+        auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
+
+        if (max != 0 && cur >= max) {
+            clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+            _new_counter = 0;
+            // TODO: make blocking
+            flush_segments(cur - max);
+        }
+    }
+
+    tasks.add(std::bind(&segment_manager::do_pending_deletes, this));
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1640,14 +1654,12 @@ future<> db::commitlog::segment_manager::init() {
     // base id counter is [ <shard> | <base> ]
     _ids = replay_position(this_shard_id(), id).id;
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
-    _timer.set_callback(std::bind(&segment_manager::on_timer, this));
     _message_loop = message_loop();
     auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
     clogger.trace("Delaying timer loop {} ms", delay);
     // We need to wait until we have scanned all other segments to actually start serving new
     // segments. We are ready now
     _reserve_replenisher = replenish_reserve();
-    arm(delay);
 }
 
 void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
@@ -1938,8 +1950,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // if we have no reserve and we're above/at limits, make background task a little more eager.
         auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
         if (!_shutdown && cur >= disk_usage_threshold) {
-            _timer.cancel();
-            _timer.arm(std::chrono::milliseconds(0));
+            wakeup();
         }
     }
 
@@ -2112,7 +2123,6 @@ future<> db::commitlog::segment_manager::shutdown() {
         try {
             co_await std::move(block_new_requests);
 
-            _timer.cancel(); // no more timer calls
             _shutdown = true; // no re-arm, no create new segments.
 
             // do a discard + delete sweep to force 
@@ -2305,28 +2315,6 @@ future<> db::commitlog::segment_manager::clear() {
         s->mark_clean();
     }
     co_await orphan_all();
-}
-
-void db::commitlog::segment_manager::on_timer() {
-    // Gate, because we are starting potentially blocking ops
-    // without waiting for them, so segement_manager could be shut down
-    // while they are running.
-    (void)seastar::with_gate(_gate, [this] {
-        // IFF a new segment was put in use since last we checked, and we're
-        // above threshold, request flush.
-        if (_new_counter > 0) {
-            auto max = disk_usage_threshold;
-            auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
-
-            if (max != 0 && cur >= max) {
-                clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
-                _new_counter = 0;
-                flush_segments(cur - max);
-            }
-        }
-        return do_pending_deletes();
-    });
-    arm();
 }
 
 std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
