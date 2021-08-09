@@ -321,6 +321,11 @@ public:
         // size allocated on disk - i.e. files created (new, reserve, recycled)
         uint64_t total_size_on_disk = 0;
         uint64_t requests_blocked_memory = 0;
+        // segment alloc/recycle/delete
+        uint64_t waiting_for_segment = 0;
+        uint64_t segment_files_created = 0;
+        uint64_t segment_files_recycled = 0;
+        uint64_t segment_files_deleted = 0;
     };
 
     stats totals;
@@ -1378,6 +1383,15 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
 
         sm::make_gauge("memory_buffer_bytes", totals.buffer_list_bytes,
                        sm::description("Holds the total number of bytes in internal memory buffers.")),
+
+        sm::make_gauge("waiting_for_segment", totals.waiting_for_segment,
+                       sm::description("Holds the number of segment allocations waiting for disk space to become available.")),
+
+        sm::make_derive("segment_files_created", totals.segment_files_created, sm::description("Counts the number of segment files created.")),
+
+        sm::make_derive("segment_files_recycled", totals.segment_files_recycled, sm::description("Counts the number of segment files recycled.")),
+        
+        sm::make_derive("segment_files_deleted", totals.segment_files_deleted, sm::description("Counts the number of segment files deleted.")),
     });
 }
 
@@ -1533,6 +1547,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_return coroutine::exception(std::move(ep));
     }
 
+    ++totals.segment_files_created;
+
     co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size, align);
 }
 
@@ -1570,6 +1586,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
             auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
             if (!f.available()) {
+                // CMH: doing this to get clean merge into older code. We hope.
+                ++totals.waiting_for_segment;
+                f = f.finally([this] { --totals.waiting_for_segment; });
                 _new_counter = 0; // zero this so timer task does not duplicate the below flush
                 flush_segments(0); // force memtable flush already
             }
@@ -1842,6 +1861,7 @@ future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
         co_await seastar::remove_file(filename);
         clogger.trace("Reclaimed {} MB", size/(1024*1024));
         totals.total_size_on_disk -= size;
+        ++totals.segment_files_deleted;
         auto p = std::exchange(_disk_deletions, {});
         p.set_value();
     } catch (...) {
@@ -1900,6 +1920,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
                         co_await rename_file(filename, dst);
                         auto b = _recycled_segments.push(std::move(dst));
                         assert(b); // we set this to max_size_t so...
+                        ++totals.segment_files_recycled;
                         continue;
                     } catch (...) {
                         recycle_error = std::current_exception();
