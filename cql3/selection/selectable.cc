@@ -208,9 +208,6 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             return make_shared<selectable::with_field_selection>(prepare_selectable(s, *fs.structure),
                     static_pointer_cast<column_identifier>(fs.field->prepare(s)));
         },
-        [&] (const expr::term_raw_ptr&) -> shared_ptr<selectable> {
-            on_internal_error(slogger, "term::raw found its way to selector context");
-        },
         [&] (const expr::null&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "null found its way to selector context");
         },
@@ -271,9 +268,6 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
         },
         [&] (const expr::field_selection& fs) -> bool {
             return true;
-        },
-        [&] (const expr::term_raw_ptr&) -> bool {
-            on_internal_error(slogger, "term::raw found its way to selector context");
         },
         [&] (const expr::null&) -> bool {
             on_internal_error(slogger, "null found its way to selector context");

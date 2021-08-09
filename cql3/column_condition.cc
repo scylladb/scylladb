@@ -49,7 +49,6 @@
 #include "types/list.hh"
 #include "utils/like_matcher.hh"
 #include "expr/expression.hh"
-#include "expr/term_expr.hh"
 
 namespace {
 

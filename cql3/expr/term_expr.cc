@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "term_expr.hh"
+#include "expression.hh"
 #include "cql3/functions/function_call.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/constants.hh"
@@ -843,9 +843,6 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, cons
         [&] (const field_selection&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::prepare()");
         },
-        [&] (const term_raw_ptr& raw) -> ::shared_ptr<term> {
-            return raw->prepare(db, keyspace, receiver);
-        },
         [&] (const null&) -> ::shared_ptr<term> {
             return null_prepare_term(db, keyspace, receiver);
         },
@@ -876,11 +873,6 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, cons
             return usertype_constructor_prepare_term(uc, db, keyspace, receiver);
         },
     }, expr);
-}
-
-::shared_ptr<term>
-term_raw_expr::prepare(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) const {
-    return prepare_term(_expr, db, keyspace, receiver);
 }
 
 assignment_testable::test_result
@@ -920,9 +912,6 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
         [&] (const field_selection&) -> test_result {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::test_assignment()");
         },
-        [&] (const term_raw_ptr& raw) -> test_result {
-            return raw->test_assignment(db, keyspace, receiver);
-        },
         [&] (const null&) -> test_result {
             return null_test_assignment(db, keyspace, receiver);
         },
@@ -951,31 +940,6 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
 }
 
 assignment_testable::test_result
-term_raw_expr::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
-    return expr::test_assignment(_expr, db, keyspace, receiver);
-}
-
-sstring
-term_raw_expr::to_string() const {
-    return std::visit(overloaded_functor{
-        [&] (const term_raw_ptr& raw) {
-            return raw->to_string();
-        },
-        [&] (auto& default_case) -> sstring { return fmt::format("{}", _expr); },
-    }, _expr);
-}
-
-sstring
-term_raw_expr::assignment_testable_source_context() const {
-    return std::visit(overloaded_functor{
-        [&] (const term_raw_ptr& raw) {
-            return raw->assignment_testable_source_context();
-        },
-        [&] (auto& default_case) -> sstring { return fmt::format("{}", _expr); },
-    }, _expr);
-}
-
-assignment_testable::test_result
 test_assignment_all(const std::vector<expression>& to_test, database& db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     test_result res = test_result::EXACT_MATCH;
@@ -996,7 +960,7 @@ class assignment_testable_expression : public assignment_testable {
 public:
     explicit assignment_testable_expression(expression e) : _e(std::move(e)) {}
     virtual test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
-        return as_term_raw(_e)->test_assignment(db, keyspace, receiver);
+        return expr::test_assignment(_e, db, keyspace, receiver);
     }
     virtual sstring assignment_testable_source_context() const override {
         return fmt::format("{}", _e);

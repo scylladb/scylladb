@@ -55,7 +55,6 @@ namespace cql3 {
 
 class column_identifier_raw;
 class query_options;
-class term_raw;
 
 namespace selection {
     class selection;
@@ -82,7 +81,6 @@ class column_mutation_attribute;
 class function_call;
 class cast;
 class field_selection;
-using term_raw_ptr = ::shared_ptr<term_raw>;
 struct null;
 struct bind_variable;
 struct untyped_constant;
@@ -93,7 +91,7 @@ struct usertype_constructor;
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection, term_raw_ptr, null, bind_variable, untyped_constant,
+                                field_selection, null, bind_variable, untyped_constant,
                                 tuple_constructor, collection_constructor, usertype_constructor>;
 
 template <typename T>
@@ -328,9 +326,6 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [&] (const field_selection& fs) -> const binary_operator* {
                 return find_atom(*fs.structure, f);
             },
-            [&] (const term_raw_ptr&) -> const binary_operator* {
-                return nullptr;
-            },
             [&] (const null&) -> const binary_operator* {
                 return nullptr;
             },
@@ -391,9 +386,6 @@ size_t count_if(const expression& e, Fn f) {
                 return count_if(*c.arg, f); },
             [&] (const field_selection& fs) -> size_t {
                 return count_if(*fs.structure, f);
-            },
-            [&] (const term_raw_ptr&) -> size_t {
-                return 0;
             },
             [&] (const null&) -> size_t {
                 return 0;
@@ -485,9 +477,6 @@ extern expression replace_column_def(const expression&, const column_definition*
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
 extern expression replace_token(const expression&, const column_definition*);
 
-extern ::shared_ptr<term_raw> as_term_raw(const expression& e);
-
-extern expression as_expression(::shared_ptr<term::raw> t);
 
 extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver);
 
