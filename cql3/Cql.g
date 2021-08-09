@@ -1579,7 +1579,7 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
               // We don't yet allow a '+' in front of an integer, but we could in the future really, so let's be future-proof in our error message
               add_recognition_error("Only expressions of the form X = X " + sstring($i.text[0] == '-' ? "-" : "+") + " <value> are supported.");
           }
-          add_raw_update(operations, key, std::make_unique<cql3::operation::addition>(cql3::expr::as_term_raw(cql3::expr::untyped_constant{cql3::expr::untyped_constant::integer, $i.text})));
+          add_raw_update(operations, key, std::make_unique<cql3::operation::addition>(cql3::expr::untyped_constant{cql3::expr::untyped_constant::integer, $i.text}));
       }
     | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
@@ -1589,11 +1589,11 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
 
 collectionColumnOperation[operations_type& operations,
                           shared_ptr<cql3::column_identifier::raw> key,
-                          shared_ptr<cql3::term::raw> k,
+                          cql3::expr::expression k,
                           bool by_uuid]
     : '=' t=term
       {
-          add_raw_update(operations, key, std::make_unique<cql3::operation::set_element>(k, t, by_uuid));
+          add_raw_update(operations, key, std::make_unique<cql3::operation::set_element>(std::move(k), std::move(t), by_uuid));
       }
     ;
 
