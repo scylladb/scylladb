@@ -25,7 +25,7 @@
 
 #include "abstract_function.hh"
 #include "scalar_function.hh"
-#include "lua.hh"
+#include "lang/lua.hh"
 
 namespace cql3 {
 namespace functions {

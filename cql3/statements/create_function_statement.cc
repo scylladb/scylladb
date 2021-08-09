@@ -25,7 +25,7 @@
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "lua.hh"
+#include "lang/lua.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
 

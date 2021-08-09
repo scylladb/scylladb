@@ -90,7 +90,7 @@
 #include "user_types_metadata.hh"
 
 #include "index/target_parser.hh"
-#include "lua.hh"
+#include "lang/lua.hh"
 
 #include "db/query_context.hh"
 #include "serializer.hh"
