@@ -32,7 +32,7 @@ namespace {
 struct my_consumer {
     stop_iteration consume(static_row sr) { return stop_iteration::no; }
     stop_iteration consume(clustering_row cr) { return stop_iteration::no; }
-    stop_iteration consume(range_tombstone rt) { return stop_iteration::no; }
+    stop_iteration consume(range_tombstone_change rt) { return stop_iteration::no; }
     stop_iteration consume(tombstone tomb) { return stop_iteration::no; }
     void consume_end_of_stream() {}
     void consume_new_partition(const dht::decorated_key& dk) {}
@@ -45,7 +45,7 @@ static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstr
   sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     try {
         sstable_ptr sstp = env.reusable_sst(s, dir, generation, version).get0();
-        auto r = sstp->make_reader_v1(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+        auto r = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
         auto close_r = deferred_close(r);
         r.consume(my_consumer{}, db::no_timeout).get();
         BOOST_FAIL("expecting exception");
