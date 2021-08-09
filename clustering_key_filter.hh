@@ -63,6 +63,12 @@ public:
         }
         return clustering_key_filter_ranges(ranges);
     }
+    static clustering_key_filter_ranges get_maybe_reversed_ranges(const schema& schema, const query::partition_slice& slice, const partition_key& key) {
+        const query::clustering_row_ranges& ranges = slice.row_ranges(schema, key);
+        // if the partition slice is reversed, the ranges were already reversed in the partition slice constructor 
+        // we want to return them in reversed order, so we do not modify them anymore
+        return clustering_key_filter_ranges(ranges);
+    }
 };
 
 }

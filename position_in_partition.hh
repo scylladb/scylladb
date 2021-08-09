@@ -139,6 +139,14 @@ public:
         return {position_in_partition_view::range_tag_t(), bound_view::from_range_end(r)};
     }
 
+    static position_in_partition_view for_range_reverse_start(const query::clustering_range& r) {
+        return {position_in_partition_view::range_tag_t(), bound_view::from_range_reverse_start(r)};
+    }
+
+    static position_in_partition_view for_range_reverse_end(const query::clustering_range& r) {
+        return {position_in_partition_view::range_tag_t(), bound_view::from_range_reverse_end(r)};
+    }
+
     static position_in_partition_view before_all_clustered_rows() {
         return {range_tag_t(), bound_view::bottom()};
     }

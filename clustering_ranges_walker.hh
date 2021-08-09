@@ -42,6 +42,7 @@ class clustering_ranges_walker {
     std::optional<position_in_partition> _trim;
     size_t _change_counter = 1;
     tombstone _tombstone;
+    bool _is_reversed;
 private:
     bool advance_to_next_range() {
         _in_current = false;
@@ -58,8 +59,13 @@ private:
             _current_end = _current_start = position_in_partition_view::after_all_clustered_rows();
             return false;
         }
-        _current_start = position_in_partition_view::for_range_start(_current_range.front());
-        _current_end = position_in_partition_view::for_range_end(_current_range.front());
+        if (_is_reversed) {
+            _current_start = position_in_partition_view::for_range_reverse_start(_current_range.front());
+            _current_end = position_in_partition_view::for_range_reverse_end(_current_range.front());
+        } else {
+            _current_start = position_in_partition_view::for_range_start(_current_range.front());
+            _current_end = position_in_partition_view::for_range_end(_current_range.front());
+        }
         return true;
     }
 
@@ -69,13 +75,18 @@ private:
             if (!_current_range) {
                 _current_start = position_in_partition_view::before_all_clustered_rows();
             } else {
-                _current_start = position_in_partition_view::for_range_start(_current_range.front());
-                _current_end = position_in_partition_view::for_range_end(_current_range.front());
+                if (_is_reversed) {
+                    _current_start = position_in_partition_view::for_range_reverse_start(_current_range.front());
+                    _current_end = position_in_partition_view::for_range_reverse_end(_current_range.front());
+                } else {
+                    _current_start = position_in_partition_view::for_range_start(_current_range.front());
+                    _current_end = position_in_partition_view::for_range_end(_current_range.front());
+                }
                 _using_clustering_range = true;
             }
         } else {
              // If the first range is contiguous with the static row, then advance _current_end as much as we can
-             if (_current_range && !_current_range.front().start()) {
+             if (_current_range && !_current_range.front().start() && !_is_reversed) {
                  _current_end = position_in_partition_view::for_range_end(_current_range.front());
                  _using_clustering_range = true;
              }
@@ -83,7 +94,7 @@ private:
     }
 
 public:
-    clustering_ranges_walker(const schema& s, const query::clustering_row_ranges& ranges, bool with_static_row = true)
+    clustering_ranges_walker(const schema& s, const query::clustering_row_ranges& ranges, bool with_static_row = true, bool is_reversed = false)
             : _schema(s)
             , _ranges(ranges)
             , _current_range(ranges)
@@ -91,7 +102,8 @@ public:
             , _past_current(false)
             , _with_static_row(with_static_row)
             , _current_start(position_in_partition_view::for_static_row())
-            , _current_end(position_in_partition_view::before_all_clustered_rows()) {
+            , _current_end(position_in_partition_view::before_all_clustered_rows())
+            , _is_reversed(is_reversed) {
         set_current_positions();
     }
 
