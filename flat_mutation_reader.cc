@@ -233,6 +233,145 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
     return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_size);
 }
 
+// the exact same reader as above, but with a flat_mutation_object instead of a pointer
+flat_mutation_reader make_owning_reversing_reader(flat_mutation_reader original) {
+    class owning_reversing_reader final : public flat_mutation_reader::impl {
+        flat_mutation_reader _source;
+        range_tombstone_list _range_tombstones;
+        std::stack<mutation_fragment> _mutation_fragments;
+        mutation_fragment_opt _partition_end;
+        size_t _stack_size = 0;
+        const query::max_result_size _max_size;
+        bool _below_soft_limit = true;
+    private:
+        stop_iteration emit_partition() {
+            auto emit_range_tombstone = [&] {
+                auto it = std::prev(_range_tombstones.end());
+                push_mutation_fragment(*_schema, _permit, _range_tombstones.pop_as<range_tombstone>(it));
+            };
+            position_in_partition::less_compare cmp(*_schema);
+            while (!_mutation_fragments.empty() && !is_buffer_full()) {
+                auto& mf = _mutation_fragments.top();
+                if (!_range_tombstones.empty() && !cmp(_range_tombstones.rbegin()->end_position(), mf.position())) {
+                    emit_range_tombstone();
+                } else {
+                    _stack_size -= mf.memory_usage();
+                    push_mutation_fragment(std::move(mf));
+                    _mutation_fragments.pop();
+                }
+            }
+            while (!_range_tombstones.empty() && !is_buffer_full()) {
+                emit_range_tombstone();
+            }
+            if (is_buffer_full()) {
+                return stop_iteration::yes;
+            }
+
+            push_mutation_fragment(std::move(*std::exchange(_partition_end, std::nullopt)));
+            return stop_iteration::no;
+        }
+        future<stop_iteration> consume_partition_from_source(db::timeout_clock::time_point timeout) {
+            if (_source.is_buffer_empty()) {
+                if (_source.is_end_of_stream()) {
+                    _end_of_stream = true;
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return _source.fill_buffer(timeout).then([] { return stop_iteration::no; });
+            }
+            while (!_source.is_buffer_empty() && !is_buffer_full()) {
+                auto mf = _source.pop_mutation_fragment();
+                if (mf.is_partition_start() || mf.is_static_row()) {
+                    push_mutation_fragment(std::move(mf));
+                } else if (mf.is_end_of_partition()) {
+                    _partition_end = std::move(mf);
+                    if (emit_partition()) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                } else if (mf.is_range_tombstone()) {
+                    _range_tombstones.apply(*_schema, std::move(mf.as_range_tombstone()));
+                } else {
+                    _mutation_fragments.emplace(std::move(mf));
+                    _stack_size += _mutation_fragments.top().memory_usage();
+                    if (_stack_size > _max_size.hard_limit || (_stack_size > _max_size.soft_limit && _below_soft_limit)) {
+                        const partition_key* key = nullptr;
+                        auto it = buffer().end();
+                        --it;
+                        if (it->is_partition_start()) {
+                            key = &it->as_partition_start().key().key();
+                        } else {
+                            --it;
+                            key = &it->as_partition_start().key().key();
+                        }
+
+                        if (_stack_size > _max_size.hard_limit) {
+                            throw std::runtime_error(fmt::format(
+                                    "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
+                                    _max_size.hard_limit,
+                                    key->with_schema(*_schema)));
+                        } else {
+                            fmr_logger.warn(
+                                    "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
+                                    _max_size.soft_limit,
+                                    key->with_schema(*_schema));
+                            _below_soft_limit = false;
+                        }
+                    }
+                }
+            }
+            return make_ready_future<stop_iteration>(is_buffer_full());
+        }
+    public:
+        explicit owning_reversing_reader(flat_mutation_reader mr, query::max_result_size max_size)
+            : flat_mutation_reader::impl(mr.schema(), mr.permit())
+            , _source(std::move(mr))
+            , _range_tombstones(*_schema)
+            , _max_size(max_size)
+        { }
+
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            return repeat([&, timeout] {
+                if (_partition_end) {
+                    // We have consumed full partition from source, now it is
+                    // time to emit it.
+                    auto stop = emit_partition();
+                    if (stop) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                }
+                return consume_partition_from_source(timeout);
+            });
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty() && !is_end_of_stream()) {
+                while (!_mutation_fragments.empty()) {
+                    _stack_size -= _mutation_fragments.top().memory_usage();
+                    _mutation_fragments.pop();
+                }
+                _range_tombstones.clear();
+                _partition_end = std::nullopt;
+                return _source.next_partition();
+            }
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        }
+
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        }
+
+        virtual future<> close() noexcept override {
+            return _source.close();
+        }
+    };
+
+    return make_flat_mutation_reader<owning_reversing_reader>(std::move(original), query::max_result_size(std::numeric_limits<uint64_t>::max()));
+}
+
 template<typename Source>
 future<bool> flat_mutation_reader::impl::fill_buffer_from(Source& source, db::timeout_clock::time_point timeout) {
     if (source.is_buffer_empty()) {

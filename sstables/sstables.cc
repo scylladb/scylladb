@@ -2163,6 +2163,9 @@ sstable::make_reader_v1(
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon) {
     if (_version >= version_types::mc) {
+        if (slice.options.contains(query::partition_slice::option::reversed)) {
+            return make_owning_reversing_reader(downgrade_to_v1(mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon)));
+        }
         return downgrade_to_v1(mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
     }
     return kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
