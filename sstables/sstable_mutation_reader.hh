@@ -36,6 +36,7 @@
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
 #include "flat_mutation_reader_v2.hh"
+#include "sstables/mx/partition_reversing_data_source.hh"
 
 namespace sstables {
 
@@ -145,6 +146,12 @@ inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s
     // returned context, and may make small skips.
     auto input = sst->data_stream(toread.start, last_end - toread.start, consumer.io_priority(),
             consumer.permit(), consumer.trace_state(), sst->_partition_range_history);
+    return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
+}
+
+template <typename DataConsumeRowsContext>
+inline std::unique_ptr<DataConsumeRowsContext> data_consume_reversed_partition(const schema& s, shared_sstable sst, index_reader& ir, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
+    auto input = input_stream<char>(sstables::mx::make_partition_reversing_data_source(s, sst, ir, toread.start, toread.end - toread.start, consumer.permit(), consumer.io_priority(), consumer.trace_state()));
     return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
 }
 

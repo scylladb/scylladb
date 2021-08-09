@@ -222,7 +222,7 @@ public:
         , _trace_state(std::move(trace_state))
         , _pc(pc)
         , _reader(reader)
-        , _schema(schema)
+        , _schema(slice.options.contains(query::partition_slice::option::reversed) ? schema->make_reversed() : schema)
         , _slice(slice)
         , _fwd(fwd)
         , _treat_static_row_as_regular(_schema->is_static_compact_table()
@@ -558,6 +558,12 @@ public:
         } else {
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
+            }
+            if (_slice.options.contains(query::partition_slice::option::reversed) &&
+                _mf_filter->apply(_in_progress_row->position()).action != mutation_fragment_filter::result::emit) {
+                // we always read rows until the end when reading in reverse,
+                // the next row read from the input stream will be from the next partition slice range
+                return proceed(!_reader->is_buffer_full() && !need_preempt());
             }
             _reader->push_mutation_fragment(mutation_fragment_v2(
                     *_schema, permit(), *std::exchange(_in_progress_row, {})));
@@ -1373,22 +1379,36 @@ private:
             }
             return make_ready_future();
         }().then([this, pos] {
-            return get_index_reader().advance_to(*pos).then([this] {
-                index_reader& idx = *_index_reader;
-                auto index_position = idx.data_file_positions();
-                if (index_position.start <= _context->position()) {
-                    return make_ready_future<>();
-                }
-                return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+            if (_slice.options.contains(query::partition_slice::option::reversed)) {
+                return get_index_reader().advance_reverse(*pos).then([this] {
+                    // we will notice the skip in the intermediary data source
+                    // and update the data ranges, from which we prepare data there
                     _sst->get_stats().on_partition_seek();
-                    auto open_end_marker = idx.end_open_marker();
+                    auto open_end_marker = _index_reader->reverse_end_open_marker();
                     if (open_end_marker) {
                         _consumer.set_range_tombstone(open_end_marker->tomb);
                     } else {
                         _consumer.set_range_tombstone({});
                     }
                 });
-            });
+            } else {
+                return get_index_reader().advance_to(*pos).then([this] {
+                    index_reader& idx = *_index_reader;
+                    auto index_position = idx.data_file_positions();
+                    if (index_position.start <= _context->position()) {
+                        return make_ready_future<>();
+                    }
+                    return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                        _sst->get_stats().on_partition_seek();
+                        auto open_end_marker = idx.end_open_marker();
+                        if (open_end_marker) {
+                            _consumer.set_range_tombstone(open_end_marker->tomb);
+                        } else {
+                            _consumer.set_range_tombstone({});
+                        }
+                    });
+                });
+            }
         });
     }
     bool is_initialized() const {
@@ -1407,6 +1427,9 @@ private:
             }
 
             _sst->get_filter_tracker().add_true_positive();
+            if (_slice.options.contains(query::partition_slice::option::reversed)) {
+                co_await _index_reader->advance_reverse_to_next_partition();
+            }
         } else {
             _sst->get_stats().on_range_partition_read();
             co_await get_index_reader().advance_to(_pr);
@@ -1417,7 +1440,11 @@ private:
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
-            _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end });
+            if (_slice.options.contains(query::partition_slice::option::reversed)) {
+                _context = data_consume_reversed_partition<DataConsumeRowsContext>(*_schema, _sst, *_index_reader, _consumer, { begin, *end });
+            } else {
+                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end });
+            }
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;

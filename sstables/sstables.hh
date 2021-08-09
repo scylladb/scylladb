@@ -75,6 +75,10 @@ namespace mc {
 class writer;
 }
 
+namespace mx {
+class partition_reversing_data_source_impl;
+}
+
 namespace fs = std::filesystem;
 
 extern logging::logger sstlog;
@@ -842,6 +846,7 @@ public:
     friend class promoted_index;
     friend class compaction;
     friend class sstables_manager;
+    friend class mx::partition_reversing_data_source_impl;
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);

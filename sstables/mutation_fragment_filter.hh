@@ -52,8 +52,8 @@ public:
                              const partition_key& pk,
                              streamed_mutation::forwarding fwd)
         : _schema(schema)
-        , _ranges(query::clustering_key_filter_ranges::get_ranges(schema, slice, pk))
-        , _walker(schema, _ranges.ranges(), schema.has_static_columns())
+        , _ranges(query::clustering_key_filter_ranges::get_maybe_reversed_ranges(schema, slice, pk))
+        , _walker(schema, _ranges.ranges(), schema.has_static_columns(), slice.options.contains(query::partition_slice::option::reversed))
         , _fwd(fwd)
         , _fwd_end(fwd ? position_in_partition_view::before_all_clustered_rows()
                        : position_in_partition_view::after_all_clustered_rows())
