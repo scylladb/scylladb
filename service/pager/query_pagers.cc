@@ -210,7 +210,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
         return do_fetch_page(page_size, now, timeout).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
-            return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] {
+            return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable {
                 handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection),
                               std::move(qr.query_result), page_size, now);
             });
