@@ -23,7 +23,7 @@ import time
 import urllib.request
 
 from botocore.exceptions import ClientError
-from util import list_tables, test_table_name, create_test_table, random_string, freeze
+from util import list_tables, unique_table_name, create_test_table, random_string, freeze
 from contextlib import contextmanager
 from urllib.error import URLError
 from boto3.dynamodb.types import TypeDeserializer
@@ -1241,7 +1241,7 @@ def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb
 # just do multiple tests on its setup.
 @pytest.fixture(scope="module")
 def test_table_stream_with_result(dynamodb, dynamodbstreams):
-    tablename = test_table_name()
+    tablename = unique_table_name()
     result = dynamodb.meta.client.create_table(TableName=tablename,
         BillingMode='PAY_PER_REQUEST',
         StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},

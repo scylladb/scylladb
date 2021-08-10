@@ -21,7 +21,7 @@ import pytest
 import time
 import re
 from botocore.exceptions import ClientError
-from util import new_test_table, random_string, full_query, test_table_name
+from util import new_test_table, random_string, full_query, unique_table_name
 from contextlib import contextmanager
 
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
@@ -162,7 +162,7 @@ def test_ttl_disable(dynamodb):
 def test_update_ttl_errors(dynamodb):
     client = dynamodb.meta.client
     # Can't set TTL on a non-existent table
-    nonexistent_table = test_table_name()
+    nonexistent_table = unique_table_name()
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         client.update_time_to_live(TableName=nonexistent_table,
             TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})

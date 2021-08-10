@@ -25,7 +25,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from util import multiset, create_test_table, test_table_name
+from util import multiset, create_test_table, unique_table_name
 
 def delete_tags(table, arn):
     got = table.meta.client.list_tags_of_resource(ResourceArn=arn)
@@ -167,7 +167,7 @@ def test_too_long_tags_from_creation(dynamodb):
     from distutils.version import LooseVersion
     if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
         pytest.skip("Botocore version 1.12.136 or above required to run this test")
-    name = test_table_name()
+    name = unique_table_name()
     # Setting 100 tags is not allowed, the following table creation should fail:
     with pytest.raises(ClientError, match='ValidationException'):
         dynamodb.create_table(TableName=name,
@@ -193,7 +193,7 @@ def test_forbidden_tags_from_creation(scylla_only, dynamodb):
     from distutils.version import LooseVersion
     if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
         pytest.skip("Botocore version 1.12.136 or above required to run this test")
-    name = test_table_name()
+    name = unique_table_name()
     # It is not allowed to set the system:write_isolation to "dog", so the
     # following table creation should fail:
     with pytest.raises(ClientError, match='ValidationException'):

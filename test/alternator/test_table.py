@@ -19,7 +19,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from util import list_tables, test_table_name, create_test_table, random_string
+from util import list_tables, unique_table_name, create_test_table, random_string
 
 # Utility function for create a table with a given name and some valid
 # schema.. This function initiates the table's creation, but doesn't
@@ -210,13 +210,13 @@ def test_create_table_already_exists(dynamodb, test_table):
 # DynamoDB did) to PROVISIONED so ProvisionedThroughput is allowed.
 def test_create_table_billing_mode_errors(dynamodb, test_table):
     with pytest.raises(ClientError, match='ValidationException'):
-        create_table(dynamodb, test_table_name(), BillingMode='unknown')
+        create_table(dynamodb, unique_table_name(), BillingMode='unknown')
     # billing mode is case-sensitive
     with pytest.raises(ClientError, match='ValidationException'):
-        create_table(dynamodb, test_table_name(), BillingMode='pay_per_request')
+        create_table(dynamodb, unique_table_name(), BillingMode='pay_per_request')
     # PAY_PER_REQUEST cannot come with a ProvisionedThroughput:
     with pytest.raises(ClientError, match='ValidationException'):
-        create_table(dynamodb, test_table_name(),
+        create_table(dynamodb, unique_table_name(),
             BillingMode='PAY_PER_REQUEST', ProvisionedThroughput={'ReadCapacityUnits': 10, 'WriteCapacityUnits': 10})
     # On the other hand, PROVISIONED requires ProvisionedThroughput:
     # By the way, ProvisionedThroughput not only needs to appear, it must
@@ -224,11 +224,11 @@ def test_create_table_billing_mode_errors(dynamodb, test_table):
     # this with boto3, because boto3 has its own verification that if
     # ProvisionedThroughput is given, it must have the correct form.
     with pytest.raises(ClientError, match='ValidationException'):
-        create_table(dynamodb, test_table_name(), BillingMode='PROVISIONED')
+        create_table(dynamodb, unique_table_name(), BillingMode='PROVISIONED')
     # If BillingMode is completely missing, it defaults to PROVISIONED, so
     # ProvisionedThroughput is required
     with pytest.raises(ClientError, match='ValidationException'):
-        dynamodb.create_table(TableName=test_table_name(),
+        dynamodb.create_table(TableName=unique_table_name(),
             KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
             AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }])
 
