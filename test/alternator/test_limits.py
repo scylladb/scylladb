@@ -304,3 +304,66 @@ def test_limit_attribute_length_gsi_lsi_projection_all(dynamodb):
               'a': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'},
               'c': {'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'},
             }) == [{'a': 'hi', 'b': 'ho', 'c': 'dog', too_long_name: 'cat'}]
+
+#############################################################################
+# The following tests test various limits of expressions
+# (ProjectionExpression, ConditionExpression, UpdateExpression and
+# FilterExpression) as documented in
+# https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Limits.html
+
+# The maximum string length of any of the expression parameters is 4 KB.
+# Check that the length 4096 is allowed, 4097 isn't - on all four expression
+# types.
+@pytest.mark.xfail(reason="limits on expression length not yet enforced")
+def test_limit_expression_len(test_table_s):
+    p = random_string()
+    string4096 = 'x'*4096
+    string4097 = 'x'*4097
+    # ProjectionExpression:
+    test_table_s.get_item(Key={'p': p}, ProjectionExpression=string4096)
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression'):
+        test_table_s.get_item(Key={'p': p}, ProjectionExpression=string4097)
+    # UpdateExpression:
+    spaces4085 = ' '*4085
+    test_table_s.update_item(Key={'p': p}, UpdateExpression=f'SET{spaces4085}a = :val',
+        ExpressionAttributeValues={':val': 1})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 1}
+    with pytest.raises(ClientError, match='ValidationException.*UpdateExpression'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression=f'SET {spaces4085}a = :val',
+            ExpressionAttributeValues={':val': 1})
+    # ConditionExpression:
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :newval',
+        ExpressionAttributeValues={':newval': 2, ':oldval': 1},
+        ConditionExpression=f'a{spaces4085} = :oldval')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 2}
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :newval',
+            ExpressionAttributeValues={':newval': 3, ':oldval': 2},
+            ConditionExpression=f'a {spaces4085} = :oldval')
+    # FilterExpression:
+    assert full_query(test_table_s, ConsistentRead=True,
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            FilterExpression=f'a{spaces4085} = :theval',
+            ExpressionAttributeValues={':theval': 2}
+        ) == [{'p': p, 'a': 2}]
+    with pytest.raises(ClientError, match='ValidationException.*FilterExpression'):
+        full_query(test_table_s, ConsistentRead=True,
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            FilterExpression=f'a {spaces4085} = :theval',
+            ExpressionAttributeValues={':theval': 2})
+
+# TODO: additional expression limits documented in DynamoDB's documentation
+# that we should test here:
+# * a limit on the length of attribute or value references (#name or :val) -
+#   the reference together with the first character (# or :) is limited to
+#   255 bytes.
+# * the sum of length of ExpressionAttributeValues and ExpressionAttributeNames
+#   is limited to 2MB (not a very interesting limit...)
+# * a limit on the number of operator or functions in an expression: 300
+#   (not a very interesting limit...)
+
+#############################################################################
+# TODO: additional limits documented in DynamoDB's documentation that we
+# should test here:
+# * limit on partition key length: 1 to 2048 bytes
+# * limit on sort key length: 1 to 1024 bytes
