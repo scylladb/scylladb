@@ -1356,7 +1356,7 @@ future<> mutate_MV(
             schema_ptr s = mut.s;
             future<> view_update = apply_to_remote_endpoints(*target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                     [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
-                            units = sem_units.split(sem_units.count())] (future<>&& f) mutable {
+                            units = sem_units.split(sem_units.count()), wait_for_all] (future<>&& f) mutable {
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
@@ -1365,7 +1365,7 @@ future<> mutate_MV(
                             *target_endpoint, updates_pushed_remote);
                     vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
                             *target_endpoint, s->ks_name(), s->cf_name(), base_token, view_token, ep);
-                    return make_exception_future<>(std::move(ep));
+                    return wait_for_all ? make_exception_future<>(std::move(ep)) : make_ready_future<>();
                 }
                 tracing::trace(tr_state, "Successfully applied view update for {} and {} remote endpoints",
                         *target_endpoint, updates_pushed_remote);
