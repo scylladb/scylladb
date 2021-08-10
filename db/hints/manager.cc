@@ -760,6 +760,7 @@ manager::end_point_hints_manager::sender::~sender() {
 future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
         set_stopping();
+        _stop_as.request_abort();
         _stopped.get();
 
         if (should_drain == drain::yes) {
@@ -823,7 +824,7 @@ void manager::end_point_hints_manager::sender::start() {
 
                 // If we got here means that either there are no more hints to send or we failed to send hints we have.
                 // In both cases it makes sense to wait a little before continuing.
-                sleep_abortable(next_sleep_duration()).get();
+                sleep_abortable(next_sleep_duration(), _stop_as).get();
             } catch (seastar::sleep_aborted&) {
                 break;
             } catch (...) {

@@ -33,6 +33,7 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
+#include <seastar/core/abort_source.hh>
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
@@ -43,10 +44,6 @@
 #include "db/hints/sync_point.hh"
 
 class fragmented_temporary_buffer;
-
-namespace seastar {
-class abort_source;
-}
 
 namespace utils {
 class directories;
@@ -150,6 +147,7 @@ public:
             std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
             state_set _state;
             future<> _stopped;
+            abort_source _stop_as;
             clock::time_point _next_flush_tp;
             clock::time_point _next_send_retry_tp;
             key_type _ep_key;
