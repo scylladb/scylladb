@@ -40,7 +40,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     // The snapshot can not contain uncommitted entries
     _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
-    logger.trace("{}: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
+    logger.trace("fsm[{}]: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
     reset_election_timeout();
 }
 
@@ -755,12 +755,12 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
-    logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
+    logger.trace("request_vote_reply[{}] received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
     // Should not register a reply to prevote as a real vote
     if (state.is_prevote != reply.is_prevote) {
-        logger.trace("{} ignoring prevote from {} as state is vote", _my_id, from);
+        logger.trace("request_vote_reply[{}] ignoring prevote from {} as state is vote", _my_id, from);
         return;
     }
     state.votes.register_vote(from, reply.vote_granted);
