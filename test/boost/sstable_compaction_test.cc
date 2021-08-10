@@ -2142,7 +2142,7 @@ std::vector<mutation_fragment> write_corrupt_sstable(test_env& env, sstable& sst
     return corrupt_fragments;
 }
 
-SEASTAR_TEST_CASE(sstable_validation_test) {
+SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     cql_test_config test_cfg;
 
     auto& db_cfg = *test_cfg.db_config;
@@ -2222,7 +2222,7 @@ SEASTAR_TEST_CASE(sstable_validation_test) {
             testlog.info("Validate");
 
             // No way to really test validation besides observing the log messages.
-            compaction_manager.perform_sstable_validation(table.get()).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::validate).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
@@ -2231,7 +2231,7 @@ SEASTAR_TEST_CASE(sstable_validation_test) {
     }, test_cfg);
 }
 
-SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
+SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
     auto schema = schema_builder("ks", get_name())
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2284,7 +2284,7 @@ SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
         BOOST_REQUIRE(valid);
     }
 
@@ -2295,7 +2295,7 @@ SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
         BOOST_REQUIRE(!valid);
     }
 
@@ -2306,7 +2306,7 @@ SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
         frags.emplace_back(make_static_row());
         frags.emplace_back(make_partition_end());
 
-        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
         BOOST_REQUIRE(!valid);
     }
 
@@ -2317,7 +2317,7 @@ SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
         BOOST_REQUIRE(!valid);
     }
 
@@ -2329,7 +2329,7 @@ SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
         BOOST_REQUIRE(!valid);
     }
 
@@ -2338,7 +2338,7 @@ SEASTAR_THREAD_TEST_CASE(validation_compaction_validate_reader_test) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(0));
 
-        const auto valid = validate_compaction_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
         BOOST_REQUIRE(!valid);
     }
 }
