@@ -65,7 +65,11 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
         << ", slice=" << r.slice << ""
         << ", limit=" << r.get_row_limit()
         << ", timestamp=" << r.timestamp.time_since_epoch().count()
-        << ", partition_limit=" << r.partition_limit << "}";
+        << ", partition_limit=" << r.partition_limit
+        << ", query_uuid=" << r.query_uuid
+        << ", is_first_page=" << r.is_first_page
+        << ", read_timestamp=" << r.read_timestamp
+        << "}";
 }
 
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
