@@ -171,16 +171,6 @@ public:
     position_in_partition_view lower_bound() const {
         return _walker.lower_bound();
     }
-
-    /// Returns the uppermost bound of the active clustering ranges
-    ///
-    /// If the filter is in streamed_mutation::forwarding::yes mode then there
-    /// is a single active range which is the one to which the reader was fast-forwarded to.
-    /// Otherwise, there may be multiple clustering ranges (as provided during the reader
-    /// creation) and this function would return the upper bound of the last one.
-    position_in_partition_view uppermost_bound() const {
-        return _fwd ? _fwd_end : _walker.uppermost_bound();
-    }
 };
 
 };   // namespace sstables
