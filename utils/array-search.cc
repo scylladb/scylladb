@@ -79,21 +79,8 @@ arch_target("default") unsigned array_search_x32_eq_impl(uint8_t val, const uint
 
 arch_target("avx2") int array_search_gt_impl(int64_t val, const int64_t* array, const int capacity, const int size) {
     int cnt = 0;
-
-    // 0. Load key into 256-bit ymm
-    __m256i k = _mm256_set1_epi64x(val);
-    for (int i = 0; i < capacity; i += 4) {
-        // 4. Count the number of 1-s, each gt match gives 8 bits
-        cnt += _mm_popcnt_u32(
-                    // 3. Pack result into 4 bytes -- 1 byte from each comparison
-                    _mm256_movemask_epi8(
-                        // 2. Compare array[i] > key, 4 elements in one go
-                        _mm256_cmpgt_epi64(
-                            // 1. Load next 4 elements into ymm
-                            _mm256_lddqu_si256((__m256i*)&array[i]), k
-                        )
-                    )
-                ) / 8;
+    for (int i = 0; i < capacity; ++i) {
+        cnt += val < array[i];
     }
 
     /*
