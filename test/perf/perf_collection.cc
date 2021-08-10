@@ -31,6 +31,9 @@ using per_key_t = int64_t;
 
 struct key_compare {
     bool operator()(const per_key_t& a, const per_key_t& b) const noexcept { return a < b; }
+    int64_t simplify_key(per_key_t k) noexcept {
+        return k;
+    }
 };
 
 struct key_tri_compare {
@@ -45,6 +48,8 @@ using namespace seastar;
 
 /* On node size 32 and less linear search works better */
 using test_bplus_tree = bplus::tree<per_key_t, unsigned long, key_compare, 4, bplus::key_search::linear>;
+
+static_assert(bplus::SimpleLessCompare<int64_t, key_compare>);
 
 #include "utils/intrusive_btree.hh"
 
