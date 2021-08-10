@@ -92,8 +92,9 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "locator/snitch_base.hh"
-
 #include "idl/partition_checksum.dist.impl.hh"
+#include "idl/forward_request.dist.hh"
+#include "idl/forward_request.dist.impl.hh"
 
 namespace netw {
 
@@ -120,6 +121,11 @@ static rpc::multi_algo_compressor_factory compressor_factory {
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
 constexpr int32_t messaging_service::current_version;
+
+// Count of connection types that are not associated with any tenant
+const size_t PER_SHARD_CONNECTION_COUNT = 2;
+// Counts per tenant connection types
+const size_t PER_TENANT_CONNECTION_COUNT = 3;
 
 bool operator==(const msg_addr& x, const msg_addr& y) noexcept {
     // Ignore cpu id for now since we do not really support shard to shard connections
@@ -323,7 +329,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
-    , _clients(2 + scfg.statement_tenants.size() * 2)
+    , _clients(PER_SHARD_CONNECTION_COUNT + scfg.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT)
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
 {
@@ -422,6 +428,7 @@ rpc::no_wait_type messaging_service::no_wait() {
 
 
 static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
+    // *_CONNECTION_COUNT constants needs to be updated after allocating a new index.
     switch (verb) {
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
@@ -496,6 +503,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
         return 3;
+    case messaging_verb::FORWARD_REQUEST:
+        return 4;
     case messaging_verb::LAST:
         return -1; // should never happen
     }
@@ -505,6 +514,10 @@ static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> 
     std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> tab{};
     for (size_t i = 0; i < tab.size(); ++i) {
         tab[i] = do_get_rpc_client_idx(messaging_verb(i));
+
+        // This assert guards against adding new connection types without
+        // updating *_CONNECTION_COUNT constants.
+        assert(tab[i] < PER_TENANT_CONNECTION_COUNT + PER_SHARD_CONNECTION_COUNT);
     }
     return tab;
 }
@@ -515,7 +528,7 @@ unsigned
 messaging_service::get_rpc_client_idx(messaging_verb verb) const {
     auto idx = s_rpc_client_idx_table[static_cast<size_t>(verb)];
 
-    if (idx < 2) {
+    if (idx < PER_SHARD_CONNECTION_COUNT) {
         return idx;
     }
 
@@ -523,8 +536,9 @@ messaging_service::get_rpc_client_idx(messaging_verb verb) const {
     const auto curr_sched_group = current_scheduling_group();
     for (unsigned i = 0; i < _connection_index_for_tenant.size(); ++i) {
         if (_connection_index_for_tenant[i].sched_group == curr_sched_group) {
-            // i == 0: the default tenant maps to the default client indexes of 2 and 3.
-            idx += i * 2;
+            // i == 0: the default tenant maps to the default client indexes beloning to the interval
+            // [PER_SHARD_CONNECTION_COUNT, PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT).
+            idx += i * PER_TENANT_CONNECTION_COUNT;
             break;
         }
     }
@@ -540,11 +554,17 @@ messaging_service::initial_scheduling_info() const {
         { _scheduling_config.gossip, "gossip" },
         { _scheduling_config.streaming, "streaming", },
     });
-    sched_infos.reserve(sched_infos.size() + _scheduling_config.statement_tenants.size() * 2);
+
+    sched_infos.reserve(sched_infos.size() +
+        _scheduling_config.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT);
     for (const auto& tenant : _scheduling_config.statement_tenants) {
         sched_infos.push_back({ tenant.sched_group, "statement:" + tenant.name });
         sched_infos.push_back({ tenant.sched_group, "statement-ack:" + tenant.name });
+        sched_infos.push_back({ tenant.sched_group, "forward:" + tenant.name });
     }
+
+    assert(sched_infos.size() == PER_SHARD_CONNECTION_COUNT +
+        _scheduling_config.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT);
     return sched_infos;
 };
 
@@ -717,7 +737,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;
     // We send cookies only for non-default statement tenant clients.
-    if (idx > 3) {
+    if (idx >= PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT) {
         opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
     }
 

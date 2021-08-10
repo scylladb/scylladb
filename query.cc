@@ -60,6 +60,28 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
         << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r) {
+    out << "reduction_type{";
+    switch (r) {
+        case forward_request::reduction_type::count:
+            out << "count";
+            break;
+    }
+    return out << "}";
+}
+
+std::ostream& operator<<(std::ostream& out, const forward_request& r) {
+    auto ms = std::chrono::time_point_cast<std::chrono::milliseconds>(r.timeout).time_since_epoch().count();
+
+    return out << "forward_request{"
+        << "reduction_types=[" << join(",", r.reduction_types) << "]"
+        << ", cmd=" << r.cmd
+        << ", pr=" << r.pr
+        << ", cl=" << r.cl
+        << ", timeout(ms)=" << ms << "}";
+}
+
+
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out << "{" << s._pk << " : " << join(", ", s._ranges) << "}";
 }
@@ -364,6 +386,49 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     std::move(partitions).end_partitions().end_query_result();
 
     return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
+}
+
+static bytes_opt merge_singular_results(bytes_opt r1, bytes_opt r2, forward_request::reduction_type reduction) {
+    switch (reduction) {
+        case forward_request::reduction_type::count: {
+            auto count1 = value_cast<int64_t>(long_type->deserialize(bytes_view(*r1)));
+            auto count2 = value_cast<int64_t>(long_type->deserialize(bytes_view(*r2)));
+            return data_value(count1 + count2).serialize();
+        }
+    }
+    throw std::runtime_error("unknown reduction type");
+}
+
+void forward_result::merge(const forward_result& other, const std::vector<forward_request::reduction_type>& reduction_types) {
+    if (query_results.empty()) {
+        query_results.resize(other.query_results.size());
+    }
+
+    assert(query_results.size() == other.query_results.size());
+    assert(query_results.size() == reduction_types.size());
+
+    for (size_t i = 0; i < query_results.size(); i++) {
+        query_results[i] = merge_singular_results(query_results[i], other.query_results[i], reduction_types[i]);
+    }
+}
+
+std::ostream& operator<<(std::ostream& out, const query::forward_result::printer& p) {
+    assert(p.types.size() == p.res.query_results.size());
+
+    out << "[";
+    for (size_t i = 0; i < p.types.size(); i++) {
+        switch (p.types[i]) {
+            case forward_request::reduction_type::count: {
+                auto count = value_cast<int64_t>(long_type->deserialize(bytes_view(*p.res.query_results[i])));
+                out << count;
+            }
+        }
+
+        if (i + 1 < p.types.size()) {
+            out << ", ";
+        }
+    }
+    return out << "]";
 }
 
 }

@@ -150,7 +150,8 @@ enum class messaging_verb : int32_t {
     GROUP0_MODIFY_CONFIG = 58,
     REPAIR_UPDATE_SYSTEM_TABLE = 59,
     REPAIR_FLUSH_HINTS_BATCHLOG = 60,
-    LAST = 61,
+    FORWARD_REQUEST = 61,
+    LAST = 62,
 };
 
 } // namespace netw
