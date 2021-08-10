@@ -145,6 +145,8 @@ public:
 
     virtual bool is_aggregate() const = 0;
 
+    virtual bool is_count() const {return false;}
+
     /**
      * Checks that selectors are either all aggregates or that none of them is.
      *

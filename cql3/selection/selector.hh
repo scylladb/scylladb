@@ -129,6 +129,10 @@ public:
         return false;
     }
 
+    virtual bool is_count_selector_factory() const {
+        return false;
+    }
+
     /**
      * Checks if this factory creates <code>writetime</code> selectors instances.
      *
