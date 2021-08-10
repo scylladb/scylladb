@@ -32,7 +32,7 @@ namespace {
 struct my_consumer {
     stop_iteration consume(static_row sr) { return stop_iteration::no; }
     stop_iteration consume(clustering_row cr) { return stop_iteration::no; }
-    stop_iteration consume(range_tombstone rt) { return stop_iteration::no; }
+    stop_iteration consume(range_tombstone_change rt) { return stop_iteration::no; }
     stop_iteration consume(tombstone tomb) { return stop_iteration::no; }
     void consume_end_of_stream() {}
     void consume_new_partition(const dht::decorated_key& dk) {}

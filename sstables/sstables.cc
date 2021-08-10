@@ -2134,7 +2134,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
     });
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable::make_reader(
         schema_ptr schema,
         reader_permit permit,
@@ -2147,6 +2147,23 @@ sstable::make_reader(
         read_monitor& mon) {
     if (_version >= version_types::mc) {
         return mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
+    }
+    return upgrade_to_v2(kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
+}
+
+flat_mutation_reader
+sstable::make_reader_v1(
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& mon) {
+    if (_version >= version_types::mc) {
+        return downgrade_to_v1(mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
     }
     return kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
@@ -2985,7 +3002,7 @@ mutation_source sstable::as_mutation_source() {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) mutable {
-        return sst->make_reader(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return sst->make_reader_v1(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
 }
 

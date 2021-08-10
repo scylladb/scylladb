@@ -1570,7 +1570,7 @@ public:
 };
 
 
-flat_mutation_reader make_reader(
+flat_mutation_reader_v2 make_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -1581,9 +1581,8 @@ flat_mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return downgrade_to_v1(
-            make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
-        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor));
+    return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
+        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
 } // namespace mx
