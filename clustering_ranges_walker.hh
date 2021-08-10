@@ -311,11 +311,6 @@ public:
         return _current_start;
     }
 
-    // Returns the upper bound of the last range in provided ranges set
-    position_in_partition_view uppermost_bound() const {
-        return position_in_partition_view::for_range_end(_ranges.back());
-    }
-
     // When lower_bound() changes, this also does
     // Always > 0.
     size_t lower_bound_change_counter() const {
