@@ -91,6 +91,7 @@ private:
     gms::feature _alternator_streams_feature;
     gms::feature _range_scan_data_variant;
     gms::feature _cdc_generations_v2;
+    gms::feature _uda;
 
 public:
     bool cluster_supports_user_defined_functions() const {
@@ -156,6 +157,10 @@ public:
 
     bool cluster_supports_cdc_generations_v2() const {
         return bool(_cdc_generations_v2);
+    }
+
+    bool cluster_supports_user_defined_aggregates() const {
+        return bool(_uda);
     }
 };
 
