@@ -187,6 +187,8 @@ public:
     future<request_return_type> tag_resource(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> untag_resource(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> update_time_to_live(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> list_streams(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_stream(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request);

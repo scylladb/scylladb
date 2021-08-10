@@ -89,6 +89,7 @@ private:
     gms::feature _digest_for_null_values_feature;
     gms::feature _correct_idx_token_in_secondary_index_feature;
     gms::feature _alternator_streams_feature;
+    gms::feature _alternator_ttl_feature;
     gms::feature _range_scan_data_variant;
     gms::feature _cdc_generations_v2;
     gms::feature _uda;
@@ -147,6 +148,10 @@ public:
 
     bool cluster_supports_alternator_streams() const {
         return bool(_alternator_streams_feature);
+    }
+
+    bool cluster_supports_alternator_ttl() const {
+        return bool(_alternator_ttl_feature);
     }
 
     // Range scans have a data variant, which produces query::result directly,

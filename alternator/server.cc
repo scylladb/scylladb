@@ -504,6 +504,12 @@ server::server(executor& exec, cql3::query_processor& qp, service::storage_proxy
         {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.list_tags_of_resource(client_state, std::move(permit), std::move(json_request));
         }},
+        {"UpdateTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.update_time_to_live(client_state, std::move(permit), std::move(json_request));
+        }},
+        {"DescribeTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.describe_time_to_live(client_state, std::move(permit), std::move(json_request));
+        }},
         {"ListStreams", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.list_streams(client_state, std::move(permit), std::move(json_request));
         }},

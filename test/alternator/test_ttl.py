@@ -19,12 +19,36 @@
 
 import pytest
 import time
+import re
 from botocore.exceptions import ClientError
-from util import new_test_table, random_string, full_query
+from util import new_test_table, random_string, full_query, test_table_name
+from contextlib import contextmanager
+
+# passes_or_raises() is similar to pytest.raises(), except that while raises()
+# expects a certain exception must happen, the new passes_or_raises()
+# expects the code to either pass (not raise), or if it throws, it must
+# throw the specific specified exception.
+@contextmanager
+def passes_or_raises(expected_exception, match=None):
+    # Sadly __tracebackhide__=True only drops some of the unhelpful backtrace
+    # lines. See https://github.com/pytest-dev/pytest/issues/2057
+    __tracebackhide__ = True
+    try:
+        yield
+        # The user's "with" code is running during the yield. If it didn't
+        # throw we return from the function - the raises_or_not() passed as
+        # the "or not" case.
+        return
+    except expected_exception as err:
+        if match == None or re.search(match, str(err)):
+            # The raises_or_not() passed on as the "raises" case
+            return
+        pytest.fail(f"exception message '{err}' did not match '{match}'")
+    except Exception as err:
+        pytest.fail(f"Got unexpected exception type {type(err).__name__} instead of {expected_exception.__name__}: {err}")
 
 # Test the DescribeTimeToLive operation on a table where the time-to-live
 # feature was *not* enabled.
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_describe_ttl_without_ttl(test_table):
     response = test_table.meta.client.describe_time_to_live(TableName=test_table.name)
     assert 'TimeToLiveDescription' in response
@@ -34,7 +58,6 @@ def test_describe_ttl_without_ttl(test_table):
 
 # Test that UpdateTimeToLive can be used to pick an expiration-time attribute
 # and this information becomes available via DescribeTimeToLive
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_enable(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -70,7 +93,6 @@ def test_ttl_enable(dynamodb):
 # disable TTL if it was enabled in the last hour (according to DynamoDB's
 # documentation). We have below a much longer test for the successful TTL
 # disable case.
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_disable_errors(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -92,10 +114,10 @@ def test_ttl_disable_errors(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*different'):
             client.update_time_to_live(TableName=table.name,
                 TimeToLiveSpecification={'AttributeName': 'dog', 'Enabled': False})
-        # Finally disable TTL the right way :-) But on DynamoDB this fails
+        # Finally disable TTL the right way :-) On DynamoDB this fails
         # because you are not allowed to modify the TTL setting twice in
-        # one hour!
-        with pytest.raises(ClientError, match='ValidationException.*multiple times'):
+        # one hour, but in our implementation it can also pass quickly.
+        with passes_or_raises(ClientError, match='ValidationException.*multiple times'):
             client.update_time_to_live(TableName=table.name,
                 TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': False})
 
@@ -104,7 +126,6 @@ def test_ttl_disable_errors(dynamodb):
 # (the documentation suggests a full hour, but in practice it seems 30
 # minutes).
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_disable(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -130,6 +151,30 @@ def test_ttl_disable(dynamodb):
                 continue
         assert client.describe_time_to_live(TableName=table.name)['TimeToLiveDescription'] == {
             'TimeToLiveStatus': 'DISABLED'}
+
+# Test various errors in the UpdateTimeToLive request.
+# Unfortunately, the boto3 library catches most incorrect inputs on the
+# client side, so we can't check the following errors here :-(
+# 1. Missing UpdateTimeToLive parameters AttributeName or Enabled
+# 2. Wrong types for them (e.g., string for Enabled)
+# 3. Empty string for AttributeName
+# There are only a few things that boto3 doesn't guard, so we can check them:
+def test_update_ttl_errors(dynamodb):
+    client = dynamodb.meta.client
+    # Can't set TTL on a non-existent table
+    nonexistent_table = test_table_name()
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        client.update_time_to_live(TableName=nonexistent_table,
+            TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        # AttributeName must be between 1 and 255 characters long. We
+        # can't check 0 (boto3 guards against this in the client), but
+        # can check >255.
+        with pytest.raises(ClientError, match='ValidationException.*length'):
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 'x'*256, 'Enabled': True})
 
 # Basic test that expiration indeed expires items that should be expired,
 # and doesn't expire items which shouldn't be expired.
