@@ -37,6 +37,8 @@
 #include "concrete_types.hh"
 #include "as_json_function.hh"
 #include "cql3/prepare_context.hh"
+#include "user_aggregate.hh"
+#include <boost/range/adaptors.hpp>
 
 #include "error_injection_fcts.hh"
 
@@ -156,6 +158,16 @@ void functions::replace_function(shared_ptr<function> func) {
 
 void functions::remove_function(const function_name& name, const std::vector<data_type>& arg_types) {
     with_udf_iter(name, arg_types, [] (functions::declared_t::iterator i) { _declared.erase(i); });
+}
+
+std::optional<function_name> functions::used_by_user_aggregate(const function_name& name) {
+    for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
+        auto aggregate = dynamic_pointer_cast<user_aggregate>(fptr);
+        if (aggregate && (aggregate->sfunc().name() == name || aggregate->finalfunc().name() == name)) {
+            return aggregate->name();
+        }
+    }
+    return {};
 }
 
 lw_shared_ptr<column_specification>

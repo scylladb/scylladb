@@ -43,6 +43,9 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement:
     if (!user_func) {
         throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", _func));
     }
+    if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name()); bool(aggregate)) {
+        throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", _func, *aggregate));
+    }
     return qp.get_migration_manager().announce_function_drop(user_func).then([this] {
         return create_schema_change(*_func, false);
     });
