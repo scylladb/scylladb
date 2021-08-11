@@ -3147,7 +3147,7 @@ private:
         int32_t status = 0;
         while (auto status_opt = co_await _source()) {
             status = std::get<0>(*status_opt);
-            slogger.debug("send_meta_data: got error code={}, from node={}, status={}", status, _node);
+            slogger.debug("send_meta_data: got error code={}, from node={}", status, _node);
             if (status == -1) {
                 _error_from_peer = true;
             }
