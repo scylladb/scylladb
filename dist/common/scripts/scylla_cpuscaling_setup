@@ -33,7 +33,7 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
-    if not os.path.exists('/sys/devices/system/cpu/cpufreq/policy0/scaling_governor'):
+    if not os.path.exists('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'):
         print('This computer doesn\'t supported CPU scaling configuration.')
         sys.exit(0)
     if is_debian_variant():
