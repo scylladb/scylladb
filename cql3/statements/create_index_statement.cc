@@ -311,6 +311,9 @@ create_index_statement::announce_migration(query_processor& qp) const {
     }
     auto index_table_name = secondary_index::index_table_name(accepted_name);
     if (db.has_schema(keyspace(), index_table_name)) {
+        // We print this error even if _if_not_exists - in this case the user
+        // asked to create a not-previously-existing index, but under an
+        // already-taken name. This should be an error, not a silent success.
         return make_exception_future<::shared_ptr<cql_transport::event::schema_change>>(
             exceptions::invalid_request_exception(format("Index {} cannot be created, because table {} already exists",
                 accepted_name, index_table_name))

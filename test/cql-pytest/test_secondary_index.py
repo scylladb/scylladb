@@ -171,6 +171,35 @@ def test_create_index_if_not_exists(cql, test_keyspace):
             cql.execute(f"DROP INDEX {test_keyspace}.abc")
         cql.execute(f"DROP INDEX {test_keyspace}.xyz")
 
+# Another test for CREATE INDEX IF NOT EXISTS: Checks what happens if an index
+# with the given *name* already exists, but it's a different index than the
+# one requested, i.e.,
+#    CREATE INDEX xyz ON tbl(a)
+#    CREATE INDEX IF NOT EXIST xyz ON tbl(b)
+# Should the second command
+# 1. Silently do nothing (because xyz already exists),
+# 2. or try to create an index (because an index on tbl(b) doesn't yet exist)
+#    and visibly fail when it can't because the name is already taken?
+# Cassandra chose the first behavior (silently do nothing), Scylla chose the
+# second behavior. We consider Cassandra's behavior to be *wrong* and
+# unhelpful - the intention of the user was ensure that an index tbl(b)
+# (an index on column b of table tbl) exists, and if we can't, an error
+# message is better than silently doing nothing.
+# So this test is marked "cassandra_bug" - passes on Scylla and xfails on
+# Cassandra.
+# Reproduces issue #9182
+def test_create_index_if_not_exists2(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v1 int, v2 int') as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v1)")
+        # Obviously can't create a different index with the same name:
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f"CREATE INDEX {index_name} ON {table}(v2)")
+        # Even with "IF NOT EXISTS" we still get a failure. An index for
+        # {table}(v2) does not yet exist, so the index creation is attempted.
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table}(v2)")
+
 # Test that the paging state works properly for indexes on tables
 # with descending clustering order. There was a problem with indexes
 # created on clustering keys with DESC clustering order - they are represented
