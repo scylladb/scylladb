@@ -28,6 +28,7 @@
 #include <map>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
@@ -89,6 +90,7 @@ private:
     server_id _id;
     server::configuration _config;
     std::optional<promise<>> _stepdown_promise;
+    std::optional<shared_promise<>> _leader_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
 
@@ -229,6 +231,9 @@ private:
     void add_to_rpc_config(server_address srv);
     void remove_from_rpc_config(const server_address& srv);
 
+    // A helper to wait for a leader to get elected
+    future<> wait_for_leader();
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -286,6 +291,13 @@ future<> server_impl::start() {
     // Metrics access _fsm, so create them only after the pointer is populated
     register_metrics();
     co_return;
+}
+
+future<> server_impl::wait_for_leader() {
+    if (!_leader_promise) {
+        _leader_promise.emplace();
+    }
+    return _leader_promise->get_shared_future();
 }
 
 template <typename T>
@@ -568,6 +580,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     std::exchange(_stepdown_promise, std::nullopt)->set_exception(timeout_error("Stepdown process timed out"));
                 }
             }
+            if (_leader_promise && _fsm->current_leader()) {
+                std::exchange(_leader_promise, std::nullopt)->set_value();
+            }
         }
     } catch (seastar::broken_condition_variable&) {
         // Log fiber is stopped explicitly.
@@ -727,6 +742,9 @@ future<> server_impl::abort() {
     }
     _awaited_commits.clear();
     _awaited_applies.clear();
+    if (_leader_promise) {
+        _leader_promise->set_exception(stopped_error());
+    }
 
     for (auto&& [_, f] : _snapshot_application_done) {
         f.set_exception(std::runtime_error("Snapshot application aborted"));
