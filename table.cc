@@ -243,7 +243,8 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_perm
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
     const auto fwd_mr = mutation_reader::forwarding::no;
-    return make_sstable_reader(schema, permit, sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    return sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice, pc,
+            std::move(trace_state), fwd, fwd_mr);
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
