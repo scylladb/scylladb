@@ -44,6 +44,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation_partition_view.hh"
 #include "utils/runtime.hh"
+#include "utils/error_injection.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -1017,24 +1018,42 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
-        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) mutable {
+        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
             auto& buf = buf_rp.buffer;
             auto& rp = buf_rp.position;
-            // Check that we can still send the next hint. Don't try to send it if the destination host
-            // is DOWN or if we have already failed to send some of the previous hints.
-            if (!draining() && ctx_ptr->segment_replay_failed) {
-                return make_ready_future<>();
-            }
 
-            // Break early if stop() was called or the destination node went down.
-            if (!can_send()) {
-                ctx_ptr->segment_replay_failed = true;
-                return make_ready_future<>();
-            }
+            while (true) {
+                // Check that we can still send the next hint. Don't try to send it if the destination host
+                // is DOWN or if we have already failed to send some of the previous hints.
+                if (!draining() && ctx_ptr->segment_replay_failed) {
+                    co_return;
+                }
 
-            return flush_maybe().finally([this, ctx_ptr, buf = std::move(buf), rp, secs_since_file_mod, &fname] () mutable {
-                return send_one_hint(std::move(ctx_ptr), std::move(buf), rp, secs_since_file_mod, fname);
-            });
+                // Break early if stop() was called or the destination node went down.
+                if (!can_send()) {
+                    ctx_ptr->segment_replay_failed = true;
+                    co_return;
+                }
+
+                co_await flush_maybe();
+
+                if (utils::get_local_injector().enter("hinted_handoff_pause_hint_replay")) {
+                    // We cannot send the hint because hint replay is paused.
+                    // Sleep 100ms and do the whole loop again.
+                    //
+                    // Jumping to the beginning of the loop makes sure that
+                    // - We regularly check if we should stop - so that we won't
+                    //   get stuck in shutdown.
+                    // - flush_maybe() is called regularly - so that new segments
+                    //   are created and we help enforce the "at most 10s worth of
+                    //   hints in a segment".
+                    co_await sleep(std::chrono::milliseconds(100));
+                    continue;
+                } else {
+                    co_await send_one_hint(ctx_ptr, std::move(buf), rp, secs_since_file_mod, fname);
+                    break;
+                }
+            };
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
