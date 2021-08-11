@@ -90,6 +90,7 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/trim_all.hpp>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -672,6 +673,7 @@ void storage_service::mark_existing_views_as_built() {
 void storage_service::bootstrap() {
     _is_bootstrap_mode = true;
     auto x = seastar::defer([this] { _is_bootstrap_mode = false; });
+    auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
     if (!_db.local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
@@ -695,7 +697,7 @@ void storage_service::bootstrap() {
 
         // Update pending ranges now, so we correctly count ourselves as a pending replica
         // when inserting the new CDC generation.
-      if (!is_repair_based_node_ops_enabled()) {
+      if (!bootstrap_rbno) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node
         // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
         mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
@@ -715,7 +717,7 @@ void storage_service::bootstrap() {
                 !_for_testing && !is_first_node() /* add_delay */,
                 _feature_service.cluster_supports_cdc_generations_v2()).get0();
 
-      if (!is_repair_based_node_ops_enabled()) {
+      if (!bootstrap_rbno) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node
         // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
         _gossiper.add_local_application_state({
@@ -746,16 +748,11 @@ void storage_service::bootstrap() {
     }).get();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    if (is_repair_based_node_ops_enabled()) {
-        if (_db.local().is_replacing()) {
-            run_replace_ops();
-        } else {
-            run_bootstrap_ops();
-        }
+    if (_db.local().is_replacing()) {
+        run_replace_ops();
     } else {
-        // Does the actual streaming of newly replicated token ranges.
-        if (_db.local().is_replacing()) {
-            run_replace_ops();
+        if (bootstrap_rbno) {
+            run_bootstrap_ops();
         } else {
             dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::bootstrap).get();
@@ -2251,7 +2248,7 @@ void storage_service::run_replace_ops() {
 
 
         // Step 7: Sync data for replace
-        if (is_repair_based_node_ops_enabled()) {
+        if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
             _repair.local().replace_with_repair(get_token_metadata_ptr(), _bootstrap_tokens).get();
         } else {
@@ -2498,7 +2495,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             auto ops = it->second.get_ops_info();
             auto as = it->second.get_abort_source();
             for (auto& node : req.leaving_nodes) {
-                if (is_repair_based_node_ops_enabled()) {
+                if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using repair, coordinator={}", req.ops_uuid, node, coordinator);
                     _repair.local().removenode_with_repair(get_token_metadata_ptr(), node, ops).get();
                 } else {
@@ -2733,7 +2730,7 @@ future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
         auto tmptr = ss.get_token_metadata_ptr();
-        if (ss.is_repair_based_node_ops_enabled()) {
+        if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
             return ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, tmptr, ss._abort_source,
@@ -2847,7 +2844,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 // Runs inside seastar::async context
 void storage_service::unbootstrap() {
     db::get_local_batchlog_manager().do_batch_log_replay().get();
-    if (is_repair_based_node_ops_enabled()) {
+    if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
         _repair.local().decommission_with_repair(get_token_metadata_ptr()).get();
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
@@ -2939,7 +2936,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    if (is_repair_based_node_ops_enabled()) {
+    if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
         auto ops_uuid = utils::make_random_uuid();
         auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::list<gms::inet_address>()});
         return _repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
@@ -3915,8 +3912,39 @@ future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     });
 }
 
-bool storage_service::is_repair_based_node_ops_enabled() {
-    return _db.local().get_config().enable_repair_based_node_ops();
+bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason reason) {
+    static const std::unordered_map<sstring, streaming::stream_reason> reason_map{
+        {"replace", streaming::stream_reason::replace},
+        {"bootstrap", streaming::stream_reason::bootstrap},
+        {"decommission", streaming::stream_reason::decommission},
+        {"removenode", streaming::stream_reason::removenode},
+        {"rebuild", streaming::stream_reason::rebuild},
+    };
+    std::vector<sstring> enabled_list;
+    std::unordered_set<streaming::stream_reason> enabled_set;
+    auto enabled_list_str = _db.local().get_config().allowed_repair_based_node_ops();
+    boost::trim_all(enabled_list_str);
+    std::replace(enabled_list_str.begin(), enabled_list_str.end(), '\"', ' ');
+    std::replace(enabled_list_str.begin(), enabled_list_str.end(), '\'', ' ');
+    boost::split(enabled_list, enabled_list_str, boost::is_any_of(","));
+    for (sstring op : enabled_list) {
+        try {
+            if (!op.empty()) {
+                auto it = reason_map.find(op);
+                if (it != reason_map.end()) {
+                    enabled_set.insert(it->second);
+                } else {
+                    throw std::invalid_argument(format("unsupported operation name: {}", op));
+                }
+            }
+        } catch (...) {
+            throw std::invalid_argument(format("Failed to parse allowed_repair_based_node_ops parameter [{}]: {}",
+                    enabled_list_str, std::current_exception()));
+        }
+    }
+    bool global_enabled = _db.local().get_config().enable_repair_based_node_ops();
+    slogger.info("enable_repair_based_node_ops={}, allowed_repair_based_node_ops={}", global_enabled, enabled_set);
+    return global_enabled && enabled_set.contains(reason);
 }
 
 node_ops_meta_data::node_ops_meta_data(
