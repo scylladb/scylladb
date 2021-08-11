@@ -242,6 +242,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
+    , enable_auto_compaction(this, "enable_auto_compaction", liveness::LiveUpdate, value_status::Used, true,
+        "If set to true (default), enable automatic compaction on all tables. If false, autocompaction is disabled by default and can be re-enabled by reloading this flag or using `nodetool enableautocompaction`")
     /* Initialization properties */
     /* The minimal properties needed for configuring a cluster. */
     , cluster_name(this, "cluster_name", value_status::Used, "",

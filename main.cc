@@ -1076,12 +1076,16 @@ int main(int ac, char** av) {
                 }
             }
 
-            db.invoke_on_all([] (database& db) {
+            if (cfg->enable_auto_compaction()) {
+              db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     table& t = *(x.second);
                     t.enable_auto_compaction();
                 }
-            }).get();
+              }).get();
+            } else {
+              supervisor::notify("autocompaction disabled by configuration option (enable_auto_compaction = false)");
+            }
 
             // If the same sstable is shared by several shards, it cannot be
             // deleted until all shards decide to compact it. So we want to
