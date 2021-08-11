@@ -154,15 +154,15 @@ raw_value to_raw_value(const cql_value& value, cql_serialization_format serializ
 }
 
 raw_value to_raw_value(const empty_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+    return raw_value::make_value(bytes());
 }
 
 raw_value to_raw_value(const unset_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+    return raw_value::make_unset_value();
 }
 
 raw_value to_raw_value(const null_value&) {
-    throw std::runtime_error(format("to_raw_value not implemented {}:{}", __FILE__, __LINE__));
+    return raw_value::make_null();
 }
 
 raw_value to_raw_value(const int16_value&) {
