@@ -371,6 +371,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Whether or not to re-use commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
+    , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, false,
+        "Whether or not to use a hard size limit for commitlog disk usage. Default is false. Enabling this can cause latency spikes, whereas the default can lead to occasional disk usage peaks.\n")
     /* Compaction settings */
     /* Related information: Configuring compaction */
     , compaction_preheat_key_cache(this, "compaction_preheat_key_cache", value_status::Unused, true,

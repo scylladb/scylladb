@@ -136,6 +136,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.extensions = &cfg.extensions();
     c.reuse_segments = cfg.commitlog_reuse_segments();
     c.use_o_dsync = cfg.commitlog_use_o_dsync();
+    c.allow_going_over_size_limit = !cfg.commitlog_use_hard_size_limit();
 
     return c;
 }
