@@ -1168,7 +1168,6 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _durable_writes(true)
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
-    , _compaction_disabled_by_user(!config.enable_auto_compaction)
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _row_locker(_schema)
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
@@ -2115,7 +2114,7 @@ void
 table::enable_auto_compaction() {
     // XXX: unmute backlog. turn table backlog back on.
     //      see table::disable_auto_compaction() notes.
-    _compaction_disabled_by_user = false;
+    _config.enable_auto_compaction = true;
 }
 
 void
@@ -2146,7 +2145,7 @@ table::disable_auto_compaction() {
     //   option
     // - it will break computation of major compaction descriptor
     //   for new submissions
-    _compaction_disabled_by_user = true;
+    _config.enable_auto_compaction = false;
 }
 
 flat_mutation_reader

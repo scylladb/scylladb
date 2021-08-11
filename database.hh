@@ -447,7 +447,6 @@ private:
     compaction_manager& _compaction_manager;
     secondary_index::secondary_index_manager _index_manager;
     int _compaction_disabled = 0;
-    bool _compaction_disabled_by_user = false;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
 
@@ -938,7 +937,7 @@ public:
     void enable_auto_compaction();
     void disable_auto_compaction();
     bool is_auto_compaction_disabled_by_user() const {
-      return _compaction_disabled_by_user;
+        return !_config.enable_auto_compaction;
     }
 
     utils::phased_barrier::operation write_in_progress() {
