@@ -115,4 +115,20 @@ struct timeout_now {
     raft::internal::tagged_uint64<raft::term_tag> current_term;
 };
 
+struct read_quorum {
+    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::internal::tagged_uint64<raft::index_tag> leader_commit_idx;
+    raft::internal::tagged_uint64<raft::read_id_tag> id;
+};
+
+struct read_quorum_reply {
+    raft::internal::tagged_uint64<raft::term_tag> current_term;
+    raft::internal::tagged_uint64<raft::index_tag> commit_idx;
+    raft::internal::tagged_uint64<raft::read_id_tag> id;
+};
+
+struct not_a_leader {
+    raft::internal::tagged_id<raft::server_id_tag> leader;
+};
+
 } // namespace raft

@@ -290,6 +290,15 @@ class rpc : public raft::rpc {
         reply_id_t reply_id;
     };
 
+    struct execute_barrier_on_leader {
+        reply_id_t reply_id;
+    };
+
+    struct execute_barrier_on_leader_reply {
+        raft::read_barrier_reply reply;
+        reply_id_t reply_id;
+    };
+
 public:
     using message_t = std::variant<
         snapshot_message,
@@ -298,7 +307,11 @@ public:
         raft::append_reply,
         raft::vote_request,
         raft::vote_reply,
-        raft::timeout_now>;
+        raft::timeout_now,
+        raft::read_quorum,
+        raft::read_quorum_reply,
+        execute_barrier_on_leader,
+        execute_barrier_on_leader_reply>;
 
     using send_message_t = std::function<void(raft::server_id dst, message_t)>;
 
@@ -315,7 +328,7 @@ private:
     // When (if) a reply returns, we take the ID from the reply (which is the same
     // as the ID in the corresponding request), take the promise under that ID
     // and push the reply through that promise.
-    std::unordered_map<reply_id_t, promise<raft::snapshot_reply>> _reply_promises;
+    std::unordered_map<reply_id_t, std::variant<promise<raft::snapshot_reply>, promise<raft::read_barrier_reply>>> _reply_promises;
     reply_id_t _counter = 0;
 
     // Used to ensure that when `abort()` returns there are
@@ -348,7 +361,7 @@ public:
         [this] (snapshot_reply_message m) -> future<> {
             auto it = _reply_promises.find(m.reply_id);
             if (it != _reply_promises.end()) {
-                it->second.set_value(std::move(m.reply));
+            std::get<promise<raft::snapshot_reply>>(it->second).set_value(std::move(m.reply));
             }
             co_return;
         },
@@ -371,6 +384,31 @@ public:
         [&] (raft::timeout_now m) -> future<> {
             c.timeout_now_request(src, std::move(m));
             co_return;
+        },
+        [&] (raft::read_quorum m) -> future<> {
+            c.read_quorum_request(src, std::move(m));
+            co_return;
+        },
+        [&] (raft::read_quorum_reply m) -> future<> {
+            c.read_quorum_reply(src, std::move(m));
+            co_return;
+        },
+        [&] (execute_barrier_on_leader m) -> future<> {
+            co_await with_gate(_gate, [&] () -> future<> {
+                auto reply = co_await c.execute_read_barrier(src);
+
+                _send(src, execute_barrier_on_leader_reply{
+                    .reply = std::move(reply),
+                    .reply_id = m.reply_id
+                });
+            });
+        },
+        [this] (execute_barrier_on_leader_reply m) -> future<> {
+            auto it = _reply_promises.find(m.reply_id);
+            if (it != _reply_promises.end()) {
+                std::get<promise<raft::read_barrier_reply>>(it->second).set_value(std::move(m.reply));
+            }
+            co_return;
         }
         ), std::move(payload));
     }
@@ -381,7 +419,9 @@ public:
         assert(it != _snapshots.end());
 
         auto id = _counter++;
-        auto f = _reply_promises[id].get_future();
+        promise<raft::snapshot_reply> p;
+        auto f = p.get_future();
+        _reply_promises.emplace(id, std::move(p));
         auto guard = defer([this, id] { _reply_promises.erase(id); });
 
         _send(dst, snapshot_message{
@@ -413,6 +453,28 @@ public:
         });
     }
 
+    virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
+        auto id = _counter++;
+        promise<raft::read_barrier_reply> p;
+        auto f = p.get_future();
+        _reply_promises.emplace(id, std::move(p));
+        auto guard = defer([this, id] { _reply_promises.erase(id); });
+
+        _send(dst, execute_barrier_on_leader {
+            .reply_id = id
+        });
+
+        co_return co_await with_gate(_gate,
+                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::read_barrier_reply> {
+            // TODO configurable
+            static const raft::logical_clock::duration execute_read_barrier_on_leader_timeout = 20_t;
+
+            // TODO: catch aborts from the abort_source as well
+            co_return co_await _timer.with_timeout(_timer.now() + execute_read_barrier_on_leader_timeout, std::move(f));
+            // co_await ensures that `guard` is destroyed before we leave `_gate`
+        });
+    }
+
     virtual future<> send_append_entries(raft::server_id dst, const raft::append_request& m) override {
         _send(dst, m);
         co_return;
@@ -431,6 +493,14 @@ public:
     }
 
     virtual void send_timeout_now(raft::server_id dst, const raft::timeout_now& m) override {
+        _send(dst, m);
+    }
+
+    virtual void send_read_quorum(raft::server_id dst, const raft::read_quorum& m) override {
+        _send(dst, m);
+    }
+
+    virtual void send_read_quorum_reply(raft::server_id dst, const raft::read_quorum_reply& m) override {
         _send(dst, m);
     }
 

@@ -152,7 +152,10 @@ enum class messaging_verb : int32_t {
     RAFT_VOTE_REQUEST = 49,
     RAFT_VOTE_REPLY = 50,
     RAFT_TIMEOUT_NOW = 51,
-    LAST = 52,
+    RAFT_READ_QUORUM = 52,
+    RAFT_READ_QUORUM_REPLY = 53,
+    RAFT_EXECUTE_READ_BARRIER_ON_LEADER = 54,
+    LAST = 55,
 };
 
 } // namespace netw
@@ -574,6 +577,18 @@ public:
     void register_raft_timeout_now(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::timeout_now)>&& func);
     future<> unregister_raft_timeout_now();
     future<> send_raft_timeout_now(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::timeout_now& timeout_now);
+
+    void register_raft_read_quorum(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum)>&& func);
+    future<> unregister_raft_read_quorum();
+    future<> send_raft_read_quorum(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::read_quorum& check_quorum);
+
+    void register_raft_read_quorum_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum_reply)>&& func);
+    future<> unregister_raft_read_quorum_reply();
+    future<> send_raft_read_quorum_reply(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::read_quorum_reply& check_quorum_reply);
+
+    void register_raft_execute_read_barrier_on_leader(std::function<future<raft::read_barrier_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id)>&& func);
+    future<> unregister_raft_execute_read_barrier_on_leader();
+    future<raft::read_barrier_reply> send_raft_execute_read_barrier_on_leader(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:

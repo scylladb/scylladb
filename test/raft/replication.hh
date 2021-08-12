@@ -673,6 +673,37 @@ public:
         tlogger.debug("[{}] rpc aborting", _id);
         return _gate.close();
     }
+    virtual void send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
+        if (!_net.count(id)) {
+            return;
+        }
+        if (!(*_connected)(id, _id)) {
+            return;
+        }
+        if (!drop_packet()) {
+            _net[id]->_client->read_quorum_request(_id, read_quorum);
+        }
+    }
+    virtual void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& reply) {
+        if (!_net.count(id)) {
+            return;
+        }
+        if (!(*_connected)(id, _id)) {
+            return;
+        }
+        if (!drop_packet()) {
+            _net[id]->_client->read_quorum_reply(_id, std::move(reply));
+        }
+    }
+    virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) {
+        if (!_net.count(id)) {
+            return make_exception_future<raft::read_barrier_reply>(std::runtime_error("trying to send a message to an unknown node"));
+        }
+        if (!(*_connected)(id, _id)) {
+            return make_exception_future<raft::read_barrier_reply>(std::runtime_error("cannot send append since nodes are disconnected"));
+        }
+        return _net[id]->_client->execute_read_barrier(_id);
+    }
     virtual void add_server(raft::server_id id, bytes node_info) {
         _known_peers.insert(raft::server_address{id});
         ++_servers_added;

@@ -41,6 +41,12 @@ using namespace std::chrono_literals;
 
 namespace raft {
 
+struct active_read {
+    read_id id;
+    index_t idx;
+    promise<read_barrier_reply> promise;
+};
+
 static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
@@ -61,6 +67,10 @@ public:
     void request_vote(server_id from, vote_request vote_request) override;
     void request_vote_reply(server_id from, vote_reply vote_reply) override;
     void timeout_now_request(server_id from, timeout_now timeout_now) override;
+    void read_quorum_request(server_id from, struct read_quorum read_quorum) override;
+    void read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) override;
+    future<read_barrier_reply> execute_read_barrier(server_id) override;
+
 
     // server interface
     future<> add_entry(command command, wait_type type);
@@ -93,6 +103,7 @@ private:
     std::optional<shared_promise<>> _leader_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
+    std::list<active_read> _reads;
     std::multimap<index_t, promise<>> _awaited_indexes;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
@@ -125,6 +136,10 @@ private:
         uint64_t snapshots_taken = 0;
         uint64_t timeout_now_sent = 0;
         uint64_t timeout_now_received = 0;
+        uint64_t read_quorum_sent = 0;
+        uint64_t read_quorum_received = 0;
+        uint64_t read_quorum_reply_sent = 0;
+        uint64_t read_quorum_reply_received = 0;
     } _stats;
 
     struct op_status {
@@ -239,6 +254,8 @@ private:
     // A helper to wait for a leader to get elected
     future<> wait_for_leader();
 
+    // Get "safe to read" index from a leader
+    future<read_barrier_reply> get_read_idx(server_id leader);
     // Wait for the index to be applied
     future<> wait_for_apply(index_t idx);
 
@@ -361,6 +378,16 @@ void server_impl::timeout_now_request(server_id from, timeout_now timeout_now) {
     _fsm->step(from, std::move(timeout_now));
 }
 
+void server_impl::read_quorum_request(server_id from, struct read_quorum read_quorum) {
+    _stats.read_quorum_received++;
+    _fsm->step(from, std::move(read_quorum));
+}
+
+void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) {
+    _stats.read_quorum_reply_received++;
+    _fsm->step(from, std::move(read_quorum_reply));
+}
+
 void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
         const std::vector<log_entry_ptr>& entries) {
     index_t commit_idx = entries.back()->idx;
@@ -467,6 +494,12 @@ void server_impl::send_message(server_id id, Message m) {
         } else if constexpr (std::is_same_v<T, timeout_now>) {
             _stats.timeout_now_sent++;
             _rpc->send_timeout_now(id, m);
+        } else if constexpr (std::is_same_v<T, struct read_quorum>) {
+            _stats.read_quorum_sent++;
+            _rpc->send_read_quorum(id, std::move(m));
+        } else if constexpr (std::is_same_v<T, struct read_quorum_reply>) {
+            _stats.read_quorum_reply_sent++;
+            _rpc->send_read_quorum_reply(id, std::move(m));
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
             _stats.install_snapshot_sent++;
             // Send in the background.
@@ -584,6 +617,12 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 co_await _apply_entries.push_eventually(std::move(batch.committed));
             }
 
+            if (batch.max_read_id_with_quorum) {
+                while (!_reads.empty() && _reads.front().id <= batch.max_read_id_with_quorum) {
+                    _reads.front().promise.set_value(_reads.front().idx);
+                    _reads.pop_front();
+                }
+            }
             if (!_fsm->is_leader()) {
                 if (_stepdown_promise) {
                     std::exchange(_stepdown_promise, std::nullopt)->set_value();
@@ -595,6 +634,11 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 }
                 // request aborts of snapshot transfers
                 abort_snapshot_transfers();
+                // abort all read barriers
+                for (auto& r : _reads) {
+                    r.promise.set_value(not_a_leader{_fsm->current_leader()});
+                }
+                _reads.clear();
             } else if (batch.abort_leadership_transfer) {
                 if (_stepdown_promise) {
                     std::exchange(_stepdown_promise, std::nullopt)->set_exception(timeout_error("Stepdown process timed out"));
@@ -736,13 +780,63 @@ future<> server_impl::wait_for_apply(index_t idx) {
     }
 }
 
+future<read_barrier_reply> server_impl::execute_read_barrier(server_id from) {
+    logger.trace("[{}] execute_read_barrier start", _id);
+
+    std::optional<std::pair<read_id, index_t>> rid;
+    try {
+        rid = _fsm->start_read_barrier(from);
+        if (!rid) {
+            // cannot start a barrier yet
+            return make_ready_future<read_barrier_reply>(std::monostate{});
+        }
+    } catch (not_a_leader& err) {
+        return make_ready_future<read_barrier_reply>(err);
+    }
+    logger.trace("[{}] execute_read_barrier read id is {} for commit idx {}",
+        _id, rid->first, rid->second);
+    _reads.push_back({rid->first, rid->second, {}});
+    return _reads.back().promise.get_future();
+}
+
+future<read_barrier_reply> server_impl::get_read_idx(server_id leader) {
+    if (_id == leader) {
+        return execute_read_barrier(_id);
+    } else {
+        return _rpc->execute_read_barrier_on_leader(leader);
+    }
+}
+
 future<> server_impl::read_barrier() {
-    if (_fsm->can_read()) {
-        co_return;
+    server_id leader = _fsm->current_leader();
+
+    logger.trace("[{}] read_barrier start", _id);
+    index_t read_idx;
+
+    while (read_idx == index_t{}) {
+        logger.trace("[{}] read_barrier forward to  {}", _id, leader);
+        if (leader == server_id{}) {
+            co_await wait_for_leader();
+            leader = _fsm->current_leader();
+        } else {
+            auto applied = _applied_idx;
+            auto res = co_await get_read_idx(leader);
+            if (std::holds_alternative<std::monostate>(res)) {
+                // the leader is not ready to answer because it did not
+                // committed any entries yet, so wait for any entry to be
+                // committed (if non were since start of the attempt) and retry.
+                logger.trace("[{}] read_barrier leader not ready", _id);
+                co_await wait_for_apply(++applied);
+            } else if (std::holds_alternative<raft::not_a_leader>(res)) {
+                leader = std::get<not_a_leader>(res).leader;
+            } else {
+                read_idx = std::get<index_t>(res);
+            }
+        }
     }
 
-    co_await apply_dummy_entry();
-    co_return;
+    logger.trace("[{}] read_barrier read index {}, append index {}", _id, read_idx, _applied_idx);
+    co_return co_await wait_for_apply(read_idx);
 }
 
 void server_impl::abort_snapshot_transfers() {
@@ -775,6 +869,12 @@ future<> server_impl::abort() {
     if (_leader_promise) {
         _leader_promise->set_exception(stopped_error());
     }
+
+    // Complete all read attempts with not_a_leader
+    for (auto& r: _reads) {
+        r.promise.set_value(raft::not_a_leader{server_id{}});
+    }
+    _reads.clear();
 
     // Abort all read_barriers with an exception
     for (auto& i : _awaited_indexes) {
@@ -845,6 +945,10 @@ void server_impl::register_metrics() {
              sm::description("how many messages were received"), {server_id_label(_id), message_type("request_vote_reply")}),
         sm::make_total_operations("messages_received", _stats.timeout_now_received,
              sm::description("how many messages were received"), {server_id_label(_id), message_type("timeout_now")}),
+        sm::make_total_operations("messages_received", _stats.read_quorum_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("read_quorum")}),
+        sm::make_total_operations("messages_received", _stats.read_quorum_reply_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("read_quorum_reply")}),
 
         sm::make_total_operations("messages_sent", _stats.append_entries_sent,
              sm::description("how many messages were send"), {server_id_label(_id), message_type("append_entries")}),
@@ -860,6 +964,10 @@ void server_impl::register_metrics() {
              sm::description("how many messages were sent"), {server_id_label(_id), message_type("snapshot_reply")}),
         sm::make_total_operations("messages_sent", _stats.timeout_now_sent,
              sm::description("how many messages were sent"), {server_id_label(_id), message_type("timeout_now")}),
+        sm::make_total_operations("messages_sent", _stats.read_quorum_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("read_quorum")}),
+        sm::make_total_operations("messages_sent", _stats.read_quorum_reply_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("read_quorum_reply")}),
 
         sm::make_total_operations("waiter_awaken", _stats.waiters_awaken,
              sm::description("how many waiters got result back"), {server_id_label(_id)}),

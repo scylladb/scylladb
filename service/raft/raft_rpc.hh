@@ -52,6 +52,10 @@ public:
     void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) override;
     void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) override;
     void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) override;
+    void send_read_quorum(raft::server_id id, const raft::read_quorum& check_quorum) override;
+    void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& check_quorum_reply) override;
+    future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) override;
+
     void add_server(raft::server_id id, raft::server_info info) override;
     void remove_server(raft::server_id id) override;
     future<> abort() override;
@@ -62,6 +66,10 @@ public:
     void request_vote(raft::server_id from, raft::vote_request vote_request);
     void request_vote_reply(raft::server_id from, raft::vote_reply vote_reply);
     void timeout_now_request(raft::server_id from, raft::timeout_now timeout_now);
+    void read_quorum_request(raft::server_id from, raft::read_quorum check_quorum);
+    void read_quorum_reply(raft::server_id from, raft::read_quorum_reply check_quorum_reply);
+    future<raft::read_barrier_reply> execute_read_barrier(raft::server_id);
+
     future<raft::snapshot_reply> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
 };
 

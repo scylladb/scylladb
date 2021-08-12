@@ -592,6 +592,9 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_VOTE_REQUEST:
     case messaging_verb::RAFT_VOTE_REPLY:
     case messaging_verb::RAFT_TIMEOUT_NOW:
+    case messaging_verb::RAFT_READ_QUORUM:
+    case messaging_verb::RAFT_READ_QUORUM_REPLY:
+    case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -1557,6 +1560,35 @@ future<> messaging_service::send_raft_timeout_now(msg_addr id, clock_type::time_
    return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_TIMEOUT_NOW, std::move(id), std::move(gid), std::move(from_id), std::move(dst_id), timeout_now);
 }
 
+void messaging_service::register_raft_read_quorum(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum)>&& func) {
+    register_handler(this, netw::messaging_verb::RAFT_READ_QUORUM, std::move(func));
+}
+future<> messaging_service::unregister_raft_read_quorum() {
+   return unregister_handler(netw::messaging_verb::RAFT_READ_QUORUM);
+}
+future<> messaging_service::send_raft_read_quorum(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const raft::read_quorum& check_quorum) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_READ_QUORUM, std::move(id), std::move(gid), std::move(from_id), std::move(dst_id), check_quorum);
+}
+
+void messaging_service::register_raft_read_quorum_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum_reply)>&& func) {
+    register_handler(this, netw::messaging_verb::RAFT_READ_QUORUM_REPLY, std::move(func));
+}
+future<> messaging_service::unregister_raft_read_quorum_reply() {
+   return unregister_handler(netw::messaging_verb::RAFT_READ_QUORUM_REPLY);
+}
+future<> messaging_service::send_raft_read_quorum_reply(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const raft::read_quorum_reply& check_quorum_reply) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_READ_QUORUM_REPLY, std::move(id), std::move(gid), std::move(from_id), std::move(dst_id), check_quorum_reply);
+}
+
+void messaging_service::register_raft_execute_read_barrier_on_leader(std::function<future<raft::read_barrier_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id)>&& func){
+    register_handler(this, netw::messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER, std::move(func));
+}
+future<> messaging_service::unregister_raft_execute_read_barrier_on_leader(){
+   return unregister_handler(netw::messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER);
+}
+future<raft::read_barrier_reply> messaging_service::send_raft_execute_read_barrier_on_leader(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id){
+   return send_message_timeout<future<raft::read_barrier_reply>>(this, messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id));
+}
 
 void init_messaging_service(sharded<messaging_service>& ms,
                 messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,

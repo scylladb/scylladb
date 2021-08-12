@@ -146,19 +146,20 @@ void tracker::set_configuration(const configuration& configuration, index_t next
 
 // A sorted array of node match indexes used to find
 // the pivot which serves as commit index of the group.
+template<typename Index>
 class match_vector {
-    std::vector<index_t> _match;
+    std::vector<Index> _match;
     // How many elements in the match array have a match index
     // larger than the previous commit index.
     size_t _count = 0;
-    index_t _prev_commit_idx;
+    Index _prev_commit_idx;
 public:
-    explicit match_vector(index_t prev_commit_idx, size_t reserve_size)
+    explicit match_vector(Index prev_commit_idx, size_t reserve_size)
             : _prev_commit_idx(prev_commit_idx) {
         _match.reserve(reserve_size);
     }
 
-    void push_back(index_t match_idx) {
+    void push_back(Index match_idx) {
         if (match_idx > _prev_commit_idx) {
             _count++;
         }
@@ -167,8 +168,8 @@ public:
     bool committed() const {
         return _count >= _match.size()/2 + 1;
     }
-    index_t commit_idx() {
-        logger.trace("check committed count {} cluster size {}", _count, _match.size());
+    Index commit_idx() {
+        logger.trace("{}: check committed count {} cluster size {}", std::is_same_v<Index, index_t> ? "commit" : "read barrier", _count, _match.size());
         // The index of the pivot node is selected so that all nodes
         // with a larger match index plus the pivot form a majority,
         // for example:
@@ -185,18 +186,26 @@ public:
     }
 };
 
-index_t tracker::committed(index_t prev_commit_idx) {
-    match_vector current(prev_commit_idx, _current_voters.size());
+template<typename T>
+T tracker::committed(T prev_commit_idx) {
+    auto push_idx = [] (match_vector<T>& v, const follower_progress& p) {
+        if constexpr (std::is_same_v<T, index_t>) {
+            v.push_back(p.match_idx);
+        } else {
+            v.push_back(p.max_acked_read);
+        }
+    };
+    match_vector<T> current(prev_commit_idx, _current_voters.size());
 
     if (!_previous_voters.empty()) {
-        match_vector previous(prev_commit_idx, _previous_voters.size());
+        match_vector<T> previous(prev_commit_idx, _previous_voters.size());
 
         for (const auto& [id, p] : *this) {
             if (_current_voters.contains(p.id)) {
-                current.push_back(p.match_idx);
+                push_idx(current, p);
             }
             if (_previous_voters.contains(p.id)) {
-                previous.push_back(p.match_idx);
+                push_idx(previous, p);
             }
         }
         if (!current.committed() || !previous.committed()) {
@@ -206,7 +215,7 @@ index_t tracker::committed(index_t prev_commit_idx) {
     } else {
         for (const auto& [id, p] : *this) {
             if (_current_voters.contains(p.id)) {
-                current.push_back(p.match_idx);
+                push_idx(current, p);
             }
         }
         if (!current.committed()) {
@@ -215,6 +224,9 @@ index_t tracker::committed(index_t prev_commit_idx) {
         return current.commit_idx();
     }
 }
+
+template index_t tracker::committed(index_t);
+template read_id tracker::committed(read_id);
 
 votes::votes(configuration configuration)
         :_voters(configuration.current)

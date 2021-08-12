@@ -101,6 +101,38 @@ void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& tim
     }); 
 }
 
+void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
+    (void)with_gate(_shutdown_gate, [&] {
+        return _messaging.send_raft_read_quorum(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, read_quorum)
+            .handle_exception([id] (std::exception_ptr ex) {
+                try {
+                    std::rethrow_exception(ex);
+                } catch (seastar::rpc::timeout_error&) {
+                } catch (...) {
+                    rlogger.error("Failed to send read barrier {}: {}", id, ex);
+                }
+            });
+    });
+}
+
+void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& check_quorum_reply) {
+    (void)with_gate(_shutdown_gate, [&] {
+        return _messaging.send_raft_read_quorum_reply(netw::msg_addr(_raft_gr.get_inet_address(id)), timeout(), _group_id, _server_id, id, check_quorum_reply)
+            .handle_exception([id] (std::exception_ptr ex) {
+                try {
+                    std::rethrow_exception(ex);
+                } catch (seastar::rpc::timeout_error&) {
+                } catch (...) {
+                    rlogger.error("Failed to send read barrier reply {}: {}", id, ex);
+                }
+            });
+    });
+}
+
+future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
+   return _messaging.send_raft_execute_read_barrier_on_leader(netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id);
+}
+
 void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
     // Parse gms::inet_address from server_info
     auto in = ser::as_input_stream(bytes_view(info));
@@ -135,6 +167,18 @@ void raft_rpc::request_vote_reply(raft::server_id from, raft::vote_reply vote_re
 
 void raft_rpc::timeout_now_request(raft::server_id from, raft::timeout_now timeout_now) {
     _client->timeout_now_request(from, timeout_now);
+}
+
+void raft_rpc::read_quorum_request(raft::server_id from, raft::read_quorum check_quorum) {
+    _client->read_quorum_request(from, check_quorum);
+}
+
+void raft_rpc::read_quorum_reply(raft::server_id from, raft::read_quorum_reply check_quorum_reply) {
+    _client->read_quorum_reply(from, check_quorum_reply);
+}
+
+future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id from) {
+    return _client->execute_read_barrier(from);
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
