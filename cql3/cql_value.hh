@@ -339,7 +339,9 @@ namespace cql3 {
 
     template<FragmentedView View>
     varint_value varint_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return varint_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
@@ -368,62 +370,86 @@ namespace cql3 {
 
     template<FragmentedView View>
     decimal_value decimal_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return decimal_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     ascii_value ascii_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return ascii_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     utf8_value utf8_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return utf8_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     date_value date_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return date_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     simple_date_value simple_date_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return simple_date_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     duration_value duration_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return duration_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     time_value time_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return time_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     timestamp_value timestamp_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return timestamp_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     timeuuid_value timeuuid_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return timeuuid_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     blob_value blob_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return blob_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     inet_value inet_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return inet_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     uuid_value uuid_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return uuid_value {
+            .value = managed_bytes(serialized_bytes)
+        };
     }
 
     template <FragmentedView View>
