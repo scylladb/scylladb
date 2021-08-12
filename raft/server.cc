@@ -93,6 +93,7 @@ private:
     std::optional<shared_promise<>> _leader_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
+    std::multimap<index_t, promise<>> _awaited_indexes;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
     queue<std::variant<std::vector<log_entry_ptr>, snapshot>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot>>(10);
@@ -173,6 +174,10 @@ private:
     // or a leader removed from cluster while some entries added on it are uncommitted.
     void drop_waiters(std::optional<index_t> idx = {});
 
+    // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
+    // to be applied.
+    void signal_applied();
+
     // This fiber processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
     //  - persist unstable log entries on disk.
@@ -233,6 +238,9 @@ private:
 
     // A helper to wait for a leader to get elected
     future<> wait_for_leader();
+
+    // Wait for the index to be applied
+    future<> wait_for_apply(index_t idx);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
@@ -411,6 +419,18 @@ void server_impl::drop_waiters(std::optional<index_t> idx) {
     };
     drop(_awaited_commits);
     drop(_awaited_applies);
+}
+
+void server_impl::signal_applied() {
+    auto it = _awaited_indexes.begin();
+
+    while (it != _awaited_indexes.end()) {
+        if (it->first > _applied_idx) {
+            break;
+        }
+        it->second.set_value();
+        it = _awaited_indexes.erase(it);
+    }
 }
 
 template <typename Message>
@@ -693,6 +713,7 @@ future<> server_impl::applier_fiber() {
                 _applied_idx = snp.idx;
                 _stats.sm_load_snapshot++;
             }
+            signal_applied();
         }
     } catch(stop_apply_fiber& ex) {
         // the fiber is aborted
@@ -704,6 +725,15 @@ future<> server_impl::applier_fiber() {
 
 term_t server_impl::get_current_term() const {
     return _fsm->get_current_term();
+}
+
+future<> server_impl::wait_for_apply(index_t idx) {
+    if (idx > _applied_idx) {
+        // The index is not applied yet. Wait for it.
+        // This will be signalled when read_idx is applied
+        auto it = _awaited_indexes.emplace(idx, promise<>());
+        co_await it->second.get_future();
+    }
 }
 
 future<> server_impl::read_barrier() {
@@ -745,6 +775,12 @@ future<> server_impl::abort() {
     if (_leader_promise) {
         _leader_promise->set_exception(stopped_error());
     }
+
+    // Abort all read_barriers with an exception
+    for (auto& i : _awaited_indexes) {
+        i.second.set_exception(stopped_error());
+    }
+    _awaited_indexes.clear();
 
     for (auto&& [_, f] : _snapshot_application_done) {
         f.set_exception(std::runtime_error("Snapshot application aborted"));
