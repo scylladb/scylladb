@@ -463,7 +463,30 @@ namespace cql3 {
     list_value list_value::from_serialized(View serialized_bytes,
                                            cql_serialization_format sf,
                                            const list_type_impl& ltype) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        utils::chunked_vector<std::variant<managed_bytes, null_value>> elements;
+        if (sf.collection_format_unchanged()) {
+            utils::chunked_vector<managed_bytes> tmp = partially_deserialize_listlike(serialized_bytes, sf);
+            elements.reserve(tmp.size());
+            for (auto&& element : tmp) {
+                elements.emplace_back(std::move(element));
+            }
+        } else [[unlikely]] {
+            auto l = value_cast<list_type_impl::native_type>(ltype.deserialize(serialized_bytes, sf));
+            elements.reserve(l.size());
+            for (auto&& element : l) {
+                // elements can be null in lists that represent a set of IN values
+                if (element.is_null()) {
+                    elements.emplace_back(null_value{});
+                } else {
+                    elements.emplace_back(managed_bytes(ltype.get_elements_type()->decompose(element)));
+                }
+            }
+        }
+
+        return list_value {
+            .elements = std::move(elements),
+            .elements_type = ltype.get_elements_type()
+        };
     }
 
     template <FragmentedView View>
