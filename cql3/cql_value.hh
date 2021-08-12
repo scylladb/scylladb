@@ -456,7 +456,34 @@ namespace cql3 {
     tuple_value tuple_value::from_serialized(View serialized_bytes,
                                              cql_serialization_format sf,
                                              const tuple_type_impl& ttype) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+
+        std::vector<managed_bytes_opt> elements = ttype.split_fragmented(serialized_bytes);
+
+        std::vector<std::variant<managed_bytes, null_value>> new_elements;
+        elements.reserve(elements.size());
+        for (managed_bytes_opt& element : elements) {
+            if (element.has_value()) {
+                new_elements.emplace_back(std::move(*element));
+            } else {
+                new_elements.emplace_back(null_value{});
+            }
+        }
+
+        std::vector<std::optional<data_type>> elements_types;
+        elements_types.reserve(elements.size());
+
+        for (size_t i = 0; i < elements_types.size(); i++) {
+            if (i < ttype.all_types().size()) {
+                elements_types.emplace_back(ttype.all_types()[i]);
+            } else {
+                elements_types.emplace_back(std::nullopt);
+            }
+        }
+
+        return tuple_value {
+            .elements = std::move(new_elements),
+            .elements_types = std::move(elements_types)
+        };
     }
 
     template <FragmentedView View>
