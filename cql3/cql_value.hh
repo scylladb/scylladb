@@ -297,32 +297,44 @@ namespace cql3 {
 
     template<FragmentedView View>
     bool_value bool_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return bool_value {
+            .value = read_simple_exactly<int8_t>(serialized_bytes) != 0
+        };
     }
 
     template<FragmentedView View>
     int8_value int8_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return int8_value {
+            .value = read_simple_exactly<int8_t>(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     int16_value int16_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return int16_value {
+            .value = read_simple_exactly<int16_t>(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     int32_value int32_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return int32_value {
+            .value = read_simple_exactly<int32_t>(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     int64_value int64_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return int64_value {
+            .value = read_simple_exactly<int64_t>(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
     counter_value counter_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        return counter_value {
+            .value = read_simple_exactly<int64_t>(serialized_bytes)
+        };
     }
 
     template<FragmentedView View>
@@ -332,12 +344,26 @@ namespace cql3 {
 
     template<FragmentedView View>
     float_value float_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        static_assert(sizeof(float) == sizeof(int32_t));
+
+        int32_t int_val = read_simple_exactly<int32_t>(serialized_bytes);
+        float value;
+        memcpy(&value, &int_val, sizeof(value));
+        return float_value {
+            .value = value
+        };
     }
 
     template<FragmentedView View>
     double_value double_value::from_serialized(View serialized_bytes) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        static_assert(sizeof(double) == sizeof(int64_t));
+
+        int64_t int_val = read_simple_exactly<int64_t>(serialized_bytes);
+        double value;
+        memcpy(&value, &int_val, sizeof(value));
+        return double_value {
+            .value = value
+        };
     }
 
     template<FragmentedView View>
