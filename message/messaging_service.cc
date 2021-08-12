@@ -491,6 +491,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_READ_QUORUM:
     case messaging_verb::RAFT_READ_QUORUM_REPLY:
     case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
+    case messaging_verb::RAFT_ADD_ENTRY:
+    case messaging_verb::RAFT_MODIFY_CONFIG:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -1410,6 +1412,28 @@ future<> messaging_service::unregister_raft_execute_read_barrier_on_leader(){
 }
 future<raft::read_barrier_reply> messaging_service::send_raft_execute_read_barrier_on_leader(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id){
    return send_message_timeout<future<raft::read_barrier_reply>>(this, messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id));
+}
+
+void messaging_service::register_raft_add_entry(std::function<future<raft::add_entry_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, raft::command)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_ADD_ENTRY, std::move(func));
+}
+future<> messaging_service::unregister_raft_add_entry() {
+   return unregister_handler(netw::messaging_verb::RAFT_ADD_ENTRY);
+}
+future<raft::add_entry_reply> messaging_service::send_raft_add_entry(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const raft::command& cmd) {
+   return send_message_timeout<raft::add_entry_reply>(this, messaging_verb::RAFT_ADD_ENTRY, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id), cmd);
+}
+
+void messaging_service::register_raft_modify_config(std::function<future<raft::add_entry_reply>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_MODIFY_CONFIG, std::move(func));
+}
+
+future<> messaging_service::unregister_raft_modify_config() {
+   return unregister_handler(netw::messaging_verb::RAFT_MODIFY_CONFIG);
+}
+
+future<raft::add_entry_reply> messaging_service::send_raft_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del) {
+   return send_message_timeout<raft::add_entry_reply>(this, messaging_verb::RAFT_MODIFY_CONFIG, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id), add, del);
 }
 
 void init_messaging_service(sharded<messaging_service>& ms,

@@ -129,6 +129,18 @@ void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quoru
     });
 }
 
+future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {
+    return _messaging.send_raft_add_entry(
+        netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, cmd);
+}
+
+future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
+    const std::vector<raft::server_address>& add,
+    const std::vector<raft::server_id>& del) {
+   return _messaging.send_raft_modify_config(netw::msg_addr(_raft_gr.get_inet_address(id)),
+       db::no_timeout, _group_id, _server_id, id, add, del);
+}
+
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
    return _messaging.send_raft_execute_read_barrier_on_leader(netw::msg_addr(_raft_gr.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id);
 }
@@ -183,6 +195,16 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
     return _client->apply_snapshot(from, std::move(snp));
+}
+
+future<raft::add_entry_reply> raft_rpc::execute_add_entry(raft::server_id from, raft::command cmd) {
+    return _client->execute_add_entry(from, std::move(cmd));
+}
+
+future<raft::add_entry_reply> raft_rpc::execute_modify_config(raft::server_id from,
+    std::vector<raft::server_address> add,
+    std::vector<raft::server_id> del) {
+    return _client->execute_modify_config(from, std::move(add), std::move(del));
 }
 
 } // end of namespace service

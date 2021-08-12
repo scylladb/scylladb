@@ -70,6 +70,9 @@ public:
     void read_quorum_request(server_id from, struct read_quorum read_quorum) override;
     void read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) override;
     future<read_barrier_reply> execute_read_barrier(server_id) override;
+    future<add_entry_reply> execute_add_entry(server_id from, command cmd) override;
+    future<add_entry_reply> execute_modify_config(server_id from,
+        std::vector<server_address> add, std::vector<server_id> del) override;
 
 
     // server interface
@@ -90,6 +93,7 @@ public:
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
+    future<> modify_config(std::vector<server_address> add, std::vector<server_id> del) override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -200,6 +204,12 @@ private:
     // This fiber runs in the background and applies committed entries.
     future<> applier_fiber();
 
+    // Add a special entry such as configuration or a dummy
+    // entry. Is not restricted by max log size, so never
+    // preempts before adding an entry to this leader's
+    // in-memory log. This allows to avoid deadlocks when
+    // automatically appending a non-joint configuration
+    // and makes set_configuration() safe from preemption.
     template <typename T> future<> add_entry_internal(T command, wait_type type);
     template <typename Message> void send_message(server_id id, Message m);
 
@@ -248,8 +258,16 @@ private:
 
     // Get "safe to read" index from a leader
     future<read_barrier_reply> get_read_idx(server_id leader);
-    // Wait for the index to be applied
+    // Wait for an entry with a specific term to get committed or
+    // applied locally.
+    future<> wait_for_entry(entry_id eid, wait_type type);
+    // Wait for a read barrier index to be applied. The index
+    // is typically already committed, so we don't worry about the
+    // term.
     future<> wait_for_apply(index_t idx);
+    // Set configuration but don't wait for transition joint ->
+    // non_joint.
+    future<> enter_joint_configuration(server_address_set c_new);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
@@ -316,28 +334,195 @@ future<> server_impl::wait_for_leader() {
     return _leader_promise->get_shared_future();
 }
 
-template <typename T>
-future<> server_impl::add_entry_internal(T command, wait_type type) {
-    logger.trace("An entry is submitted on a leader");
+future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
+    // The entry may have been already committed and even applied
+    // in case it was forwarded to the leader. In this case
+    // waiting for it is futile.
+    if (eid.idx <= _fsm->commit_idx()) {
+        if ((type == wait_type::committed) ||
+            (type == wait_type::applied && eid.idx <= _applied_idx)) {
 
-    // Wait for a new slot to become available
-    co_await _fsm->wait_max_log_size();
+            auto term = _fsm->log_term_for(eid.idx);
 
-    logger.trace("An entry proceeds after wait");
+            _stats.waiters_awaken++;
 
-    const log_entry& e = _fsm->add_entry(std::move(command));
-
+            if (term && *term == eid.term) {
+                co_return;
+            }
+            // An entry with a different term has been committed.
+            // It implies this entry was dropped.
+            throw dropped_entry();
+        }
+    }
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
+    logger.trace("{} waiting for entry {}.{}", id(), eid.term, eid.idx);
 
     // This will track the commit/apply status of the entry
-    auto [it, inserted] = container.emplace(e.idx, op_status{e.term, promise<>()});
+    auto [it, inserted] = container.emplace(eid.idx, op_status{eid.term, promise<>()});
+    if (!inserted) {
+        // No two leaders can exist with the same term.
+        assert(it->second.term != eid.term);
+
+        auto term_of_commit_idx = *_fsm->log_term_for(_fsm->commit_idx());
+        if (it->second.term > eid.term) {
+            if (term_of_commit_idx > eid.term) {
+                // There are some entries committed with a term
+                // bigger than ours, our entry must have been
+                // already dropped (see 3.6.2 "Committing entries
+                // from previous terms").
+                _stats.waiters_awaken++;
+                throw dropped_entry();
+            } else {
+                // Our entry might still get committed if another
+                // leader is elected with an older log tail, but oh
+                // well, we can't wait for two entries with the same
+                // index and see which one wins, keep waiting for
+                // an entry with a bigger term and hope that the
+                // newly elected leader will have a newer log tail.
+                _stats.waiters_dropped++;
+                throw commit_status_unknown();
+            }
+        }
+        // Let's replace an older-term entry with a newer-term one.
+        auto prev_wait = std::move(it->second);
+        container.erase(it);
+        std::tie(it, inserted) = container.emplace(eid.idx, op_status{eid.term, promise<>()});
+        // Set the status of the replaced entry. Same reasoning
+        // applies for choosing the right exception status as earlier.
+        if (term_of_commit_idx > prev_wait.term) {
+            prev_wait.done.set_exception(dropped_entry{});
+            _stats.waiters_awaken++;
+        } else {
+            prev_wait.done.set_exception(commit_status_unknown{});
+            _stats.waiters_dropped++;
+        }
+    }
     assert(inserted);
-    co_return co_await it->second.done.get_future();
+    co_await it->second.done.get_future();
+    logger.trace("{} done waiting for {}.{}", id(), eid.term, eid.idx);
+    co_return;
+}
+
+template <typename T>
+future<> server_impl::add_entry_internal(T command, wait_type type) {
+    // Must not preempt before adding entry, the caller, such as
+    // set_configuration(), relies on it.
+    const log_entry& e = _fsm->add_entry(std::move(command));
+    co_return co_await wait_for_entry({.term = e.term, .idx = e.idx}, type);
+}
+
+future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd) {
+    if (from != _id && !_fsm->get_configuration().contains(from)) {
+        // Do not accept entries from servers removed from the
+        // configuration.
+        co_return add_entry_reply{not_a_leader{server_id{}}};
+    }
+    try {
+        // Wait for a new slot to become available
+        co_await _fsm->wait_max_log_size();
+        logger.trace("Adding entry after log size limit check.");
+
+        const log_entry& e = _fsm->add_entry(std::move(cmd));
+
+        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+    } catch (raft::not_a_leader& e) {
+        co_return add_entry_reply{e};
+    }
 }
 
 future<> server_impl::add_entry(command command, wait_type type) {
     _stats.add_command++;
-    return add_entry_internal(std::move(command), type);
+    server_id leader = _fsm->current_leader();
+    logger.trace("An entry is submitted");
+    while (true) {
+        if (leader == server_id{}) {
+            logger.trace("The leader is unknown, waiting through uncertainty");
+            co_await wait_for_leader();
+            leader = _fsm->current_leader();
+        } else {
+            auto reply = co_await [&] {
+                if (leader == _id) {
+                    logger.trace("An entry proceeds on a leader");
+                    // Make a copy of the command since we may still
+                    // retry and forward it.
+                    return execute_add_entry(leader, command);
+                } else {
+                    logger.trace("Forwarding the entry to {}", leader);
+                    return _rpc->send_add_entry(leader, command);
+                }
+            }();
+            if (std::holds_alternative<raft::entry_id>(reply)) {
+                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), type);
+            }
+            leader = std::get<raft::not_a_leader>(reply).leader;
+        }
+    }
+}
+
+future<add_entry_reply> server_impl::execute_modify_config(server_id from,
+    std::vector<server_address> add, std::vector<server_id> del) {
+
+    if (from != _id && !_fsm->get_configuration().contains(from)) {
+        // Do not accept entries from servers removed from the
+        // configuration.
+        co_return add_entry_reply{not_a_leader{server_id{}}};
+    }
+    try {
+        // Wait for a new slot to become available
+        auto cfg = get_configuration().current;
+        for (auto& addr : add) {
+            logger.trace("Adding server {}", addr.id);
+            auto [it, inserted] = cfg.insert(addr);
+            if (!inserted) {
+                logger.warn("The server {} already exists in configuration of {}", addr.id, _id);
+            }
+        }
+        for (auto& id : del) {
+            logger.trace("Removing server {}", id);
+            cfg.erase(server_address{.id = id});
+        }
+        co_await enter_joint_configuration(cfg);
+        // Wait for transition joint->non-joint outside on the
+        // client.
+        const log_entry& e = _fsm->add_entry(log_entry::dummy());
+        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+
+    } catch (raft::error& e) {
+        if (is_uncertainty(e)) {
+            // Although modify_config() is safe to retry, preserve
+            // information that the entry may already have been
+            // committed in the return value.
+            co_return add_entry_reply{commit_status_unknown()};
+        } else if (!is_transient_error(e)) {
+            throw;
+        }
+    }
+    co_return add_entry_reply{not_a_leader{_fsm->current_leader()}};
+}
+
+future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del) {
+    server_id leader = _fsm->current_leader();
+    while (true) {
+        if (leader == server_id{}) {
+            co_await wait_for_leader();
+            leader = _fsm->current_leader();
+        } else {
+            auto reply = co_await [&] {
+                if (leader == _id) {
+                    // Make a copy since of the params since we may
+                    // still retry and forward them.
+                    return execute_modify_config(leader, add, del);
+                } else {
+                    logger.trace("Forwarding the entry to {}", leader);
+                    return _rpc->send_modify_config(leader, add, del);
+                }
+            }();
+            if (std::holds_alternative<raft::entry_id>(reply)) {
+                co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), wait_type::committed);
+            }
+            leader = std::get<raft::not_a_leader>(reply).leader;
+        }
+    }
 }
 
 void server_impl::append_entries(server_id from, append_request append_request) {
@@ -918,7 +1103,7 @@ future<> server_impl::abort() {
     co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
 
-future<> server_impl::set_configuration(server_address_set c_new) {
+future<> server_impl::enter_joint_configuration(server_address_set c_new) {
     const auto& cfg = _fsm->get_configuration();
     // 4.1 Cluster membership changes. Safety.
     // When the leader receives a request to add or remove a server
@@ -931,13 +1116,17 @@ future<> server_impl::set_configuration(server_address_set c_new) {
     }
     _stats.add_config++;
     co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed);
-     // Above we co_wait that the joint configuration is committed.
-     // Immediately, without yield, once the FSM discovers
-     // this, it appends non-joint entry. Hence,
-     // at this point in execution, non-joint entry is in the log.
-     // By waiting for a follow up dummy to get committed, we
-     // automatically wait for the non-joint entry to get
-     // committed.
+}
+
+future<> server_impl::set_configuration(server_address_set c_new) {
+    co_await enter_joint_configuration(std::move(c_new));
+    // Above we co_wait that the joint configuration is committed.
+    // Immediately, without yield, once the FSM discovers
+    // this, it appends non-joint entry. Hence,
+    // at this point in execution, non-joint entry is in the log.
+    // By waiting for a follow up dummy to get committed, we
+    // automatically wait for the non-joint entry to get
+    // committed.
     co_await add_entry_internal(log_entry::dummy(), wait_type::committed);
 }
 

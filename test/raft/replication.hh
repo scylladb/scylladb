@@ -713,6 +713,25 @@ public:
         }
         return _net[id]->_client->execute_read_barrier(_id);
     }
+    void check_known_and_connected(raft::server_id id) {
+        if (!_net.count(id)) {
+            throw std::runtime_error("trying to send a message to an unknown node");
+        }
+        if (!(*_connected)(id, _id)) {
+            throw std::runtime_error("cannot send since nodes are disconnected");
+        }
+    }
+    future<raft::add_entry_reply> send_add_entry(raft::server_id id, const raft::command& cmd) override {
+        check_known_and_connected(id);
+        return _net[id]->_client->execute_add_entry(_id, cmd);
+    }
+    future<raft::add_entry_reply> send_modify_config(raft::server_id id,
+        const std::vector<raft::server_address>& add,
+        const std::vector<raft::server_id>& del) override {
+        check_known_and_connected(id);
+        return _net[id]->_client->execute_modify_config(_id, add, del);
+    }
+
     void add_server(raft::server_id id, bytes node_info) override {
         _known_peers.insert(raft::server_address{id});
         ++_servers_added;

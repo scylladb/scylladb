@@ -131,4 +131,12 @@ struct not_a_leader {
     raft::internal::tagged_id<raft::server_id_tag> leader;
 };
 
+struct commit_status_unknown {
+};
+
+struct entry_id {
+    raft::internal::tagged_uint64<raft::term_tag> term;
+    raft::internal::tagged_uint64<raft::index_tag> idx;
+};
+
 } // namespace raft
