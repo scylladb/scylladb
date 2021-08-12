@@ -592,7 +592,6 @@ private:
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
     future<> replenish_reserve();
-    future<> _reserve_replenisher;
     future<> _background_sync;
     seastar::gate _gate;
     uint64_t _new_counter = 0;
@@ -1528,7 +1527,6 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _request_controller(max_request_controller_units(), request_controller_timeout_exception_factory{})
     , _reserve_segments(1)
     , _recycled_segments(std::numeric_limits<size_t>::max())
-    , _reserve_replenisher(make_ready_future<>())
     , _background_sync(make_ready_future<>())
     , _message_loop(make_ready_future<>())
 {
@@ -1565,6 +1563,7 @@ future<> db::commitlog::segment_manager::message_loop() {
     bool shutdown = false;
 
     auto writes = handle_writes();
+    auto replenish = replenish_reserve();
     auto last_sync = message_clock::now();
     auto sync_period = std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms);
 
@@ -1620,7 +1619,8 @@ future<> db::commitlog::segment_manager::message_loop() {
     co_await std::move(writes);
 
     co_await clear_reserve_segments();
-    co_await do_pending_deletes();
+    co_await std::move(replenish);
+    co_await do_pending_deletes();    
 }
 
 future<> db::commitlog::segment_manager::handle_writes() noexcept {
@@ -1804,11 +1804,6 @@ future<> db::commitlog::segment_manager::init() {
 
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _message_loop = message_loop();
-    auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
-    clogger.trace("Delaying timer loop {} ms", delay);
-    // We need to wait until we have scanned all other segments to actually start serving new
-    // segments. We are ready now
-    _reserve_replenisher = with_scheduling_group(cfg.sched_group, [this] { return replenish_reserve(); });
 }
 
 void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
@@ -2355,11 +2350,6 @@ future<> db::commitlog::segment_manager::shutdown() {
 
         try {
             co_await clear_reserve_segments();
-        } catch (...) {
-            p = std::current_exception();
-        }
-        try {
-            co_await std::move(_reserve_replenisher);
         } catch (...) {
             p = std::current_exception();
         }
