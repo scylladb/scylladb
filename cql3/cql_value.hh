@@ -541,7 +541,33 @@ namespace cql3 {
     user_type_value user_type_value::from_serialized(View serialized_bytes,
                                                      cql_serialization_format sf,
                                                      const user_type_impl& utype) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        std::vector<managed_bytes_opt> elements = utype.split_fragmented(serialized_bytes);
+        if (elements.size() > utype.size()) {
+            throw std::runtime_error("User Defined Type value contained too many fields");
+        }
+
+        std::vector<std::variant<managed_bytes, null_value>> field_values;
+        field_values.resize(elements.size());
+
+        for (managed_bytes_opt& element : elements) {
+            if (element.has_value()) {
+                field_values.emplace_back(std::move(*element));
+            } else {
+                field_values.emplace_back(null_value{});
+            }
+        }
+
+        if (utype.all_types().size() < field_values.size()) {
+            throw std::runtime_error("user_type_value::from_serialized the type doesn't have enough types");
+        }
+
+        std::vector<data_type> field_values_types(utype.all_types());
+        field_values_types.resize(field_values.size());
+
+        return user_type_value {
+            .field_values = std::move(field_values),
+            .field_values_types = std::move(field_values_types)
+        };
     }
 
     // Decides whether serialized bytes of size 0 mean empty_value or not
