@@ -140,7 +140,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             assert(_column_operations.empty());
-            constants::setter(*s->regular_begin(), make_shared<constants::value>(cql3::raw_value::make_value(bytes()))).execute(m, prefix, params);
+            constants::setter(*s->regular_begin(), make_shared<constants::value>(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {

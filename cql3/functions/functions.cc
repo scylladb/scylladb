@@ -531,7 +531,7 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
         if (type.is_collection()) {
             throw std::runtime_error(format("function_call::make_terminal: unhandled collection type {}", type.name()));
         }
-        return make_shared<constants::value>(std::move(result));
+        return make_shared<constants::value>(std::move(result), fun->return_type());
     }
     ));
 }

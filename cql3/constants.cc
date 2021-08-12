@@ -44,9 +44,22 @@
 
 namespace cql3 {
 
-thread_local const ::shared_ptr<constants::value> constants::UNSET_VALUE = ::make_shared<constants::value>(cql3::raw_value::make_unset_value());
+thread_local const ::shared_ptr<constants::value> constants::UNSET_VALUE = ::make_shared<constants::value>(cql3::raw_value::make_unset_value(), empty_type);
 thread_local const ::shared_ptr<term::raw> constants::NULL_LITERAL = ::make_shared<constants::null_literal>();
 thread_local const ::shared_ptr<terminal> constants::null_literal::NULL_VALUE = ::make_shared<constants::null_literal::null_value>();
+
+ordered_cql_value constants::value::to_ordered_cql_value(cql_serialization_format sf) const {
+    cql_value cql_val = cql_value_from_raw_value(_bytes, sf, _my_type->without_reversed());
+    return reverse_if_needed(std::move(cql_val),  _my_type->is_reversed());
+}
+
+ordered_cql_value constants::null_literal::null_value::to_ordered_cql_value(cql_serialization_format) const {
+     if (_my_type->is_reversed()) {
+        return ordered_cql_value(reversed_cql_value{cql_value(cql3::null_value{})});
+    } else {
+        return ordered_cql_value(cql_value(cql3::null_value{}));
+    }
+}
 
 std::ostream&
 operator<<(std::ostream&out, constants::type t)
@@ -161,7 +174,7 @@ constants::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             _type, _text, *receiver->name, receiver->type->as_cql3_type().to_string()));
     }
-    return ::make_shared<value>(cql3::raw_value::make_value(parsed_value(receiver->type)));
+    return ::make_shared<value>(cql3::raw_value::make_value(parsed_value(receiver->type)), receiver->type);
 }
 
 void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
