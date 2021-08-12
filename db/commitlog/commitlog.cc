@@ -421,6 +421,7 @@ public:
     void flush_segments(uint64_t size_to_remove);
 
     struct shutdown_request {};
+    struct replenish_request {};
 
     struct write_request {
         sseg_ptr segment = {};
@@ -433,6 +434,7 @@ public:
 
     using message_payload = std::variant<
         shutdown_request,
+        replenish_request,
         write_request
         // to come...
     >;
@@ -451,6 +453,7 @@ public:
 
     static inline message_type constexpr shutdown_request_index = get_index<shutdown_request, message_payload>::value;
     static inline message_type constexpr write_request_index = get_index<write_request, message_payload>::value;
+    static inline message_type constexpr replenish_request_index = get_index<replenish_request, message_payload>::value;
 
     using message_clock = clock_type; // todo: steady_clock_type? higher res.;
     static inline constexpr auto immediately = message_clock::time_point::min();
@@ -518,8 +521,10 @@ private:
     void wakeup();
 
     void handle_writes(messages&, pending_tasks&);
+    void handle_replenishes(messages&, pending_tasks&);
     void do_periodic_syncs(pending_tasks&);
     void do_periodic_flush_callbacks(pending_tasks&);
+    void replenish_reserve(pending_tasks&);
 
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
@@ -530,8 +535,6 @@ private:
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
-    future<> replenish_reserve();
-    future<> _reserve_replenisher;
     future<> _background_sync;
     seastar::gate _gate;
     uint64_t _new_counter = 0;
@@ -983,8 +986,8 @@ public:
                     co_await _written_pos.wait(top);
                     clogger.trace("Flush {} at {} wait for previous flush -> {}", *this, prev, pos);
                     co_await _flush_pos.wait(prev);
-                        co_await _file.flush();
-                        ++_segment_manager->totals.flush_count;
+                    co_await _file.flush();
+                    ++_segment_manager->totals.flush_count;
                     clogger.trace("{} synced to {}", *this, top);
                     if (_flush_pos < top) {
                         _flush_pos.set(top);
@@ -1356,7 +1359,6 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _request_controller(max_request_controller_units(), request_controller_timeout_exception_factory{})
     , _reserve_segments(1)
     , _recycled_segments(std::numeric_limits<size_t>::max())
-    , _reserve_replenisher(make_ready_future<>())
     , _background_sync(make_ready_future<>())
     , _message_loop(make_ready_future<>())
 {
@@ -1481,6 +1483,8 @@ future<> db::commitlog::segment_manager::message_loop() {
     pending_tasks tasks;
     bool shutdown = false;
 
+    replenish_reserve(tasks);
+
     while (!shutdown || !_message_queue.empty()) {
         auto next_wakeup = no_timeout;
         auto now = message_clock::now();
@@ -1494,6 +1498,7 @@ future<> db::commitlog::segment_manager::message_loop() {
 
         if (!msgs.empty()) {
             handle_writes(msgs, tasks);
+            handle_replenishes(msgs, tasks);
 
             auto mp = msgs.extract_messages(shutdown_request_index);
             if (!mp.empty()) {
@@ -1506,6 +1511,8 @@ future<> db::commitlog::segment_manager::message_loop() {
 
         assert(msgs.empty());
     }
+
+    clogger.debug("Message loop shutdown");
 
     co_await tasks.drain();
 
@@ -1582,32 +1589,42 @@ size_t db::commitlog::segment_manager::max_request_controller_units() const {
     return max_mutation_size + db::commitlog::segment::default_size;
 }
 
-future<> db::commitlog::segment_manager::replenish_reserve() {
-    while (!_shutdown) {
-        co_await _reserve_segments.not_full();
-        if (_shutdown) {
-            break;
-        }
-        try {
-            gate::holder g(_gate);
-            // note: if we were strict with disk size, we would refuse to do this 
-            // unless disk footprint is lower than threshold. but we cannot (yet?)
-            // trust that flush logic will absolutely free up an existing 
-            // segment (because colocation stuff etc), so always allow a new
-            // file if needed. That and performance stuff...
-            auto s = co_await allocate_segment();
-            auto ret = _reserve_segments.push(std::move(s));
-            if (!ret) {
-                clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
-            }
-            continue;
-        } catch (shutdown_marker&) {
-            break;
-        } catch (...) {
-            clogger.warn("Exception in segment reservation: {}", std::current_exception());
-        }
-        co_await sleep(100ms);
+void db::commitlog::segment_manager::handle_replenishes(messages& msgs, pending_tasks& tasks) {
+    auto mp = msgs.extract_messages(replenish_request_index);
+    if (!mp.empty() /** TODO: remove when shutdown moves */ && !_shutdown) {
+        replenish_reserve(tasks);
     }
+}
+
+void db::commitlog::segment_manager::replenish_reserve(pending_tasks& tasks) {
+    tasks.add([this]() -> future<> {
+        while (!_reserve_segments.full() && !_shutdown) {
+            try {
+                // TODO: remove
+                gate::holder g(_gate);
+                // note: if we were strict with disk size, we would refuse to do this 
+                // unless disk footprint is lower than threshold. but we cannot (yet?)
+                // trust that flush logic will absolutely free up an existing 
+                // segment (because colocation stuff etc), so always allow a new
+                // file if needed. That and performance stuff...
+                auto s = co_await allocate_segment();
+                auto ret = _reserve_segments.push(std::move(s));
+                if (!ret) {
+                    clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
+                }
+            } catch (shutdown_marker&) {
+                break;
+            } catch (...) {
+                clogger.warn("Exception in segment reservation: {}", std::current_exception());
+            }
+        }
+        if (!_shutdown) {
+            co_await _reserve_segments.not_full();
+            if (!_shutdown) {
+                send(replenish_request{});
+            }
+        }
+    });
 }
 
 future<std::vector<db::commitlog::descriptor>>
@@ -1655,11 +1672,6 @@ future<> db::commitlog::segment_manager::init() {
     _ids = replay_position(this_shard_id(), id).id;
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _message_loop = message_loop();
-    auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
-    clogger.trace("Delaying timer loop {} ms", delay);
-    // We need to wait until we have scanned all other segments to actually start serving new
-    // segments. We are ready now
-    _reserve_replenisher = replenish_reserve();
 }
 
 void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
@@ -2155,11 +2167,6 @@ future<> db::commitlog::segment_manager::shutdown() {
 
         try {
             co_await clear_reserve_segments();
-        } catch (...) {
-            p = std::current_exception();
-        }
-        try {
-            co_await std::move(_reserve_replenisher);
         } catch (...) {
             p = std::current_exception();
         }
