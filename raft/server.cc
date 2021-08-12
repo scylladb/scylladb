@@ -210,16 +210,6 @@ private:
     // Called when no longer a leader or on shutdown
     void abort_snapshot_transfers();
 
-    // Apply a dummy entry. Dummy entry is not propagated to the
-    // state machine, but waiting for it to be "applied" ensures
-    // all previous entries are applied as well.
-    // Resolves when the entry is committed.
-    // The function has to be called on the leader, throws otherwise
-    // May fail because of an internal error or because the leader
-    // has changed and the entry was replaced by another one,
-    // submitted to the new leader.
-    future<> apply_dummy_entry();
-
     // Send snapshot in the background and notify FSM about the result.
     void send_snapshot(server_id id, install_snapshot&& snp);
 
@@ -349,10 +339,6 @@ future<> server_impl::add_entry(command command, wait_type type) {
     return add_entry_internal(std::move(command), type);
 }
 
-future<> server_impl::apply_dummy_entry() {
-    _stats.add_dummy++;
-    return add_entry_internal(log_entry::dummy(), wait_type::applied);
-}
 void server_impl::append_entries(server_id from, append_request append_request) {
     _stats.append_entries_received++;
     _fsm->step(from, std::move(append_request));
