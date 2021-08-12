@@ -58,4 +58,64 @@ cql_value into_cql_value(ordered_cql_value&& ordered_cql_val) {
         [](reversed_cql_value&& val) { return std::move(val.value); }
     }, std::move(ordered_cql_val));
 }
+
+cql_value cql_value_from_raw_value(const cql3::raw_value& raw_val,
+                                   cql_serialization_format sf,
+                                   const abstract_type& val_type) {
+    if (raw_val.is_null()) {
+        return cql_value(null_value{});
+    }
+
+    if (raw_val.is_unset_value()) {
+        return cql_value(unset_value{});
+    }
+    // Now we know that raw_val.is_value()
+
+    return raw_val.to_view().with_value([&](const FragmentedView auto& view) {
+        return cql_value_from_serialized(view, sf, val_type);
+    });
+}
+
+// Decides whether serialized bytes of size 0 mean empty_value or not
+bool is_0_bytes_value_empty_value(abstract_type::kind type_kind) {
+    switch (type_kind) {
+        case abstract_type::kind::utf8:
+        case abstract_type::kind::bytes:
+        case abstract_type::kind::ascii:
+        case abstract_type::kind::tuple:
+            return false;
+
+        case abstract_type::kind::boolean:
+        case abstract_type::kind::byte:
+        case abstract_type::kind::short_kind:
+        case abstract_type::kind::int32:
+        case abstract_type::kind::long_kind:
+        case abstract_type::kind::float_kind:
+        case abstract_type::kind::double_kind:
+        case abstract_type::kind::counter:
+        case abstract_type::kind::inet:
+        case abstract_type::kind::uuid:
+        case abstract_type::kind::date:
+        case abstract_type::kind::simple_date:
+        case abstract_type::kind::duration:
+        case abstract_type::kind::time:
+        case abstract_type::kind::timestamp:
+        case abstract_type::kind::timeuuid:
+        case abstract_type::kind::empty:
+        case abstract_type::kind::list:
+        case abstract_type::kind::set:
+        case abstract_type::kind::map:
+        case abstract_type::kind::user:
+        case abstract_type::kind::decimal:
+        case abstract_type::kind::varint:
+            return true;
+
+        case abstract_type::kind::reversed:
+            throw std::runtime_error("is_0_bytes_value_empty_value reversed_type is not allowed");
+
+        default:
+            throw std::runtime_error(
+                fmt::format("is_0_bytes_value_empty_value - unhandled type kind: {}", type_kind));
+    }
+}
 }

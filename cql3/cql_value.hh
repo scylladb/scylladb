@@ -42,6 +42,11 @@
 #pragma once
 
 #include "cql3/values.hh"
+#include "types/list.hh"
+#include "types/set.hh"
+#include "types/map.hh"
+#include "types/tuple.hh"
+#include "types/user.hh"
 
 namespace cql3 {
     // A value represented by empty bytes()
@@ -51,86 +56,149 @@ namespace cql3 {
 
     struct bool_value {
         bool value;
+
+        template<FragmentedView View>
+        static bool_value from_serialized(View serialized_bytes);
     };
 
     struct int8_value {
         int8_t value;
+
+        template<FragmentedView View>
+        static int8_value from_serialized(View serialized_bytes);
     };
 
     struct int16_value {
         int16_t value;
+
+        template<FragmentedView View>
+        static int16_value from_serialized(View serialized_bytes);
     };
 
     struct int32_value {
         int32_t value;
+
+        template<FragmentedView View>
+        static int32_value from_serialized(View serialized_bytes);
     };
 
     struct int64_value {
         int64_t value;
+
+        template<FragmentedView View>
+        static int64_value from_serialized(View serialized_bytes);
     };
 
     struct counter_value {
         int64_t value;
+
+        template<FragmentedView View>
+        static counter_value from_serialized(View serialized_bytes);
     };
 
     struct varint_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static varint_value from_serialized(View serialized_bytes);
     };
 
     struct float_value {
         float value;
+
+        template<FragmentedView View>
+        static float_value from_serialized(View serialized_bytes);
     };
 
     struct double_value {
         double value;
+
+        template<FragmentedView View>
+        static double_value from_serialized(View serialized_bytes);
     };
 
     struct decimal_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static decimal_value from_serialized(View serialized_bytes);
     };
 
     struct ascii_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static ascii_value from_serialized(View serialized_bytes);
     };
 
     struct utf8_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static utf8_value from_serialized(View serialized_bytes);
     };
 
     struct date_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static date_value from_serialized(View serialized_bytes);
     };
 
     struct simple_date_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static simple_date_value from_serialized(View serialized_bytes);
     };
 
     struct duration_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static duration_value from_serialized(View serialized_bytes);
     };
 
     struct time_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static time_value from_serialized(View serialized_bytes);
     };
 
     struct timestamp_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static timestamp_value from_serialized(View serialized_bytes);
     };
 
     struct timeuuid_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static timeuuid_value from_serialized(View serialized_bytes);
     };
 
     struct blob_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static blob_value from_serialized(View serialized_bytes);
     };
 
     struct inet_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static inet_value from_serialized(View serialized_bytes);
     };
 
     struct uuid_value {
         managed_bytes value;
+
+        template<FragmentedView View>
+        static uuid_value from_serialized(View serialized_bytes);
     };
 
     struct tuple_value {
@@ -138,27 +206,42 @@ namespace cql3 {
         // Not every element in a tuple has a type, because in some cases the tuple_type_impl is empty.
         // TODO: Find the types in these cases.
         std::vector<std::optional<data_type>> elements_types;
+
+        template<FragmentedView View>
+        static tuple_value from_serialized(View serialized_bytes, cql_serialization_format, const tuple_type_impl&);
     };
 
     struct list_value {
         utils::chunked_vector<std::variant<managed_bytes, null_value>> elements;
         data_type elements_type;
+
+        template<FragmentedView View>
+        static list_value from_serialized(View serialized_bytes, cql_serialization_format, const list_type_impl&);
     };
 
     struct set_value {
         std::set<managed_bytes, serialized_compare> elements;
         data_type elements_type;
+
+        template<FragmentedView View>
+        static set_value from_serialized(View serialized_bytes, cql_serialization_format, const set_type_impl&);
     };
 
     struct map_value {
         std::map<managed_bytes, managed_bytes, serialized_compare> elements;
         data_type keys_type;
         data_type values_type;
+
+        template<FragmentedView View>
+        static map_value from_serialized(View serialized_bytes, cql_serialization_format, const map_type_impl&);
     };
 
     struct user_type_value {
         std::vector<std::variant<managed_bytes, null_value>> field_values;
         std::vector<data_type> field_values_types;
+
+        template<FragmentedView View>
+        static user_type_value from_serialized(View serialized_bytes, cql_serialization_format, const user_type_impl&);
     };
 
     using cql_value = std::variant<
@@ -192,6 +275,12 @@ namespace cql3 {
         map_value,
         user_type_value>;
 
+    template<FragmentedView View>
+    cql_value cql_value_from_serialized(View serialized_bytes, cql_serialization_format, const abstract_type&);
+
+    cql_value cql_value_from_raw_value(const cql3::raw_value&, cql_serialization_format, const abstract_type&);
+
+
     // A cql_value that is ordered in reverse order
     struct reversed_cql_value {
         cql_value value;
@@ -204,4 +293,273 @@ namespace cql3 {
 
     // Takes the cql_value out of ordered_cql_value
     cql_value into_cql_value(ordered_cql_value&&);
+
+
+    template<FragmentedView View>
+    bool_value bool_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    int8_value int8_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    int16_value int16_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    int32_value int32_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    int64_value int64_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    counter_value counter_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    varint_value varint_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    float_value float_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    double_value double_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    decimal_value decimal_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    ascii_value ascii_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    utf8_value utf8_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    date_value date_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    simple_date_value simple_date_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    duration_value duration_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    time_value time_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    timestamp_value timestamp_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    timeuuid_value timeuuid_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    blob_value blob_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    inet_value inet_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template<FragmentedView View>
+    uuid_value uuid_value::from_serialized(View serialized_bytes) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template <FragmentedView View>
+    tuple_value tuple_value::from_serialized(View serialized_bytes,
+                                             cql_serialization_format sf,
+                                             const tuple_type_impl& ttype) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template <FragmentedView View>
+    list_value list_value::from_serialized(View serialized_bytes,
+                                           cql_serialization_format sf,
+                                           const list_type_impl& ltype) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template <FragmentedView View>
+    set_value set_value::from_serialized(View serialized_bytes,
+                                         cql_serialization_format sf,
+                                         const set_type_impl& stype) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template <FragmentedView View>
+    map_value map_value::from_serialized(View serialized_bytes,
+                                         cql_serialization_format sf,
+                                         const map_type_impl& mtype) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    template <FragmentedView View>
+    user_type_value user_type_value::from_serialized(View serialized_bytes,
+                                                     cql_serialization_format sf,
+                                                     const user_type_impl& utype) {
+        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+    }
+
+    // Decides whether serialized bytes of size 0 mean empty_value or not
+    bool is_0_bytes_value_empty_value(abstract_type::kind type_kind);
+
+    template<FragmentedView View>
+    cql_value cql_value_from_serialized(View serialized_bytes,
+                                        cql_serialization_format sf,
+                                        const abstract_type& val_type) {
+        
+        if (serialized_bytes.empty() && is_0_bytes_value_empty_value(val_type.get_kind())) {
+            return cql_value(empty_value{});
+        }
+
+        switch (val_type.get_kind()) {
+            case abstract_type::kind::ascii:
+                return cql_value(ascii_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::boolean:
+                return cql_value(bool_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::byte:
+                return cql_value(int8_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::bytes:
+                return cql_value(blob_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::counter:
+                return cql_value(counter_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::date:
+                return cql_value(date_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::decimal:
+                return cql_value(decimal_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::double_kind:
+                return cql_value(double_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::duration:
+                return cql_value(duration_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::float_kind:
+                return cql_value(float_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::inet:
+                return cql_value(inet_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::int32:
+                return cql_value(int32_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::long_kind:
+                return cql_value(int64_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::short_kind:
+                return cql_value(int16_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::simple_date:
+                return cql_value(simple_date_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::time:
+                return cql_value(time_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::timestamp:
+                return cql_value(timestamp_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::timeuuid:
+                return cql_value(timeuuid_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::utf8:
+                return cql_value(utf8_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::uuid:
+                return cql_value(uuid_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::varint:
+                return cql_value(varint_value::from_serialized(serialized_bytes));
+
+            case abstract_type::kind::list: {
+                const list_type_impl* list_val_type = dynamic_cast<const list_type_impl*>(&val_type);
+                if (list_val_type == nullptr) {
+                    throw std::runtime_error("cql_value_from_serialized - val_type is not list_type_impl");
+                }
+                return cql_value(list_value::from_serialized(serialized_bytes, sf, *list_val_type));
+            }
+
+            case abstract_type::kind::set: {
+                const set_type_impl* set_val_type = dynamic_cast<const set_type_impl*>(&val_type);
+                if (set_val_type == nullptr) {
+                    throw std::runtime_error("cql_value_from_serialized - val_type is not set_type_impl");
+                }
+                return cql_value(set_value::from_serialized(serialized_bytes, sf, *set_val_type));
+            }
+
+            case abstract_type::kind::map: {
+                const map_type_impl* map_val_type = dynamic_cast<const map_type_impl*>(&val_type);
+                if (map_val_type == nullptr) {
+                    throw std::runtime_error("cql_value_from_serialized - val_type is not map_type_impl");
+                }
+                return cql_value(map_value::from_serialized(serialized_bytes, sf, *map_val_type));
+            }
+
+            case abstract_type::kind::tuple: {
+                const tuple_type_impl* tuple_val_type = dynamic_cast<const tuple_type_impl*>(&val_type);
+                if (tuple_val_type == nullptr) {
+                    throw std::runtime_error("cql_value_from_serialized - val_type is not tuple_type_impl");
+                }
+                return cql_value(tuple_value::from_serialized(serialized_bytes, sf, *tuple_val_type));
+            }
+
+            case abstract_type::kind::user: {
+                const user_type_impl* user_val_type = dynamic_cast<const user_type_impl*>(&val_type);
+                if (user_val_type == nullptr) {
+                    throw std::runtime_error("cql_value_from_serialized - val_type is not user_type_impl");
+                }
+                return cql_value(user_type_value::from_serialized(serialized_bytes, sf, *user_val_type));
+            }
+
+            case abstract_type::kind::empty:
+                return cql_value(empty_value{});
+
+            case abstract_type::kind::reversed:
+                throw std::runtime_error("cql_value_from_serialized reversed_type is not allowed");
+
+            default:
+                throw std::runtime_error(
+                    fmt::format("constants::value::to_cql_value - unhandled type: {}", val_type.name()));
+        }
+    }
 }
