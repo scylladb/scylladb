@@ -493,7 +493,23 @@ namespace cql3 {
     set_value set_value::from_serialized(View serialized_bytes,
                                          cql_serialization_format sf,
                                          const set_type_impl& stype) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        std::set<managed_bytes, serialized_compare> elements(stype.get_elements_type()->as_less_comparator());
+        if (sf.collection_format_unchanged()) {
+            utils::chunked_vector<managed_bytes> tmp = partially_deserialize_listlike(serialized_bytes, sf);
+            for (auto&& element : tmp) {
+                elements.insert(std::move(element));
+            }
+        } else [[unlikely]] {
+            auto s = value_cast<set_type_impl::native_type>(stype.deserialize(serialized_bytes, sf));
+            for (auto&& element : s) {
+                elements.insert(elements.end(), managed_bytes(stype.get_elements_type()->decompose(element)));
+            }
+        }
+
+        return set_value {
+            .elements = std::move(elements),
+            .elements_type = stype.get_elements_type()
+        };
     }
 
     template <FragmentedView View>
