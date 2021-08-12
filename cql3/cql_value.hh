@@ -516,7 +516,25 @@ namespace cql3 {
     map_value map_value::from_serialized(View serialized_bytes,
                                          cql_serialization_format sf,
                                          const map_type_impl& mtype) {
-        throw std::runtime_error(fmt::format("from_serialized not implemented! {}:{}", __FILE__, __LINE__));
+        std::map<managed_bytes, managed_bytes, serialized_compare> elems(mtype.get_keys_type()->as_less_comparator());
+        if (sf.collection_format_unchanged()) {
+            std::vector<std::pair<managed_bytes, managed_bytes>> tmp = partially_deserialize_map(serialized_bytes, sf);
+            for (auto&& key_value : tmp) {
+                elems.insert(std::move(key_value));
+            }
+        } else [[unlikely]] {
+            auto m = value_cast<map_type_impl::native_type>(mtype.deserialize(serialized_bytes, sf));
+            for (auto&& e : m) {
+                elems.emplace(mtype.get_keys_type()->decompose(e.first),
+                              mtype.get_values_type()->decompose(e.second));
+            }
+        }
+
+        return map_value {
+            .elements = elems,
+            .keys_type = mtype.get_keys_type(),
+            .values_type = mtype.get_values_type()
+        };
     }
 
     template <FragmentedView View>
