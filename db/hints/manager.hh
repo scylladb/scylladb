@@ -273,9 +273,10 @@ public:
 
             /// \brief Restore a mutation object from the hints file entry.
             /// \param ctx_ptr pointer to the send context
+            /// \param rp replay position of the hint
             /// \param buf hints file entry
             /// \return The mutation object representing the original mutation stored in the hints file.
-            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf, uint64_t operation_id);
+            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, db::replay_position rp, fragmented_temporary_buffer& buf, uint64_t operation_id);
 
             /// \brief Get a reference to the column_mapping object for a given frozen mutation.
             /// \param ctx_ptr pointer to the send context
