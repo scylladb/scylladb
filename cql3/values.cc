@@ -60,7 +60,8 @@ raw_value_view raw_value_view::make_temporary(raw_value&& value) {
     switch (value._data.index()) {
     case 0:  return raw_value_view(managed_bytes(std::get<bytes>(value._data)));
     case 1:  return raw_value_view(std::move(std::get<managed_bytes>(value._data)));
-    default: return raw_value_view::make_null();
+    case 2:  return raw_value_view::make_null();
+    default: return raw_value_view::make_unset_value();
     }
 }
 
