@@ -86,6 +86,10 @@ private:
         uint64_t sent = 0;
         uint64_t discarded = 0;
         uint64_t corrupted_files = 0;
+
+        // For logging purposes
+        uint64_t attempted_writes = 0;
+        uint64_t attempted_sends = 0;
     };
 
     // map: shard -> segments
@@ -271,14 +275,15 @@ public:
             /// \param ctx_ptr pointer to the send context
             /// \param buf hints file entry
             /// \return The mutation object representing the original mutation stored in the hints file.
-            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf);
+            frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf, uint64_t operation_id);
 
             /// \brief Get a reference to the column_mapping object for a given frozen mutation.
             /// \param ctx_ptr pointer to the send context
             /// \param fm Frozen mutation object
             /// \param hr hint entry reader object
+            /// \param operation_id ID of the hint sending operation
             /// \return
-            const column_mapping& get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr);
+            const column_mapping& get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr, uint64_t operation_id);
 
             /// \brief Perform a single mutation send atempt.
             ///
@@ -287,14 +292,16 @@ public:
             ///
             /// \param m mutation to send
             /// \param natural_endpoints current replicas for the given mutation
+            /// \param operation_id ID of the hint sending operation
             /// \return future that resolves when the operation is complete
-            future<> do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints) noexcept;
+            future<> do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints, uint64_t operation_id) noexcept;
 
             /// \brief Send one mutation out.
             ///
             /// \param m mutation to send
+            /// \param operation_id ID of the hint sending operation
             /// \return future that resolves when the mutation sending processing is complete.
-            future<> send_one_mutation(frozen_mutation_and_schema m);
+            future<> send_one_mutation(frozen_mutation_and_schema m, uint64_t operation_id);
 
             /// \brief Notifies replay waiters for which the target replay position was reached.
             void notify_replay_waiters() noexcept;
@@ -367,8 +374,9 @@ public:
         /// \param s column family descriptor
         /// \param fm frozen mutation object
         /// \param tr_state trace_state handle
+        /// \param operation_id ID of the hint storing operation
         /// \return FALSE if hint is definitely not going to be stored
-        bool store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+        bool store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state, uint64_t operation_id) noexcept;
 
         /// \brief Populates the _segments_to_replay list.
         ///  Populates the _segments_to_replay list with the names of the files in the <manager hints files directory> directory
@@ -560,8 +568,9 @@ public:
 
     /// \brief Check if a hint may be generated to the give end point
     /// \param ep end point to check
+    /// \param operation_id ID of the hint storing operation
     /// \return true if we should generate the hint to the given end point if it becomes unavailable
-    bool can_hint_for(ep_key_type ep) const noexcept;
+    bool can_hint_for(ep_key_type ep, uint64_t operation_id) const noexcept;
 
     /// \brief Check if there aren't too many in-flight hints
     ///

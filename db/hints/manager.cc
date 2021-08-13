@@ -223,32 +223,32 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     co_return;
 }
 
-bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state, uint64_t operation_id) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
-        (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
+        (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state, operation_id] () mutable {
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
 
-            return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
+            return with_shared(file_update_mutex(), [this, fm, s, tr_state, operation_id] () mutable -> future<> {
                 return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
                     return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
-                }).then([this, tr_state] (db::rp_handle rh) {
+                }).then([this, tr_state, operation_id] (db::rp_handle rh) {
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {
                         _last_written_rp = rp;
-                        manager_logger.trace("[{}] store_hint(): updated last written replay position to {}", end_point_key(), rp);
+                        manager_logger.trace("[{}, write={}] store_hint(): updated last written replay position to {}", end_point_key(), operation_id, rp);
                     }
                     ++shard_stats().written;
 
-                    manager_logger.trace("[{}] store_hint(): hint was stored at RP {}", end_point_key(), rp);
+                    manager_logger.trace("[{}, write={}] store_hint(): hint was stored at RP {}", end_point_key(), operation_id, rp);
                     tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
-                }).handle_exception([this, tr_state] (std::exception_ptr eptr) {
+                }).handle_exception([this, tr_state, operation_id] (std::exception_ptr eptr) {
                     ++shard_stats().errors;
 
-                    manager_logger.debug("[{}] store_hint(): got the exception when storing a hint: {}", end_point_key(), eptr);
+                    manager_logger.debug("[{}, write={}] store_hint(): got the exception when storing a hint: {}", end_point_key(), operation_id, eptr);
                     tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
                 });
             }).finally([this, mut_size, fm, s] {
@@ -257,7 +257,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
             });;
         });
     } catch (...) {
-        manager_logger.debug("[{}] store_hint(): failed to store a hint: {}", end_point_key(), std::current_exception());
+        manager_logger.debug("[{}, write={}] store_hint(): failed to store a hint: {}", end_point_key(), operation_id, std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
 
         ++shard_stats().dropped;
@@ -366,19 +366,20 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 }
 
 bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
-        manager_logger.trace("[{}] store_hint(): can't store the hint", ep);
+    const uint64_t operation_id = _stats.attempted_writes++;
+    if (stopping() || draining_all() || !started() || !can_hint_for(ep, operation_id)) {
+        manager_logger.trace("[{}, write={}] store_hint(): can't store the hint", ep, operation_id);
         ++_stats.dropped;
         return false;
     }
 
     try {
-        manager_logger.trace("[{}] store_hint(): want to store a hint", ep);
+        manager_logger.trace("[{}, write={}] store_hint(): want to store a hint", ep, operation_id);
         tracing::trace(tr_state, "Going to store a hint to {}", ep);
 
-        return get_ep_manager(ep).store_hint(std::move(s), std::move(fm), tr_state);
+        return get_ep_manager(ep).store_hint(std::move(s), std::move(fm), tr_state, operation_id);
     } catch (...) {
-        manager_logger.debug("[{}] store_hint(): failed to store a hint: {}", ep, std::current_exception());
+        manager_logger.debug("[{}, write={}] store_hint(): failed to store a hint: {}", ep, operation_id, std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", ep, std::current_exception());
 
         ++_stats.errors;
@@ -521,15 +522,15 @@ future<timespec> manager::end_point_hints_manager::sender::get_last_file_modific
     });
 }
 
-future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints) noexcept {
-    return futurize_invoke([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
+future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints, uint64_t operation_id) noexcept {
+    return futurize_invoke([this, m = std::move(m), &natural_endpoints, operation_id] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
-            manager_logger.trace("[{}] do_send_one_mutation(): sending directly", end_point_key());
+            manager_logger.trace("[{}, send={}] do_send_one_mutation(): sending directly", end_point_key(), operation_id);
             return _proxy.send_hint_to_endpoint(std::move(m), end_point_key());
         } else {
-            manager_logger.trace("[{}] do_send_one_mutation(): endpoints set has changed and the destination node is no longer a replica. Mutating from scratch...", end_point_key());
+            manager_logger.trace("[{}, send={}] do_send_one_mutation(): endpoints set has changed and the destination node is no longer a replica. Mutating from scratch...", end_point_key(), operation_id);
             return _proxy.send_hint_to_all_replicas(std::move(m));
         }
     });
@@ -557,10 +558,10 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     }
 }
 
-frozen_mutation_and_schema manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
+frozen_mutation_and_schema manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf, uint64_t operation_id) {
     hint_entry_reader hr(buf);
     auto& fm = hr.mutation();
-    auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
+    auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr, operation_id);
     auto schema = _db.find_schema(fm.column_family_id());
 
     if (schema->version() != fm.schema_version()) {
@@ -572,14 +573,14 @@ frozen_mutation_and_schema manager::end_point_hints_manager::sender::get_mutatio
     return {std::move(hr).mutation(), std::move(schema)};
 }
 
-const column_mapping& manager::end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
+const column_mapping& manager::end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr, uint64_t operation_id) {
     auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
     if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
         if (!hr.get_column_mapping()) {
             throw no_column_mapping(fm.schema_version());
         }
 
-        manager_logger.debug("[{}] get_column_mapping(): new schema version {}", end_point_key(), fm.schema_version());
+        manager_logger.debug("[{}, send={}] get_column_mapping(): caching new schema version {}", end_point_key(), operation_id, fm.schema_version());
         cm_it = ctx_ptr->schema_ver_to_column_mapping.emplace(fm.schema_version(), *hr.get_column_mapping()).first;
     }
 
@@ -592,7 +593,7 @@ bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {
     return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
-bool manager::can_hint_for(ep_key_type ep) const noexcept {
+bool manager::can_hint_for(ep_key_type ep, uint64_t operation_id) const noexcept {
     if (utils::fb_utilities::is_me(ep)) {
         return false;
     }
@@ -608,22 +609,22 @@ bool manager::can_hint_for(ep_key_type ep) const noexcept {
     // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
     const auto hints_in_progress_for_ep = hints_in_progress_for(ep);
     if (_stats.size_of_hints_in_progress > max_size_of_hints_in_progress && hints_in_progress_for_ep > 0) {
-        manager_logger.trace("[{}] can_hint_for(): cannot store a hint: the size of hints waiting to be stored exceeds the shard limit ({} > {}) and there is a non-zero number ({}) of hints waiting to be stored to this node",
-                ep, _stats.size_of_hints_in_progress, max_size_of_hints_in_progress, hints_in_progress_for_ep);
+        manager_logger.trace("[{}, write={}] can_hint_for(): cannot store a hint: the size of hints waiting to be stored exceeds the shard limit ({} > {}) and there is a non-zero number ({}) of hints waiting to be stored to this node",
+                ep, operation_id, _stats.size_of_hints_in_progress, max_size_of_hints_in_progress, hints_in_progress_for_ep);
         return false;
     }
 
     // check that the destination DC is "hintable"
     if (!check_dc_for(ep)) {
-        manager_logger.trace("[{}] can_hint_for(): cannot store a hint: it is not allowed to store hints to the destination node's DC", ep);
+        manager_logger.trace("[{}, write={}] can_hint_for(): cannot store a hint: it is not allowed to store hints to the destination node's DC", ep, operation_id);
         return false;
     }
 
     // check if the end point has been down for too long
     const auto ep_downtime = local_gossiper().get_endpoint_downtime(ep);
     if (ep_downtime > _max_hint_window_us) {
-        manager_logger.trace("[{}] can_hint_for(): cannot store a hint: the destination endpoint is down for too long ({}us > {}us)",
-                ep, ep_downtime, _max_hint_window_us);
+        manager_logger.trace("[{}, write={}] can_hint_for(): cannot store a hint: the destination endpoint is down for too long ({}us > {}us)",
+                ep, operation_id, ep_downtime, _max_hint_window_us);
         return false;
     }
 
@@ -840,23 +841,24 @@ void manager::end_point_hints_manager::sender::start() {
     });
 }
 
-future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
+future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m, uint64_t operation_id) {
     keyspace& ks = _db.find_keyspace(m.s->ks_name());
     auto& rs = ks.get_replication_strategy();
     auto token = dht::get_token(*m.s, m.fm.key());
     inet_address_vector_replica_set natural_endpoints = rs.get_natural_endpoints(std::move(token));
 
-    return do_send_one_mutation(std::move(m), natural_endpoints);
+    return do_send_one_mutation(std::move(m), natural_endpoints, operation_id);
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
-    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
+    const uint64_t operation_id = this->shard_stats().attempted_sends++;
+    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr, operation_id] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
-        (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
+        (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr, operation_id] () mutable {
             try {
-                auto m = this->get_mutation(ctx_ptr, buf);
+                auto m = this->get_mutation(ctx_ptr, buf, operation_id);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
 
                 // The hint is too old - drop it.
@@ -867,26 +869,26 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
-                return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
+                return this->send_one_mutation(std::move(m), operation_id).then([this, rp, ctx_ptr] {
                     ++this->shard_stats().sent;
-                }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
-                    manager_logger.debug("[{}] send_one_hint(): failed to send hint: {}", end_point_key(), eptr);
+                }).handle_exception([this, ctx_ptr, rp, operation_id] (auto eptr) {
+                    manager_logger.debug("[{}, send={}] send_one_hint(): failed to send hint: {}", end_point_key(), operation_id, eptr);
                     return make_exception_future<>(std::move(eptr));
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
             } catch (no_such_column_family& e) {
-                manager_logger.trace("[{}] send_hints(): no_such_column_family: {}", end_point_key(), e.what());
+                manager_logger.trace("[{}, send={}] send_hints(): no_such_column_family: {}", end_point_key(), operation_id, e.what());
                 ++this->shard_stats().discarded;
             } catch (no_such_keyspace& e) {
-                manager_logger.trace("[{}] send_hints(): no_such_keyspace: {}", end_point_key(), e.what());
+                manager_logger.trace("[{}, send={}] send_hints(): no_such_keyspace: {}", end_point_key(), operation_id, e.what());
                 ++this->shard_stats().discarded;
             } catch (no_column_mapping& e) {
-                manager_logger.debug("[{}] send_hints(): {} at RP {}: {}", end_point_key(), fname, rp, e.what());
+                manager_logger.debug("[{}, send={}] send_hints(): {} at RP {}: {}", end_point_key(), operation_id, fname, rp, e.what());
                 ++this->shard_stats().discarded;
             } catch (...) {
                 auto eptr = std::current_exception();
-                manager_logger.debug("[{}] send_hints(): unexpected error in file {} at RP {}: {}", end_point_key(), fname, rp, eptr);
+                manager_logger.debug("[{}, send={}] send_hints(): unexpected error in file {} at RP {}: {}", end_point_key(), operation_id, fname, rp, eptr);
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
@@ -907,8 +909,8 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             }
             f.ignore_ready_future();
         });
-    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
-        manager_logger.debug("[{}] send_one_file(): Hmmm. Something bad had happened: {}", end_point_key(), eptr);
+    }).handle_exception([this, ctx_ptr, rp, operation_id] (auto eptr) {
+        manager_logger.debug("[{}, send={}] send_one_file(): Hmmm. Something bad had happened: {}", end_point_key(), operation_id, eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
 }
