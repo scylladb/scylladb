@@ -158,7 +158,7 @@ void manager::forbid_hints() {
 }
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
-    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
+    manager_logger.debug("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
     boost::for_each(_ep_managers, [this] (auto& pair) {
         end_point_hints_manager& ep_man = pair.second;
         if (has_ep_with_pending_hints(ep_man.end_point_key())) {
@@ -239,7 +239,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {
                         _last_written_rp = rp;
-                        manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+                        manager_logger.trace("[{}] Updated last written replay position to {}", end_point_key(), rp);
                     }
                     ++shard_stats().written;
 
@@ -257,7 +257,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
             });;
         });
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
+        manager_logger.debug("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
 
         ++shard_stats().dropped;
@@ -353,7 +353,7 @@ future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
 manager::end_point_hints_manager& manager::get_ep_manager(ep_key_type ep) {
     auto it = find_ep_manager(ep);
     if (it == ep_managers_end()) {
-        manager_logger.trace("Creating an ep_manager for {}", ep);
+        manager_logger.debug("Creating an ep_manager for {}", ep);
         manager::end_point_hints_manager& ep_man = _ep_managers.emplace(ep, end_point_hints_manager(ep, *this)).first->second;
         ep_man.start();
         return ep_man;
@@ -378,7 +378,7 @@ bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const froze
 
         return get_ep_manager(ep).store_hint(std::move(s), std::move(fm), tr_state);
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", ep, std::current_exception());
+        manager_logger.debug("Failed to store a hint to {}: {}", ep, std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", ep, std::current_exception());
 
         ++_stats.errors;
@@ -387,7 +387,7 @@ bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const froze
 }
 
 future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
-    manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
+    manager_logger.debug("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_invoke([this] {
         return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
@@ -504,7 +504,7 @@ future<> manager::end_point_hints_manager::sender::flush_maybe() noexcept {
         return _ep_manager.flush_current_hints().then([this, current_time] {
             _next_flush_tp = current_time + hints_flush_period;
         }).handle_exception([] (auto eptr) {
-            manager_logger.trace("flush_maybe() failed: {}", eptr);
+            manager_logger.debug("flush_maybe() failed: {}", eptr);
             return make_ready_future<>();
         });
     }
@@ -687,7 +687,7 @@ void manager::drain_for(gms::inet_address endpoint) {
         return;
     }
 
-    manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
+    manager_logger.debug("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
     (void)with_gate(_draining_eps_gate, [this, endpoint] {
@@ -723,7 +723,7 @@ void manager::drain_for(gms::inet_address endpoint) {
             });
         });
     }).finally([endpoint] {
-        manager_logger.trace("drain_for: finished draining {}", endpoint);
+        manager_logger.debug("drain_for: finished draining {}", endpoint);
     });
 }
 
@@ -780,16 +780,16 @@ future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noex
             //
             // The next call for send_hints_maybe() will send the last hints to the current end point and when it is
             // done there is going to be no more pending hints and the corresponding hints directory may be removed.
-            manager_logger.trace("Draining for {}: start", end_point_key());
+            manager_logger.debug("Draining for {}: start", end_point_key());
             set_draining();
             send_hints_maybe();
             _ep_manager.flush_current_hints().handle_exception([] (auto e) {
                 manager_logger.error("Failed to flush pending hints: {}. Ignoring...", e);
             }).get();
             send_hints_maybe();
-            manager_logger.trace("Draining for {}: end", end_point_key());
+            manager_logger.debug("Draining for {}: end", end_point_key());
         }
-        manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
+        manager_logger.debug("ep_manager({})::sender: exiting", end_point_key());
     });
 }
 
@@ -817,7 +817,7 @@ void manager::end_point_hints_manager::sender::start() {
 
     attr.sched_group = _hints_cpu_sched_group;
     _stopped = seastar::async(std::move(attr), [this] {
-        manager_logger.trace("ep_manager({})::sender: started", end_point_key());
+        manager_logger.debug("ep_manager({})::sender: started", end_point_key());
         while (!stopping()) {
             try {
                 flush_maybe().get();
@@ -830,7 +830,7 @@ void manager::end_point_hints_manager::sender::start() {
                 break;
             } catch (...) {
                 // log and keep on spinning
-                manager_logger.trace("sender: got the exception: {}", std::current_exception());
+                manager_logger.debug("sender: got the exception: {}", std::current_exception());
             }
         }
     });
@@ -866,16 +866,16 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
                     ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
-                    manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
+                    manager_logger.debug("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
                     return make_exception_future<>(std::move(eptr));
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
             } catch (no_such_column_family& e) {
-                manager_logger.debug("send_hints(): no_such_column_family: {}", e.what());
+                manager_logger.trace("send_hints(): no_such_column_family: {}", e.what());
                 ++this->shard_stats().discarded;
             } catch (no_such_keyspace& e) {
-                manager_logger.debug("send_hints(): no_such_keyspace: {}", e.what());
+                manager_logger.trace("send_hints(): no_such_keyspace: {}", e.what());
                 ++this->shard_stats().discarded;
             } catch (no_column_mapping& e) {
                 manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
@@ -904,7 +904,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             f.ignore_ready_future();
         });
     }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
-        manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
+        manager_logger.debug("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
 }
@@ -917,7 +917,7 @@ void manager::end_point_hints_manager::sender::notify_replay_waiters() noexcept 
 
     manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
     while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
-        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        manager_logger.debug("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
         auto ptr = _replay_waiters.begin()->second;
         (**ptr).set_value();
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
@@ -1060,7 +1060,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
         ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch (...) {
-        manager_logger.trace("sending of {} failed: {}", fname, std::current_exception());
+        manager_logger.debug("sending of {} failed: {}", fname, std::current_exception());
         ctx_ptr->segment_replay_failed = true;
     }
 
@@ -1069,7 +1069,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // If we are draining ignore failures and drop the segment even if we failed to send it.
     if (draining() && ctx_ptr->segment_replay_failed) {
-        manager_logger.trace("send_one_file(): we are draining so we are going to delete the segment anyway");
+        manager_logger.debug("send_one_file(): we are draining so we are going to delete the segment anyway");
         ctx_ptr->segment_replay_failed = false;
     }
 
@@ -1079,7 +1079,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
         // If there was an error thrown by read_log_file function itself, we will retry sending from
         // the last hint that was successfully sent (last_succeeded_rp).
         _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
-        manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
+        manager_logger.debug("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
         return false;
     }
 
@@ -1092,7 +1092,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
     _last_schema_ver_to_column_mapping.clear();
-    manager_logger.trace("send_one_file(): segment {} was sent in full and deleted", fname);
+    manager_logger.debug("send_one_file(): segment {} was sent in full and deleted", fname);
     return true;
 }
 
@@ -1118,7 +1118,7 @@ void manager::end_point_hints_manager::sender::pop_current_segment() {
 // Runs in the seastar::async context
 void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
-    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
+    manager_logger.debug("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
     int replayed_segments_count = 0;
 
@@ -1140,7 +1140,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
     // Exceptions are not expected here during the regular operation, so just log them.
     } catch (...) {
-        manager_logger.trace("send_hints(): got the exception: {}", std::current_exception());
+        manager_logger.debug("send_hints(): got the exception: {}", std::current_exception());
     }
 
     if (have_segments()) {
@@ -1151,7 +1151,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
         _next_send_retry_tp = _next_flush_tp;
     }
 
-    manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
+    manager_logger.debug("send_hints(): we handled {} segments", replayed_segments_count);
 }
 
 static future<> scan_for_hints_dirs(const sstring& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
