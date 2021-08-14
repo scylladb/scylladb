@@ -99,6 +99,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/functions/user_aggregate.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
@@ -181,6 +182,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
     schema_result after);
 
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
+static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
 
 static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
 
@@ -1053,9 +1055,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
     auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
     auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-#if 0 // not in 2.1.8
-    /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
-#endif
+    auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
 
     co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
@@ -1075,9 +1075,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
     auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, views());
     auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-#if 0 // not in 2.1.8
-       /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
-#endif
+    auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
 
     std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
     auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
@@ -1085,9 +1083,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
         std::move(old_column_families), std::move(new_column_families),
         std::move(old_views), std::move(new_views));
     co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
-#if 0
-    mergeAggregates(oldAggregates, newAggregates);
-#endif
+    co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates));
     co_await types_to_drop.drop();
 
     co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
@@ -1559,6 +1555,34 @@ static shared_ptr<cql3::functions::user_function> create_func(database& db, cons
             row.get_nonnull<bool>("called_on_null_input"), std::move(bitcode), std::move(cfg));
 }
 
+static shared_ptr<cql3::functions::user_aggregate> create_aggregate(database& db, const query::result_set_row& row) {
+    cql3::functions::function_name name{
+            row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
+    auto arg_types = read_arg_types(row, name.keyspace);
+    data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"));
+    sstring sfunc = row.get_nonnull<sstring>("state_func");
+    sstring ffunc = row.get_nonnull<sstring>("final_func");
+    sstring initcond_str = row.get_nonnull<sstring>("initcond");
+
+    std::vector<data_type> acc_types{state_type};
+    acc_types.insert(acc_types.end(), arg_types.begin(), arg_types.end());
+    auto state_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
+            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, sfunc}, acc_types));
+    auto final_func = dynamic_pointer_cast<cql3::functions::scalar_function>(
+            cql3::functions::functions::find(cql3::functions::function_name{name.keyspace, ffunc}, {state_type}));
+    if (!state_func) {
+        throw std::runtime_error(format("State function {} needed by aggregate {} not found", sfunc, name.name));
+    }
+    if (!final_func) {
+        throw std::runtime_error(format("Final function {} needed by aggregate {} not found", ffunc, name.name));
+    }
+
+    bytes_opt initcond = state_type->from_string(initcond_str);
+
+    return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(final_func));
+
+}
+
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after,
         std::function<shared_ptr<cql3::functions::function>(database& db, const query::result_set_row& row)> create) {
     auto diff = diff_rows(before, after);
@@ -1579,6 +1603,10 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
 
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
     co_await merge_functions(proxy, before, after, create_func);
+}
+
+static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
+    co_await merge_functions(proxy, before, after, create_aggregate);
 }
 
 template<typename... Args>
@@ -1866,6 +1894,45 @@ std::vector<mutation> make_drop_function_mutations(schema_ptr s, const cql3::fun
 
 std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp) {
     return make_drop_function_mutations(functions(), *func, timestamp);
+}
+
+/*
+ * UDA metadata serialization/deserialization
+ */
+
+static std::pair<mutation, clustering_key> get_mutation(schema_ptr s, const cql3::functions::user_aggregate& aggregate) {
+    auto name = aggregate.name();
+    auto pkey = partition_key::from_singular(*s, name.keyspace);
+
+    list_type_impl::native_type arg_types;
+    for (const auto& arg_type : aggregate.arg_types()) {
+        arg_types.emplace_back(arg_type->as_cql3_type().to_string());
+    }
+    auto arg_list_type = list_type_impl::get_instance(utf8_type, false);
+    data_value arg_types_val = make_list_value(arg_list_type, std::move(arg_types));
+    auto ckey = clustering_key::from_exploded(
+            *s, {utf8_type->decompose(name.name), arg_list_type->decompose(arg_types_val)});
+    mutation m{s, pkey};
+    return {std::move(m), std::move(ckey)};
+}
+
+std::vector<mutation> make_create_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
+    schema_ptr s = aggregates();
+    auto p = get_mutation(s, *aggregate);
+    mutation& m = p.first;
+    clustering_key& ckey = p.second;
+
+    m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc().name().name, timestamp);
+    data_type state_type = aggregate->sfunc().arg_types()[0];
+    m.set_clustered_cell(ckey, "initcond", state_type->to_string(*aggregate->initcond()), timestamp);
+    m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
+    m.set_clustered_cell(ckey, "state_func", aggregate->sfunc().name().name, timestamp);
+    m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
+    return {m};
+}
+
+std::vector<mutation> make_drop_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp) {
+    return make_drop_function_mutations(aggregates(), *aggregate, timestamp);
 }
 
 /*

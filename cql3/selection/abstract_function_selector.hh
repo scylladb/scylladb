@@ -42,6 +42,7 @@
 #include "selector.hh"
 #include "cql3/functions/function.hh"
 #include "cql3/functions/function_name.hh"
+#include "cql3/functions/user_aggregate.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
@@ -66,7 +67,8 @@ public:
 
     abstract_function_selector(shared_ptr<functions::function> fun, std::vector<shared_ptr<selector>> arg_selectors)
             : _fun(std::move(fun)), _arg_selectors(std::move(arg_selectors)),
-              _requires_thread(boost::algorithm::any_of(_arg_selectors, [] (auto& s) { return s->requires_thread(); })) {
+              _requires_thread(boost::algorithm::any_of(_arg_selectors, [] (auto& s) { return s->requires_thread(); })
+                    || _fun->requires_thread()) {
         _args.resize(_arg_selectors.size());
     }
 

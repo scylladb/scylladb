@@ -55,6 +55,7 @@
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/schema_tables.hh"
+#include "cql3/functions/user_aggregate.hh"
 
 namespace service {
 
@@ -742,14 +743,22 @@ future<> migration_manager::announce_function_drop(
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
-#if 0
-public static void announceNewAggregate(UDAggregate udf, boolean announceLocally)
-{
-    mlogger.info(String.format("Create aggregate function '%s'", udf.name()));
-    KSMetaData ksm = Schema.instance.getKSMetaData(udf.name().keyspace);
-    announce(LegacySchemaTables.makeCreateAggregateMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
+future<> migration_manager::announce_new_aggregate(shared_ptr<cql3::functions::user_aggregate> aggregate) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
+    auto mutations = db::schema_tables::make_create_aggregate_mutations(aggregate, api::new_timestamp());
+    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
+future<> migration_manager::announce_aggregate_drop(
+        shared_ptr<cql3::functions::user_aggregate> aggregate) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
+    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
+    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
+}
+
+#if 0
 public static void announceKeyspaceUpdate(KSMetaData ksm) throws ConfigurationException
 {
     announceKeyspaceUpdate(ksm, false);

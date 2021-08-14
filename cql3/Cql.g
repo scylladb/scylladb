@@ -45,6 +45,7 @@ options {
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/statements/create_function_statement.hh"
+#include "cql3/statements/create_aggregate_statement.hh"
 #include "cql3/statements/create_service_level_statement.hh"
 #include "cql3/statements/sl_prop_defs.hh"
 #include "cql3/statements/attach_service_level_statement.hh"
@@ -55,6 +56,7 @@ options {
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/drop_function_statement.hh"
+#include "cql3/statements/drop_aggregate_statement.hh"
 #include "cql3/statements/drop_service_level_statement.hh"
 #include "cql3/statements/detach_service_level_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
@@ -365,10 +367,8 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st27=dropTypeStatement           { $stmt = std::move(st27); }
     | st28=createFunctionStatement     { $stmt = std::move(st28); }
     | st29=dropFunctionStatement       { $stmt = std::move(st29); }
-#if 0
-    | st30=createAggregateStatement    { $stmt = st30; }
-    | st31=dropAggregateStatement      { $stmt = st31; }
-#endif
+    | st30=createAggregateStatement    { $stmt = std::move(st30); }
+    | st31=dropAggregateStatement      { $stmt = std::move(st31); }
     | st32=createViewStatement         { $stmt = std::move(st32); }
     | st33=alterViewStatement          { $stmt = std::move(st33); }
     | st34=dropViewStatement           { $stmt = std::move(st34); }
@@ -385,7 +385,6 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st45=detachServiceLevelStatement { $stmt = std::move(st45); }
     | st46=listServiceLevelStatement { $stmt = std::move(st46); }
     | st47=listServiceLevelAttachStatement { $stmt = std::move(st47); }
-
     ;
 
 /*
@@ -661,22 +660,42 @@ batchStatementObjective returns [std::unique_ptr<cql3::statements::raw::modifica
     | d=deleteStatement  { $statement = std::move(d); }
     ;
 
-#if 0
-createAggregateStatement returns [CreateAggregateStatement expr]
+dropAggregateStatement returns [std::unique_ptr<cql3::statements::drop_aggregate_statement> expr]
     @init {
-        boolean orReplace = false;
-        boolean ifNotExists = false;
-
-        List<CQL3Type.Raw> argsTypes = new ArrayList<>();
+        bool if_exists = false;
+        std::vector<shared_ptr<cql3_type::raw>> arg_types;
+        bool args_present = false;
     }
-    : K_CREATE (K_OR K_REPLACE { orReplace = true; })?
+    : K_DROP K_AGGREGATE
+      (K_IF K_EXISTS { if_exists = true; } )?
+      fn=functionName
+      (
+        '('
+          (
+            v=comparatorType { arg_types.push_back(v); }
+            ( ',' v=comparatorType { arg_types.push_back(v); } )*
+          )?
+        ')'
+        { args_present = true; }
+      )?
+      { $expr = std::make_unique<cql3::statements::drop_aggregate_statement>(std::move(fn), std::move(arg_types), args_present, if_exists); }
+    ;
+
+createAggregateStatement returns [std::unique_ptr<cql3::statements::create_aggregate_statement> expr]
+    @init {
+        bool or_replace = false;
+        bool if_not_exists = false;
+
+        std::vector<shared_ptr<cql3_type::raw>> arg_types;
+    }
+    : K_CREATE (K_OR K_REPLACE { or_replace = true; })?
       K_AGGREGATE
-      (K_IF K_NOT K_EXISTS { ifNotExists = true; })?
+      (K_IF K_NOT K_EXISTS { if_not_exists = true; })?
       fn=functionName
       '('
         (
-          v=comparatorType { argsTypes.add(v); }
-          ( ',' v=comparatorType { argsTypes.add(v); } )*
+          v=comparatorType { arg_types.push_back(v); }
+          ( ',' v=comparatorType { arg_types.push_back(v); } )*
         )?
       ')'
       K_SFUNC sfunc = allowedFunctionName
@@ -687,30 +706,8 @@ createAggregateStatement returns [CreateAggregateStatement expr]
       (
         K_INITCOND ival = term
       )?
-      { $expr = new CreateAggregateStatement(fn, argsTypes, sfunc, stype, ffunc, ival, orReplace, ifNotExists); }
+      { $expr = std::make_unique<cql3::statements::create_aggregate_statement>(std::move(fn), std::move(arg_types), std::move(sfunc), std::move(stype), std::move(ffunc), std::move(ival), or_replace, if_not_exists); }
     ;
-
-dropAggregateStatement returns [DropAggregateStatement expr]
-    @init {
-        boolean ifExists = false;
-        List<CQL3Type.Raw> argsTypes = new ArrayList<>();
-        boolean argsPresent = false;
-    }
-    : K_DROP K_AGGREGATE
-      (K_IF K_EXISTS { ifExists = true; } )?
-      fn=functionName
-      (
-        '('
-          (
-            v=comparatorType { argsTypes.add(v); }
-            ( ',' v=comparatorType { argsTypes.add(v); } )*
-          )?
-        ')'
-        { argsPresent = true; }
-      )?
-      { $expr = new DropAggregateStatement(fn, argsTypes, argsPresent, ifExists); }
-    ;
-#endif
 
 createFunctionStatement returns [std::unique_ptr<cql3::statements::create_function_statement> expr]
     @init {

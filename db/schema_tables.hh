@@ -42,6 +42,7 @@
 
 #include "mutation.hh"
 #include "cql3/functions/user_function.hh"
+#include "cql3/functions/user_aggregate.hh"
 #include "schema_fwd.hh"
 #include "schema_features.hh"
 #include "hashing.hh"
@@ -213,6 +214,10 @@ std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_sc
 std::vector<mutation> make_create_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
 
 std::vector<mutation> make_drop_function_mutations(shared_ptr<cql3::functions::user_function> func, api::timestamp_type timestamp);
+
+std::vector<mutation> make_create_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> func, api::timestamp_type timestamp);
+
+std::vector<mutation> make_drop_aggregate_mutations(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type timestamp);
 
 std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 
