@@ -116,7 +116,7 @@ private:
     Querier make_querier(const dht::partition_range& range) {
         return Querier(_mutation_source,
             _s.schema(),
-            _sem.make_tracking_only_permit(_s.schema().get(), "make-querier"),
+            _sem.make_tracking_only_permit(_s.schema().get(), "make-querier", db::no_timeout),
             range,
             _s.schema()->full_slice(),
             service::get_local_sstable_query_read_priority(),
@@ -789,8 +789,8 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
         .with_column("v", int32_type)
         .build();
 
-    auto sem1_h1 = sem1.register_inactive_read(make_empty_flat_reader(schema, sem1.make_tracking_only_permit(schema.get(), get_name())));
-    auto sem2_h1 = sem2.register_inactive_read(make_empty_flat_reader(schema, sem2.make_tracking_only_permit(schema.get(), get_name())));
+    auto sem1_h1 = sem1.register_inactive_read(make_empty_flat_reader(schema, sem1.make_tracking_only_permit(schema.get(), get_name(), db::no_timeout)));
+    auto sem2_h1 = sem2.register_inactive_read(make_empty_flat_reader(schema, sem2.make_tracking_only_permit(schema.get(), get_name(), db::no_timeout)));
 
     // Sanity check that lookup still works with empty handle.
     BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));

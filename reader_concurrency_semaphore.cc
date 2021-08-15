@@ -92,6 +92,7 @@ class reader_permit::impl
     bool _marked_as_used = false;
     uint64_t _blocked_branches = 0;
     bool _marked_as_blocked = false;
+    db::timeout_clock::time_point _timeout;
 
 private:
     void on_permit_used() {
@@ -129,20 +130,22 @@ private:
 public:
     struct value_tag {};
 
-    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name, reader_resources base_resources)
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name_view(op_name)
         , _base_resources(base_resources)
+        , _timeout(timeout)
     {
         _semaphore.on_permit_created(*this);
     }
-    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name, reader_resources base_resources)
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
         , _base_resources(base_resources)
+        , _timeout(timeout)
     {
         _semaphore.on_permit_created(*this);
     }
@@ -301,6 +304,10 @@ public:
         }
         return _semaphore.do_wait_admission(shared_from_this(), timeout);
     }
+
+    db::timeout_clock::time_point timeout() const noexcept {
+        return _timeout;
+    }
 };
 
 static_assert(std::is_nothrow_copy_constructible_v<reader_permit>);
@@ -311,14 +318,14 @@ reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
-        reader_resources base_resources)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name, base_resources))
+        reader_resources base_resources, db::timeout_clock::time_point timeout)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name, base_resources, timeout))
 {
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
-        reader_resources base_resources)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name), base_resources))
+        reader_resources base_resources, db::timeout_clock::time_point timeout)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name), base_resources, timeout))
 {
 }
 
@@ -383,6 +390,10 @@ void reader_permit::mark_blocked() noexcept {
 
 void reader_permit::mark_unblocked() noexcept {
     _impl->mark_unblocked();
+}
+
+db::timeout_clock::time_point reader_permit::timeout() const noexcept {
+    return _impl->timeout();
 }
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
@@ -881,7 +892,7 @@ void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, const char* const op_name, size_t memory,
         db::timeout_clock::time_point timeout) {
-    auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)});
+    auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout);
     return do_wait_admission(permit, timeout).then([permit] () mutable {
         return std::move(permit);
     });
@@ -889,23 +900,23 @@ future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* 
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, sstring&& op_name, size_t memory,
         db::timeout_clock::time_point timeout) {
-    auto permit = reader_permit(*this, schema, std::move(op_name), {1, static_cast<ssize_t>(memory)});
+    auto permit = reader_permit(*this, schema, std::move(op_name), {1, static_cast<ssize_t>(memory)}, timeout);
     return do_wait_admission(permit, timeout).then([permit] () mutable {
         return std::move(permit);
     });
 }
 
-reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, const char* const op_name) {
-    return reader_permit(*this, schema, std::string_view(op_name), {});
+reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, const char* const op_name, db::timeout_clock::time_point timeout) {
+    return reader_permit(*this, schema, std::string_view(op_name), {}, timeout);
 }
 
-reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, sstring&& op_name) {
-    return reader_permit(*this, schema, std::move(op_name), {});
+reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, sstring&& op_name, db::timeout_clock::time_point timeout) {
+    return reader_permit(*this, schema, std::move(op_name), {}, timeout);
 }
 
 future<> reader_concurrency_semaphore::with_permit(const schema* const schema, const char* const op_name, size_t memory,
         db::timeout_clock::time_point timeout, read_func func) {
-    return do_wait_admission(reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}), timeout, std::move(func));
+    return do_wait_admission(reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout), timeout, std::move(func));
 }
 
 future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, read_func func) {

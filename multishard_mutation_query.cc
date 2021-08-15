@@ -220,10 +220,10 @@ class read_context : public reader_lifecycle_policy {
 
 public:
     read_context(distributed<database>& db, schema_ptr s, const query::read_command& cmd, const dht::partition_range_vector& ranges,
-            tracing::trace_state_ptr trace_state)
+            tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
             : _db(db)
             , _schema(std::move(s))
-            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query"))
+            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query", timeout))
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))
@@ -670,7 +670,7 @@ future<typename ResultBuilder::result_type> do_query(
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
         ResultBuilder&& result_builder) {
-    auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state);
+    auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
 
     co_await ctx->lookup_readers();
 

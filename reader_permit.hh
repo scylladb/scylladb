@@ -112,9 +112,9 @@ private:
     reader_permit() = default;
     reader_permit(shared_ptr<impl>);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
-            reader_resources base_resources);
+            reader_resources base_resources, db::timeout_clock::time_point timeout);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
-            reader_resources base_resources);
+            reader_resources base_resources, db::timeout_clock::time_point timeout);
 
     void on_waiting();
     void on_admission();
@@ -161,6 +161,8 @@ public:
     reader_resources base_resources() const;
 
     sstring description() const;
+
+    db::timeout_clock::time_point timeout() const noexcept;
 };
 
 using reader_permit_opt = optimized_optional<reader_permit>;

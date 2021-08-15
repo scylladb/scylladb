@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "db/timeout_clock.hh"
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
@@ -74,7 +75,7 @@ BOOST_AUTO_TEST_CASE(bytes_view_hasher_sanity_check) {
 BOOST_AUTO_TEST_CASE(mutation_fragment_sanity_check) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__);
     simple_schema s;
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), "test");
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), "test", db::no_timeout);
     gc_clock::time_point ts(gc_clock::duration(1234567890000));
 
     auto check_hash = [&] (const mutation_fragment& mf, uint64_t expected) {

@@ -344,8 +344,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name);
-    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name);
+    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name, db::timeout_clock::time_point timeout);
+    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name, db::timeout_clock::time_point timeout);
 
     /// Run the function through the semaphore's execution stage with an admitted permit
     ///

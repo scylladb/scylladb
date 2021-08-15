@@ -808,7 +808,7 @@ public:
 
         // Initialize at the end of the constructor body, so we can delay making
         // the semaphore used until we know that no more exceptions can be thrown.
-        _range_tombstones.emplace(range_tombstone_stream(_schema, _semaphore.make_tracking_only_permit(&s, "mx-writer")));
+        _range_tombstones.emplace(range_tombstone_stream(_schema, _semaphore.make_tracking_only_permit(&s, "mx-writer", db::no_timeout)));
     }
 
     ~writer();
