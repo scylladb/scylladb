@@ -209,9 +209,9 @@ private:
 
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
-    future<> enqueue_waiter(reader_permit permit, db::timeout_clock::time_point timeout, read_func func);
+    future<> enqueue_waiter(reader_permit permit, read_func func);
     void evict_readers_in_background();
-    future<> do_wait_admission(reader_permit permit, db::timeout_clock::time_point timeout, read_func func = {});
+    future<> do_wait_admission(reader_permit permit, read_func func = {});
     void maybe_admit_waiters() noexcept;
 
     void on_permit_created(reader_permit::impl&);

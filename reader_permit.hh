@@ -146,7 +146,7 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
-    future<> maybe_wait_readmission(db::timeout_clock::time_point timeout);
+    future<> maybe_wait_readmission();
 
     void consume(reader_resources res);
 
