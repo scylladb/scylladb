@@ -274,7 +274,7 @@ future<> fragment_and_freeze(flat_mutation_reader mr, frozen_mutation_consumer_f
     fragmenting_mutation_freezer freezer(*mr.schema(), c, fragment_size);
     return do_with(std::move(freezer), [&mr] (auto& freezer) {
         return repeat([&] {
-            return mr(db::no_timeout).then([&] (auto mfopt) {
+            return mr().then([&] (auto mfopt) {
                 if (!mfopt) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }

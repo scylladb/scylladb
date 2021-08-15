@@ -633,7 +633,6 @@ future<page_consume_result<ResultBuilder>> read_page(
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout,
         ResultBuilder&& result_builder) {
     auto ms = mutation_source([&] (schema_ptr s,
             reader_permit permit,
@@ -654,7 +653,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     std::exception_ptr ex;
     try {
         auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
-                cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
+                cmd.partition_limit, cmd.timestamp, *cmd.max_result_size);
         auto buffer = reader.detach_buffer();
         co_await reader.close();
         // page_consume_result cannot fail so there's no risk of double-closing reader.
@@ -682,7 +681,7 @@ future<typename ResultBuilder::result_type> do_query(
     std::exception_ptr ex;
 
     try {
-        auto [last_ckey, result, unconsumed_buffer, compaction_state] = co_await read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, timeout,
+        auto [last_ckey, result, unconsumed_buffer, compaction_state] = co_await read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state,
                 std::move(result_builder));
 
         if (compaction_state->are_limits_reached() || result.is_short_read()) {

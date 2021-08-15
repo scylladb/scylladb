@@ -29,11 +29,11 @@
 // All calls will first wait for a future to resolve, then forward to a given underlying reader.
 class chained_delegating_reader : public flat_mutation_reader::impl {
     std::unique_ptr<flat_mutation_reader> _underlying;
-    std::function<future<flat_mutation_reader>(db::timeout_clock::time_point)> _populate_reader;
+    std::function<future<flat_mutation_reader>()> _populate_reader;
     std::function<void()> _on_destroyed;
     
 public:
-    chained_delegating_reader(schema_ptr s, std::function<future<flat_mutation_reader>(db::timeout_clock::time_point)>&& populate, reader_permit permit, std::function<void()> on_destroyed = []{})
+    chained_delegating_reader(schema_ptr s, std::function<future<flat_mutation_reader>()>&& populate, reader_permit permit, std::function<void()> on_destroyed = []{})
         : impl(s, std::move(permit))
         , _populate_reader(std::move(populate))
         , _on_destroyed(std::move(on_destroyed))
@@ -45,11 +45,11 @@ public:
         _on_destroyed();
     }
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+    virtual future<> fill_buffer() override {
         if (!_underlying) {
-            return _populate_reader(timeout).then([this, timeout] (flat_mutation_reader&& rd) {
+            return _populate_reader().then([this] (flat_mutation_reader&& rd) {
                 _underlying = std::make_unique<flat_mutation_reader>(std::move(rd));
-                return fill_buffer(timeout);
+                return fill_buffer();
             });
         }
 
@@ -57,23 +57,23 @@ public:
             return make_ready_future<>();
         }
 
-        return _underlying->fill_buffer(timeout).then([this] {
+        return _underlying->fill_buffer().then([this] {
             _end_of_stream = _underlying->is_end_of_stream();
             _underlying->move_buffer_content_to(*this);
         });
     }
 
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(position_range pr) override {
         if (!_underlying) {
-            return _populate_reader(timeout).then([this, timeout, pr = std::move(pr)] (flat_mutation_reader&& rd) mutable {
+            return _populate_reader().then([this, pr = std::move(pr)] (flat_mutation_reader&& rd) mutable {
                 _underlying = std::make_unique<flat_mutation_reader>(std::move(rd));
-                return fast_forward_to(pr, timeout);
+                return fast_forward_to(pr);
             });
         }
 
         _end_of_stream = false;
         forward_buffer_to(pr.start());
-        return _underlying->fast_forward_to(std::move(pr), timeout);
+        return _underlying->fast_forward_to(std::move(pr));
     }
 
     virtual future<> next_partition() override {
@@ -91,17 +91,17 @@ public:
         return f;
     }
 
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (!_underlying) {
-            return _populate_reader(timeout).then([this, timeout, &pr] (flat_mutation_reader&& rd) mutable {
+            return _populate_reader().then([this, &pr] (flat_mutation_reader&& rd) mutable {
                 _underlying = std::make_unique<flat_mutation_reader>(std::move(rd));
-                return fast_forward_to(pr, timeout);
+                return fast_forward_to(pr);
             });
         }
 
         _end_of_stream = false;
         clear_buffer();
-        return _underlying->fast_forward_to(pr, timeout);
+        return _underlying->fast_forward_to(pr);
     }
 
     virtual future<> close() noexcept override {

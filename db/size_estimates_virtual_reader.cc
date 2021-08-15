@@ -35,7 +35,6 @@
 #include "range.hh"
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
-#include "db/timeout_clock.hh"
 #include "database.hh"
 
 #include "db/size_estimates_virtual_reader.hh"
@@ -270,15 +269,15 @@ future<> size_estimates_mutation_reader::close_partition_reader() noexcept {
     return _partition_reader ? _partition_reader->close() : make_ready_future<>();
 }
 
-future<> size_estimates_mutation_reader::fill_buffer(db::timeout_clock::time_point timeout) {
-    return do_until([this, timeout] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
+future<> size_estimates_mutation_reader::fill_buffer() {
+    return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
         if (!_partition_reader) {
             return get_next_partition();
         }
         return _partition_reader->consume_pausable([this] (mutation_fragment mf) {
             push_mutation_fragment(std::move(mf));
             return stop_iteration(is_buffer_full());
-        }, timeout).then([this] {
+        }).then([this] {
             if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
                 return _partition_reader->close();
             }
@@ -295,7 +294,7 @@ future<> size_estimates_mutation_reader::next_partition() {
     return make_ready_future<>();
 }
 
-future<> size_estimates_mutation_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> size_estimates_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
     clear_buffer();
     _prange = &pr;
     _keyspaces = std::nullopt;
@@ -303,11 +302,11 @@ future<> size_estimates_mutation_reader::fast_forward_to(const dht::partition_ra
     return close_partition_reader();
 }
 
-future<> size_estimates_mutation_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+future<> size_estimates_mutation_reader::fast_forward_to(position_range pr) {
     forward_buffer_to(pr.start());
     _end_of_stream = false;
     if (_partition_reader) {
-        return _partition_reader->fast_forward_to(std::move(pr), timeout);
+        return _partition_reader->fast_forward_to(std::move(pr));
     }
     return make_ready_future<>();
 }

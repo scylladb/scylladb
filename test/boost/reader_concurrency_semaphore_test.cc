@@ -188,14 +188,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
         public:
             skeleton_reader(schema_ptr s, reader_permit permit)
                 : impl(std::move(s), std::move(permit)) { }
-            virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            virtual future<> fill_buffer() override {
                 reader_permit::blocked_guard _{_permit};
                 _resources.emplace(_permit.consume_resources(reader_resources(0, tests::random::get_int(1024, 2048))));
                 co_await sleep(std::chrono::milliseconds(1));
             }
             virtual future<> next_partition() override { return make_ready_future<>(); }
-            virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override { return make_ready_future<>(); }
-            virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override { return make_ready_future<>(); }
+            virtual future<> fast_forward_to(const dht::partition_range& pr) override { return make_ready_future<>(); }
+            virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
             virtual future<> close() noexcept override {
                 _resources.reset();
                 return make_ready_future<>();
@@ -226,7 +226,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
             co_await tick(std::get<flat_mutation_reader>(_reader));
         }
         future<> tick(flat_mutation_reader& reader) {
-            co_await reader.fill_buffer(db::no_timeout);
+            co_await reader.fill_buffer();
             if (_evictable) {
                 _reader = _permit->semaphore().register_inactive_read(std::move(reader));
             }
@@ -318,7 +318,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
         try {
             co_await r->obtain_permit();
         } catch (semaphore_timed_out&) {
-            semaphore.broken(std::make_exception_ptr(std::runtime_error("test failed due to read timeout")));
+            semaphore.broken(std::make_exception_ptr(std::runtime_error("test failed due to read ")));
             co_return;
         }
 
@@ -327,7 +327,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
                 watchdog_touched = true;
                 co_await r->tick();
             } catch (semaphore_timed_out&) {
-                semaphore.broken(std::make_exception_ptr(std::runtime_error("test failed due to read timeout")));
+                semaphore.broken(std::make_exception_ptr(std::runtime_error("test failed due to read ")));
                 break;
             }
         }

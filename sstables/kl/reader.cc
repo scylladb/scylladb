@@ -806,7 +806,7 @@ public:
     // The new range must not overlap with the previous range and
     // must be after it.
     //
-    std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point timeout) {
+    std::optional<position_in_partition_view> fast_forward_to(position_range r) {
         sstlog.trace("mp_row_consumer_k_l {}: fast_forward_to({})", fmt::ptr(this), r);
         _out_of_range = _is_mutation_end;
         _fwd_end = std::move(r).end();
@@ -1340,7 +1340,7 @@ public:
             _partition_finished = true;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         return ensure_initialized().then([this, &pr] {
             if (!is_initialized()) {
                 _end_of_stream = true;
@@ -1368,17 +1368,17 @@ public:
             }
         });
     }
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+    virtual future<> fill_buffer() override {
         if (_end_of_stream) {
             return make_ready_future<>();
         }
         if (!is_initialized()) {
-            return initialize().then([this, timeout] {
+            return initialize().then([this] {
                 if (!is_initialized()) {
                     _end_of_stream = true;
                     return make_ready_future<>();
                 } else {
-                    return fill_buffer(timeout);
+                    return fill_buffer();
                 }
             });
         }
@@ -1424,11 +1424,11 @@ public:
         return make_ready_future<>();
         // If _ds is not created then next_partition() has no effect because there was no partition_start emitted yet.
     }
-    virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(position_range cr) override {
         forward_buffer_to(cr.start());
         if (!_partition_finished) {
             _end_of_stream = false;
-            return advance_context(_consumer.fast_forward_to(std::move(cr), timeout));
+            return advance_context(_consumer.fast_forward_to(std::move(cr)));
         } else {
             _end_of_stream = true;
             return make_ready_future<>();

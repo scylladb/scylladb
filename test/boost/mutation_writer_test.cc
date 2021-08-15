@@ -83,7 +83,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                         }
                         return with_closeable(std::move(reader), [&sharder, &shards_after, error] (flat_mutation_reader& reader) {
                           return repeat([&sharder, &shards_after, &reader, error] () mutable {
-                            return reader(db::no_timeout).then([&sharder, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
+                            return reader().then([&sharder, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
@@ -139,7 +139,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                 if (mf_produced++ > 800) {
                     return make_exception_future<mutation_fragment_opt>(std::runtime_error("the producer failed"));
                 } else {
-                    return source_reader(db::no_timeout);
+                    return source_reader();
                 }
             };
             auto& sharder = s->get_sharder();
@@ -154,7 +154,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                         }
                         return with_closeable(std::move(reader), [&sharder, error] (flat_mutation_reader& reader) {
                           return repeat([&sharder, &reader, error] () mutable {
-                            return reader(db::no_timeout).then([&sharder,  error] (mutation_fragment_opt mf_opt) mutable {
+                            return reader().then([&sharder,  error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
@@ -354,7 +354,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
-            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets), db::no_timeout);
+            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets));
         });
     };
 
@@ -375,7 +375,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     }
 
     std::vector<mutation> combined_mutations;
-    while (auto m = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0()) {
+    while (auto m = read_mutation_from_flat_mutation_reader(reader).get0()) {
         m->partition().compact_for_compaction(*random_schema.schema(), always_gc, now);
         combined_mutations.emplace_back(std::move(*m));
     }
@@ -424,7 +424,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
     testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
-            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets, throw_after), db::no_timeout);
+            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets, throw_after));
         });
     };
 

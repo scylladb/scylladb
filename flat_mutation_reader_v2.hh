@@ -35,7 +35,6 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/file.hh>
-#include "db/timeout_clock.hh"
 #include "reader_permit.hh"
 
 #include <deque>
@@ -204,7 +203,7 @@ public:
         void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
         template<typename Source>
-        future<bool> fill_buffer_from(Source&, db::timeout_clock::time_point);
+        future<bool> fill_buffer_from(Source&);
         // When succeeds, makes sure that the next push_mutation_fragment() will not fail.
         void reserve_one() {
             if (_buffer.capacity() == _buffer.size()) {
@@ -217,7 +216,7 @@ public:
     public:
         impl(schema_ptr s, reader_permit permit) : _buffer(permit), _schema(std::move(s)), _permit(std::move(permit)) { }
         virtual ~impl() {}
-        virtual future<> fill_buffer(db::timeout_clock::time_point) = 0;
+        virtual future<> fill_buffer() = 0;
         virtual future<> next_partition() = 0;
 
         bool is_end_of_stream() const { return _end_of_stream; }
@@ -238,12 +237,12 @@ public:
             _buffer_size += memory_usage;
         }
 
-        future<mutation_fragment_v2_opt> operator()(db::timeout_clock::time_point timeout) {
+        future<mutation_fragment_v2_opt> operator()() {
             if (is_buffer_empty()) {
                 if (is_end_of_stream()) {
                     return make_ready_future<mutation_fragment_v2_opt>();
                 }
-                return fill_buffer(timeout).then([this, timeout] { return operator()(timeout); });
+                return fill_buffer().then([this] { return operator()(); });
             }
             return make_ready_future<mutation_fragment_v2_opt>(pop_mutation_fragment());
         }
@@ -252,13 +251,13 @@ public:
         requires FlatMutationReaderConsumerV2<Consumer>
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
         // Next call will start from the next mutation_fragment_v2 in the stream.
-        future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
-            return repeat([this, consumer = std::move(consumer), timeout] () mutable {
+        future<> consume_pausable(Consumer consumer) {
+            return repeat([this, consumer = std::move(consumer)] () mutable {
                 if (is_buffer_empty()) {
                     if (is_end_of_stream()) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
-                    return fill_buffer(timeout).then([] {
+                    return fill_buffer().then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
                 }
@@ -279,7 +278,7 @@ public:
         // a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
         // entirely and never reach the consumer.
-        void consume_pausable_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
+        void consume_pausable_in_thread(Consumer consumer, Filter filter) {
             while (true) {
                 if (need_preempt()) {
                     seastar::thread::yield();
@@ -288,7 +287,7 @@ public:
                     if (is_end_of_stream()) {
                         return;
                     }
-                    fill_buffer(timeout).get();
+                    fill_buffer().get();
                     continue;
                 }
                 auto mf = pop_mutation_fragment();
@@ -371,9 +370,9 @@ public:
         //
         //
         // This method returns whatever is returned from Consumer::consume_end_of_stream().S
-        auto consume(Consumer consumer, db::timeout_clock::time_point timeout) {
-            return do_with(consumer_adapter<Consumer>(*this, std::move(consumer)), [this, timeout] (consumer_adapter<Consumer>& adapter) {
-                return consume_pausable(std::ref(adapter), timeout).then([this, &adapter] {
+        auto consume(Consumer consumer) {
+            return do_with(consumer_adapter<Consumer>(*this, std::move(consumer)), [this] (consumer_adapter<Consumer>& adapter) {
+                return consume_pausable(std::ref(adapter)).then([this, &adapter] {
                     return adapter._consumer.consume_end_of_stream();
                 });
             });
@@ -384,9 +383,9 @@ public:
         // A variant of consumee() that expects to be run in a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
         // entirely and never reach the consumer.
-        auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
+        auto consume_in_thread(Consumer consumer, Filter filter) {
             auto adapter = consumer_adapter<Consumer>(*this, std::move(consumer));
-            consume_pausable_in_thread(std::ref(adapter), std::move(filter), timeout);
+            consume_pausable_in_thread(std::ref(adapter), std::move(filter));
             filter.on_end_of_stream();
             return adapter._consumer.consume_end_of_stream();
         };
@@ -394,8 +393,8 @@ public:
         /*
          * fast_forward_to is forbidden on flat_mutation_reader_v2 created for a single partition.
          */
-        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
-        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
+        virtual future<> fast_forward_to(const dht::partition_range&) = 0;
+        virtual future<> fast_forward_to(position_range) = 0;
 
         // close should cancel any outstanding background operations,
         // if possible, and wait on them to complete.
@@ -465,20 +464,20 @@ public:
 
     ~flat_mutation_reader_v2();
 
-    future<mutation_fragment_v2_opt> operator()(db::timeout_clock::time_point timeout) {
-        return _impl->operator()(timeout);
+    future<mutation_fragment_v2_opt> operator()() {
+        return _impl->operator()();
     }
 
     template <typename Consumer>
     requires FlatMutationReaderConsumerV2<Consumer>
-    auto consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
-        return _impl->consume_pausable(std::move(consumer), timeout);
+    auto consume_pausable(Consumer consumer) {
+        return _impl->consume_pausable(std::move(consumer));
     }
 
     template <typename Consumer>
     requires FlattenedConsumerV2<Consumer>
-    auto consume(Consumer consumer, db::timeout_clock::time_point timeout) {
-        return _impl->consume(std::move(consumer), timeout);
+    auto consume(Consumer consumer) {
+        return _impl->consume(std::move(consumer));
     }
 
     class filter {
@@ -528,14 +527,14 @@ public:
 
     template<typename Consumer, typename Filter>
     requires FlattenedConsumerV2<Consumer> && FlattenedConsumerFilterV2<Filter>
-    auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
-        return _impl->consume_in_thread(std::move(consumer), std::move(filter), timeout);
+    auto consume_in_thread(Consumer consumer, Filter filter) {
+        return _impl->consume_in_thread(std::move(consumer), std::move(filter));
     }
 
     template<typename Consumer>
     requires FlattenedConsumerV2<Consumer>
-    auto consume_in_thread(Consumer consumer, db::timeout_clock::time_point timeout) {
-        return consume_in_thread(std::move(consumer), no_filter{}, timeout);
+    auto consume_in_thread(Consumer consumer) {
+        return consume_in_thread(std::move(consumer), no_filter{});
     }
 
     // Skips to the next partition.
@@ -556,7 +555,7 @@ public:
     // `operator()()` calls.
     future<> next_partition() { return _impl->next_partition(); }
 
-    future<> fill_buffer(db::timeout_clock::time_point timeout) { return _impl->fill_buffer(timeout); }
+    future<> fill_buffer() { return _impl->fill_buffer(); }
 
     // Changes the range of partitions to pr. The range can only be moved
     // forwards. pr.begin() needs to be larger than pr.end() of the previousl
@@ -564,8 +563,8 @@ public:
     // previous fast forward target).
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
     // is called again.
-    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
-        return _impl->fast_forward_to(pr, timeout);
+    future<> fast_forward_to(const dht::partition_range& pr) {
+        return _impl->fast_forward_to(pr);
     }
     // Skips to a later range of rows.
     // The new range must not overlap with the current range.
@@ -593,8 +592,8 @@ public:
     // and it affects the set of fragments returned from that partition.
     // In particular one must first enter a partition by fetching a `partition_start`
     // fragment before calling `fast_forward_to`.
-    future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) {
-        return _impl->fast_forward_to(std::move(cr), timeout);
+    future<> fast_forward_to(position_range cr) {
+        return _impl->fast_forward_to(std::move(cr));
     }
     // Closes the reader.
     //
@@ -637,15 +636,15 @@ public:
     // Resolves with a pointer to the next fragment in the stream without consuming it from the stream,
     // or nullptr if there are no more fragments.
     // The returned pointer is invalidated by any other non-const call to this object.
-    future<mutation_fragment_v2*> peek(db::timeout_clock::time_point timeout) {
+    future<mutation_fragment_v2*> peek() {
         if (!is_buffer_empty()) {
             return make_ready_future<mutation_fragment_v2*>(&_impl->_buffer.front());
         }
         if (is_end_of_stream()) {
             return make_ready_future<mutation_fragment_v2*>(nullptr);
         }
-        return fill_buffer(timeout).then([this, timeout] {
-            return peek(timeout);
+        return fill_buffer().then([this] {
+            return peek();
         });
     }
     // A peek at the next fragment in the buffer.
@@ -709,9 +708,9 @@ future<> consume_mutation_fragments_until(
         flat_mutation_reader_v2& r,
         StopCondition&& stop,
         ConsumeMutationFragment&& consume_mf,
-        ConsumeEndOfStream&& consume_eos,
-        db::timeout_clock::time_point timeout) {
-    return do_until([stop] { return stop(); }, [&r, stop, consume_mf, consume_eos, timeout] {
+        ConsumeEndOfStream&& consume_eos)
+{
+    return do_until([stop] { return stop(); }, [&r, stop, consume_mf, consume_eos] {
         while (!r.is_buffer_empty()) {
             consume_mf(r.pop_mutation_fragment());
             if (stop() || need_preempt()) {
@@ -721,7 +720,7 @@ future<> consume_mutation_fragments_until(
         if (r.is_end_of_stream()) {
             return consume_eos();
         }
-        return r.fill_buffer(timeout);
+        return r.fill_buffer();
     });
 }
 
@@ -745,11 +744,11 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
                 , _reader(std::move(r))
                 , _t(std::move(t))
         {}
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        virtual future<> fill_buffer() override {
             if (_end_of_stream) {
                 return make_ready_future<>();
             }
-            return _reader.consume_pausable(consumer{this}, timeout).then([this] {
+            return _reader.consume_pausable(consumer{this}).then([this] {
                 if (_reader.is_end_of_stream()) {
                     _end_of_stream = true;
                 }
@@ -762,15 +761,15 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
             }
             return make_ready_future<>();
         }
-        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             clear_buffer();
             _end_of_stream = false;
-            return _reader.fast_forward_to(pr, timeout);
+            return _reader.fast_forward_to(pr);
         }
-        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(position_range pr) override {
             forward_buffer_to(pr.start());
             _end_of_stream = false;
-            return _reader.fast_forward_to(std::move(pr), timeout);
+            return _reader.fast_forward_to(std::move(pr));
         }
         virtual future<> close() noexcept override {
             return _reader.close();
@@ -786,4 +785,4 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
 flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
-future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&, db::timeout_clock::time_point timeout);
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&);

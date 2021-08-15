@@ -766,7 +766,7 @@ public:
         }
         return readers;
     }
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = pr;
         return create_new_readers(dht::ring_position_view::for_range_start(_pr));
     }
@@ -994,11 +994,11 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
-            }, db::no_timeout).get();
+            }).get();
 
             for (auto&& range : ranges) {
                 auto prange = position_range(range);
-                rd.fast_forward_to(prange, db::no_timeout).get();
+                rd.fast_forward_to(prange).get();
                 rd.consume_pausable([&](mutation_fragment&& mf) {
                     if (!mf.relevant_for_range(*s, prange.start())) {
                         BOOST_FAIL(format("Received fragment which is not relevant for range: {}, range: {}", mutation_fragment::printer(*s, mf), prange));
@@ -1009,14 +1009,14 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                     }
                     result.partition().apply(*s, std::move(mf));
                     return stop_iteration::no;
-                }, db::no_timeout).get();
+                }).get();
             }
 
             assert_that(result).is_equal_to(expected, ranges);
         };
 
         check_next_partition(combined[0]);
-        rd.fast_forward_to(dht::partition_range::make_singular(keys[2]), db::no_timeout).get();
+        rd.fast_forward_to(dht::partition_range::make_singular(keys[2])).get();
         check_next_partition(combined[2]);
     });
 }
@@ -1062,7 +1062,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
-            }, db::no_timeout).get();
+            }).get();
 
             assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
         }
@@ -1086,9 +1086,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 BOOST_REQUIRE(!mf.position().has_clustering_key());
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
-            }, db::no_timeout).get();
+            }).get();
 
-            rd.fast_forward_to(prange, db::no_timeout).get();
+            rd.fast_forward_to(prange).get();
 
             position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
             auto consume_clustered = [&] (mutation_fragment&& mf) {
@@ -1101,9 +1101,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 return stop_iteration::no;
             };
 
-            rd.consume_pausable(consume_clustered, db::no_timeout).get();
-            rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows()), db::no_timeout).get();
-            rd.consume_pausable(consume_clustered, db::no_timeout).get();
+            rd.consume_pausable(consume_clustered).get();
+            rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows())).get();
+            rd.consume_pausable(consume_clustered).get();
 
             assert_that(result).is_equal_to(m1 + m2);
         }
@@ -1132,7 +1132,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
                         mf_m.partition().apply(*s, mf);
                         memtables[source_index++ % memtables.size()]->apply(mf_m);
                         return stop_iteration::no;
-                    }, db::no_timeout).get();
+                    }).get();
                 }
 
                 std::vector<mutation_source> sources;
@@ -1652,7 +1652,7 @@ public:
         _ctrl.destroyed = true;
     }
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+    virtual future<> fill_buffer() override {
         if (is_end_of_stream() || !is_buffer_empty()) {
             return make_ready_future<>();
         }
@@ -1680,13 +1680,13 @@ public:
         abort();
     }
     virtual future<> next_partition() override { return make_ready_future<>(); }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         ++_ctrl.fast_forward_to;
         clear_buffer();
         _end_of_stream = true;
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+    virtual future<> fast_forward_to(position_range) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual future<> close() noexcept override {
@@ -1743,7 +1743,7 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
                     make_reader_permit(env),
                     std::move(remote_reader));
 
-            reader.fill_buffer(db::no_timeout).get();
+            reader.fill_buffer().get();
 
             BOOST_REQUIRE(!reader.is_buffer_empty());
 
@@ -1997,12 +1997,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         auto&& remote_controls = reader_sharder_remote_controls__.remote_controls;
 
         // This will read shard 0's buffer only
-        reader.fill_buffer(db::no_timeout).get();
+        reader.fill_buffer().get();
         BOOST_REQUIRE(reader.is_buffer_full());
         reader.detach_buffer();
 
         // This will move to shard 1 and trigger read-ahead on shard 2
-        reader.fill_buffer(db::no_timeout).get();
+        reader.fill_buffer().get();
         BOOST_REQUIRE(reader.is_buffer_full());
 
         // Check that shard with read-ahead is indeed blocked.
@@ -2055,11 +2055,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
         auto&& remote_controls = reader_sharder_remote_controls_pr.remote_controls;
         auto&& pr = reader_sharder_remote_controls_pr.pr;
 
-        reader.fill_buffer(db::no_timeout).get();
+        reader.fill_buffer().get();
         BOOST_REQUIRE(reader.is_buffer_full());
         reader.detach_buffer();
 
-        reader.fill_buffer(db::no_timeout).get();
+        reader.fill_buffer().get();
         BOOST_REQUIRE(reader.is_buffer_full());
         reader.detach_buffer();
 
@@ -2074,7 +2074,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
         ++end_token._data;
 
         auto next_pr = dht::partition_range::make_starting_with(dht::ring_position::starting_at(end_token));
-        auto fut = reader.fast_forward_to(next_pr, db::no_timeout);
+        auto fut = reader.fast_forward_to(next_pr);
 
         smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
                 [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
@@ -2095,7 +2095,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
 
         BOOST_REQUIRE(all_shard_fast_forwarded);
 
-        reader.fill_buffer(db::no_timeout).get();
+        reader.fill_buffer().get();
 
         BOOST_REQUIRE(reader.is_buffer_empty());
         BOOST_REQUIRE(reader.is_end_of_stream());
@@ -2249,7 +2249,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
         auto close_rd = deferred_close(rd);
         rd.set_max_buffer_size(max_buffer_size);
 
-        rd.fill_buffer(db::no_timeout).get();
+        rd.fill_buffer().get();
 
         auto mf = rd.pop_mutation_fragment();
         BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::partition_start);
@@ -2264,7 +2264,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
             BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
         }
 
-        rd.fill_buffer(db::no_timeout).get();
+        rd.fill_buffer().get();
 
         while (!rd.is_buffer_empty()) {
             mf = rd.pop_mutation_fragment();
@@ -2272,7 +2272,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
             BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
         }
 
-        rd.fill_buffer(db::no_timeout).get();
+        rd.fill_buffer().get();
 
         BOOST_REQUIRE(!rd.is_buffer_empty());
 
@@ -2305,7 +2305,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
         auto fragments = make_fragments_with_non_monotonic_positions(s, mut_permit, s.make_pkey(pk), max_buffer_size, tombstone_deletion_time);
         auto rd = make_flat_mutation_reader_from_fragments(s.schema(), mut_permit, std::move(fragments));
         auto close_rd = deferred_close(rd);
-        auto mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+        auto mut_opt = read_mutation_from_flat_mutation_reader(rd).get0();
         BOOST_REQUIRE(mut_opt);
 
         assert_that(make_multishard_combining_reader(
@@ -2383,12 +2383,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto close_reference_reader = deferred_close(reference_reader);
 
         std::vector<mutation> reference_muts;
-        while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader, db::no_timeout).get0()) {
+        while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader).get0()) {
             reference_muts.push_back(std::move(*mut_opt));
         }
 
         std::vector<mutation> tested_muts;
-        while (auto mut_opt = read_mutation_from_flat_mutation_reader(tested_reader, db::no_timeout).get0()) {
+        while (auto mut_opt = read_mutation_from_flat_mutation_reader(tested_reader).get0()) {
             tested_muts.push_back(std::move(*mut_opt));
         }
 
@@ -2415,7 +2415,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto read_all = [] (flat_mutation_reader& reader, std::vector<mutation>& muts) {
             return async([&reader, &muts] {
                 auto close_reader = deferred_close(reader);
-                while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0()) {
+                while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader).get0()) {
                     muts.emplace_back(std::move(*mut_opt));
                 }
             });
@@ -2425,7 +2425,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             return async([&] {
                 auto reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), muts);
                 auto close_reader = deferred_close(reader);
-                while (auto mf_opt = reader(db::no_timeout).get0()) {
+                while (auto mf_opt = reader().get0()) {
                     handle.push(std::move(*mf_opt)).get();
                 }
                 handle.push_end_of_stream();
@@ -2452,12 +2452,12 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
-        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+        auto fill_buffer_fut = reader.fill_buffer();
 
         auto expected_reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), expected_muts);
         auto close_expected_reader = deferred_close(expected_reader);
 
-        handle.push(std::move(*expected_reader(db::no_timeout).get0())).get();
+        handle.push(std::move(*expected_reader().get0())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2481,14 +2481,14 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         auto push_fut = make_ready_future<>();
         while (push_fut.available()) {
-            push_fut = handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+            push_fut = handle.push(std::move(*expected_reader().get0()));
         }
 
         BOOST_REQUIRE(!push_fut.available());
 
         handle.abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("error")));
 
-        BOOST_REQUIRE_THROW(reader.fill_buffer(db::no_timeout).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(reader.fill_buffer().get(), std::runtime_error);
         BOOST_REQUIRE_THROW(push_fut.get(), std::runtime_error);
         BOOST_REQUIRE(!reader.is_end_of_stream());
     }
@@ -2498,7 +2498,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
-        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+        auto fill_buffer_fut = reader.fill_buffer();
 
         {
             auto throwaway_reader = std::move(reader);
@@ -2516,12 +2516,12 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
-        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+        auto fill_buffer_fut = reader.fill_buffer();
 
         auto expected_reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), expected_muts);
         auto close_expected_reader = deferred_close(expected_reader);
 
-        handle.push(std::move(*expected_reader(db::no_timeout).get0())).get();
+        handle.push(std::move(*expected_reader().get0())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2544,12 +2544,12 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
-        auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
+        auto fill_buffer_fut = reader.fill_buffer();
 
         auto expected_reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), expected_muts);
         auto close_expected_reader = deferred_close(expected_reader);
 
-        handle.push(std::move(*expected_reader(db::no_timeout).get0())).get();
+        handle.push(std::move(*expected_reader().get0())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2741,8 +2741,8 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
             std::tie(_reader, _handle) = make_manually_paused_evictable_reader(mt.as_data_source(), mt.schema(), _permit, pr, ps, pc,
                     std::move(trace_state), fwd_mr);
         }
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return _reader.fill_buffer(timeout).then([this] {
+        virtual future<> fill_buffer() override {
+            return _reader.fill_buffer().then([this] {
                 _end_of_stream = _reader.is_end_of_stream();
                 _reader.move_buffer_content_to(*this);
             }).then([this] {
@@ -2757,14 +2757,14 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
             _end_of_stream = false;
             return _reader.next_partition();
         }
-        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             clear_buffer();
             _end_of_stream = false;
-            return _reader.fast_forward_to(pr, timeout).then([this] {
+            return _reader.fast_forward_to(pr).then([this] {
                 maybe_pause();
             });
         }
-        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(position_range pr) override {
             throw_with_backtrace<std::bad_function_call>();
         }
         virtual future<> close() noexcept override {
@@ -2873,7 +2873,7 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
 
     rd.set_max_buffer_size(max_buffer_size);
 
-    rd.fill_buffer(db::no_timeout).get0();
+    rd.fill_buffer().get0();
 
     const auto eq_cmp = position_in_partition::equal_compare(*schema);
     BOOST_REQUIRE(rd.is_buffer_full());
@@ -2954,7 +2954,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_trim_range_tombstones) {
             s.schema()->full_slice(), std::move(first_buffer), last_fragment_position, std::move(second_buffer), max_buffer_size);
     auto close_rd = deferred_close(rd);
 
-    rd.fill_buffer(db::no_timeout).get();
+    rd.fill_buffer().get();
 
     const auto tri_cmp = position_in_partition::tri_compare(*s.schema());
 
@@ -2984,7 +2984,7 @@ void check_evictable_reader_validation_is_triggered(
     const bool fail = !error_prefix.empty();
 
     try {
-        rd.fill_buffer(db::no_timeout).get0();
+        rd.fill_buffer().get0();
     } catch (std::runtime_error& e) {
         if (fail) {
             if (error_prefix == std::string_view(e.what(), error_prefix.size())) {
@@ -3333,7 +3333,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
             on_range_change(pr);
         }
 
-        virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+        virtual future<> fill_buffer() override {
             if (_it == _end) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -3354,13 +3354,13 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
         virtual future<> next_partition() override {
             return make_ready_future<>();
         }
-        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point) override {
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             on_range_change(pr);
             clear_buffer();
             _end_of_stream = false;
             return make_ready_future<>();
         }
-        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+        virtual future<> fast_forward_to(position_range) override {
             return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
         virtual future<> close() noexcept override {
@@ -3915,9 +3915,9 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             assert(!_readers.empty());
         }
 
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        virtual future<> fill_buffer() override {
             while (!is_buffer_full()) {
-                auto mfo = co_await next_fragment(timeout);
+                auto mfo = co_await next_fragment();
                 if (!mfo) {
                     _end_of_stream = true;
                     break;
@@ -3946,7 +3946,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             return make_ready_future<>();
         }
 
-        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             // all fragments currently in the buffer come from the current partition range
             // and pr must be strictly greater, so just clear the buffer
             clear_buffer();
@@ -3959,7 +3959,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             co_return;
         }
 
-        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(position_range pr) override {
             if (!_inside_partition) {
                 // this should not happen - the specification of fast_forward_to says that it can only be called
                 // while inside partition. But if it happens for whatever reason just do nothing
@@ -3970,7 +3970,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             // and pr must be strictly greater, so just clear the buffer
             clear_buffer();
             _end_of_stream = false;
-            return _it->second.fast_forward_to(std::move(pr), timeout);
+            return _it->second.fast_forward_to(std::move(pr));
         }
 
         virtual future<> close() noexcept override {
@@ -3979,12 +3979,12 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             });
         }
 
-        future<mutation_fragment_opt> next_fragment(db::timeout_clock::time_point timeout) {
+        future<mutation_fragment_opt> next_fragment() {
             if (_it == _readers.end() || _range.get().after(_it->first, dht::ring_position_comparator(*_schema))) {
                 co_return mutation_fragment_opt{};
             }
 
-            auto mfo = co_await _it->second(timeout);
+            auto mfo = co_await _it->second();
             if (mfo) {
                 if (mfo->is_end_of_partition()) {
                     ++_it;
@@ -4032,7 +4032,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                     good.apply(std::move(mf));
                 }
                 return stop_iteration::no;
-            }, db::no_timeout).get();
+            }).get();
 
             mutation_bounds mb {
                 std::move(good),
@@ -4104,7 +4104,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
             std::make_unique<simple_position_reader_queue>(*s, std::move(rs)));
     auto close_r = deferred_close(r);
 
-    auto mf = r(db::no_timeout).get0();
+    auto mf = r().get0();
     if (mf) {
         BOOST_FAIL(format("reader combined of empty readers returned fragment {}", mutation_fragment::printer(*s, *mf)));
     }

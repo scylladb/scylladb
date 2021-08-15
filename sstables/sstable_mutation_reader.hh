@@ -166,14 +166,13 @@ template<typename T>
 concept RowConsumer =
     requires(T t,
                     const partition_key& pk,
-                    position_range cr,
-                    db::timeout_clock::time_point timeout) {
+                    position_range cr) {
         { t.io_priority() } -> std::convertible_to<const io_priority_class&>;
         { t.is_mutation_end() } -> std::same_as<bool>;
         { t.setup_for_partition(pk) } -> std::same_as<void>;
         { t.push_ready_fragments() } -> std::same_as<void>;
         { t.maybe_skip() } -> std::same_as<std::optional<position_in_partition_view>>;
-        { t.fast_forward_to(std::move(cr), timeout) } -> std::same_as<std::optional<position_in_partition_view>>;
+        { t.fast_forward_to(std::move(cr)) } -> std::same_as<std::optional<position_in_partition_view>>;
     };
 
 /*

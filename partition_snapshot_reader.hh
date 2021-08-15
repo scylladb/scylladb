@@ -325,7 +325,7 @@ private:
         _no_more_rows_in_current_range = false;
     }
 
-    void do_fill_buffer(db::timeout_clock::time_point timeout) {
+    void do_fill_buffer() {
         while (!is_end_of_stream() && !is_buffer_full()) {
             auto mfopt = read_next();
             if (mfopt) {
@@ -360,16 +360,16 @@ public:
         });
     }
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+    virtual future<> fill_buffer() override {
       // FIXME: indentation
-      return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
+      return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
         _reader.with_reserve([&] {
             if (!_static_row_done) {
                 push_static_row();
                 on_new_range();
                 _static_row_done = true;
             }
-            do_fill_buffer(timeout);
+            do_fill_buffer();
         });
         return make_ready_future<>();
       });
@@ -381,10 +381,10 @@ public:
         }
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         throw std::runtime_error("This reader can't be fast forwarded to another partition.");
     };
-    virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(position_range cr) override {
         throw std::runtime_error("This reader can't be fast forwarded to another position.");
     };
     virtual future<> close() noexcept override {

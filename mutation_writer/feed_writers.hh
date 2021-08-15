@@ -50,10 +50,10 @@ template <typename Writer>
 requires MutationFragmentConsumer<Writer, future<>>
 future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
     return do_with(std::move(rd), std::move(wr), [] (flat_mutation_reader& rd, Writer& wr) {
-        return rd.fill_buffer(db::no_timeout).then([&rd, &wr] {
+        return rd.fill_buffer().then([&rd, &wr] {
             return do_until([&rd] { return rd.is_buffer_empty() && rd.is_end_of_stream(); }, [&rd, &wr] {
                 auto f1 = rd.pop_mutation_fragment().consume(wr);
-                auto f2 = rd.is_buffer_empty() ? rd.fill_buffer(db::no_timeout) : make_ready_future<>();
+                auto f2 = rd.is_buffer_empty() ? rd.fill_buffer() : make_ready_future<>();
                 return when_all_succeed(std::move(f1), std::move(f2)).discard_result();
             });
         }).then_wrapped([&wr] (future<> f) {

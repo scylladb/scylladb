@@ -857,7 +857,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         bool ok = true;
 
         staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, permit, as, staging_reader_handle,
-                    consumer_verifier(schema, sem, partition_rows, collected_muts, ok)), db::no_timeout);
+                    consumer_verifier(schema, sem, partition_rows, collected_muts, ok)));
 
         BOOST_REQUIRE(ok);
 

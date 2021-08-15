@@ -3207,7 +3207,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
      * ]
      */
     mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader& reader) {
-        return read_mutation_from_flat_mutation_reader(reader, db::no_timeout);
+        return read_mutation_from_flat_mutation_reader(reader);
     }).get0();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
@@ -3279,7 +3279,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
      *
      */
     mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader& reader) {
-        return read_mutation_from_flat_mutation_reader(reader, db::no_timeout);
+        return read_mutation_from_flat_mutation_reader(reader);
     }).get0();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));

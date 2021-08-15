@@ -1808,7 +1808,7 @@ public:
             .build();
     }
 
-    future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) override {
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
         return _ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
             const locator::token_metadata& tm = _ss.get_token_metadata();
             gms::gossiper& gs = gms::get_local_gossiper();

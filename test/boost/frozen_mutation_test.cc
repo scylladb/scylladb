@@ -111,7 +111,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
         rd.consume_pausable([&] (mutation_fragment mf) {
             mfs.emplace_back(std::move(mf));
             return stop_iteration::no;
-        }, db::no_timeout).get();
+        }).get();
 
         auto permit = semaphore.make_permit();
         for (auto&& mf : mfs) {

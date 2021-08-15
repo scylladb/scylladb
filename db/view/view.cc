@@ -926,8 +926,8 @@ future<> view_update_builder::close() noexcept {
 }
 
 future<stop_iteration> view_update_builder::advance_all() {
-    auto existings_f = _existings ? (*_existings)(db::no_timeout) : make_ready_future<optimized_optional<mutation_fragment>>();
-    return when_all(_updates(db::no_timeout), std::move(existings_f)).then([this] (auto&& fragments) mutable {
+    auto existings_f = _existings ? (*_existings)() : make_ready_future<optimized_optional<mutation_fragment>>();
+    return when_all(_updates(), std::move(existings_f)).then([this] (auto&& fragments) mutable {
         _update = std::move(std::get<0>(fragments).get0());
         _existing = std::move(std::get<1>(fragments).get0());
         return stop_iteration::no;
@@ -935,7 +935,7 @@ future<stop_iteration> view_update_builder::advance_all() {
 }
 
 future<stop_iteration> view_update_builder::advance_updates() {
-    return _updates(db::no_timeout).then([this] (auto&& update) mutable {
+    return _updates().then([this] (auto&& update) mutable {
         _update = std::move(update);
         return stop_iteration::no;
     });
@@ -945,7 +945,7 @@ future<stop_iteration> view_update_builder::advance_existings() {
     if (!_existings) {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
-    return (*_existings)(db::no_timeout).then([this] (auto&& existing) mutable {
+    return (*_existings)().then([this] (auto&& existing) mutable {
         _existing = std::move(existing);
         return stop_iteration::no;
     });
@@ -2040,7 +2040,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             query::max_partitions,
             view_builder::consumer{*this, step, now});
     consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
-    auto built = step.reader.consume_in_thread(std::move(consumer), db::no_timeout);
+    auto built = step.reader.consume_in_thread(std::move(consumer));
 
     _as.check();
 

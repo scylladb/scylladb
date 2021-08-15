@@ -120,8 +120,8 @@ class build_progress_virtual_reader {
             return clustering_key_prefix::from_exploded(r);
         }
 
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return _underlying.fill_buffer(timeout).then([this] {
+        virtual future<> fill_buffer() override {
+            return _underlying.fill_buffer().then([this] {
                 _end_of_stream = _underlying.is_end_of_stream();
                 while (!_underlying.is_buffer_empty()) {
                     auto mf = _underlying.pop_mutation_fragment();
@@ -171,16 +171,16 @@ class build_progress_virtual_reader {
             return make_ready_future<>();
         }
 
-        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             clear_buffer();
             _end_of_stream = false;
-            return _underlying.fast_forward_to(pr, timeout);
+            return _underlying.fast_forward_to(pr);
         }
 
-        virtual future<> fast_forward_to(position_range range, db::timeout_clock::time_point timeout) override {
+        virtual future<> fast_forward_to(position_range range) override {
             forward_buffer_to(range.start());
             _end_of_stream = false;
-            return _underlying.fast_forward_to(std::move(range), timeout);
+            return _underlying.fast_forward_to(std::move(range));
         }
 
         virtual future<> close() noexcept override {

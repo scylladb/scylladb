@@ -91,7 +91,7 @@ shard_writer::shard_writer(schema_ptr s,
 }
 
 future<> shard_writer::consume() {
-    return _reader.peek(db::no_timeout).then([this] (mutation_fragment* mf_ptr) {
+    return _reader.peek().then([this] (mutation_fragment* mf_ptr) {
         if (mf_ptr) {
             return _consumer(std::move(_reader));
         }
@@ -182,7 +182,7 @@ future<> multishard_writer::wait_pending_consumers() {
 
 future<> multishard_writer::distribute_mutation_fragments() {
     return repeat([this] () mutable {
-        return _producer(db::no_timeout).then([this] (mutation_fragment_opt mf_opt) mutable {
+        return _producer().then([this] (mutation_fragment_opt mf_opt) mutable {
             if (mf_opt) {
                 return handle_mutation_fragment(std::move(*mf_opt));
             } else {

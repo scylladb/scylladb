@@ -51,7 +51,7 @@ public:
         : _cache(cache)
         , _read_context(context)
     { }
-    future<mutation_fragment_opt> move_to_next_partition(db::timeout_clock::time_point timeout) {
+    future<mutation_fragment_opt> move_to_next_partition() {
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
@@ -79,12 +79,12 @@ public:
             return rd.close();
           });
         }
-     return refresh_reader.then([this, timeout] {
-      return _reader->next_partition().then([this, timeout] {
+     return refresh_reader.then([this] {
+      return _reader->next_partition().then([this] {
         if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
             return make_ready_future<mutation_fragment_opt>();
         }
-        return (*_reader)(timeout).then([this] (auto&& mfopt) {
+        return (*_reader)().then([this] (auto&& mfopt) {
             if (mfopt) {
                 assert(mfopt->is_partition_start());
                 _new_last_key = mfopt->as_partition_start().key();
@@ -94,18 +94,18 @@ public:
       });
      });
     }
-    future<> fast_forward_to(dht::partition_range&& range, db::timeout_clock::time_point timeout) {
+    future<> fast_forward_to(dht::partition_range&& range) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));
-        return fast_forward_to(std::move(range), snapshot_and_phase.snapshot, snapshot_and_phase.phase, timeout);
+        return fast_forward_to(std::move(range), snapshot_and_phase.snapshot, snapshot_and_phase.phase);
     }
-    future<> fast_forward_to(dht::partition_range&& range, mutation_source& snapshot, row_cache::phase_type phase, db::timeout_clock::time_point timeout) {
+    future<> fast_forward_to(dht::partition_range&& range, mutation_source& snapshot, row_cache::phase_type phase) {
         _range = std::move(range);
         _last_key = { };
         _new_last_key = { };
         if (_reader) {
             if (_reader_creation_phase == phase) {
                 ++_cache._tracker._stats.underlying_partition_skips;
-                return _reader->fast_forward_to(_range, timeout);
+                return _reader->fast_forward_to(_range);
             } else {
                 ++_cache._tracker._stats.underlying_recreations;
             }
@@ -208,10 +208,10 @@ public:
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
 public:
-    future<> ensure_underlying(db::timeout_clock::time_point timeout) {
+    future<> ensure_underlying() {
         if (_underlying_snapshot) {
-            return create_underlying(timeout).then([this, timeout] {
-                return _underlying.underlying()(timeout).then([this] (mutation_fragment_opt&& mfopt) {
+            return create_underlying().then([this] {
+                return _underlying.underlying()().then([this] (mutation_fragment_opt&& mfopt) {
                     _partition_exists = bool(mfopt);
                 });
             });
@@ -224,7 +224,7 @@ public:
         return make_ready_future<>();
     }
 public:
-    future<> create_underlying(db::timeout_clock::time_point timeout);
+    future<> create_underlying();
     void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = snapshot;

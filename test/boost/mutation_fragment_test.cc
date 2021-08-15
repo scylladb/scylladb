@@ -118,7 +118,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 }
                 auto rd = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m});
                 auto close_rd = deferred_close(rd);
-                rd.consume(fragment_scatterer{muts}, db::no_timeout).get();
+                rd.consume(fragment_scatterer{muts}).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));
                 }
@@ -409,7 +409,7 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
 
                 auto reader = transform(flat_mutation_reader_from_mutations(semaphore.make_permit(), {m1}), schema_upgrader(m2.schema()));
                 auto close_reader = deferred_close(reader);
-                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
+                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get0();
 
                 auto regular = m1;
                 regular.upgrade(m2.schema());

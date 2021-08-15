@@ -108,7 +108,7 @@ void test_scans_with_dummy_entries() {
         auto rd = cache.make_reader(s, semaphore.make_permit(), pr, slice);
         auto close_reader = deferred_close(rd);
         rd.set_max_buffer_size(1);
-        rd.fill_buffer(db::no_timeout).get();
+        rd.fill_buffer().get();
         seastar::thread::maybe_yield();
 
         if (cancelled) {
@@ -127,7 +127,7 @@ void test_scans_with_dummy_entries() {
         auto d = duration_in_seconds([&] {
             rd.consume_pausable([](mutation_fragment) {
                 return stop_iteration(cancelled);
-            }, db::no_timeout).get();
+            }).get();
         });
         slm.stop();
 
@@ -211,7 +211,6 @@ void test_scan_with_range_delete_over_rows() {
                            std::numeric_limits<uint32_t>::max(),
                            std::numeric_limits<uint32_t>::max(),
                            gc_clock::now(),
-                           db::no_timeout,
                            query::max_result_size()).get();
         });
 

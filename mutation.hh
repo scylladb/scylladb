@@ -291,4 +291,4 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
 class flat_mutation_reader;
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
-future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& reader);

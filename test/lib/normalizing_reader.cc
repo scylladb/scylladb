@@ -28,9 +28,9 @@ normalizing_reader::normalizing_reader(flat_mutation_reader rd)
     , _range_tombstones(*_rd.schema(), _rd.permit())
 {}
 
-future<> normalizing_reader::fill_buffer(db::timeout_clock::time_point timeout) {
-    return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
-        return _rd.fill_buffer(timeout).then([this] {
+future<> normalizing_reader::fill_buffer() {
+    return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this] {
+        return _rd.fill_buffer().then([this] {
             position_in_partition::less_compare less{*_rd.schema()};
             while (!_rd.is_buffer_empty()) {
                 auto mf = _rd.pop_mutation_fragment();
@@ -79,18 +79,18 @@ future<> normalizing_reader::next_partition() {
     return make_ready_future<>();
 }
 future<> normalizing_reader::fast_forward_to(
-        const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+        const dht::partition_range& pr) {
     _range_tombstones.reset();
     clear_buffer();
     _end_of_stream = false;
-    return _rd.fast_forward_to(pr, timeout);
+    return _rd.fast_forward_to(pr);
 }
 future<> normalizing_reader::fast_forward_to(
-        position_range pr, db::timeout_clock::time_point timeout) {
+        position_range pr) {
     _range_tombstones.forward_to(pr.start());
     forward_buffer_to(pr.start());
     _end_of_stream = false;
-    return _rd.fast_forward_to(std::move(pr), timeout);
+    return _rd.fast_forward_to(std::move(pr));
 }
 future<> normalizing_reader::close() noexcept {
     return _rd.close();
