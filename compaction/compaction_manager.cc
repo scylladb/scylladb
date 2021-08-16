@@ -461,7 +461,16 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
     auto tasks = _tasks;
     return do_with(std::move(tasks), [this] (std::list<lw_shared_ptr<task>>& tasks) {
         return parallel_for_each(tasks, [this] (auto& task) {
-            return this->task_stop(task);
+            return this->task_stop(task).then_wrapped([](future <> f) {
+                try {
+                    f.get();
+                } catch (sstables::compaction_stop_exception& e) {
+                    // swallow stop exception if a given procedure decides to propagate it to the caller,
+                    // as it happens with reshard and reshape.
+                } catch (...) {
+                    throw;
+                }
+            });
         });
     });
 }
