@@ -231,15 +231,34 @@ future<std::optional<service_level_options>> service_level_controller::find_serv
 }
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
-    _service_levels_db.emplace(name, sl_data);
-    return make_ready_future();
+    return seastar::async( [this, name, sl_data] {
+        _subscribers.for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {
+            try {
+                subscriber->on_before_service_level_add(name, sl_data.slo).get();
+            } catch (...) {
+                sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
+            }
+        });
+        _service_levels_db.emplace(name, sl_data);
+    });
+
 }
 
 future<> service_level_controller::notify_service_level_updated(sstring name, service_level_options slo) {
     auto sl_it = _service_levels_db.find(name);
     future<> f = make_ready_future();
     if (sl_it != _service_levels_db.end()) {
-        sl_it->second.slo = slo;
+        service_level_options slo_before = sl_it->second.slo;
+        return seastar::async( [this,sl_it, name, slo_before, slo] {
+            _subscribers.for_each([name, slo_before, slo] (qos_configuration_change_subscriber* subscriber) {
+                try {
+                    subscriber->on_before_service_level_change(name, slo_before, slo).get();
+                } catch (...) {
+                    sl_logger.error("notify_service_level_updated: exception occurred in one of the observers callbacks {}", std::current_exception());
+                }
+            });
+            sl_it->second.slo = slo;
+        });
     }
     return f;
 }
@@ -249,7 +268,15 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
     if (sl_it != _service_levels_db.end()) {
         _service_levels_db.erase(sl_it);
     }
-    return make_ready_future();
+    return seastar::async( [this, name] {
+        _subscribers.for_each([name] (qos_configuration_change_subscriber* subscriber) {
+            try {
+                subscriber->on_after_service_level_remove(name).get();
+            } catch (...) {
+                sl_logger.error("notify_service_level_removed: exception occurred in one of the observers callbacks {}", std::current_exception());
+            }
+        });
+    });
 }
 
 void service_level_controller::update_from_distributed_data(std::chrono::duration<float> interval) {
@@ -422,5 +449,13 @@ void service_level_controller::on_leave_cluster(const gms::inet_address& endpoin
 void service_level_controller::on_up(const gms::inet_address& endpoint) { }
 
 void service_level_controller::on_down(const gms::inet_address& endpoint) { }
+
+void service_level_controller::register_subscriber(qos_configuration_change_subscriber* subscriber) {
+    _subscribers.add(subscriber);
+}
+
+future<> service_level_controller::unregister_subscriber(qos_configuration_change_subscriber* subscriber) {
+    return _subscribers.remove(subscriber);
+}
 
 }
