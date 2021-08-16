@@ -36,8 +36,12 @@
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
 
+#include "test/lib/random_utils.hh"
 #include "test/raft/logical_timer.hh"
 #include "test/raft/ticker.hh"
+#include "test/raft/generator.hh"
+
+#include "to_string.hh"
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -251,8 +255,14 @@ future<call_result_t<M>> call(
             return make_ready_future<call_result_t<M>>(e);
         } catch (logical_timer::timed_out<typename M::output_t> e) {
             (void)e.get_future().discard_result()
-                .handle_exception_type([] (const output_channel_dropped&) {})
-                .handle_exception_type([] (const raft::dropped_entry&) {});
+                .handle_exception([] (std::exception_ptr eptr) {
+                    try {
+                        std::rethrow_exception(eptr);
+                    } catch (const output_channel_dropped&) {
+                    } catch (const raft::dropped_entry&) {
+                    } catch (const raft::stopped_error&) {
+                    }
+                });
             return make_ready_future<call_result_t<M>>(timed_out_error{});
         }
     });
@@ -834,7 +844,13 @@ future<reconfigure_result_t> reconfigure(
         co_return e;
     } catch (logical_timer::timed_out<void> e) {
         (void)e.get_future().discard_result()
-            .handle_exception_type([] (const raft::dropped_entry&) {});
+            .handle_exception([] (std::exception_ptr eptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const raft::dropped_entry&) {
+                } catch (const raft::stopped_error&) {
+                }
+            });
         co_return timed_out_error{};
     }
 }
@@ -1220,6 +1236,18 @@ namespace ser {
 
 bool operator==(ExReg::ret a, ExReg::ret b) { return a.x == b.x; }
 
+std::ostream& operator<<(std::ostream& os, const ExReg::ret& r) {
+    return os << format("ret{{{}}}", r.x);
+}
+
+std::ostream& operator<<(std::ostream& os, const ExReg::read&) {
+    return os << "read";
+}
+
+std::ostream& operator<<(std::ostream& os, const ExReg::exchange& e) {
+    return os << format("xng{{{}}}", e.x);
+}
+
 // Wait until either one of `nodes` in `env` becomes a leader, or duration `d` expires according to `timer` (whichever happens first).
 // If the leader is found, returns it. Otherwise throws a `logical_timer::timed_out` exception.
 template <PureStateMachine M>
@@ -1465,4 +1493,311 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
         auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, 1000_t);
         tlogger.trace("last leader: {}", l);
     });
+}
+
+// Given a function `F` which takes a `raft::server_id` argument and returns a variant type
+// which contains `not_a_leader`, repeatedly calls `F` until it returns something else than
+// `not_a_leader` or until we reach a limit, whichever happens first.
+// The maximum number of calls until we give up is specified by `bounces`.
+// The initial `raft::server_id` argument provided to `F` is specified as an argument
+// to this function (`srv_id`). If the initial call returns `not_a_leader`, then:
+// - if the result contained a different leader ID, we will use it in the next call,
+//   sleeping for `known_leader_delay` first,
+// - otherwise we will take the next ID from the `known` set, sleeping for
+//   `unknown_leader_delay` first.
+// The returned result contains the result of the last call to `F` and the last
+// server ID passed to `F`.
+template <typename F>
+struct bouncing {
+    using future_type = std::invoke_result_t<F, raft::server_id>;
+    using value_type = typename future_type::value_type;
+
+    static_assert(boost::mp11::mp_contains<value_type, raft::not_a_leader>::value);
+
+    F _f;
+
+    bouncing(F f) : _f(std::move(f)) {}
+
+    // FIXME: change this into a free function after clang bug #50345 is fixed.
+    future<std::pair<value_type, raft::server_id>> operator()(
+            logical_timer& timer,
+            std::unordered_set<raft::server_id> known,
+            raft::server_id srv_id,
+            size_t bounces,
+            raft::logical_clock::duration known_leader_delay,
+            raft::logical_clock::duration unknown_leader_delay
+            ) {
+        auto it = known.find(srv_id);
+        while (true) {
+            auto res = co_await _f(srv_id);
+
+            if (auto n_a_l = std::get_if<raft::not_a_leader>(&res); n_a_l && bounces) {
+                --bounces;
+                if (n_a_l->leader) {
+                    assert(n_a_l->leader != srv_id);
+                    co_await timer.sleep(known_leader_delay);
+                    srv_id = n_a_l->leader;
+                } else {
+                    co_await timer.sleep(unknown_leader_delay);
+                    assert(!known.empty());
+                    if (it == known.end() || ++it == known.end()) {
+                        it = known.begin();
+                    }
+                    srv_id = *it;
+                }
+                continue;
+            }
+
+            co_return std::pair{res, srv_id};
+        }
+    }
+};
+
+// An operation representing a call to the Raft cluster with a specific state machine input.
+// We may bounce a number of times if the server returns `not_a_leader` before giving up.
+template <PureStateMachine M>
+struct raft_call {
+    typename M::input_t input;
+    raft::logical_clock::duration timeout;
+
+    using result_type = call_result_t<M>;
+
+    struct state_type {
+        environment<M>& env;
+
+        // The set of servers that may be part of the current configuration.
+        // Sometimes we don't know the exact configuration, e.g. after a failed configuration change.
+        const std::unordered_set<raft::server_id>& known;
+
+        logical_timer& timer;
+    };
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        // TODO a stable contact point used by a given thread would be preferable;
+        // the thread would switch only if necessary (the contact point left the configuration).
+        // Currently we choose the contact point randomly each time.
+        assert(s.known.size() > 0);
+        static std::mt19937 engine{0};
+
+        auto it = s.known.begin();
+        std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(engine));
+        auto contact = *it;
+
+        tlogger.debug("db call start inp {} tid {} start time {} current time {} contact {}", input, ctx.thread, ctx.start, s.timer.now(), contact);
+
+        auto [res, last] = co_await bouncing{[input = input, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
+            return env.get_server(id).call(input, timeout, timer);
+        }}(s.timer, s.known, contact, 6, 10_t, 10_t);
+        tlogger.debug("db call end inp {} tid {} start time {} current time {} last contact {}", input, ctx.thread, ctx.start, s.timer.now(), last);
+
+        co_return res;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const raft_call& c) {
+        return os << format("raft_call{{input:{},timeout:{}}}", c.input, c.timeout);
+    }
+};
+
+// An operation that partitions the network in half.
+// During the partition, no server from one half can contact any server from the other;
+// the partition is symmetric.
+// For odd number of nodes, ensures that the current leader (if there is one) is in the minority.
+template <PureStateMachine M>
+class network_majority_grudge {
+    raft::logical_clock::duration _duration;
+
+public:
+    struct state_type {
+        environment<M>& env;
+        const std::unordered_set<raft::server_id>& known;
+        logical_timer& timer;
+        std::mt19937 rnd;
+    };
+
+    using result_type = std::monostate;
+
+    network_majority_grudge(raft::logical_clock::duration d) : _duration(d) {
+        static_assert(operation::Executable<network_majority_grudge<M>>);
+    }
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        std::vector<raft::server_id> nodes{s.known.begin(), s.known.end()};
+        std::shuffle(nodes.begin(), nodes.end(), s.rnd);
+
+        auto mid = nodes.begin() + (nodes.size() / 2);
+        if (nodes.size() % 2) {
+            // Odd number of nodes, let's ensure that the leader (if there is one) is in the minority
+            auto it = std::find_if(mid, nodes.end(), [&env = s.env] (raft::server_id id) { return env.get_server(id).is_leader(); });
+            if (it != nodes.end()) {
+                std::swap(*nodes.begin(), *it);
+            }
+        }
+
+        // Note: creating the grudges has O(n^2) complexity, where n is the cluster size.
+        // May be problematic for (very) large clusters.
+        for (auto x = nodes.begin(); x != mid; ++x) {
+            for (auto y = mid; y != nodes.end(); ++y) {
+                s.env.get_network().add_grudge(*x, *y);
+                s.env.get_network().add_grudge(*y, *x);
+            }
+        }
+
+        tlogger.debug("network_majority_grudge start tid {} start time {} current time {} duration {} grudge: {} vs {}",
+                ctx.thread, ctx.start, s.timer.now(),
+                _duration,
+                std::vector<raft::server_id>{nodes.begin(), mid},
+                std::vector<raft::server_id>{mid, nodes.end()});
+
+        co_await s.timer.sleep(_duration);
+
+        tlogger.debug("network_majority_grudge end tid {} start time {} current time {}", ctx.thread, ctx.start, s.timer.now());
+
+        // Some servers in `nodes` may already be gone at this point but network doesn't care.
+        // It's safe to call `remove_grudge`.
+        for (auto x = nodes.begin(); x != mid; ++x) {
+            for (auto y = mid; y != nodes.end(); ++y) {
+                s.env.get_network().remove_grudge(*x, *y);
+                s.env.get_network().remove_grudge(*y, *x);
+            }
+        }
+
+        co_return std::monostate{};
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const network_majority_grudge& p) {
+        return os << format("network_majority_grudge{{duration:{}}}", p._duration);
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const std::monostate&) {
+    return os << "";
+}
+
+template <typename T, typename... Ts>
+std::ostream& operator<<(std::ostream& os, const std::variant<T, Ts...>& v) {
+    std::visit([&os] (auto& arg) { os << arg; }, v);
+    return os;
+}
+
+namespace operation {
+
+std::ostream& operator<<(std::ostream& os, const thread_id& tid) {
+    return os << format("thread_id{{{}}}", tid.id);
+}
+
+} // namespace operation
+
+SEASTAR_TEST_CASE(basic_generator_test) {
+    using op_type = operation::invocable<operation::either_of<raft_call<ExReg>, network_majority_grudge<ExReg>>>;
+    using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
+
+    static_assert(operation::Invocable<op_type>);
+
+    logical_timer timer;
+    environment_config cfg {
+        .network_delay = 3_t,
+        .fd_convict_threshold = 50_t,
+    };
+    auto history = co_await with_env_and_ticker<ExReg>(cfg, [&cfg, &timer] (environment<ExReg>& env, ticker& t) -> future<history_t> {
+        t.start({
+            {1, [&] {
+                env.tick_network();
+                timer.tick();
+            }},
+            {10, [&] {
+                env.tick_servers();
+            }}
+        }, 50'000);
+
+        auto leader_id = co_await env.new_server(true);
+
+        // Wait for the server to elect itself as a leader.
+        assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, 1000_t) == leader_id);
+
+
+        size_t no_servers = 5;
+        std::unordered_set<raft::server_id> servers{leader_id};
+        for (size_t i = 1; i < no_servers; ++i) {
+            servers.insert(co_await env.new_server(false));
+        }
+
+        assert(std::holds_alternative<std::monostate>(
+            co_await env.get_server(leader_id).reconfigure(
+                std::vector<raft::server_id>{servers.begin(), servers.end()}, timer.now() + 100_t, timer)));
+
+        auto threads = operation::make_thread_set(servers.size() + 1);
+        auto nemesis_thread = some(threads);
+
+        auto seed = tests::random::get_int<int32_t>();
+
+        // TODO: make it dynamic based on the current configuration
+        std::unordered_set<raft::server_id>& known = servers;
+
+        raft_call<ExReg>::state_type db_call_state {
+            .env = env,
+            .known = known,
+            .timer = timer
+        };
+
+        network_majority_grudge<ExReg>::state_type network_majority_grudge_state {
+            .env = env,
+            .known = known,
+            .timer = timer,
+            .rnd = std::mt19937{seed}
+        };
+
+        auto init_state = op_type::state_type{std::move(db_call_state), std::move(network_majority_grudge_state)};
+
+        using namespace generator;
+
+        // For reference to ``real life'' suppose 1_t ~= 10ms. Then:
+        // 10_t (server tick) ~= 100ms
+        // network delay = 3_t ~= 30ms
+        // election timeout = 10 server ticks = 100_t ~= 1s
+        // thus, to enforce leader election, need a majority to convict the current leader for > 100_t ~= 1s,
+        // failure detector convict threshold = 50 srv ticks = 500_t ~= 5s
+        // so need to partition for > 600_t ~= 6s
+        // choose network partition duration uniformly from [600_t-600_t/3, 600_t+600_t/3] = [400_t, 800_t]
+        // ~= [4s, 8s] -> ~1/2 partitions should cause an election
+        // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
+
+        auto gen = op_limit(500,
+            pin(nemesis_thread,
+                stagger(seed, timer.now() + 200_t, 1200_t, 1200_t,
+                    random(seed, [] (std::mt19937& engine) {
+                        static std::uniform_int_distribution<raft::logical_clock::rep> dist{400, 800};
+                        return op_type{network_majority_grudge<ExReg>{raft::logical_clock::duration{dist(engine)}}};
+                    })
+                ),
+                random(seed, [] (std::mt19937& engine) {
+                    return op_type{raft_call<ExReg>{ExReg::exchange{engine()}, 200_t}};
+                })
+            )
+        );
+
+        class history_recorder {
+            history_t& _h;
+
+        public:
+            history_recorder(history_t& h) : _h(h) {}
+
+            void operator()(op_type o) {
+                _h.emplace_back(std::move(o));
+            }
+
+            void operator()(operation::completion<op_type> o) {
+                _h.emplace_back(std::move(o));
+            }
+        };
+
+        history_t history;
+        interpreter<op_type, decltype(gen), history_recorder> interp{
+            std::move(gen), std::move(threads), 1_t, std::move(init_state), timer,
+            history_recorder(history)};
+        co_await interp.run();
+
+        co_return history;
+    });
+
+    tlogger.debug("history: {}", history);
 }
