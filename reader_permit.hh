@@ -163,6 +163,8 @@ public:
     sstring description() const;
 
     db::timeout_clock::time_point timeout() const noexcept;
+
+    void set_timeout(db::timeout_clock::time_point timeout) noexcept;
 };
 
 using reader_permit_opt = optimized_optional<reader_permit>;

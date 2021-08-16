@@ -308,6 +308,18 @@ public:
     db::timeout_clock::time_point timeout() const noexcept {
         return _timeout;
     }
+
+    void set_timeout(db::timeout_clock::time_point timeout) noexcept {
+        using namespace std::chrono_literals;
+        if (_timeout != db::no_timeout && timeout < _timeout) {
+            if (_timeout - timeout > 100ms) {
+                rcslog.warn("Detected timeout skew of {}ms, please check time skew between nodes in the cluster.  backtrace: {}",
+                        std::chrono::duration_cast<std::chrono::milliseconds>(_timeout - timeout).count(),
+                        current_backtrace());
+            }
+        }
+        _timeout = timeout;
+    }
 };
 
 static_assert(std::is_nothrow_copy_constructible_v<reader_permit>);
@@ -394,6 +406,10 @@ void reader_permit::mark_unblocked() noexcept {
 
 db::timeout_clock::time_point reader_permit::timeout() const noexcept {
     return _impl->timeout();
+}
+
+void reader_permit::set_timeout(db::timeout_clock::time_point timeout) noexcept {
+    _impl->set_timeout(timeout);
 }
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
