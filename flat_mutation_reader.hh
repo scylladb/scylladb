@@ -388,10 +388,14 @@ public:
             }
         }
 
-        static void maybe_timed_out(db::timeout_clock::time_point timeout) {
-            if (db::timeout_clock::now() >= timeout) {
+        void maybe_timed_out() {
+            if (db::timeout_clock::now() >= timeout()) {
                 throw timed_out_error();
             }
+        }
+
+        db::timeout_clock::time_point timeout() const noexcept {
+            return _permit.timeout();
         }
     };
 private:
@@ -577,6 +581,7 @@ public:
     void unpop_mutation_fragment(mutation_fragment mf) { _impl->unpop_mutation_fragment(std::move(mf)); }
     const schema_ptr& schema() const { return _impl->_schema; }
     const reader_permit& permit() const { return _impl->_permit; }
+    db::timeout_clock::time_point timeout() const noexcept { return _impl->timeout(); }
     void set_max_buffer_size(size_t size) {
         _impl->max_buffer_size_in_bytes = size;
     }

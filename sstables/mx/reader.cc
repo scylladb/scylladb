@@ -1496,7 +1496,7 @@ public:
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
             if (_partition_finished) {
-                maybe_timed_out(timeout);
+                maybe_timed_out();
                 if (_before_partition) {
                     return read_partition();
                 } else {
@@ -1508,7 +1508,7 @@ public:
                     if (is_buffer_full() || _partition_finished || _end_of_stream) {
                         return make_ready_future<>();
                     }
-                    maybe_timed_out(timeout);
+                    maybe_timed_out();
                     return advance_context(_consumer.maybe_skip()).then([this] {
                         return _context->consume_input();
                     });

@@ -3011,9 +3011,10 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
             write_memtable_to_sstable_for_test(*mt, sst).get();
             auto sstp = env.reusable_sst(s, tmpdir_path, 12).get0();
             auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
-            auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+            auto timeout = db::timeout_clock::now();
+            auto rd = sstp->make_reader(s, env.make_reader_permit(timeout), pr, s->full_slice());
             auto close_rd = deferred_close(rd);
-            auto f = read_mutation_from_flat_mutation_reader(rd, db::timeout_clock::now());
+            auto f = read_mutation_from_flat_mutation_reader(rd, timeout);
             BOOST_REQUIRE_THROW(f.get(), timed_out_error);
         });
     });
