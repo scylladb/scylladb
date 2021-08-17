@@ -265,7 +265,11 @@ public:
     const uint64_t max_disk_size; // per-shard
     const uint64_t disk_usage_threshold;
 
-    bool _shutdown = false;
+    enum class state {
+        active, shutting_down, terminated,
+    };
+
+    state _state = state::active;
     std::optional<shared_promise<>> _shutdown_promise = {};
 
     struct request_controller_timeout_exception_factory {
@@ -522,9 +526,11 @@ private:
 
     void handle_writes(messages&, pending_tasks&);
     void handle_replenishes(messages&, pending_tasks&);
+    void handle_shutdowns(messages&, pending_tasks&);
     void do_periodic_syncs(pending_tasks&);
     void do_periodic_flush_callbacks(pending_tasks&);
     void replenish_reserve(pending_tasks&);
+    void do_pending_deletes(pending_tasks&);
 
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
@@ -535,8 +541,6 @@ private:
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
-    future<> _background_sync;
-    seastar::gate _gate;
     uint64_t _new_counter = 0;
     std::optional<size_t> _disk_write_alignment;
     future<> _message_loop;
@@ -1359,7 +1363,6 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _request_controller(max_request_controller_units(), request_controller_timeout_exception_factory{})
     , _reserve_segments(1)
     , _recycled_segments(std::numeric_limits<size_t>::max())
-    , _background_sync(make_ready_future<>())
     , _message_loop(make_ready_future<>())
 {
     assert(max_size > 0);
@@ -1485,7 +1488,7 @@ future<> db::commitlog::segment_manager::message_loop() {
 
     replenish_reserve(tasks);
 
-    while (!shutdown || !_message_queue.empty()) {
+    while (_state != state::terminated || !_message_queue.empty()) {
         auto next_wakeup = no_timeout;
         auto now = message_clock::now();
         if (cfg.mode == sync_mode::PERIODIC && !_segments.empty() && _segments.back()->is_still_allocating()) {
@@ -1499,6 +1502,7 @@ future<> db::commitlog::segment_manager::message_loop() {
         if (!msgs.empty()) {
             handle_writes(msgs, tasks);
             handle_replenishes(msgs, tasks);
+            handle_shutdowns(msgs, tasks);
 
             auto mp = msgs.extract_messages(shutdown_request_index);
             if (!mp.empty()) {
@@ -1508,6 +1512,7 @@ future<> db::commitlog::segment_manager::message_loop() {
         
         do_periodic_syncs(tasks);
         do_periodic_flush_callbacks(tasks);
+        do_pending_deletes(tasks);
 
         assert(msgs.empty());
     }
@@ -1548,6 +1553,46 @@ void db::commitlog::segment_manager::handle_writes(messages& msgs, pending_tasks
     }
 }
 
+void db::commitlog::segment_manager::handle_shutdowns(messages& msgs, pending_tasks& tasks) {
+    bool shutdown = !msgs.extract_messages(shutdown_request_index).empty();
+    if (shutdown) {
+        tasks.add([this]() -> future<> {
+            // Wait for all pending requests to finish. Need to sync first because segments that are
+            // alive may be holding semaphore permits.
+            auto block_new_requests = get_units(_request_controller, max_request_controller_units());
+            try {
+                clogger.debug("Begin shutdown sequence");
+
+                co_await sync_all_segments();
+                co_await std::move(block_new_requests);
+
+                _state = state::shutting_down; // please do not create new segments etc.
+
+                discard_unused_segments();
+                co_await do_pending_deletes();
+
+                auto ep = std::make_exception_ptr(shutdown_marker{});
+                if (_recycled_segments.empty()) {
+                    abort_recycled_list(ep);
+                }
+                abort_deletion_promise(ep);
+
+                co_await shutdown_all_segments();
+                co_await clear_reserve_segments();
+
+                _state = state::terminated;
+
+                clogger.debug("Shutdown sequence complete");
+
+                wakeup(); // ensure we exit message loop now
+            } catch (...) {
+                clogger.error("Exception during shutdown: {}. Aborting.", std::current_exception());
+                abort();
+            }
+        });
+    }
+}
+
 void db::commitlog::segment_manager::do_periodic_syncs(pending_tasks& tasks) {
     auto def_copy = _segments;
     for (auto& s : def_copy) {
@@ -1566,10 +1611,6 @@ void db::commitlog::segment_manager::do_periodic_syncs(pending_tasks& tasks) {
 }
 
 void db::commitlog::segment_manager::do_periodic_flush_callbacks(pending_tasks& tasks) {
-    // TODO: remove this once shutdown is properly moved to message loop
-    if (_shutdown) {
-        return;
-    }
     if (_new_counter > 0) {
         auto max = disk_usage_threshold;
         auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
@@ -1581,8 +1622,10 @@ void db::commitlog::segment_manager::do_periodic_flush_callbacks(pending_tasks& 
             flush_segments(cur - max);
         }
     }
+}
 
-    tasks.add(std::bind(&segment_manager::do_pending_deletes, this));
+void db::commitlog::segment_manager::do_pending_deletes(pending_tasks& tasks) {
+    tasks.add([this] { return do_pending_deletes(); });
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1591,17 +1634,19 @@ size_t db::commitlog::segment_manager::max_request_controller_units() const {
 
 void db::commitlog::segment_manager::handle_replenishes(messages& msgs, pending_tasks& tasks) {
     auto mp = msgs.extract_messages(replenish_request_index);
-    if (!mp.empty() /** TODO: remove when shutdown moves */ && !_shutdown) {
+    if (!mp.empty()) {
         replenish_reserve(tasks);
     }
 }
 
 void db::commitlog::segment_manager::replenish_reserve(pending_tasks& tasks) {
+    if (_state != state::active) {
+        return;
+    }
+
     tasks.add([this]() -> future<> {
-        while (!_reserve_segments.full() && !_shutdown) {
+        while (!_reserve_segments.full() && _state == state::active) {
             try {
-                // TODO: remove
-                gate::holder g(_gate);
                 // note: if we were strict with disk size, we would refuse to do this 
                 // unless disk footprint is lower than threshold. but we cannot (yet?)
                 // trust that flush logic will absolutely free up an existing 
@@ -1618,9 +1663,9 @@ void db::commitlog::segment_manager::replenish_reserve(pending_tasks& tasks) {
                 clogger.warn("Exception in segment reservation: {}", std::current_exception());
             }
         }
-        if (!_shutdown) {
+        if (_state == state::active) {
             co_await _reserve_segments.not_full();
-            if (!_shutdown) {
+            if (_state == state::active) {
                 send(replenish_request{});
             }
         }
@@ -1947,7 +1992,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
-    if (_shutdown) {
+    if (_state != state::active) {
         co_return coroutine::make_exception(std::runtime_error("Commitlog has been shut down. Cannot add data"));
     }
 
@@ -1961,7 +2006,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         }
         // if we have no reserve and we're above/at limits, make background task a little more eager.
         auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
-        if (!_shutdown && cur >= disk_usage_threshold) {
+        if (_state == state::active && cur >= disk_usage_threshold) {
             wakeup();
         }
     }
@@ -1992,7 +2037,6 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         _segment_allocating.emplace(p.get_future());
         auto finally = defer([&] () noexcept { _segment_allocating = std::nullopt; });
         try {
-            gate::holder g(_gate);
             auto s = co_await with_timeout(timeout, new_segment());
             p.set_value();
         } catch (...) {
@@ -2047,7 +2091,7 @@ std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
 void db::commitlog::segment_manager::discard_unused_segments() {
     clogger.trace("Checking for unused segments ({} active)", _segments.size());
 
-    std::erase_if(_segments, [=](sseg_ptr s) {
+    auto n = std::erase_if(_segments, [=](sseg_ptr s) {
         if (s->can_delete()) {
             clogger.debug("Segment {} is unused", *s);
             return true;
@@ -2061,15 +2105,9 @@ void db::commitlog::segment_manager::discard_unused_segments() {
         }
         return false;
     });
-
-    // launch in background, but guard with gate so this deletion is
-    // sure to finish in shutdown, because at least through this path,
-    // segments on deletion queue could be non-empty, and we don't want
-    // those accidentally left around for replay.
-    if (!_shutdown) {
-        (void)with_gate(_gate, [this] {
-            return do_pending_deletes();
-        });
+    if (n != 0) {
+        // message loop will do pending deletions.
+        wakeup();
     }
 }
 
@@ -2120,66 +2158,12 @@ future<> db::commitlog::segment_manager::shutdown() {
     if (!_shutdown_promise) {
         _shutdown_promise = shared_promise<>();
 
-        // Wait for all pending requests to finish. Need to sync first because segments that are
-        // alive may be holding semaphore permits.
-        auto block_new_requests = get_units(_request_controller, max_request_controller_units());
-        try {
-            co_await sync_all_segments();
-        } catch (...) {
-            clogger.error("Syncing all segments failed during shutdown: {}. Aborting.", std::current_exception());
-            abort();
-        }
-
-        std::exception_ptr p;
-
-        try {
-            co_await std::move(block_new_requests);
-
-            _shutdown = true; // no re-arm, no create new segments.
-
-            // do a discard + delete sweep to force 
-            // gate holder (i.e. replenish) to wake up
-            discard_unused_segments();
-
-            auto f = _gate.close();
-            co_await do_pending_deletes();
-            auto ep = std::make_exception_ptr(shutdown_marker{});
-            if (_recycled_segments.empty()) {
-                abort_recycled_list(ep);
-            }
-            abort_deletion_promise(ep);
-            auto f2 = std::exchange(_background_sync, make_ready_future<>());
-
-            co_await std::move(f);
-            co_await std::move(f2);
-
-            try {
-                co_await shutdown_all_segments();
-            } catch (...) {
-                clogger.error("Shutting down all segments failed during shutdown: {}. Aborting.", std::current_exception());
-                abort();
-            }
-        } catch (...) {
-            p = std::current_exception();
-        }
-            
-        discard_unused_segments();
-
-        try {
-            co_await clear_reserve_segments();
-        } catch (...) {
-            p = std::current_exception();
-        }
-
         send(shutdown_request{});
+        try {
         co_await std::move(_message_loop);
-
-        // slight functional change from non-coroutine version: we propagate all/any
-        // exceptions, not just the replenish one.
-        if (p) {
-            _shutdown_promise->set_exception(p);
-        } else {
             _shutdown_promise->set_value();
+        } catch (...) {
+            _shutdown_promise->set_exception(std::current_exception());
         }
     }
     co_return co_await _shutdown_promise->get_shared_future();
