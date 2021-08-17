@@ -24,6 +24,8 @@
 #include <boost/test/unit_test.hpp>
 #include "hashers.hh"
 #include "xx_hasher.hh"
+#include "gc_clock.hh"
+#include "test/lib/simple_schema.hh"
 
 bytes text_part1("sanity");
 bytes text_part2("check");
@@ -67,4 +69,47 @@ BOOST_AUTO_TEST_CASE(bytes_view_hasher_sanity_check) {
     size_t hash2 = hasher2.finalize();
 
     BOOST_REQUIRE_EQUAL(hash1, hash2);
+}
+
+void hash_mutation_fragment_for_test(xx_hasher& h, const schema& s, const mutation_fragment& mf);
+
+BOOST_AUTO_TEST_CASE(mutation_fragment_sanity_check) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__);
+    simple_schema s;
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), "test");
+    gc_clock::time_point ts(gc_clock::duration(1234567890000));
+
+    auto check_hash = [&] (const mutation_fragment& mf, uint64_t expected) {
+        xx_hasher h;
+        hash_mutation_fragment_for_test(h, *s.schema(), mf);
+        auto v = h.finalize_uint64();
+        BOOST_REQUIRE_EQUAL(v, expected);
+    };
+
+
+
+    {
+        mutation_fragment f(*s.schema(), permit, partition_start{ s.make_pkey(0), {} });
+        check_hash(f, 0xfb4f06dd4de434c2ull);
+    }
+
+    {
+        mutation_fragment f(*s.schema(), permit, partition_start{ s.make_pkey(1), tombstone(42, ts) });
+        check_hash(f, 0xcd9299d785a70d8dull);
+    }
+
+    {
+        mutation_fragment f(*s.schema(), permit, s.make_row(permit, s.make_ckey(1), "abc"));
+        check_hash(f, 0x8ae8c4860ca108bbull);
+    }
+
+    {
+        mutation_fragment f(*s.schema(), permit, s.make_static_row(permit, "def"));
+        check_hash(f, 0x2b8119e27581bbeeull);
+    }
+
+    {
+        mutation_fragment f(*s.schema(), permit, s.make_range_tombstone(query::clustering_range::make(s.make_ckey(2), s.make_ckey(3)), ts));
+        check_hash(f, 0x5092daca1b27ea26ull);
+    }
 }

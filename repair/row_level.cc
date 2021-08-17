@@ -333,6 +333,11 @@ private:
     }
 };
 
+void hash_mutation_fragment_for_test(xx_hasher& h, const schema& s, const mutation_fragment& mf) {
+    fragment_hasher fh(s, h);
+    fh.hash(mf);
+}
+
 using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
 
 class repair_row {
