@@ -148,6 +148,7 @@ class reconcilable_result_builder {
     uint64_t _live_rows{};
     // make this the last member so it is destroyed first. #7240
     utils::chunked_vector<partition> _result;
+    size_t _used_at_entry;
 public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter) noexcept

@@ -1985,6 +1985,7 @@ void reconcilable_result_builder::consume_new_partition(const dht::decorated_key
     _live_rows = 0;
     auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
     _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), is_reversed));
+    _used_at_entry = _memory_accounter.used_memory();
 }
 
 void reconcilable_result_builder::consume(tombstone t) {
@@ -2029,6 +2030,17 @@ stop_iteration reconcilable_result_builder::consume_end_of_partition() {
     }
     _total_live_rows += _live_rows;
     _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
+
+    auto accounted = _memory_accounter.used_memory() - _used_at_entry;
+    auto actually_used = sizeof(partition) + _result.back().mut().representation().size();
+    if (actually_used > accounted) {
+        _memory_accounter.update(actually_used - accounted);
+    }
+
+    if (_slice.options.contains<query::partition_slice::option::allow_empty_pages>()) {
+        _stop = _stop || _memory_accounter.check();
+    }
+
     return _stop;
 }
 
