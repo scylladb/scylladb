@@ -736,11 +736,10 @@ const utils::UUID& database::get_version() const {
 }
 
 static future<>
-do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
+do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
     using namespace db::schema_tables;
 
-    auto cf_name = make_lw_shared<sstring>(_cf_name);
-    auto rs = co_await db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name);
+    auto rs = co_await db::system_keyspace::query(proxy, db::schema_tables::NAME, cf_name);
     {
         auto names = std::set<sstring>();
         for (auto& r : rs->rows()) {
@@ -752,14 +751,14 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
                 co_return;
             }
 
-            auto v = co_await read_schema_partition_for_keyspace(proxy, *cf_name, name);
+            auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
             {
                 {
                     {
                         try {
                             co_await func(v);
                         } catch (std::exception& e) {
-                            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, *cf_name, e.what());
+                            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, e.what());
                         }
                     }
                 }
