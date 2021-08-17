@@ -684,7 +684,18 @@ future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snaps
     _fsm->step(from, std::move(snp));
     // Only one snapshot can be received at a time from each node
     assert(! _snapshot_application_done.contains(from));
-    return _snapshot_application_done[from].get_future();
+    snapshot_reply reply{_fsm->get_current_term(), false};
+    try {
+        reply = co_await _snapshot_application_done[from].get_future();
+    } catch (...) {
+        logger.error("apply_snapshot[{}] failed with {}", _id, std::current_exception());
+    }
+    if (!reply.success) {
+        // Drop snapshot that failed to be applied
+        _state_machine->drop_snapshot(snp.snp.id);
+    }
+
+    co_return reply;
 }
 
 future<> server_impl::applier_fiber() {
