@@ -285,7 +285,7 @@ future<fsm_output> fsm::poll_output() {
         auto diff = _log.last_idx() - _log.stable_idx();
 
         if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum ||
-                (is_leader() && leader_state().last_read_id_changed)) {
+                (is_leader() && leader_state().last_read_id_changed) || _output.snp) {
             break;
         }
         co_await _sm_events.wait();
@@ -324,11 +324,6 @@ fsm_output fsm::get_output() {
 
     if (_observed._current_term != _current_term || _observed._voted_for != _voted_for) {
         output.term_and_vote = {_current_term, _voted_for};
-    }
-
-    // see if there was a new snapshot that has to be handled
-    if (_observed._snapshot.id != _log.get_snapshot().id) {
-        output.snp = _log.get_snapshot();
     }
 
     // Return committed entries.
@@ -967,8 +962,9 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing, bool local) {
         return false;
     }
     // If the snapshot is local, _commit_idx is larger than snp.idx.
-    // Otherwise snp.idx becomes the new commit nidex.
+    // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
+    _output.snp.emplace(fsm_output::applied_snapshot{snp, local, current_snp.id});
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);

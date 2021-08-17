@@ -30,12 +30,17 @@ namespace raft {
 
 // State of the FSM that needs logging & sending.
 struct fsm_output {
+    struct applied_snapshot {
+        snapshot snp;
+        bool is_local;
+        snapshot_id prev_snp_id;
+    };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
     std::vector<std::pair<server_id, rpc_message>> messages;
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
-    std::optional<snapshot> snp;
+    std::optional<applied_snapshot> snp;
     // Latest configuration obtained from the log in case it has changed
     // since last fsm output poll.
     std::optional<server_address_set> rpc_configuration;
@@ -182,14 +187,13 @@ class fsm {
         term_t _current_term;
         server_id _voted_for;
         index_t _commit_idx;
-        snapshot _snapshot;
         index_t _last_conf_idx;
         term_t _last_term;
         bool _abort_leadership_transfer;
 
         bool is_equal(const fsm& fsm) const {
             return _current_term == fsm._current_term && _voted_for == fsm._voted_for &&
-                _commit_idx == fsm._commit_idx && _snapshot.id == fsm._log.get_snapshot().id &&
+                _commit_idx == fsm._commit_idx &&
                 _last_conf_idx == fsm._log.last_conf_idx() &&
                 _last_term == fsm._log.last_term() &&
                 _abort_leadership_transfer == fsm._abort_leadership_transfer;
@@ -199,7 +203,6 @@ class fsm {
             _current_term = fsm._current_term;
             _voted_for = fsm._voted_for;
             _commit_idx = fsm._commit_idx;
-            _snapshot = fsm._log.get_snapshot();
             _last_conf_idx = fsm._log.last_conf_idx();
             _last_term = fsm._log.last_term();
             _abort_leadership_transfer = fsm._abort_leadership_transfer;

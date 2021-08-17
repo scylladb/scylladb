@@ -179,9 +179,6 @@ private:
     };
     absl::flat_hash_map<server_id, append_request_queue> _append_request_status;
 
-    // An id of last loaded snapshot into a state machine
-    snapshot_id _last_loaded_snapshot_id;
-
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
@@ -291,7 +288,6 @@ future<> server_impl::start() {
     _applied_idx = index_t{0};
     if (snapshot.id) {
         co_await _state_machine->load_snapshot(snapshot.id);
-        _last_loaded_snapshot_id = snapshot.id;
         _applied_idx = snapshot.idx;
     }
 
@@ -549,14 +545,17 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.snp) {
-                logger.trace("[{}] io_fiber storing snapshot {}", _id, batch.snp->id);
+                auto& [snp, is_local, old_id] = *batch.snp;
+                logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
-                co_await _persistence->store_snapshot(*batch.snp, _config.snapshot_trailing);
+                co_await _persistence->store_snapshot(snp, _config.snapshot_trailing);
                 _stats.store_snapshot++;
+                // Drop previous snapshot since it is no longer used
+                 _state_machine->drop_snapshot(old_id);
                 // If this is locally generated snapshot there is no need to
                 // load it.
-                if (_last_loaded_snapshot_id != batch.snp->id) {
-                    co_await _apply_entries.push_eventually(std::move(*batch.snp));
+                if (!is_local) {
+                    co_await _apply_entries.push_eventually(std::move(snp));
                 }
             }
 
@@ -735,7 +734,6 @@ future<> server_impl::applier_fiber() {
                    snp.config = _fsm->log_last_conf_for(_applied_idx);
                    logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                    snp.id = co_await _state_machine->take_snapshot();
-                   _last_loaded_snapshot_id = snp.id;
                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                    // a later snapshot from the queue.
@@ -751,9 +749,7 @@ future<> server_impl::applier_fiber() {
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
                 co_await _state_machine->load_snapshot(snp.id);
-                _state_machine->drop_snapshot(_last_loaded_snapshot_id);
                 drop_waiters(snp.idx);
-                _last_loaded_snapshot_id = snp.id;
                 _applied_idx = snp.idx;
                 _stats.sm_load_snapshot++;
             }
