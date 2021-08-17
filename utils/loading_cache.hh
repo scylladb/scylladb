@@ -142,10 +142,21 @@ private:
     timestamped_val_ptr _ts_val_ptr;
 
 public:
-    value_ptr(timestamped_val_ptr ts_val_ptr) : _ts_val_ptr(std::move(ts_val_ptr)) { _ts_val_ptr->touch(); }
+    value_ptr(timestamped_val_ptr ts_val_ptr) : _ts_val_ptr(std::move(ts_val_ptr)) {
+        if (_ts_val_ptr) {
+            _ts_val_ptr->touch();
+        }
+    }
+    value_ptr(std::nullptr_t) noexcept : _ts_val_ptr() {}
+    bool operator==(const value_ptr& x) const { return _ts_val_ptr == x._ts_val_ptr; }
+    bool operator!=(const value_ptr& x) const { return !operator==(x); }
     explicit operator bool() const noexcept { return bool(_ts_val_ptr); }
     value_type& operator*() const noexcept { return _ts_val_ptr->value(); }
     value_type* operator->() const noexcept { return &_ts_val_ptr->value(); }
+
+    friend std::ostream& operator<<(std::ostream& os, const value_ptr& vp) {
+        return os << vp._ts_val_ptr;
+    }
 };
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
@@ -258,14 +269,8 @@ private:
     using loading_values_type = typename ts_value_type::loading_values_type;
     using timestamped_val_ptr = typename loading_values_type::entry_ptr;
     using ts_value_lru_entry = typename ts_value_type::lru_entry;
-    using set_iterator = typename loading_values_type::iterator;
     using lru_list_type = typename ts_value_lru_entry::lru_list_type;
     using list_iterator = typename lru_list_type::iterator;
-    struct value_extractor_fn {
-        Tp& operator()(ts_value_lru_entry& le) const {
-            return le.timestamped_value().value();
-        }
-    };
 
 public:
     using value_type = Tp;
@@ -273,7 +278,6 @@ public:
     using value_ptr = typename ts_value_type::value_ptr;
 
     class entry_is_too_big : public std::exception {};
-    using iterator = boost::transform_iterator<value_extractor_fn, list_iterator>;
 
 private:
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
@@ -383,21 +387,24 @@ public:
         return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
     }
 
+    /// Find a value for a specific Key value and touch() it.
+    /// \tparam KeyType Key type
+    /// \tparam KeyHasher Hash functor type
+    /// \tparam KeyEqual Equality functor type
+    ///
+    /// \param key Key value to look for
+    /// \param key_hasher_func Hash functor
+    /// \param key_equal_func Equality functor
+    /// \return cache_value_ptr object pointing to the found value or nullptr otherwise.
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
-    iterator find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
-        return boost::make_transform_iterator(to_list_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func))), _value_extractor_fn);
+    value_ptr find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        // cache_value_ptr constructor is going to update a "last read" timestamp of the corresponding object and move
+        // the object to the front of the LRU
+        return set_find(key, std::move(key_hasher_func), std::move(key_equal_func));
     };
 
-    iterator find(const Key& k) noexcept {
-        return boost::make_transform_iterator(to_list_iterator(set_find(k)), _value_extractor_fn);
-    }
-
-    iterator end() {
-        return boost::make_transform_iterator(list_end(), _value_extractor_fn);
-    }
-
-    iterator begin() {
-        return boost::make_transform_iterator(list_begin(), _value_extractor_fn);
+    value_ptr find(const Key& k) noexcept {
+        return set_find(k);
     }
 
     template <typename Pred>
@@ -412,21 +419,12 @@ public:
     }
 
     void remove(const Key& k) {
-        auto it = set_find(k);
-        if (it == set_end()) {
-            return;
-        }
-
-        _lru_list.erase_and_dispose(_lru_list.iterator_to(*it->lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+        remove_ts_value(set_find(k));
     }
 
-    void remove(iterator it) {
-        if (it == end()) {
-            return;
-        }
-
-        const ts_value_type& val = ts_value_type::container_of(*it);
-        _lru_list.erase_and_dispose(_lru_list.iterator_to(*val.lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+    template<typename KeyType, typename KeyHasher, typename KeyEqual>
+    void remove(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        remove_ts_value(set_find(key, std::move(key_hasher_func), std::move(key_equal_func)));
     }
 
     size_t size() const {
@@ -439,49 +437,29 @@ public:
     }
 
 private:
-    /// Should only be called on values for which the following holds: set_it == set_end() || set_it->ready()
-    /// For instance this always holds for iterators returned by set_find(...).
-    list_iterator to_list_iterator(set_iterator set_it) {
-        if (set_it != set_end()) {
-            return _lru_list.iterator_to(*set_it->lru_entry_ptr());
+    void remove_ts_value(timestamped_val_ptr ts_ptr) {
+        if (!ts_ptr) {
+            return;
         }
-        return list_end();
+        _lru_list.erase_and_dispose(_lru_list.iterator_to(*ts_ptr->lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
     }
 
-    set_iterator ready_entry_iterator(set_iterator it) {
-        set_iterator end_it = set_end();
-
-        if (it == end_it || !it->ready()) {
-            return end_it;
+    timestamped_val_ptr ready_entry_ptr(timestamped_val_ptr tv_ptr) {
+        if (!tv_ptr || !tv_ptr->ready()) {
+            return nullptr;
         }
-        return it;
+        return std::move(tv_ptr);
     }
 
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
-    set_iterator set_find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
-        return ready_entry_iterator(_loading_values.find(key, std::move(key_hasher_func), std::move(key_equal_func)));
+    timestamped_val_ptr set_find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        return ready_entry_ptr(_loading_values.find(key, std::move(key_hasher_func), std::move(key_equal_func)));
     }
 
     // keep the default non-templated overloads to ease on the compiler for specifications
     // that do not require the templated find().
-    set_iterator set_find(const Key& key) noexcept {
-        return ready_entry_iterator(_loading_values.find(key));
-    }
-
-    set_iterator set_end() noexcept {
-        return _loading_values.end();
-    }
-
-    set_iterator set_begin() noexcept {
-        return _loading_values.begin();
-    }
-
-    list_iterator list_end() noexcept {
-        return _lru_list.end();
-    }
-
-    list_iterator list_begin() noexcept {
-        return _lru_list.begin();
+    timestamped_val_ptr set_find(const Key& key) noexcept {
+        return ready_entry_ptr(_loading_values.find(key));
     }
 
     bool caching_enabled() const {
@@ -613,7 +591,6 @@ private:
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
     seastar::gate _timer_reads_gate;
-    value_extractor_fn _value_extractor_fn;
 };
 
 }

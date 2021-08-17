@@ -197,9 +197,9 @@ SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_explicit_eviction)
         }).get();
 
         int rand_key = rand_int(num_loaders);
-        BOOST_REQUIRE(shared_values.find(rand_key) != shared_values.end());
+        BOOST_REQUIRE(shared_values.find(rand_key) != nullptr);
         anchors_vec[rand_key] = nullptr;
-        BOOST_REQUIRE_MESSAGE(shared_values.find(rand_key) == shared_values.end(), format("explicit removal for key {} failed", rand_key));
+        BOOST_REQUIRE_MESSAGE(shared_values.find(rand_key) == nullptr, format("explicit removal for key {} failed", rand_key));
         anchors_vec.clear();
     });
 }
@@ -236,29 +236,10 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_removing_key) {
 
     loading_cache.get_ptr(0, loader).discard_result().get();
     BOOST_REQUIRE_EQUAL(load_count, 1);
-    BOOST_REQUIRE(loading_cache.find(0) != loading_cache.end());
+    BOOST_REQUIRE(loading_cache.find(0) != nullptr);
 
     loading_cache.remove(0);
-    BOOST_REQUIRE(loading_cache.find(0) == loading_cache.end());
-}
-
-SEASTAR_THREAD_TEST_CASE(test_loading_cache_removing_iterator) {
-    using namespace std::chrono;
-    load_count = 0;
-    utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, testlog);
-    auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-    prepare().get();
-
-    loading_cache.get_ptr(0, loader).discard_result().get();
-    BOOST_REQUIRE_EQUAL(load_count, 1);
-
-    auto it = loading_cache.find(0);
-
-    BOOST_REQUIRE(it != loading_cache.end());
-
-    loading_cache.remove(it);
-    BOOST_REQUIRE(loading_cache.find(0) == loading_cache.end());
+    BOOST_REQUIRE(loading_cache.find(0) == nullptr);
 }
 
 SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
@@ -292,10 +273,69 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
 
         loading_cache.get_ptr(0, loader).discard_result().get();
 
-        BOOST_REQUIRE(loading_cache.find(0) != loading_cache.end());
+        BOOST_REQUIRE(loading_cache.find(0) != nullptr);
 
         sleep(20ms).get();
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.find(0), loading_cache.end());
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.find(0), nullptr);
+    });
+}
+
+SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_reset_on_sync_op) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 30ms, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        loading_cache.get_ptr(0, loader).discard_result().get();
+        auto vp = loading_cache.find(0);
+        auto load_time = steady_clock::now();
+
+        // Check that the expiration timer is reset every time we call a find()
+        for (int i = 0; i < 10; ++i) {
+            // seastar::lowres_clock has 10ms resolution. This means that we should use 10ms threshold to compensate.
+            if (steady_clock::now() <= load_time + 20ms) {
+                BOOST_REQUIRE(vp != nullptr);
+            } else {
+                // If there was a delay and we weren't able to execute the next loop iteration during 20ms let's repopulate
+                // the cache.
+                loading_cache.get_ptr(0, loader).discard_result().get();
+                BOOST_TEST_MESSAGE("Test " << i << " was skipped. Repopulating...");
+            }
+            vp = loading_cache.find(0);
+            load_time = steady_clock::now();
+            sleep(10ms).get();
+        }
+
+        sleep(30ms).get();
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_loading_cache_move_item_to_mru_list_front_on_sync_op) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        utils::loading_cache<int, sstring> loading_cache(2, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        for (int i = 0; i < 2; ++i) {
+            loading_cache.get_ptr(i, loader).discard_result().get();
+        }
+
+        auto vp0 = loading_cache.find(0);
+        BOOST_REQUIRE(vp0 != nullptr);
+
+        loading_cache.get_ptr(2, loader).discard_result().get();
+
+        // "0" should be at the beginning of the list and "1" right after it before we try to add a new entry to the
+        // cache ("2"). And hence "1" should get evicted.
+        vp0 = loading_cache.find(0);
+        auto vp1 = loading_cache.find(1);
+        BOOST_REQUIRE(vp0 != nullptr);
+        BOOST_REQUIRE(vp1 == nullptr);
     });
 }
 
