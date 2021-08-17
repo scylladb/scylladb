@@ -175,7 +175,6 @@ public:
     named_value<uint32_t> commitlog_sync_batch_window_in_ms;
     named_value<int64_t> commitlog_total_space_in_mb;
     named_value<int64_t> commitlog_flush_threshold_in_mb;
-    named_value<bool> commitlog_reuse_segments;
     named_value<bool> commitlog_use_o_dsync;
     named_value<bool> commitlog_use_hard_size_limit;
     named_value<bool> compaction_preheat_key_cache;

@@ -386,8 +386,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Related information: Configuring memtable throughput")
     , commitlog_flush_threshold_in_mb(this, "commitlog_flush_threshold_in_mb", value_status::Used, -1,
         "Threshold for commitlog disk usage. When used disk space goes above this value, Scylla initiates flushes of memtables to disk for the oldest commitlog segments, removing those log segments. Adjusting this affects disk usage vs. write latency.")
-    , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Used, true,
-        "Whether or not to re-use commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, false,
