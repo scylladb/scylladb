@@ -434,10 +434,15 @@ public:
         bool termination = false;
     };
 
+    struct close_request {
+        sseg_ptr segment = {};
+    };
+
     using message_payload = std::variant<
         shutdown_request,
         replenish_request,
-        write_request
+        write_request,
+        close_request
         // to come...
     >;
 
@@ -456,6 +461,7 @@ public:
     static inline message_type constexpr shutdown_request_index = get_index<shutdown_request, message_payload>::value;
     static inline message_type constexpr write_request_index = get_index<write_request, message_payload>::value;
     static inline message_type constexpr replenish_request_index = get_index<replenish_request, message_payload>::value;
+    static inline message_type constexpr close_request_index = get_index<close_request, message_payload>::value;
 
     using message_clock = clock_type; // todo: steady_clock_type? higher res.;
     static inline constexpr auto immediately = message_clock::time_point::min();
@@ -469,6 +475,7 @@ public:
     };
 
     void send(message_payload);
+    void wakeup();
     
 private:
     class shutdown_marker{};
@@ -519,11 +526,11 @@ private:
     void abort_recycled_list(std::exception_ptr);
 
     future<> message_loop();
-    void wakeup();
 
     void handle_writes(messages&, pending_tasks&);
     void handle_replenishes(messages&, pending_tasks&);
     void handle_shutdowns(messages&, pending_tasks&);
+    void handle_closes(messages&, pending_tasks&);
     void do_periodic_syncs(pending_tasks&);
     void do_periodic_flush_callbacks(pending_tasks&);
     void replenish_reserve(pending_tasks&);
@@ -655,7 +662,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     void end_flush() {
         _segment_manager->end_flush();
         if (can_delete()) {
-            _segment_manager->discard_unused_segments();
+            _segment_manager->wakeup();
         }
     }
 
@@ -720,7 +727,7 @@ public:
     void release_cf_count(const cf_id_type& cf) override {
         mark_clean(cf, 1);
         if (can_delete()) {
-            _segment_manager->discard_unused_segments();
+            _segment_manager->wakeup();
         }
     }
 
@@ -741,8 +748,7 @@ public:
      * Finalize this segment and get a new one
      */
     future<sseg_ptr> finish_and_get_new(db::timeout_clock::time_point timeout) {
-        //FIXME: discarded future.
-        (void)close();
+        issue_close_request();
         return _segment_manager->active_segment(timeout);
     }
     time_point sync_time() const {
@@ -751,35 +757,13 @@ public:
     void reset_sync_time() {
         _sync_time = clock_type::now();
     }
-    future<sseg_ptr> shutdown() {
-        /**
-         * When we are shutting down, we first
-         * close the segment, thus no new
-         * data can be appended. Then we just issue a
-         * flush, which will wait for any queued ops
-         * to complete as well. Then we close the ops
-         * queue, just to be sure.
-         */
-        auto me = shared_from_this();
-        // could have kept the "finally" continuations
-        // here, but this potentially missed immediate 
-        // exceptions thrown in close/p_o.close.
-        std::exception_ptr p;
-        try {
-            co_await close();
-        } catch (...) {
-            p = std::current_exception();
-        }
-        co_await _file.truncate(_flush_pos);
-        co_await _file.close();
-        _closed_file = true;
 
-        if (p) {
-            co_return coroutine::exception(std::move(p));
-        }
-
-        co_return me;
+    future<> shutdown() {
+        // only called from segment_manager::shutdown
+        _closed = true;
+        return do_close();
     }
+
     // See class comment for info
     future<sseg_ptr> sync() {
         return cycle(true);
@@ -799,15 +783,34 @@ public:
                 return cycle(true, true);
             }
         }
-        return make_ready_future<sseg_ptr>(shared_from_this());
+        // just in case, wait for flushing to finish up to what is now final end
+        // pos.
+        return _flush_pos.wait(_file_pos).then([me = shared_from_this()] {
+            return me;
+        });
     }
-    future<sseg_ptr> close() {
-        auto me = shared_from_this();
-        _closed = true;
+    void issue_close_request() {
+        if (!std::exchange(_closed, true)) {
+            _segment_manager->send(segment_manager::close_request{shared_from_this()});
+        }
+    }
+    future<> do_close() {
+        clogger.trace("Begin close of {}", *this);
         co_await sync();
         co_await terminate();
-        _segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
-        co_return me;
+        if (!_closed_file) {
+            _segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
+            if (_segment_manager->_state != segment_manager::state::active && _flush_pos < _size_on_disk) {
+                co_await _file.truncate(_flush_pos);
+                _segment_manager->totals.total_size_on_disk -= (_size_on_disk - _flush_pos);
+            }
+            co_await _file.close();
+            _closed_file = true;
+        }
+        clogger.trace("Closed {}", *this);
+    }
+    future<> perform_close_request(segment_manager::close_request r) {
+        return do_close();
     }
 
     /**
@@ -1498,13 +1501,9 @@ future<> db::commitlog::segment_manager::message_loop() {
 
         if (!msgs.empty()) {
             handle_writes(msgs, tasks);
+            handle_closes(msgs, tasks);
             handle_replenishes(msgs, tasks);
             handle_shutdowns(msgs, tasks);
-
-            auto mp = msgs.extract_messages(shutdown_request_index);
-            if (!mp.empty()) {
-                shutdown = true;
-            }
         }
         
         do_periodic_syncs(tasks);
@@ -1588,6 +1587,24 @@ void db::commitlog::segment_manager::handle_shutdowns(messages& msgs, pending_ta
     }
 }
 
+void db::commitlog::segment_manager::handle_closes(messages& msgs, pending_tasks& tasks) {
+    auto mp = msgs.extract_messages(close_request_index);
+
+    for (auto&& m : mp) {
+        auto& c = std::get<close_request>(m.payload);
+        tasks.add([this](close_request c) -> future<> {
+            auto s = std::move(c.segment);
+            try {
+                co_await s->perform_close_request(std::move(c));
+                // ensure we run cleanup etc.
+                wakeup();
+            } catch (...) {
+                clogger.error("Error processing close request: {}", std::current_exception());
+            }
+        }, std::move(c));
+    }
+}
+
 void db::commitlog::segment_manager::do_periodic_syncs(pending_tasks& tasks) {
     auto def_copy = _segments;
     for (auto& s : def_copy) {
@@ -1620,6 +1637,7 @@ void db::commitlog::segment_manager::do_periodic_flush_callbacks(pending_tasks& 
 }
 
 void db::commitlog::segment_manager::do_pending_deletes(pending_tasks& tasks) {
+    discard_unused_segments();
     tasks.add([this] { return do_pending_deletes(); });
 }
 
@@ -2050,21 +2068,29 @@ void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type
 
     clogger.debug("Discarding {}: {}", id, usage);
 
+    bool marked = false;
     for (auto&s : _segments) {
         auto i = usage.find(s->_desc.id);
         if (i != usage.end()) {
             s->mark_clean(id, i->second);
+            marked = true;
         }
     }
-    discard_unused_segments();
+    if (marked) {
+        wakeup();
+    }
 }
 
 void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id) {
     clogger.debug("Discard all data for {}", id);
+    bool marked = false;
     for (auto&s : _segments) {
         s->mark_clean(id);
+        marked = true;
     }
-    discard_unused_segments();
+    if (marked) {
+        wakeup();
+    }
 }
 
 namespace db {
@@ -2144,8 +2170,12 @@ future<> db::commitlog::segment_manager::shutdown_all_segments() {
     // _segments (end_flush()->discard_unused())
     auto def_copy = _segments;
     co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
-        co_await s->shutdown();
-        clogger.debug("Shutdown segment {}", *s);
+        try {
+            co_await s->shutdown();
+            clogger.debug("Shutdown segment {}", *s);
+        } catch (...) {
+            clogger.error("Exception in shutdown segment {}", std::current_exception());
+        }
     });
 }
 
@@ -2167,10 +2197,12 @@ future<> db::commitlog::segment_manager::shutdown() {
 void db::commitlog::segment_manager::add_file_to_delete(sstring filename, descriptor d) {
     assert(!_files_to_delete.contains(filename));
     _files_to_delete.emplace(std::move(filename), std::move(d));
+    wakeup();
 }
 
 void db::commitlog::segment_manager::add_file_to_close(file f) {
     _files_to_close.emplace_back(std::move(f));
+    wakeup();
 }
 
 future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
