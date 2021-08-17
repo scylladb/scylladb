@@ -210,6 +210,10 @@ public:
         auto rs = p.rows();
         return { p.key().value(), !rs.empty() ? rs.back().key() : std::optional<clustering_key>() };
     }
+
+    bool empty() const {
+        return _v.partitions().empty();
+    }
 };
 
 }

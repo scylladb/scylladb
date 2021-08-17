@@ -772,8 +772,10 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     const bool restrictions_need_filtering = _restrictions->need_filtering();
     const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !restrictions_need_filtering;
     if (fast_path) {
+        results->ensure_counts(); // Should be no-op since 2.1
+        bool empty = results->row_count() == 0;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::rows>(result(
-            result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
+            result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats, empty),
             ::make_shared<metadata>(*_selection->get_result_metadata()))
         ));
     }

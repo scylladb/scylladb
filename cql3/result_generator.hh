@@ -33,6 +33,7 @@ class result_generator {
     lw_shared_ptr<const query::read_command> _command;
     shared_ptr<const selection::selection> _selection;
     cql_stats* _stats;
+    bool _empty;
 private:
     friend class untyped_result_set;
     template<typename Visitor>
@@ -122,12 +123,13 @@ public:
     result_generator() = default;
 
     result_generator(schema_ptr s, foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<const query::read_command> cmd,
-                     ::shared_ptr<const selection::selection> select, cql_stats& stats)
+                     ::shared_ptr<const selection::selection> select, cql_stats& stats, bool empty)
         : _schema(std::move(s))
         , _result(std::move(result))
         , _command(std::move(cmd))
         , _selection(std::move(select))
         , _stats(&stats)
+        , _empty(empty)
     { }
 
     template<typename Visitor>
@@ -135,6 +137,10 @@ public:
         query_result_visitor<Visitor> v(*_schema, visitor, *_selection);
         query::result_view::consume(*_result, _command->slice, v);
         _stats->rows_read += v.rows_read();
+    }
+
+    bool empty() const {
+        return _empty;
     }
 };
 

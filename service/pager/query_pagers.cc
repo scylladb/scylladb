@@ -234,7 +234,7 @@ future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_s
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         handle_result(noop_visitor(), qr.query_result, page_size, now);
-        return cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats);
+        return cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats, _row_count == 0);
     });
 }
 
@@ -344,6 +344,7 @@ public:
             }
 
             row_count = v.total_rows - v.dropped_rows;
+            _row_count = row_count;
             _max = _max - row_count;
             _exhausted = (v.total_rows < page_size && !results->is_short_read() && v.dropped_rows == 0) || _max == 0;
             // If per partition limit is defined, we need to accumulate rows fetched for last partition key if the key matches
@@ -358,6 +359,7 @@ public:
             _last_ckey = v.last_ckey;
         } else {
             row_count = results->row_count() ? *results->row_count() : std::get<1>(view.count_partitions_and_rows());
+            _row_count = row_count;
             _max = _max - row_count;
             _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
 

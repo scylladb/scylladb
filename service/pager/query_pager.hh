@@ -82,6 +82,7 @@ protected:
     // remember if we use clustering. if not, each partition == one row
     const bool _has_clustering_keys;
     bool _exhausted = false;
+    uint64_t _row_count;
     uint64_t _max;
     uint64_t _per_partition_limit;
 
