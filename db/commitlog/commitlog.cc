@@ -552,9 +552,13 @@ public:
     };
 
     struct shutdown_request {};
+    struct close_request {
+        sseg_ptr segment = {};
+    };
 
     using message = std::variant<
-        shutdown_request
+        shutdown_request,
+        close_request
         // to come...
     >;
 
@@ -901,8 +905,7 @@ public:
      * Finalize this segment and get a new one
      */
     future<sseg_ptr> finish_and_get_new(db::timeout_clock::time_point timeout) {
-        //FIXME: discarded future.
-        (void)close();
+        issue_close_request();
         return _segment_manager->active_segment(timeout);
     }
     time_point sync_time() const {
@@ -911,34 +914,14 @@ public:
     void reset_sync_time() {
         _sync_time = clock_type::now();
     }
-    future<sseg_ptr> shutdown() {
-        /**
-         * When we are shutting down, we first
-         * close the segment, thus no new
-         * data can be appended. Then we just issue a
-         * flush, which will wait for any queued ops
-         * to complete as well. Then we close the ops
-         * queue, just to be sure.
-         */
-        auto me = shared_from_this();
-        // could have kept the "finally" continuations
-        // here, but this potentially missed immediate 
-        // exceptions thrown in close/p_o.close.
-        std::exception_ptr p;
-        try {
-            co_await close();
-        } catch (...) {
-            p = std::current_exception();
-        }
-        co_await _file.truncate(_flush_pos);
-        co_await _file.close();
 
-        if (p) {
-            co_return coroutine::exception(std::move(p));
+    future<> shutdown() {
+        // only called from segment_manager::shutdown
+        if (!std::exchange(_closed, true)) {
+            co_await do_close();
         }
-
-        co_return me;
     }
+
     // See class comment for info
     future<sseg_ptr> sync() {
         // Note: this is not a marker for when sync was finished.
@@ -948,29 +931,61 @@ public:
     }
     future<sseg_ptr> terminate() {
         assert(_closed);
-        if (!std::exchange(_terminated, true)) {
-            // write a terminating zero block iff we are ending (a reused)
-            // block before actual file end.
-            // we should only get here when all actual data is 
-            // already flushed (see below, close()).
-            if (file_position() < _segment_manager->max_size) {
-                clogger.trace("{} is closed but not terminated.", *this);
-                if (_buffer.empty()) {
-                    new_buffer(0);
+        bool terminate = false;
+
+        for (;;) {
+            auto wr = make_write_request(true, terminate);
+            auto top = wr.file_offset + wr.size;
+
+            co_await perform_write_request(wr);
+            co_await _flush_pos.wait(top);
+
+            // should not really get here more than once, but...
+            if (!std::exchange(_terminated, true)) {
+                // write a terminating zero block iff we are ending (a reused)
+                // block before actual file end.
+                // we should only get here when all actual data is 
+                // already flushed (see below, close()).
+                if (file_position() < _segment_manager->max_size) {
+                    clogger.trace("{} is closed but not terminated.", *this);
+                    if (_buffer.empty()) {
+                        new_buffer(0);
+                    }
+                    terminate = true;
+                    continue;
                 }
-                return cycle(true, true);
             }
+            break;
         }
-        return make_ready_future<sseg_ptr>(shared_from_this());
+
+        // just in case, wait for flushing to finish up to what is now final end
+        // pos.
+        co_return co_await _flush_pos.wait(_file_pos).then([me = shared_from_this()] {
+            return me;
+        });
     }
-    future<sseg_ptr> close() {
-        auto me = shared_from_this();
-        _closed = true;
-        co_await sync();
+    void issue_close_request() {
+        if (!std::exchange(_closed, true)) {
+            _segment_manager->send(segment_manager::close_request{shared_from_this()});
+        }
+    }
+    future<> do_close() {
+        clogger.trace("Begin close of {}", *this);
         co_await terminate();
-        _waste = _file.known_size() - file_position();
-        _segment_manager->totals.wasted_size_on_disk += _waste;
-        co_return me;
+        if (_file) {
+            _waste = _file.known_size() - file_position();
+            _segment_manager->totals.wasted_size_on_disk += _waste;
+            // if we are shutting down, maybe truncate the file length. If we get here on recycle etc, don't
+            if (_segment_manager->_state != segment_manager::state::active && _flush_pos < _file.known_size()) {
+                co_await _file.truncate(_flush_pos);
+                _segment_manager->totals.total_size_on_disk -= (_file.known_size() - _flush_pos);
+            }
+            co_await _file.close();
+        }
+        clogger.trace("Closed {}", *this);
+    }
+    future<> perform_close_request(const segment_manager::close_request& r) {
+        return do_close();
     }
 
     /**
@@ -1598,8 +1613,14 @@ future<> db::commitlog::segment_manager::message_loop() {
         while (!_message_queue.empty()) {
             auto m = _message_queue.pop();
 
-            std::visit(overloaded_functor {
-                [&](const shutdown_request&) { shutdown = true; },
+            co_await std::visit(overloaded_functor {
+                [&](const shutdown_request&) { 
+                    shutdown = true;
+                    return make_ready_future<>(); 
+                },
+                [&](const close_request& r) {
+                    return r.segment->perform_close_request(r);
+                },
             }, m);
         }
 
@@ -2268,8 +2289,7 @@ future<> db::commitlog::segment_manager::force_new_active_segment() noexcept {
 
     auto& s = _segments.back();
     if (s->position()) { // check used.
-        co_await s->close();
-        discard_unused_segments();
+        s->issue_close_request();
     }
 }
 
@@ -2344,9 +2364,13 @@ future<> db::commitlog::segment_manager::shutdown_all_segments() {
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
     auto def_copy = _segments;
-    co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
-        co_await s->shutdown();
-        clogger.debug("Shutdown segment {}", *s);
+    co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
+        try {
+            co_await s->shutdown();
+            clogger.debug("Shutdown segment {}", *s);
+        } catch (...) {
+            clogger.error("Exception in shutdown segment {}", std::current_exception());
+        }
     });
 }
 
@@ -2369,6 +2393,7 @@ future<> db::commitlog::segment_manager::shutdown() {
 
 void db::commitlog::segment_manager::add_file_to_dispose(named_file f, dispose_mode mode) {
     _files_to_dispose.emplace_back(std::move(f), mode);
+    wakeup();
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
