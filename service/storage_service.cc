@@ -3224,7 +3224,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
     auto& table = _db.local().find_column_family(table_id);
     auto s = table.schema();
     const auto cf_id = s->id();
-    const auto reason = streaming::stream_reason::rebuild;
+    const auto reason = streaming::stream_reason::repair;
     auto& rs = _db.local().find_keyspace(ks_name).get_replication_strategy();
 
     size_t nr_sst_total = sstables.size();
