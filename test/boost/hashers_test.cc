@@ -71,8 +71,6 @@ BOOST_AUTO_TEST_CASE(bytes_view_hasher_sanity_check) {
     BOOST_REQUIRE_EQUAL(hash1, hash2);
 }
 
-void hash_mutation_fragment_for_test(xx_hasher& h, const schema& s, const mutation_fragment& mf);
-
 BOOST_AUTO_TEST_CASE(mutation_fragment_sanity_check) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__);
     simple_schema s;
@@ -81,7 +79,7 @@ BOOST_AUTO_TEST_CASE(mutation_fragment_sanity_check) {
 
     auto check_hash = [&] (const mutation_fragment& mf, uint64_t expected) {
         xx_hasher h;
-        hash_mutation_fragment_for_test(h, *s.schema(), mf);
+        feed_hash(h, mf, *s.schema());
         auto v = h.finalize_uint64();
         BOOST_REQUIRE_EQUAL(v, expected);
     };

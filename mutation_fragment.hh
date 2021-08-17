@@ -616,3 +616,11 @@ concept StreamedMutationTranformer =
         { f(std::move(mf)) } -> std::same_as<mutation_fragment>;
         { f(s) } -> std::same_as<schema_ptr>;
     };
+
+class xx_hasher;
+
+template<>
+struct appending_hash<mutation_fragment> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const;
+};

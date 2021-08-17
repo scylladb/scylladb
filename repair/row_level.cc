@@ -261,83 +261,6 @@ public:
     }
 };
 
-class fragment_hasher {
-    const schema& _schema;
-    xx_hasher& _hasher;
-private:
-    void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
-        feed_hash(_hasher, col.kind);
-        feed_hash(_hasher, col.id);
-        feed_hash(_hasher, cell, col);
-    }
-public:
-    explicit fragment_hasher(const schema&s, xx_hasher& h)
-        : _schema(s), _hasher(h) { }
-
-    void hash(const mutation_fragment& mf) {
-        mf.visit(seastar::make_visitor(
-            [&] (const clustering_row& cr) {
-                consume(cr);
-            },
-            [&] (const static_row& sr) {
-                consume(sr);
-            },
-            [&] (const range_tombstone& rt) {
-                consume(rt);
-            },
-            [&] (const partition_start& ps) {
-                consume(ps);
-            },
-            [&] (const partition_end& pe) {
-                throw std::runtime_error("partition_end is not expected");
-            }
-        ));
-    }
-
-private:
-
-    void consume(const tombstone& t) {
-        feed_hash(_hasher, t);
-    }
-
-    void consume(const static_row& sr) {
-        sr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-            auto&& col = _schema.static_column_at(id);
-            consume_cell(col, cell);
-        });
-    }
-
-    void consume(const clustering_row& cr) {
-        feed_hash(_hasher, cr.key(), _schema);
-        feed_hash(_hasher, cr.tomb());
-        feed_hash(_hasher, cr.marker());
-        cr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-            auto&& col = _schema.regular_column_at(id);
-            consume_cell(col, cell);
-        });
-    }
-
-    void consume(const range_tombstone& rt) {
-        feed_hash(_hasher, rt.start, _schema);
-        feed_hash(_hasher, rt.start_kind);
-        feed_hash(_hasher, rt.tomb);
-        feed_hash(_hasher, rt.end, _schema);
-        feed_hash(_hasher, rt.end_kind);
-    }
-
-    void consume(const partition_start& ps) {
-        feed_hash(_hasher, ps.key().key(), _schema);
-        if (ps.partition_tombstone()) {
-            consume(ps.partition_tombstone());
-        }
-    }
-};
-
-void hash_mutation_fragment_for_test(xx_hasher& h, const schema& s, const mutation_fragment& mf) {
-    fragment_hasher fh(s, h);
-    fh.hash(mf);
-}
-
 using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
 
 class repair_row {
@@ -1210,8 +1133,7 @@ private:
 
     repair_hash do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
         xx_hasher h(_seed);
-        fragment_hasher fh(*_schema, h);
-        fh.hash(mf);
+        feed_hash(h, mf, *_schema);
         feed_hash(h, dk_with_hash.hash.hash);
         return repair_hash(h.finalize_uint64());
     }
