@@ -325,11 +325,15 @@ public:
 //  - query-result-writer.hh
 
 class result {
+public:
+    using primary_key = std::tuple<partition_key, std::optional<clustering_key>>;
+private:
     bytes_ostream _w;
     std::optional<result_digest> _digest;
     std::optional<uint32_t> _row_count_low_bits;
     api::timestamp_type _last_modified = api::missing_timestamp;
     short_read _short_read;
+    std::optional<primary_key> _short_read_pos; // Not serialized.
     query::result_memory_tracker _memory_tracker;
     std::optional<uint32_t> _partition_count;
     std::optional<uint32_t> _row_count_high_bits;
@@ -391,6 +395,19 @@ public:
     result(const result&) = default;
     result& operator=(result&&) = default;
     result& operator=(const result&) = default;
+
+    // Sets the short read position of the result.
+    // All writes with keys up to this position (inclusive) are reflected in the result.
+    void set_short_read_pos(primary_key key) {
+        _short_read_pos = std::move(key);
+    }
+
+    // When returns an engaged optional, all writes with keys up to this position (inclusive)
+    // are reflected in the result.
+    // When disengaged, the result reflects writes with keys up to at least the highest position included in the result.
+    const std::optional<primary_key>& short_read_pos() {
+        return _short_read_pos;
+    }
 
     const bytes_ostream& buf() const {
         return _w;

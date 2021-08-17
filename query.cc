@@ -218,7 +218,16 @@ result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     } else {
         out << "{}";
     }
-    out << ", short_read=" << is_short_read() << " }";
+    out << ", short_read=" << is_short_read();
+    if (_short_read_pos) {
+        auto [pkey, ckey] = *_short_read_pos;
+        out << ", short_pos=(" << pkey.with_schema(*s);
+        if (ckey) {
+            out << ", " << ckey->with_schema(*s);
+        }
+        out << ")";
+    }
+    out << " }";
     return out.str();
 }
 
@@ -281,6 +290,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     uint64_t row_count = 0;
     short_read is_short_read;
     uint32_t partition_count = 0;
+    std::optional<query::result::primary_key> srp;
 
     for (auto&& r : _partial) {
         result_view::do_with(*r, [&] (result_view rv) {
@@ -306,6 +316,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
         });
         if (r->is_short_read()) {
             is_short_read = short_read::yes;
+            srp = r->short_read_pos();
             break;
         }
         if (row_count >= _max_rows || partition_count >= _max_partitions) {
@@ -315,7 +326,11 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
 
     std::move(partitions).end_partitions().end_query_result();
 
-    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
+    auto res = make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
+    if (srp) {
+        res->set_short_read_pos(std::move(*srp));
+    }
+    return res;
 }
 
 }

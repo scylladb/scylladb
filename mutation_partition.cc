@@ -2038,13 +2038,63 @@ reconcilable_result reconcilable_result_builder::consume_end_of_stream() {
                                std::move(_memory_accounter).done());
 }
 
+template<FlattenedConsumer Delegate>
+class position_recording_consumer {
+    Delegate _delegate;
+    std::optional<dht::decorated_key> _pkey;
+    std::optional<clustering_key> _ckey;
+public:
+    position_recording_consumer(Delegate delegate)
+        : _delegate(std::move(delegate))
+    { }
+
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _pkey = dk;
+        _ckey = std::nullopt;
+        _delegate.consume_new_partition(dk);
+    }
+
+    void consume(tombstone t) {
+        _delegate.consume(std::move(t));
+    }
+
+    stop_iteration consume(static_row&& sr) {
+        return _delegate.consume(std::move(sr));
+    }
+
+    stop_iteration consume(clustering_row&& cr) {
+        _ckey = cr.key();
+        return _delegate.consume(std::move(cr));
+    }
+
+    stop_iteration consume(range_tombstone&& rt) {
+        return _delegate.consume(std::move(rt));
+    }
+
+    stop_iteration consume_end_of_partition() {
+        return _delegate.consume_end_of_partition();
+    }
+
+    auto consume_end_of_stream() {
+        return _delegate.consume_end_of_stream();
+    }
+
+    std::optional<query::result::primary_key> last_key() const {
+        if (!_pkey) {
+            return std::nullopt;
+        }
+        return std::make_tuple(_pkey->key(), std::move(_ckey));
+    }
+};
+
 query::result
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint64_t max_rows, uint32_t max_partitions,
         query::result_options opts) {
     // This result was already built with a limit, don't apply another one.
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
-    auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
-            max_partitions, query_result_builder(*s, builder));
+    auto consumer = position_recording_consumer(
+        compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
+            max_partitions, query_result_builder(*s, builder)));
     const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
 
     for (const partition& p : r.partitions()) {
@@ -2056,7 +2106,17 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     if (r.is_short_read()) {
         builder.mark_as_short_read();
     }
-    return builder.build();
+
+    auto qr = builder.build();
+
+    if (r.is_short_read()) {
+        auto pk = consumer.last_key();
+        if (pk) {
+            qr.set_short_read_pos(std::move(*pk));
+        }
+    }
+
+    return qr;
 }
 
 query::result

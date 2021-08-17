@@ -34,6 +34,7 @@
 #include "test/lib/result_set_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/simple_schema.hh"
 
 #include "mutation_query.hh"
 #include <seastar/core/do_with.hh>
@@ -489,6 +490,104 @@ SEASTAR_TEST_CASE(test_result_row_count) {
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1, m2}), query::full_partition_range, slice, 10000, query::max_partitions, now),
                     s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
+    });
+}
+
+SEASTAR_TEST_CASE(test_to_data_query_result) {
+    return seastar::async([] {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pkeys = ss.make_pkeys(3);
+        std::vector<mutation> muts;
+        {
+            mutation m(s, pkeys[0]);
+            ss.add_row(m, ss.make_ckey(1), "v1");
+            ss.add_row(m, ss.make_ckey(2), "v2");
+            ss.add_row(m, ss.make_ckey(3), "v3");
+            muts.push_back(m);
+        }
+        {
+            mutation m(s, pkeys[1]);
+            ss.add_row(m, ss.make_ckey(4), "v4");
+            ss.add_row(m, ss.make_ckey(5), "v5");
+            ss.add_row(m, ss.make_ckey(6), "v6");
+            muts.push_back(m);
+        }
+        {
+            mutation m(s, pkeys[2]);
+            ss.add_row(m, ss.make_ckey(7), "v7");
+            ss.add_row(m, ss.make_ckey(8), "v8");
+            ss.add_row(m, ss.make_ckey(9), "v9");
+            muts.push_back(m);
+        }
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        auto slice = partition_slice_builder(*s).build();
+        auto rev_slice = partition_slice_builder(*s).reversed().build();
+        auto src = make_source(muts);
+
+        utils::chunked_vector<partition> parts;
+        parts.push_back(partition(3, freeze(muts[0])));
+        parts.push_back(partition(3, freeze(muts[1])));
+        parts.push_back(partition(3, freeze(muts[2])));
+        reconcilable_result rr(9, std::move(parts), query::short_read::yes);
+
+        {
+            query::result r = to_data_query_result(rr, s, slice, 1, inf32);
+            testlog.trace("r = {}", r.pretty_print(s, slice));
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
+            BOOST_REQUIRE(r.short_read_pos());
+            auto [pkey, ckey] = *r.short_read_pos();
+            BOOST_REQUIRE(pkey.equal(*s, pkeys[0].key()));
+            BOOST_REQUIRE(ckey);
+            BOOST_REQUIRE(ckey->equal(*s, ss.make_ckey(1)));
+        }
+
+        {
+            query::result r = to_data_query_result(rr, s, slice, inf32, inf32);
+            testlog.trace("r = {}", r.pretty_print(s, slice));
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 9);
+            BOOST_REQUIRE(r.short_read_pos());
+            auto [pkey, ckey] = *r.short_read_pos();
+            BOOST_REQUIRE(pkey.equal(*s, pkeys[2].key()));
+            BOOST_REQUIRE(ckey);
+            BOOST_REQUIRE(ckey->equal(*s, ss.make_ckey(9)));
+        }
+
+        {
+            query::result r = to_data_query_result(rr, s, slice, inf32, 2);
+            testlog.trace("r = {}", r.pretty_print(s, slice));
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 6);
+            BOOST_REQUIRE(r.short_read_pos());
+            auto [pkey, ckey] = *r.short_read_pos();
+            BOOST_REQUIRE(pkey.equal(*s, pkeys[1].key()));
+            BOOST_REQUIRE(ckey);
+            BOOST_REQUIRE(ckey->equal(*s, ss.make_ckey(6)));
+        }
+
+        {
+            query::result r = to_data_query_result(rr, s, rev_slice, 1, inf32);
+            testlog.trace("r = {}", r.pretty_print(s, rev_slice));
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
+            BOOST_REQUIRE(r.short_read_pos());
+            auto [pkey, ckey] = *r.short_read_pos();
+            BOOST_REQUIRE(pkey.equal(*s, pkeys[0].key()));
+            BOOST_REQUIRE(ckey);
+            BOOST_REQUIRE(ckey->equal(*s, ss.make_ckey(3)));
+        }
+
+        {
+            query::result r = to_data_query_result(rr, s, rev_slice, inf32, inf32);
+            testlog.trace("r = {}", r.pretty_print(s, rev_slice));
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 9);
+            BOOST_REQUIRE(r.short_read_pos());
+            auto [pkey, ckey] = *r.short_read_pos();
+            BOOST_REQUIRE(pkey.equal(*s, pkeys[2].key()));
+            BOOST_REQUIRE(ckey);
+            BOOST_REQUIRE(ckey->equal(*s, ss.make_ckey(7)));
+        }
     });
 }
 
