@@ -740,31 +740,23 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
     using namespace db::schema_tables;
 
     auto rs = co_await db::system_keyspace::query(proxy, db::schema_tables::NAME, cf_name);
-    {
-        auto names = std::set<sstring>();
-        for (auto& r : rs->rows()) {
-            auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
-            names.emplace(keyspace_name);
-        }
-        co_await parallel_for_each(names.begin(), names.end(), [&] (sstring name) mutable -> future<> {
-            if (is_system_keyspace(name)) {
-                co_return;
-            }
-
-            auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
-            {
-                {
-                    {
-                        try {
-                            co_await func(v);
-                        } catch (std::exception& e) {
-                            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, e.what());
-                        }
-                    }
-                }
-            }
-        });
+    auto names = std::set<sstring>();
+    for (auto& r : rs->rows()) {
+        auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
+        names.emplace(keyspace_name);
     }
+    co_await parallel_for_each(names.begin(), names.end(), [&] (sstring name) mutable -> future<> {
+        if (is_system_keyspace(name)) {
+            co_return;
+        }
+
+        auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
+        try {
+            co_await func(v);
+        } catch (std::exception& e) {
+            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, e.what());
+        }
+    });
 }
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
@@ -773,63 +765,51 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         auto ksm = create_keyspace_from_schema_partition(v);
         co_return co_await create_keyspace(ksm, true /* bootstrap. do not mark populated yet */, system_keyspace::no);
     });
-    {
-        co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, [&] (schema_result_value_type &v) -> future<> {
-            auto& ks = this->find_keyspace(v.first);
-            auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
-            for (auto&& type : user_types) {
-                ks.add_user_type(type);
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, [&] (schema_result_value_type &v) -> future<> {
+        auto& ks = this->find_keyspace(v.first);
+        auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
+        for (auto&& type : user_types) {
+            ks.add_user_type(type);
+        }
+        co_return;
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [&] (schema_result_value_type& v) -> future<> {
+        auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
+        for (auto&& func : user_functions) {
+            cql3::functions::functions::add_function(func);
+        }
+        co_return;
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, [&] (schema_result_value_type &v) -> future<> {
+        std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
+        co_await parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
+            co_await this->add_column_family_and_make_directory(t.second);
+            auto s = t.second;
+            // Recreate missing column mapping entries in case
+            // we failed to persist them for some reason after a schema change
+            bool cm_exists = co_await db::schema_tables::column_mapping_exists(s->id(), s->version());
+            if (cm_exists) {
+                co_return;
             }
-            co_return;
+            co_return co_await db::schema_tables::store_column_mapping(proxy, s, false);
         });
-        co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [&] (schema_result_value_type& v) -> future<> {
-            auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
-            for (auto&& func : user_functions) {
-                cql3::functions::functions::add_function(func);
-            }
-            co_return;
-        });
-        co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, [&] (schema_result_value_type &v) -> future<> {
-            std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
-            {
-                co_await parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
-                    co_await this->add_column_family_and_make_directory(t.second);
-                    auto s = t.second;
-                    {
-                        // Recreate missing column mapping entries in case
-                        // we failed to persist them for some reason after a schema change
-                        bool cm_exists = co_await db::schema_tables::column_mapping_exists(s->id(), s->version());
-                        {
-                            if (cm_exists) {
-                                co_return;
-                            }
-                            co_return co_await db::schema_tables::store_column_mapping(proxy, s, false);
-                        }
-                    }
-                });
-            }
-            });
-        co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [&] (schema_result_value_type &v) -> future<> {
-            std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
-            {
-                co_await parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
-                    // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
-                    // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
-                    view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
-                    view_ptr v_to_add = fixed_v ? fixed_v : v;
-                    co_await this->add_column_family_and_make_directory(v_to_add);
-                    if (bool(fixed_v)) {
-                        v_to_add = fixed_v;
-                        auto&& keyspace = find_keyspace(v->ks_name()).metadata();
-                        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
-                        {
-                            co_await db::schema_tables::merge_schema(proxy, _feat, std::move(mutations));
-                        }
-                    }
-                });
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [&] (schema_result_value_type &v) -> future<> {
+        std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
+        co_await parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
+            // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
+            // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
+            view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
+            view_ptr v_to_add = fixed_v ? fixed_v : v;
+            co_await this->add_column_family_and_make_directory(v_to_add);
+            if (bool(fixed_v)) {
+                v_to_add = fixed_v;
+                auto&& keyspace = find_keyspace(v->ks_name()).metadata();
+                auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
+                co_await db::schema_tables::merge_schema(proxy, _feat, std::move(mutations));
             }
         });
-    }
+    });
 }
 
 future<>
