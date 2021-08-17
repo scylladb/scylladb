@@ -1145,6 +1145,13 @@ future<flat_mutation_reader> evictable_reader::resume_or_create_reader(db::timeo
         co_return std::move(*_reader);
     }
     if (auto reader_opt = try_resume()) {
+        // FIXME: until the timeout parameter is removed
+        if (reader_opt->timeout() != timeout && timeout != db::no_timeout) {
+            on_internal_error_noexcept(mrlog, format("evictable_reader::resume_or_create_reader: reader.timeout={} != timeout={}",
+                reader_opt->timeout().time_since_epoch().count(),
+                timeout.time_since_epoch().count()));
+            reader_opt->set_timeout(timeout);
+        }
         co_return std::move(*reader_opt);
     }
     co_await _permit.maybe_wait_readmission(timeout);
@@ -1425,6 +1432,13 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::t
         co_return;
     }
     if (auto reader_opt = try_resume()) {
+        // FIXME: until the timeout parameter is removed
+        if (reader_opt->timeout() != timeout) {
+            on_internal_error_noexcept(mrlog, format("evictable_reader::fast_forward_to: reader.timeout={} != timeout={}",
+                reader_opt->timeout().time_since_epoch().count(),
+                timeout.time_since_epoch().count()));
+            reader_opt->set_timeout(timeout);
+        }
         co_await reader_opt->fast_forward_to(pr, timeout);
         _range_override.reset();
         maybe_pause(std::move(*reader_opt));

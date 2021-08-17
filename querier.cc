@@ -320,7 +320,8 @@ std::optional<Querier> querier_cache::lookup_querier(
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state) {
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout) {
     auto base_ptr = find_querier(index, key, ranges, trace_state);
     auto& stats = _stats;
     ++stats.lookups;
@@ -338,6 +339,7 @@ std::optional<Querier> querier_cache::lookup_querier(
     if (!reader_opt) {
         throw std::runtime_error("lookup_querier(): found querier that is evicted");
     }
+    reader_opt->set_timeout(timeout);
     querier_utils::set_reader(q, std::move(*reader_opt));
     --stats.population;
 
@@ -364,25 +366,28 @@ std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state) {
-    return lookup_querier<data_querier>(_data_querier_index, key, s, range, slice, std::move(trace_state));
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout) {
+    return lookup_querier<data_querier>(_data_querier_index, key, s, range, slice, std::move(trace_state), timeout);
 }
 
 std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state) {
-    return lookup_querier<mutation_querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state));
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout) {
+    return lookup_querier<mutation_querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state), timeout);
 }
 
 std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,
         const schema& s,
         const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state) {
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout) {
     return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, key, s, ranges, slice,
-            std::move(trace_state));
+            std::move(trace_state), timeout);
 }
 
 future<> querier_base::close() noexcept {

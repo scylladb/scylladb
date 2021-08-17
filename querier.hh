@@ -389,7 +389,8 @@ private:
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state);
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout);
 
 public:
     explicit querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
@@ -424,7 +425,8 @@ public:
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout);
 
     /// Lookup a mutation querier in the cache.
     ///
@@ -433,7 +435,8 @@ public:
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout);
 
     /// Lookup a shard mutation querier in the cache.
     ///
@@ -442,7 +445,8 @@ public:
             const schema& s,
             const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state);
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout);
 
     /// Change the ttl of cache entries
     ///
