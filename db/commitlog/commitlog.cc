@@ -107,7 +107,6 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
     c.extensions = &cfg.extensions();
-    c.reuse_segments = cfg.commitlog_reuse_segments();
     c.use_o_dsync = cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = !cfg.commitlog_use_hard_size_limit();
 
@@ -260,7 +259,6 @@ public:
     using request_controller_type = basic_semaphore<timeout_exception_factory, db::timeout_clock>;
     using request_controller_units = semaphore_units<timeout_exception_factory, db::timeout_clock>;
     request_controller_type _request_controller;
-    shared_promise<> _disk_deletions;
 
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::unordered_map<sstring, descriptor> _files_to_delete;
@@ -398,7 +396,6 @@ private:
 
     future<> clear_reserve_segments();
     void abort_recycled_list(std::exception_ptr);
-    void abort_deletion_promise(std::exception_ptr);
 
     future<> recalculate_footprint();
 
@@ -1566,7 +1563,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
         if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
             clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
-            auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
+            auto f = _recycled_segments.not_empty();
             if (!f.available()) {
                 _new_counter = 0; // zero this so timer task does not duplicate the below flush
                 flush_segments(0); // force memtable flush already
@@ -1788,7 +1785,6 @@ future<> db::commitlog::segment_manager::shutdown() {
             if (_recycled_segments.empty()) {
                 abort_recycled_list(ep);
             }
-            abort_deletion_promise(ep);
             auto f2 = std::exchange(_background_sync, make_ready_future<>());
 
             co_await std::move(f);
@@ -1843,8 +1839,6 @@ future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
         co_await seastar::remove_file(filename);
         clogger.trace("Reclaimed {} MB", size/(1024*1024));
         totals.total_size_on_disk -= size;
-        auto p = std::exchange(_disk_deletions, {});
-        p.set_value();
     } catch (...) {
         commit_error_handler(std::current_exception());
         throw;
@@ -1875,7 +1869,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
             }
 
             // We allow reuse of the segment if the current disk size is less than shard max.
-            if (cfg.reuse_segments) {
+            {
                 auto usage = totals.total_size_on_disk;
                 auto recycle = usage <= max_disk_size;
 
@@ -1910,6 +1904,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
                     }
                 }
             }
+            // last resort.
             co_await delete_file(filename);
             ++num_deleted;
         } catch (...) {
@@ -1927,11 +1922,6 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
     }
-    // If recycle failed and turned into a delete, we should fake-wakeup waiters
-    // since we might still have cleaned up disk space.
-    if (!recycle_error && num_deleted && cfg.reuse_segments && _recycled_segments.empty()) {
-        abort_recycled_list(std::make_exception_ptr(std::runtime_error("deleted files")));
-    }
 
     // #9348 - if we had an exception, we can't trust our bookeep any more. recalculate.
     if (except) {
@@ -1945,10 +1935,6 @@ void db::commitlog::segment_manager::abort_recycled_list(std::exception_ptr ep) 
     _recycled_segments.abort(ep);
     // and ensure next lap(s) still has a queue
     _recycled_segments = queue<sstring>(std::numeric_limits<size_t>::max());
-}
-
-void db::commitlog::segment_manager::abort_deletion_promise(std::exception_ptr ep) {
-    std::exchange(_disk_deletions, {}).set_exception(ep);
 }
 
 future<> db::commitlog::segment_manager::recalculate_footprint() {

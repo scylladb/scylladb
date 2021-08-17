@@ -752,7 +752,6 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
     // ensure total size per shard is not multiple of segment size.
     cfg.commitlog_total_space_in_mb = 5 * smp::count;
     cfg.commitlog_sync_period_in_ms = 10;
-    cfg.reuse_segments = true;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -823,7 +822,6 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
     // ensure total size per shard is not multiple of segment size.
     cfg.commitlog_total_space_in_mb = 5 * smp::count;
     cfg.commitlog_sync_period_in_ms = 10;
-    cfg.reuse_segments = true;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -891,7 +889,6 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
     cfg.commitlog_sync_period_in_ms = 10;
-    cfg.reuse_segments = true;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -937,7 +934,7 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
     }
 }
 
-static future<> do_test_exception_in_allocate_ex(bool do_file_delete, bool reuse = true) {
+static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
     commitlog::config cfg;
 
     constexpr auto max_size_mb = 1;
@@ -945,7 +942,6 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete, bool reuse
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
     cfg.commitlog_sync_period_in_ms = 10;
-    cfg.reuse_segments = reuse;
     cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -1030,18 +1026,11 @@ SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
     co_await do_test_exception_in_allocate_ex(false);
 }
 
-SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_no_recycle) {
-    co_await do_test_exception_in_allocate_ex(false, false);
-}
-
 /**
  * Test generating an exception in segment file allocation, but also 
  * delete the file, which in turn should cause follow-up exceptions
  * in cleanup delete. Which CL should handle
  */
-SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file) {
-    co_await do_test_exception_in_allocate_ex(true, false);
-}
 
 SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file_no_recycle) {
     co_await do_test_exception_in_allocate_ex(true);

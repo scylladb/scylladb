@@ -424,8 +424,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , commitlog_total_space_in_mb(this, "commitlog_total_space_in_mb", value_status::Used, -1,
         "Total space used for commitlogs. If the used space goes above this value, Scylla rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"
         "Related information: Configuring memtable throughput")
-    , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Used, true,
-        "Whether or not to re-use commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
+    /* Note: Unused. Retained for upgrade compat. Deprecate and remove in a cycle or two. */
+    , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Unused, true,
+        "Whether or not to re-use commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")        
     , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, false,

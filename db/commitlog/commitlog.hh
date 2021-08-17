@@ -109,7 +109,6 @@ public:
         sync_mode mode = sync_mode::PERIODIC;
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
 
-        bool reuse_segments = true;
         bool use_o_dsync = false;
         bool warn_about_segments_left_on_disk_after_shutdown = true;
         bool allow_going_over_size_limit = true;
