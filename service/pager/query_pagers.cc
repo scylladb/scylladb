@@ -355,21 +355,37 @@ public:
                     _rows_fetched_for_last_partition = v.last_partition_row_count;
                 }
             }
-            _last_pkey = v.last_pkey;
-            _last_ckey = v.last_ckey;
+            if (results->short_read_pos()) {
+                auto [last_pkey, last_ckey] = *results->short_read_pos();
+                _last_pkey = std::move(last_pkey);
+                _last_ckey = std::move(last_ckey);
+            } else {
+                _last_pkey = v.last_pkey;
+                _last_ckey = v.last_ckey;
+            }
         } else {
             row_count = results->row_count() ? *results->row_count() : std::get<1>(view.count_partitions_and_rows());
             _row_count = row_count;
             _max = _max - row_count;
             _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
 
-            if (!_exhausted && row_count > 0) {
+            if (!_exhausted) {
                 if (_last_pkey) {
                     update_slice(*_last_pkey);
                 }
-                auto [ last_pkey, last_ckey ] = view.get_last_partition_and_clustering_key();
-                _last_pkey = std::move(last_pkey);
-                _last_ckey = std::move(last_ckey);
+                if (results->short_read_pos()) {
+                    auto [last_pkey, last_ckey] = *results->short_read_pos();
+                    _last_pkey = std::move(last_pkey);
+                    _last_ckey = std::move(last_ckey);
+                } else {
+                    if (!row_count) {
+                        on_internal_error(qlogger, format("Empty result with no short read position, table={}.{}",
+                                                          _schema->ks_name(), _schema->cf_name()));
+                    }
+                    auto [last_pkey, last_ckey] = view.get_last_partition_and_clustering_key();
+                    _last_pkey = std::move(last_pkey);
+                    _last_ckey = std::move(last_ckey);
+                }
             }
         }
 

@@ -68,6 +68,8 @@
 
 bool is_system_keyspace(std::string_view name);
 
+static logging::logger slogger("select");
+
 namespace cql3 {
 
 namespace statements {
@@ -956,14 +958,31 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    auto result_view = query::result_view(*results);
-    if (!results->row_count() || *results->row_count() == 0) {
-        return paging_state;
+    if (!results->is_short_read() && (!results->row_count() || *results->row_count() == 0)) {
+        auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
+        paging_state_copy->set_remaining(0);
+        return paging_state_copy;
     }
 
-    auto&& last_partition_and_clustering_key = result_view.get_last_partition_and_clustering_key();
-    auto& last_base_pk = std::get<0>(last_partition_and_clustering_key);
-    auto& last_base_ck = std::get<1>(last_partition_and_clustering_key);
+    query::result::primary_key last_pos = [&] {
+        if (results->short_read_pos()) {
+            return *results->short_read_pos();
+        } else if (!results->row_count() || *results->row_count() == 0) {
+            // This cannot be handled correctly. We must revert the view paging state, otherwise the next
+            // page will skip over data which was not yet read from the base in the previous page.
+            // If results are empty, we should rewind it to the previous paging state, but we no longer have it.
+            // This should not happen though. Short reads which generate empty results should go through
+            // the short_read_pos() case above. Other short reads will generate at least one row.
+            on_internal_error(slogger, format("Attempted to generate view paging state from empty results of {}.{}", _schema->ks_name(), _schema->cf_name()));
+        } else {
+            auto result_view = query::result_view(*results);
+            return result_view.get_last_partition_and_clustering_key();
+        }
+    }();
+
+    auto& last_base_pk = std::get<0>(last_pos);
+    auto& last_base_ck = std::get<1>(last_pos);
+
 
     bytes_opt indexed_column_value = _used_index_restrictions->value_for(*cdef, options);
 
