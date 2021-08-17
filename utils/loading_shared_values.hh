@@ -28,7 +28,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/bitops.hh>
 #include <boost/intrusive/unordered_set.hpp>
-#include <boost/iterator/transform_iterator.hpp>
 #include "seastarx.hh"
 
 namespace bi = boost::intrusive;
@@ -136,15 +135,7 @@ private:
     using set_type = bi::unordered_set<entry, bi::power_2_buckets<true>, bi::compare_hash<true>>;
     using bi_set_bucket_traits = typename set_type::bucket_traits;
     using set_iterator = typename set_type::iterator;
-    struct value_extractor_fn {
-        value_type& operator()(entry& e) const {
-            return e.value();
-        }
-    };
     enum class shrinking_is_allowed { no, yes };
-
-public:
-    using iterator = boost::transform_iterator<value_extractor_fn, set_iterator>;
 
 public:
     // Pointer to entry value
@@ -153,12 +144,15 @@ public:
     public:
         using element_type = value_type;
         entry_ptr() = default;
+        entry_ptr(std::nullptr_t) noexcept : _e() {};
         explicit entry_ptr(lw_shared_ptr<entry> e) : _e(std::move(e)) {}
         entry_ptr& operator=(std::nullptr_t) noexcept {
             _e = nullptr;
             return *this;
         }
         explicit operator bool() const noexcept { return bool(_e); }
+        bool operator==(const entry_ptr& x) const { return _e == x._e; }
+        bool operator!=(const entry_ptr& x) const { return !operator==(x); }
         element_type& operator*() const noexcept { return _e->value(); }
         element_type* operator->() const noexcept { return &_e->value(); }
 
@@ -173,12 +167,14 @@ public:
         }
 
         friend class loading_shared_values;
+        friend std::ostream& operator<<(std::ostream& os, const entry_ptr& ep) {
+            return os << ep._e.get();
+        }
     };
 
 private:
     std::vector<typename set_type::bucket_type> _buckets;
     set_type _set;
-    value_extractor_fn _value_extractor_fn;
 
 public:
     static const key_type& to_key(const entry_ptr& e_ptr) noexcept {
@@ -273,26 +269,18 @@ public:
         return _set.size();
     }
 
-    iterator end() {
-        return boost::make_transform_iterator(_set.end(), _value_extractor_fn);
-    }
-
-    iterator begin() {
-        return boost::make_transform_iterator(_set.begin(), _value_extractor_fn);
-    }
-
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
-    iterator find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+    entry_ptr find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
         set_iterator it = _set.find(key, std::move(key_hasher_func), key_eq<KeyType, KeyEqual>());
         if (it == _set.end() || !it->ready()) {
-            return end();
+            return entry_ptr();
         }
-        return boost::make_transform_iterator(it, _value_extractor_fn);
+        return entry_ptr(it->shared_from_this());
     };
 
     // keep the default non-templated overloads to ease on the compiler for specifications
     // that do not require the templated find().
-    iterator find(const key_type& key) noexcept {
+    entry_ptr find(const key_type& key) noexcept {
         return find(key, Hash(), EqualPred());
     }
 

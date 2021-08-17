@@ -104,13 +104,7 @@ private:
     using cache_key_type = typename prepared_cache_key_type::cache_key_type;
     using cache_type = utils::loading_cache<cache_key_type, prepared_cache_entry, utils::loading_cache_reload_enabled::no, prepared_cache_entry_size, utils::tuple_hash, std::equal_to<cache_key_type>, prepared_cache_stats_updater>;
     using cache_value_ptr = typename cache_type::value_ptr;
-    using cache_iterator = typename cache_type::iterator;
     using checked_weak_ptr = typename statements::prepared_statement::checked_weak_ptr;
-    struct value_extractor_fn {
-        checked_weak_ptr operator()(prepared_cache_entry& e) const {
-            return e->checked_weak_from_this();
-        }
-    };
 
 public:
     static const std::chrono::minutes entry_expiry;
@@ -118,12 +112,9 @@ public:
     using key_type = prepared_cache_key_type;
     using value_type = checked_weak_ptr;
     using statement_is_too_big = typename cache_type::entry_is_too_big;
-    /// \note both iterator::reference and iterator::value_type are checked_weak_ptr
-    using iterator = boost::transform_iterator<value_extractor_fn, cache_iterator>;
 
 private:
     cache_type _cache;
-    value_extractor_fn _value_extractor_fn;
 
 public:
     prepared_statements_cache(logging::logger& logger, size_t size)
@@ -137,16 +128,12 @@ public:
         });
     }
 
-    iterator find(const key_type& key) {
-        return boost::make_transform_iterator(_cache.find(key.key()), _value_extractor_fn);
-    }
-
-    iterator end() {
-        return boost::make_transform_iterator(_cache.end(), _value_extractor_fn);
-    }
-
-    iterator begin() {
-        return boost::make_transform_iterator(_cache.begin(), _value_extractor_fn);
+    value_type find(const key_type& key) {
+        cache_value_ptr vp = _cache.find(key.key());
+        if (vp) {
+            return (*vp)->checked_weak_from_this();
+        }
+        return value_type();
     }
 
     template <typename Pred>

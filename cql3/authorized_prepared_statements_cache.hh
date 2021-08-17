@@ -36,6 +36,28 @@ struct authorized_prepared_statements_cache_size {
 class authorized_prepared_statements_cache_key {
 public:
     using cache_key_type = std::pair<auth::authenticated_user, typename cql3::prepared_cache_key_type::cache_key_type>;
+
+    struct view {
+        const auth::authenticated_user& user_ref;
+        const cql3::prepared_cache_key_type& prep_cache_key_ref;
+    };
+
+    struct view_hasher {
+        size_t operator()(const view& kv) {
+            return cql3::authorized_prepared_statements_cache_key::hash(kv.user_ref, kv.prep_cache_key_ref.key());
+        }
+    };
+
+    struct view_equal {
+        bool operator()(const authorized_prepared_statements_cache_key& k1, const view& k2) {
+            return k1.key().first == k2.user_ref && k1.key().second == k2.prep_cache_key_ref.key();
+        }
+
+        bool operator()(const view& k2, const authorized_prepared_statements_cache_key& k1) {
+            return operator()(k1, k2);
+        }
+    };
+
 private:
     cache_key_type _key;
 
@@ -101,10 +123,12 @@ private:
 
 public:
     using key_type = cache_key_type;
+    using key_view_type = typename key_type::view;
+    using key_view_hasher = typename key_type::view_hasher;
+    using key_view_equal = typename key_type::view_equal;
     using value_type = checked_weak_ptr;
     using entry_is_too_big = typename cache_type::entry_is_too_big;
-    using iterator = typename cache_type::iterator;
-
+    using value_ptr = typename cache_type::value_ptr;
 private:
     cache_type _cache;
 
@@ -123,38 +147,12 @@ public:
         }).discard_result();
     }
 
-    iterator find(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key) {
-        struct key_view {
-            const auth::authenticated_user& user_ref;
-            const cql3::prepared_cache_key_type& prep_cache_key_ref;
-        };
-
-        struct hasher {
-            size_t operator()(const key_view& kv) {
-                return cql3::authorized_prepared_statements_cache_key::hash(kv.user_ref, kv.prep_cache_key_ref.key());
-            }
-        };
-
-        struct equal {
-            bool operator()(const key_type& k1, const key_view& k2) {
-                return k1.key().first == k2.user_ref && k1.key().second == k2.prep_cache_key_ref.key();
-            }
-
-            bool operator()(const key_view& k2, const key_type& k1) {
-                return operator()(k1, k2);
-            }
-        };
-
-        return _cache.find(key_view{user, prep_cache_key}, hasher(), equal());
-    }
-
-    iterator end() {
-        return _cache.end();
+    value_ptr find(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key) {
+        return _cache.find(key_view_type{user, prep_cache_key}, key_view_hasher(), key_view_equal());
     }
 
     void remove(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key) {
-        iterator it = find(user, prep_cache_key);
-        _cache.remove(it);
+        _cache.remove(key_view_type{user, prep_cache_key}, key_view_hasher(), key_view_equal());
     }
 
     size_t size() const {

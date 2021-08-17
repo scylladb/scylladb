@@ -181,10 +181,10 @@ public:
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {
-            auto it = _authorized_prepared_cache.find(*user, key);
-            if (it != _authorized_prepared_cache.end()) {
+            auto vp = _authorized_prepared_cache.find(*user, key);
+            if (vp) {
                 try {
-                    return it->get()->checked_weak_from_this();
+                    return vp->get()->checked_weak_from_this();
                 } catch (seastar::checked_ptr_is_null_exception&) {
                     // If the prepared statement got invalidated - remove the corresponding authorized_prepared_statements_cache entry as well.
                     _authorized_prepared_cache.remove(*user, key);
@@ -195,11 +195,7 @@ public:
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
-        auto it = _prepared_cache.find(key);
-        if (it == _prepared_cache.end()) {
-            return statements::prepared_statement::checked_weak_ptr();
-        }
-        return *it;
+        return _prepared_cache.find(key);
     }
 
     future<::shared_ptr<cql_transport::messages::result_message>>
