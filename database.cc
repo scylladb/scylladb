@@ -740,32 +740,32 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
     using namespace db::schema_tables;
 
     auto cf_name = make_lw_shared<sstring>(_cf_name);
-    return db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name).then([] (auto rs) {
+    auto rs = co_await db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name);
+    {
         auto names = std::set<sstring>();
         for (auto& r : rs->rows()) {
             auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
             names.emplace(keyspace_name);
         }
-        return names;
-    }).then([&proxy, cf_name, func = std::move(func)] (std::set<sstring>&& names) mutable {
-        return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::move(func)] (sstring name) mutable {
+        co_await parallel_for_each(names.begin(), names.end(), [&] (sstring name) mutable -> future<> {
             if (is_system_keyspace(name)) {
-                return make_ready_future<>();
+                co_return;
             }
 
-            return read_schema_partition_for_keyspace(proxy, *cf_name, name).then([func, cf_name] (auto&& v) mutable {
-                return do_with(std::move(v), [func = std::move(func), cf_name] (auto& v) {
-                    return func(v).then_wrapped([cf_name, &v] (future<> f) {
+            auto v = co_await read_schema_partition_for_keyspace(proxy, *cf_name, name);
+            {
+                {
+                    {
                         try {
-                            f.get();
+                            co_await func(v);
                         } catch (std::exception& e) {
                             dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, *cf_name, e.what());
                         }
-                    });
-                });
-            });
+                    }
+                }
+            }
         });
-    });
+    }
 }
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
