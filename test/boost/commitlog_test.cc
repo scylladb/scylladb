@@ -289,7 +289,7 @@ SEASTAR_TEST_CASE(test_commitlog_closed) {
             return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                 dst.write(tmp.data(), tmp.size());
             }).then_wrapped([] (future<db::rp_handle> f) {
-                BOOST_REQUIRE_EXCEPTION(f.get(), gate_closed_exception, exception_predicate::message_equals("gate closed"));
+                BOOST_REQUIRE_EXCEPTION(f.get(), std::runtime_error, exception_predicate::message_equals("Commitlog has been shut down. Cannot add data"));
             });
         });
     });
