@@ -2092,33 +2092,23 @@ database::stop() {
     assert(!_large_data_handler->running());
 
     // try to ensure that CL has done disk flushing
-    future<> maybe_shutdown_commitlog = _commitlog != nullptr ? _commitlog->shutdown() : make_ready_future<>();
-    return maybe_shutdown_commitlog.then([this] {
-        return _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
-    }).then([this] {
-        if (_commitlog != nullptr) {
-            return _commitlog->release();
-        }
-        return make_ready_future<>();
-    }).then([this] {
-        return _system_dirty_memory_manager.shutdown();
-    }).then([this] {
-        return _dirty_memory_manager.shutdown();
-    }).then([this] {
-        return _memtable_controller.shutdown();
-    }).then([this] {
-        return _user_sstables_manager->close();
-    }).then([this] {
-        return _system_sstables_manager->close();
-    }).finally([this] {
-        return _querier_cache.stop().finally([this] {
-            return when_all_succeed(
-                    _read_concurrency_sem.stop(),
-                    _streaming_concurrency_sem.stop(),
-                    _compaction_concurrency_sem.stop(),
-                    _system_read_concurrency_sem.stop()).discard_result();
-        });
-    });
+    if (_commitlog) {
+        co_await _commitlog->shutdown();
+    }
+    co_await _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
+    if (_commitlog) {
+        co_await _commitlog->release();
+    }
+    co_await _system_dirty_memory_manager.shutdown();
+    co_await _dirty_memory_manager.shutdown();
+    co_await _memtable_controller.shutdown();
+    co_await _user_sstables_manager->close();
+    co_await _system_sstables_manager->close();
+    co_await _querier_cache.stop();
+    co_await _read_concurrency_sem.stop();
+    co_await _streaming_concurrency_sem.stop();
+    co_await _compaction_concurrency_sem.stop();
+    co_await _system_read_concurrency_sem.stop();
 }
 
 future<> database::flush_all_memtables() {
