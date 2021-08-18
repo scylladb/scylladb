@@ -787,9 +787,10 @@ void write(sstable_version_types v, file_writer& out, const utils::streaming_his
 }
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, commitlog_interval& ci) {
-    return parse(s, v, in, ci.start).then([&ci, v, &s, &in] {
-        return parse(s, v, in, ci.end);
-    });
+    co_await parse(s, v, in, ci.start);
+    {
+        co_await parse(s, v, in, ci.end);
+    }
 }
 
 void write(sstable_version_types v, file_writer& out, const commitlog_interval& ci) {
