@@ -37,7 +37,7 @@ static bool operator==(const configuration& lhs, const configuration& rhs) {
     return lhs.current == rhs.current && lhs.previous == rhs.previous;
 }
 
-static bool operator==(const snapshot& lhs, const snapshot& rhs) {
+static bool operator==(const snapshot_descriptor& lhs, const snapshot_descriptor& rhs) {
     return lhs.idx == rhs.idx &&
         lhs.term == rhs.term &&
         lhs.config == rhs.config &&
@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
         raft::configuration snp_cfg({raft::server_id::create_random_id()});
         auto snp_id = raft::snapshot_id::create_random_id();
 
-        raft::snapshot snp{
+        raft::snapshot_descriptor snp{
             .idx = snp_idx,
             .term = snp_term,
             .config = std::move(snp_cfg),
@@ -120,8 +120,8 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
         // deliberately larger than log size to keep the log intact
         static constexpr size_t preserve_log_entries = 10;
 
-        co_await storage.store_snapshot(snp, preserve_log_entries);
-        raft::snapshot loaded_snp = co_await storage.load_snapshot();
+        co_await storage.store_snapshot_descriptor(snp, preserve_log_entries);
+        raft::snapshot_descriptor loaded_snp = co_await storage.load_snapshot_descriptor();
 
         BOOST_CHECK(snp == loaded_snp);
     });
@@ -174,7 +174,7 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
         raft::configuration snp_cfg({raft::server_id::create_random_id()});
         auto snp_id = raft::snapshot_id::create_random_id();
 
-        raft::snapshot snp{
+        raft::snapshot_descriptor snp{
             .idx = snp_idx,
             .term = snp_term,
             .config = std::move(snp_cfg),
@@ -183,7 +183,7 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
         // leave the last 2 entries in the log after saving the snapshot
         static constexpr size_t preserve_log_entries = 2;
 
-        co_await storage.store_snapshot(snp, preserve_log_entries);
+        co_await storage.store_snapshot_descriptor(snp, preserve_log_entries);
         raft::log_entries loaded_entries = co_await storage.load_log();
         BOOST_CHECK_EQUAL(loaded_entries.size(), 2);
         for (size_t i = 0, end = loaded_entries.size(); i != end; ++i) {

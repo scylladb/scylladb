@@ -108,7 +108,7 @@ struct initial_state {
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
-    raft::snapshot snapshot;
+    raft::snapshot_descriptor snapshot;
     snapshot_value snp_value;
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
 };
@@ -239,7 +239,7 @@ struct initial_log {
 };
 
 struct initial_snapshot {
-    raft::snapshot snap;
+    raft::snapshot_descriptor snap;
 };
 
 struct test_case {
@@ -260,7 +260,7 @@ int rand() noexcept;
 
 // Lets assume one snapshot per server
 using snapshots = std::unordered_map<raft::server_id, std::unordered_map<raft::snapshot_id, snapshot_value>>;
-using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>>;
+using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot_descriptor, snapshot_value>>;
 
 extern seastar::semaphore snapshot_sync;
 // application of a snaphot with that id will be delayed until snapshot_sync is signaled
@@ -434,13 +434,13 @@ public:
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
+    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
         (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id][snap.id]);
         tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id][snap.id].hasher.finalize_uint64());
         return make_ready_future<>();
     }
-    future<raft::snapshot> load_snapshot() override {
-        return make_ready_future<raft::snapshot>(_conf.snapshot);
+    future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
+        return make_ready_future<raft::snapshot_descriptor>(_conf.snapshot);
     }
     virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { return seastar::sleep(1us); };
     virtual future<raft::log_entries> load_log() {

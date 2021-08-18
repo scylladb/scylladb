@@ -107,7 +107,7 @@ private:
     std::multimap<index_t, promise<>> _awaited_indexes;
 
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
-    queue<std::variant<std::vector<log_entry_ptr>, snapshot>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot>>(10);
+    queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>> _apply_entries = queue<std::variant<std::vector<log_entry_ptr>, snapshot_descriptor>>(10);
 
     struct stats {
         uint64_t add_command = 0;
@@ -273,7 +273,7 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
 
 future<> server_impl::start() {
     auto [term, vote] = co_await _persistence->load_term_and_vote();
-    auto snapshot  = co_await _persistence->load_snapshot();
+    auto snapshot  = co_await _persistence->load_snapshot_descriptor();
     auto log_entries = co_await _persistence->load_log();
     auto log = raft::log(snapshot, std::move(log_entries));
     raft::configuration rpc_config = log.get_configuration();
@@ -548,7 +548,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 auto& [snp, is_local, old_id] = *batch.snp;
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
-                co_await _persistence->store_snapshot(snp, _config.snapshot_trailing);
+                co_await _persistence->store_snapshot_descriptor(snp, _config.snapshot_trailing);
                 _stats.store_snapshot++;
                 // Drop previous snapshot since it is no longer used
                  _state_machine->drop_snapshot(old_id);
@@ -739,7 +739,7 @@ future<> server_impl::applier_fiber() {
                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
                auto last_snap_idx = _fsm->log_last_snapshot_idx();
                if (_applied_idx >= last_snap_idx && _applied_idx - last_snap_idx >= _config.snapshot_threshold) {
-                   snapshot snp;
+                   snapshot_descriptor snp;
                    snp.term = last_term;
                    snp.idx = _applied_idx;
                    snp.config = _fsm->log_last_conf_for(_applied_idx);
@@ -755,7 +755,7 @@ future<> server_impl::applier_fiber() {
                    _stats.snapshots_taken++;
                }
             } else {
-                snapshot& snp = std::get<1>(v);
+                snapshot_descriptor& snp = std::get<1>(v);
                 assert(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);

@@ -859,7 +859,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         index_t prev_idx = progress.next_idx - index_t{1};
         std::optional<term_t> prev_term = _log.term_for(prev_idx);
         if (!prev_term) {
-            const snapshot& snapshot = _log.get_snapshot();
+            const snapshot_descriptor& snapshot = _log.get_snapshot();
             // We need to transfer the snapshot before we can
             // continue syncing the log.
             progress.become_snapshot(snapshot.idx);
@@ -943,7 +943,7 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-bool fsm::apply_snapshot(snapshot snp, size_t trailing, bool local) {
+bool fsm::apply_snapshot(snapshot_descriptor snp, size_t trailing, bool local) {
     logger.trace("apply_snapshot[{}]: current term: {}, term: {}, idx: {}, id: {}, local: {}",
             _my_id, _current_term, snp.term, snp.idx, snp.id, local);
     // If the snapshot is locally generated, all entries up to its index must have been locally applied,

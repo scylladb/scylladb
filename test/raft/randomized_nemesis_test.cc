@@ -523,7 +523,7 @@ template <typename State>
 class persistence : public raft::persistence {
     snapshots_t<State>& _snapshots;
 
-    std::pair<raft::snapshot, State> _stored_snapshot;
+    std::pair<raft::snapshot_descriptor, State> _stored_snapshot;
     std::pair<raft::term_t, raft::server_id> _stored_term_and_vote;
 
     // Invariants:
@@ -553,7 +553,7 @@ public:
     persistence(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id, State init_state)
         : _snapshots(snaps)
         , _stored_snapshot(
-                raft::snapshot{
+                raft::snapshot_descriptor{
                     .config = init_config_id ? raft::configuration{*init_config_id} : raft::configuration{}
                 },
                 std::move(init_state))
@@ -569,7 +569,7 @@ public:
         co_return _stored_term_and_vote;
     }
 
-    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) override {
+    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
         // The snapshot's index cannot be smaller than the index of the first stored entry minus one;
         // that would create a ``gap'' in the log.
         assert(_stored_entries.empty() || snap.idx + 1 >= _stored_entries.front()->idx);
@@ -590,7 +590,7 @@ public:
         co_return;
     }
 
-    virtual future<raft::snapshot> load_snapshot() override {
+    virtual future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
         auto [snap, state] = _stored_snapshot;
         _snapshots.insert_or_assign(snap.id, std::move(state));
         co_return snap;

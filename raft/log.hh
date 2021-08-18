@@ -34,7 +34,7 @@ namespace raft {
 // any function leaves the log in a consistent state.
 class log {
     // Snapshot of the prefix of the log.
-    snapshot _snapshot;
+    snapshot_descriptor _snapshot;
     // We need something that can be truncated from both sides.
     // std::deque move constructor is not nothrow hence cannot be used
     log_entries _log;
@@ -79,7 +79,7 @@ private:
     log_entry_ptr& get_entry(index_t);
     const log_entry_ptr& get_entry(index_t) const;
 public:
-    explicit log(snapshot snp, log_entries log = {})
+    explicit log(snapshot_descriptor snp, log_entries log = {})
             : _snapshot(std::move(snp)), _log(std::move(log)) {
         if (_log.empty()) {
             _first_idx = _snapshot.idx + index_t{1};
@@ -131,14 +131,14 @@ public:
     }
 
     // The function returns current snapshot state of the log
-    const snapshot& get_snapshot() const {
+    const snapshot_descriptor& get_snapshot() const {
         return _snapshot;
     }
 
     // This call will update the log to point to the new snaphot
     // and will truncate the log prefix up to (snp.idx - trailing)
     // entry. Return value specifies how many log entries were dropped
-    size_t apply_snapshot(snapshot&& snp, size_t trailing);
+    size_t apply_snapshot(snapshot_descriptor&& snp, size_t trailing);
 
     // 3.5
     // Raft maintains the following properties, which

@@ -51,7 +51,7 @@ struct configuration {
     std::unordered_set<raft::server_address> previous;
 };
 
-struct snapshot {
+struct snapshot_descriptor {
     raft::internal::tagged_uint64<raft::index_tag> idx;
     raft::internal::tagged_uint64<raft::term_tag> term;
     raft::configuration config;
@@ -74,7 +74,7 @@ struct vote_reply {
 
 struct install_snapshot {
     raft::internal::tagged_uint64<raft::term_tag> current_term;
-    raft::snapshot snp;
+    raft::snapshot_descriptor snp;
 };
 
 struct snapshot_reply {

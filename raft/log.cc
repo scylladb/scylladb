@@ -226,7 +226,7 @@ const configuration* log::get_prev_configuration() const {
     return nullptr;
 }
 
-size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
+size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t trailing) {
     assert (snp.idx > _snapshot.idx);
 
     size_t removed;

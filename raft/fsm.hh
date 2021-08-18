@@ -31,7 +31,7 @@ namespace raft {
 // State of the FSM that needs logging & sending.
 struct fsm_output {
     struct applied_snapshot {
-        snapshot snp;
+        snapshot_descriptor snp;
         bool is_local;
         snapshot_id prev_snp_id;
     };
@@ -452,7 +452,7 @@ public:
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
     // entry. Returns false if the snapshot is older than existing one.
-    bool apply_snapshot(snapshot snp, size_t traling, bool local);
+    bool apply_snapshot(snapshot_descriptor snp, size_t traling, bool local);
 
     std::optional<std::pair<read_id, index_t>> start_read_barrier(server_id requester);
 
