@@ -802,26 +802,29 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     auto data_len_ptr = make_lw_shared<uint64_t>(0);
     auto chunk_len_ptr = make_lw_shared<uint32_t>(0);
 
-    return parse(s, v, in, c.name, c.options, *chunk_len_ptr, *data_len_ptr).then([v, &s, &in, &c, chunk_len_ptr, data_len_ptr] {
+    co_await parse(s, v, in, c.name, c.options, *chunk_len_ptr, *data_len_ptr);
+    {
         c.set_uncompressed_chunk_length(*chunk_len_ptr);
         c.set_uncompressed_file_length(*data_len_ptr);
 
-      return do_with(uint32_t(), c.offsets.get_writer(), [v, &s, &in, &c] (uint32_t& len, compression::segmented_offsets::writer& offsets) {
-        return parse(s, v, in, len).then([&in, &c, &len, &offsets] {
+        uint32_t len = 0;
+        compression::segmented_offsets::writer offsets = c.offsets.get_writer();
+        co_await parse(s, v, in, len);
+        {
             auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
-            return do_until(eoarr, [&in, &c, &len, &offsets] () {
+            while (!eoarr()) {
                 auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
-                return in.read_exactly(now * sizeof(uint64_t)).then([&offsets, now] (auto buf) {
+                auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+                {
                     for (size_t i = 0; i < now; ++i) {
                         uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
                         offsets.push_back(net::ntoh(value));
                     }
-                });
-            });
-        });
-      });
-    });
+                }
+            }
+        }
+    }
 }
 
 void write(sstable_version_types v, file_writer& out, const compression& c) {
