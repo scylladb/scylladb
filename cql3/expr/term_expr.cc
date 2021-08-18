@@ -787,8 +787,8 @@ cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_share
 ::shared_ptr<term>
 prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return std::visit(overloaded_functor{
-        [&] (bool bool_constant) -> ::shared_ptr<term> {
-            on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::prepare()");
+        [] (const constant&) -> ::shared_ptr<term> {
+            on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
         [&] (const binary_operator&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via term_raw_expr::prepare()");
@@ -874,8 +874,9 @@ assignment_testable::test_result
 test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     return std::visit(overloaded_functor{
-        [&] (bool bool_constant) -> test_result {
-            on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::test_assignment()");
+        [&] (const constant&) -> test_result {
+            // constants shouldn't appear in parser output, only untyped_constants
+            on_internal_error(expr_logger, "constants are not yet reachable via term_raw_expr::test_assignment()");
         },
         [&] (const binary_operator&) -> test_result {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via term_raw_expr::test_assignment()");
