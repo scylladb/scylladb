@@ -22,6 +22,8 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "cql3/untyped_result_set.hh"
+#include "cql3/query_processor.hh"
 #include "transport/messages/result_message.hh"
 
 SEASTAR_TEST_CASE(test_index_with_paging) {
@@ -53,6 +55,54 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         eventually([&] {
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1").get0();
             assert_that(res).is_rows().with_size(64 * 1024);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_index_with_paging_with_base_short_read) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (pk int, ck text, v int, v2 int, v3 text, PRIMARY KEY (pk, ck))").get();
+        e.execute_cql("CREATE INDEX ON tab (v)").get();
+
+        // Enough to trigger a short read on the base table during scan
+        sstring big_string(2 * query::result_memory_limiter::maximum_result_size, 'j');
+
+        const int row_count = 67;
+        for (int i = 0; i < row_count; ++i) {
+            e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
+        }
+
+        eventually([&] {
+            uint64_t count = 0;
+            e.qp().local().query_internal("SELECT * FROM ks.tab WHERE v = 1", [&] (const cql3::untyped_result_set_row&) {
+                ++count;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            }).get();
+            BOOST_REQUIRE_EQUAL(count, row_count);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_index_with_paging_with_base_short_read_no_ck) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (pk int, v int, v2 int, v3 text, PRIMARY KEY (pk))").get();
+        e.execute_cql("CREATE INDEX ON tab (v)").get();
+
+        // Enough to trigger a short read on the base table during scan
+        sstring big_string(2 * query::result_memory_limiter::maximum_result_size, 'j');
+
+        const int row_count = 67;
+        for (int i = 0; i < row_count; ++i) {
+            e.execute_cql(format("INSERT INTO tab (pk, v, v2, v3) VALUES ({}, 1, {}, '{}')", i, i, big_string)).get();
+        }
+
+        eventually([&] {
+            uint64_t count = 0;
+            e.qp().local().query_internal("SELECT * FROM ks.tab WHERE v = 1", [&] (const cql3::untyped_result_set_row&) {
+                ++count;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            }).get();
+            BOOST_REQUIRE_EQUAL(count, row_count);
         });
     });
 }
