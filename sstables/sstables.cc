@@ -508,68 +508,58 @@ void write(sstable_version_types v, file_writer& out, const disk_set_of_tagged_u
 future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
-    return parse(schema, v, in, s.header.min_index_interval,
+    co_await parse(schema, v, in, s.header.min_index_interval,
                      s.header.size,
                      s.header.memory_size,
                      s.header.sampling_level,
-                     s.header.size_at_full_sampling).then([v, &schema, &in, &s] {
-        return in.read_exactly(s.header.size * sizeof(pos_type)).then([&in, &s] (auto buf) {
-            auto len = s.header.size * sizeof(pos_type);
-            check_buf_size(buf, len);
+                     s.header.size_at_full_sampling);
+    auto buf = co_await in.read_exactly(s.header.size * sizeof(pos_type));
+    auto len = s.header.size * sizeof(pos_type);
+    check_buf_size(buf, len);
 
-            // Positions are encoded in little-endian.
-            auto b = buf.get();
-            s.positions = utils::chunked_vector<pos_type>();
-            return do_until([&s] { return s.positions.size() == s.header.size; }, [&s, buf = std::move(buf), b] () mutable {
-                s.positions.push_back(seastar::read_le<pos_type>(b));
-                b += sizeof(pos_type);
-                return make_ready_future<>();
-            }).then([&s] {
-                // Since the keys in the index are not sized, we need to calculate
-                // the start position of the index i+1 to determine the boundaries
-                // of index i. The "memory_size" field in the header determines the
-                // total memory used by the map, so if we push it to the vector, we
-                // can guarantee that no conditionals are used, and we can always
-                // query the position of the "next" index.
-                s.positions.push_back(s.header.memory_size);
-                return make_ready_future<>();
-            });
-        }).then([&in, &s] {
-            return in.seek(sizeof(summary::header) + s.header.memory_size);
-        }).then([v, &schema, &in, &s] {
-            return parse(schema, v, in, s.first_key, s.last_key);
-        }).then([&in, &s] {
-            return in.seek(s.positions[0] + sizeof(summary::header));
-        }).then([&schema, &in, &s] {
-            s.entries.reserve(s.header.size);
+    // Positions are encoded in little-endian.
+    auto b = buf.get();
+    s.positions = utils::chunked_vector<pos_type>();
+    while (s.positions.size() != s.header.size) {
+        s.positions.push_back(seastar::read_le<pos_type>(b));
+        b += sizeof(pos_type);
+        co_await make_ready_future<>(); // yield
+    }
+    // Since the keys in the index are not sized, we need to calculate
+    // the start position of the index i+1 to determine the boundaries
+    // of index i. The "memory_size" field in the header determines the
+    // total memory used by the map, so if we push it to the vector, we
+    // can guarantee that no conditionals are used, and we can always
+    // query the position of the "next" index.
+    s.positions.push_back(s.header.memory_size);
 
-            return do_with(int(0), [&schema, &in, &s] (int& idx) mutable {
-                return do_until([&s] { return s.entries.size() == s.header.size; }, [&schema, &s, &in, &idx] () mutable {
-                    auto pos = s.positions[idx++];
-                    auto next = s.positions[idx];
+    co_await in.seek(sizeof(summary::header) + s.header.memory_size);
+    co_await parse(schema, v, in, s.first_key, s.last_key);
+    co_await in.seek(s.positions[0] + sizeof(summary::header));
 
-                    auto entrysize = next - pos;
-                    return in.read_exactly(entrysize).then([&schema, &s, entrysize] (auto buf) mutable {
-                        check_buf_size(buf, entrysize);
+    s.entries.reserve(s.header.size);
 
-                        auto keysize = entrysize - 8;
-                        auto key_data = s.add_summary_data(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), keysize));
-                        buf.trim_front(keysize);
+    int idx = 0;
+    while (s.entries.size() != s.header.size) {
+        auto pos = s.positions[idx++];
+        auto next = s.positions[idx];
 
-                        // position is little-endian encoded
-                        auto position = seastar::read_le<uint64_t>(buf.get());
-                        auto token = schema.get_partitioner().get_token(key_view(key_data));
-                        s.add_summary_data(token.data());
-                        s.entries.push_back({ token, key_data, position });
-                        return make_ready_future<>();
-                    });
-                });
-            }).then([&s] {
-                // Delete last element which isn't part of the on-disk format.
-                s.positions.pop_back();
-            });
-        });
-    });
+        auto entrysize = next - pos;
+        auto buf = co_await in.read_exactly(entrysize);
+        check_buf_size(buf, entrysize);
+
+        auto keysize = entrysize - 8;
+        auto key_data = s.add_summary_data(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), keysize));
+        buf.trim_front(keysize);
+
+        // position is little-endian encoded
+        auto position = seastar::read_le<uint64_t>(buf.get());
+        auto token = schema.get_partitioner().get_token(key_view(key_data));
+        s.add_summary_data(token.data());
+        s.entries.push_back({ token, key_data, position });
+    }
+    // Delete last element which isn't part of the on-disk format.
+    s.positions.pop_back();
 }
 
 inline void write(sstable_version_types v, file_writer& out, const summary_entry& entry) {
@@ -621,41 +611,41 @@ inline void write(sstable_version_types v, file_writer& out, const std::unique_p
 }
 
 future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, statistics& s) {
-    return parse(schema, v, in, s.offsets).then([v, &schema, &in, &s] {
+    try {
+        co_await parse(schema, v, in, s.offsets);
         // Old versions of Scylla do not respect the order.
         // See https://github.com/scylladb/scylla/issues/3937
         boost::sort(s.offsets.elements, [] (auto&& e1, auto&& e2) { return e1.first < e2.first; });
-        return do_for_each(s.offsets.elements.begin(), s.offsets.elements.end(), [v, &schema, &in, &s] (auto val) mutable {
-            return in.seek(val.second).then([v, &schema, &in, &s, type = val.first] {
-                switch (type) {
-                case metadata_type::Validation:
-                    return parse<validation_metadata>(schema, v, in, s.contents[type]);
-                case metadata_type::Compaction:
-                    return parse<compaction_metadata>(schema, v, in, s.contents[type]);
-                case metadata_type::Stats:
-                    return parse<stats_metadata>(schema, v, in, s.contents[type]);
-                case metadata_type::Serialization:
-                    if (v < sstable_version_types::mc) {
-                        throw malformed_sstable_exception(
-                            "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
-                    } else {
-                        return parse<serialization_header>(schema, v, in, s.contents[type]);
-                    }
-                    return make_ready_future<>();
-                default:
-                    throw malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
+        for (auto val : s.offsets.elements) {
+            auto type = val.first;
+            co_await in.seek(val.second);
+            switch (type) {
+            case metadata_type::Validation:
+                co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
+                break;
+            case metadata_type::Compaction:
+                co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
+                break;
+            case metadata_type::Stats:
+                co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
+                break;
+            case metadata_type::Serialization:
+                if (v < sstable_version_types::mc) {
+                    throw malformed_sstable_exception(
+                        "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
+                } else {
+                    co_await parse<serialization_header>(schema, v, in, s.contents[type]);
                 }
-            });
-        });
-    }).handle_exception([] (std::exception_ptr ex) {
-        try {
-            std::rethrow_exception(ex);
-        } catch (const malformed_sstable_exception&) {
-            throw;
-        } catch (...) {
-            throw malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", ex));
+                break;
+            default:
+                throw malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
+            }
         }
-    });
+    } catch (const malformed_sstable_exception&) {
+        throw;
+    } catch (...) {
+        throw malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", std::current_exception()));
+    }
 }
 
 inline void write(sstable_version_types v, file_writer& out, const statistics& s) {
@@ -668,38 +658,34 @@ inline void write(sstable_version_types v, file_writer& out, const statistics& s
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::estimated_histogram& eh) {
     auto len = std::make_unique<uint32_t>();
 
-    auto f = parse(s, v, in, *len);
-    return f.then([&in, &eh, len = std::move(len)] {
-        uint32_t length = *len;
+    co_await parse(s, v, in, *len);
+    uint32_t length = *len;
 
-        if (length == 0) {
-            throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
+    if (length == 0) {
+        throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
+    }
+
+    // Arrays are potentially pre-initialized by the estimated_histogram constructor.
+    eh.bucket_offsets.clear();
+    eh.buckets.clear();
+
+    eh.bucket_offsets.reserve(length - 1);
+    eh.buckets.reserve(length);
+
+    auto type_size = sizeof(uint64_t) * 2;
+    auto buf = co_await in.read_exactly(length * type_size);
+    check_buf_size(buf, length * type_size);
+
+    size_t j = 0;
+    while (eh.buckets.size() != length) {
+        auto offset = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
+        auto bucket = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
+        if (!eh.buckets.empty()) {
+            eh.bucket_offsets.push_back(offset);
         }
-
-        // Arrays are potentially pre-initialized by the estimated_histogram constructor.
-        eh.bucket_offsets.clear();
-        eh.buckets.clear();
-
-        eh.bucket_offsets.reserve(length - 1);
-        eh.buckets.reserve(length);
-
-        auto type_size = sizeof(uint64_t) * 2;
-        return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto&& buf) {
-            check_buf_size(buf, length * type_size);
-
-            return do_with(size_t(0), std::move(buf), [&eh, length] (size_t& j, auto& buf) mutable {
-                return do_until([&eh, length] { return eh.buckets.size() == length; }, [&eh, &j, &buf] () mutable {
-                    auto offset = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
-                    auto bucket = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
-                    if (!eh.buckets.empty()) {
-                        eh.bucket_offsets.push_back(offset);
-                    }
-                    eh.buckets.push_back(bucket);
-                    return make_ready_future<>();
-                });
-            });
-        });
-    });
+        eh.buckets.push_back(bucket);
+        co_await make_ready_future<>(); // yield
+    }
 }
 
 void write(sstable_version_types v, file_writer& out, const utils::estimated_histogram& eh) {
@@ -741,33 +727,29 @@ struct streaming_histogram_element {
 };
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::streaming_histogram& sh) {
-    auto a = std::make_unique<disk_array<uint32_t, streaming_histogram_element>>();
+    auto a = disk_array<uint32_t, streaming_histogram_element>();
 
-    auto f = parse(s, v, in, sh.max_bin_size, *a);
-    return f.then([&sh, a = std::move(a)] {
-        auto length = a->elements.size();
-        if (length > sh.max_bin_size) {
-            throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
-        }
+    co_await parse(s, v, in, sh.max_bin_size, a);
+    auto length = a.elements.size();
+    if (length > sh.max_bin_size) {
+        throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
+    }
 
-        // Find bad histogram which had incorrect elements merged due to use of
-        // unordered map. The keys will be unordered. Histogram which size is
-        // less than max allowed will be correct because no entries needed to be
-        // merged, so we can avoid discarding those.
-        // look for commit with title 'streaming_histogram: fix update' for more details.
-        auto possibly_broken_histogram = length == sh.max_bin_size;
-        auto less_comp = [] (auto& x, auto& y) { return x.key < y.key; };
-        if (possibly_broken_histogram && !boost::is_sorted(a->elements, less_comp)) {
-            return make_ready_future<>();
-        }
+    // Find bad histogram which had incorrect elements merged due to use of
+    // unordered map. The keys will be unordered. Histogram which size is
+    // less than max allowed will be correct because no entries needed to be
+    // merged, so we can avoid discarding those.
+    // look for commit with title 'streaming_histogram: fix update' for more details.
+    auto possibly_broken_histogram = length == sh.max_bin_size;
+    auto less_comp = [] (auto& x, auto& y) { return x.key < y.key; };
+    if (possibly_broken_histogram && !boost::is_sorted(a.elements, less_comp)) {
+        co_return;
+    }
 
-        auto transform = [] (auto element) -> std::pair<streaming_histogram_element::key_type, streaming_histogram_element::value_type> {
-            return { element.key, element.value };
-        };
-        boost::copy(a->elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
-
-        return make_ready_future<>();
-    });
+    auto transform = [] (auto element) -> std::pair<streaming_histogram_element::key_type, streaming_histogram_element::value_type> {
+        return { element.key, element.value };
+    };
+    boost::copy(a.elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
 }
 
 void write(sstable_version_types v, file_writer& out, const utils::streaming_histogram& sh) {
@@ -782,9 +764,8 @@ void write(sstable_version_types v, file_writer& out, const utils::streaming_his
 }
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, commitlog_interval& ci) {
-    return parse(s, v, in, ci.start).then([&ci, v, &s, &in] {
-        return parse(s, v, in, ci.end);
-    });
+    co_await parse(s, v, in, ci.start);
+    co_await parse(s, v, in, ci.end);
 }
 
 void write(sstable_version_types v, file_writer& out, const commitlog_interval& ci) {
@@ -793,29 +774,26 @@ void write(sstable_version_types v, file_writer& out, const commitlog_interval& 
 }
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
-    auto data_len_ptr = make_lw_shared<uint64_t>(0);
-    auto chunk_len_ptr = make_lw_shared<uint32_t>(0);
+    uint64_t data_len = 0;
+    uint32_t chunk_len = 0;
 
-    return parse(s, v, in, c.name, c.options, *chunk_len_ptr, *data_len_ptr).then([v, &s, &in, &c, chunk_len_ptr, data_len_ptr] {
-        c.set_uncompressed_chunk_length(*chunk_len_ptr);
-        c.set_uncompressed_file_length(*data_len_ptr);
+    co_await parse(s, v, in, c.name, c.options, chunk_len, data_len);
+    c.set_uncompressed_chunk_length(chunk_len);
+    c.set_uncompressed_file_length(data_len);
 
-      return do_with(uint32_t(), c.offsets.get_writer(), [v, &s, &in, &c] (uint32_t& len, compression::segmented_offsets::writer& offsets) {
-        return parse(s, v, in, len).then([&in, &c, &len, &offsets] {
-            auto eoarr = [&c, &len] { return c.offsets.size() == len; };
+    uint32_t len = 0;
+    compression::segmented_offsets::writer offsets = c.offsets.get_writer();
+    co_await parse(s, v, in, len);
+    auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
-            return do_until(eoarr, [&in, &c, &len, &offsets] () {
-                auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
-                return in.read_exactly(now * sizeof(uint64_t)).then([&offsets, now] (auto buf) {
-                    for (size_t i = 0; i < now; ++i) {
-                        uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
-                        offsets.push_back(net::ntoh(value));
-                    }
-                });
-            });
-        });
-      });
-    });
+    while (!eoarr()) {
+        auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
+        auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+        for (size_t i = 0; i < now; ++i) {
+            uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
+            offsets.push_back(net::ntoh(value));
+        }
+    }
 }
 
 void write(sstable_version_types v, file_writer& out, const compression& c) {
