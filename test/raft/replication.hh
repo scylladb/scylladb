@@ -267,6 +267,7 @@ class raft_cluster {
     class connected;
     class failure_detector;
     class rpc;
+    using rpc_net = std::unordered_map<raft::server_id, rpc*>;
     struct test_server {
         std::unique_ptr<raft::server> server;
         state_machine* sm;
@@ -286,6 +287,7 @@ class raft_cluster {
     size_t _leader;
     std::vector<initial_state> get_states(test_case test, bool prevote);
     typename Clock::duration _tick_delta;
+    rpc_net _rpc_net;
 public:
     raft_cluster(test_case test,
             apply_fn apply,
@@ -494,22 +496,27 @@ public:
 
 template <typename Clock>
 class raft_cluster<Clock>::rpc : public raft::rpc {
-    static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
     connected* _connected;
     snapshots* _snapshots;
+    rpc_net& _net;
     bool _packet_drops;
     raft::server_address_set _known_peers;
     uint32_t _servers_added = 0;
     uint32_t _servers_removed = 0;
 public:
     rpc(raft::server_id id, connected* connected, snapshots* snapshots,
-            bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
-            _packet_drops(packet_drops) {
-        net[_id] = this;
+        rpc_net& net, bool packet_drops)
+            : _id(id)
+            , _connected(connected)
+            , _snapshots(snapshots)
+            , _net(net)
+            , _packet_drops(packet_drops)
+    {
+        _net[_id] = this;
     }
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
-        if (!net.count(id)) {
+        if (!_net.count(id)) {
             throw std::runtime_error("trying to send a message to an unknown node");
         }
         if (!(*_connected)(id, _id)) {
@@ -521,57 +528,57 @@ public:
             co_await snapshot_sync.wait();
             snapshot_sync.signal();
         }
-        co_return co_await net[id]->_client->apply_snapshot(_id, std::move(s));
+        co_return co_await _net[id]->_client->apply_snapshot(_id, std::move(s));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (!net.count(id)) {
+        if (!_net.count(id)) {
             return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
         }
         if (!(*_connected)(id, _id)) {
             return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
         if (!_packet_drops || (rand() % 5)) {
-            net[id]->_client->append_entries(_id, append_request);
+            _net[id]->_client->append_entries(_id, append_request);
         }
         return make_ready_future<>();
     }
     virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (!net.count(id)) {
+        if (!_net.count(id)) {
             return;
         }
         if (!(*_connected)(id, _id)) {
             return;
         }
         if (!_packet_drops || (rand() % 5)) {
-            net[id]->_client->append_entries_reply(_id, std::move(reply));
+            _net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
     }
     virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-        if (!net.count(id)) {
+        if (!_net.count(id)) {
             return;
         }
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->request_vote(_id, std::move(vote_request));
+        _net[id]->_client->request_vote(_id, std::move(vote_request));
     }
     virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        if (!net.count(id)) {
+        if (!_net.count(id)) {
             return;
         }
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
+        _net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
     }
     virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
-        if (!net.count(id)) {
+        if (!_net.count(id)) {
             return;
         }
         if (!(*_connected)(id, _id)) {
             return;
         }
-        net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
+        _net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
     }
     virtual void add_server(raft::server_id id, bytes node_info) {
         _known_peers.insert(raft::server_address{id});
@@ -582,9 +589,6 @@ public:
         ++_servers_removed;
     }
     virtual future<> abort() { return make_ready_future<>(); }
-    static void reset_network() {
-        net.clear();
-    }
 
     const raft::server_address_set& known_peers() const {
         return _known_peers;
@@ -602,9 +606,6 @@ public:
 };
 
 template <typename Clock>
-std::unordered_map<raft::server_id, typename raft_cluster<Clock>::rpc*> raft_cluster<Clock>::rpc::net;
-
-template <typename Clock>
 typename raft_cluster<Clock>::test_server raft_cluster<Clock>::create_server(size_t id, initial_state state) {
 
     auto uuid = to_raft_id(id);
@@ -612,7 +613,7 @@ typename raft_cluster<Clock>::test_server raft_cluster<Clock>::create_server(siz
     auto& rsm = *sm;
 
     auto mrpc = std::make_unique<raft_cluster::rpc>(uuid, _connected.get(),
-            _snapshots.get(), _packet_drops);
+            _snapshots.get(), _rpc_net, _packet_drops);
     auto& rpc_ref = *mrpc;
 
     auto mpersistence = std::make_unique<persistence>(uuid, state,
@@ -645,8 +646,6 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         , _apply(apply)
         , _leader(first_leader)
         , _tick_delta(tick_delta) {
-
-    rpc::reset_network();
 
     auto states = get_states(test, prevote);
     for (size_t s = 0; s < states.size(); ++s) {
