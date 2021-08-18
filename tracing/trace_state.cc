@@ -55,15 +55,20 @@ namespace tracing {
 logging::logger trace_state_logger("trace_state");
 
 struct trace_state::params_values {
+    struct prepared_statement_info {
+        prepared_checked_weak_ptr statement;
+        std::optional<std::vector<sstring_view>> query_option_names;
+        std::vector<cql3::raw_value_view> query_option_values;
+        explicit prepared_statement_info(prepared_checked_weak_ptr statement) : statement(std::move(statement)) {}
+    };
+
     std::optional<inet_address_vector_replica_set> batchlog_endpoints;
     std::optional<api::timestamp_type> user_timestamp;
     std::vector<sstring> queries;
     std::optional<db::consistency_level> cl;
     std::optional<db::consistency_level> serial_cl;
     std::optional<int32_t> page_size;
-    std::vector<prepared_checked_weak_ptr> prepared_statements;
-    std::vector<std::optional<std::vector<sstring_view>>> query_option_names;
-    std::vector<std::vector<cql3::raw_value_view>> query_option_values;
+    std::vector<prepared_statement_info> prepared_statements;
 };
 
 trace_state::params_values* trace_state::params_ptr::get_ptr_safe() {
@@ -152,12 +157,10 @@ void trace_state::add_prepared_query_options(const cql3::query_options& prepared
         throw std::logic_error("Tracing a prepared statement but no prepared statement is stored");
     }
 
-    _params_ptr->query_option_names.reserve(_params_ptr->prepared_statements.size());
-    _params_ptr->query_option_values.reserve(_params_ptr->prepared_statements.size());
-
     for (size_t i = 0; i < _params_ptr->prepared_statements.size(); ++i) {
-        _params_ptr->query_option_names.emplace_back(prepared_options_ptr.for_statement(i).get_names());
-        _params_ptr->query_option_values.emplace_back(prepared_options_ptr.for_statement(i).get_values());
+        const cql3::query_options& opts = prepared_options_ptr.for_statement(i);
+        _params_ptr->prepared_statements[i].query_option_names = opts.get_names();
+        _params_ptr->prepared_statements[i].query_option_values = opts.get_values();
     }
 }
 
@@ -208,11 +211,13 @@ void trace_state::build_parameters_map() {
         // queries CQL command, where X is an index of the parameter in a corresponding query and Y is an index of the
         // corresponding query in the BATCH.
         if (prepared_statements.size() == 1) {
-            build_parameters_map_for_one_prepared(prepared_statements[0], vals.query_option_names[0], vals.query_option_values[0], "param");
+            auto& stmt_info = prepared_statements[0];
+            build_parameters_map_for_one_prepared(stmt_info.statement, stmt_info.query_option_names, stmt_info.query_option_values, "param");
         } else {
             // BATCH
             for (size_t i = 0; i < prepared_statements.size(); ++i) {
-                build_parameters_map_for_one_prepared(prepared_statements[i], vals.query_option_names[i], vals.query_option_values[i], format("param[{:d}]", i));
+                auto& stmt_info = prepared_statements[i];
+                build_parameters_map_for_one_prepared(stmt_info.statement, stmt_info.query_option_names, stmt_info.query_option_values, format("param[{:d}]", i));
             }
         }
     }
