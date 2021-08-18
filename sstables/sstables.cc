@@ -799,13 +799,13 @@ void write(sstable_version_types v, file_writer& out, const commitlog_interval& 
 }
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
-    auto data_len_ptr = make_lw_shared<uint64_t>(0);
-    auto chunk_len_ptr = make_lw_shared<uint32_t>(0);
+    uint64_t data_len = 0;
+    uint32_t chunk_len = 0;
 
-    co_await parse(s, v, in, c.name, c.options, *chunk_len_ptr, *data_len_ptr);
+    co_await parse(s, v, in, c.name, c.options, chunk_len, data_len);
     {
-        c.set_uncompressed_chunk_length(*chunk_len_ptr);
-        c.set_uncompressed_file_length(*data_len_ptr);
+        c.set_uncompressed_chunk_length(chunk_len);
+        c.set_uncompressed_file_length(data_len);
 
         uint32_t len = 0;
         compression::segmented_offsets::writer offsets = c.offsets.get_writer();
