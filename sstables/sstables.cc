@@ -672,8 +672,8 @@ inline void write(sstable_version_types v, file_writer& out, const statistics& s
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::estimated_histogram& eh) {
     auto len = std::make_unique<uint32_t>();
 
-    auto f = parse(s, v, in, *len);
-    return f.then([&in, &eh, len = std::move(len)] {
+    co_await parse(s, v, in, *len);
+    {
         uint32_t length = *len;
 
         if (length == 0) {
@@ -688,22 +688,24 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
         eh.buckets.reserve(length);
 
         auto type_size = sizeof(uint64_t) * 2;
-        return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto&& buf) {
+        auto buf = co_await in.read_exactly(length * type_size);
+        {
             check_buf_size(buf, length * type_size);
 
-            return do_with(size_t(0), std::move(buf), [&eh, length] (size_t& j, auto& buf) mutable {
-                return do_until([&eh, length] { return eh.buckets.size() == length; }, [&eh, &j, &buf] () mutable {
+            size_t j = 0;
+            {
+                while (eh.buckets.size() != length) {
                     auto offset = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
                     auto bucket = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
                     if (!eh.buckets.empty()) {
                         eh.bucket_offsets.push_back(offset);
                     }
                     eh.buckets.push_back(bucket);
-                    return make_ready_future<>();
-                });
-            });
-        });
-    });
+                    co_await make_ready_future<>(); // yield
+                }
+            }
+        }
+    }
 }
 
 void write(sstable_version_types v, file_writer& out, const utils::estimated_histogram& eh) {
