@@ -162,9 +162,9 @@ struct reset {
 };
 
 struct wait_log {
-    std::vector<size_t> local_ids;
-    wait_log(size_t local_id) : local_ids({local_id}) {}
-    wait_log(std::initializer_list<size_t> local_ids) : local_ids(local_ids) {}
+    std::vector<size_t> int_ids;
+    wait_log(size_t int_id) : int_ids({int_id}) {}
+    wait_log(std::initializer_list<size_t> int_ids) : int_ids(int_ids) {}
 };
 
 struct set_config_entry {
@@ -737,7 +737,7 @@ future<> raft_cluster<Clock>::add_entries(size_t n) {
         } catch (raft::not_a_leader& e) {
             // leader stepped down, update with new leader if present
             if (e.leader != raft::server_id{}) {
-                _leader = to_local_id(e.leader.id);
+                _leader = to_int_id(e.leader.id);
             }
         } catch (raft::commit_status_unknown& e) {
         } catch (raft::dropped_entry& e) {
@@ -808,7 +808,7 @@ future<> raft_cluster<Clock>::wait_log(size_t follower) {
 template <typename Clock>
 future<> raft_cluster<Clock>::wait_log(::wait_log followers) {
     auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
-    for (auto s: followers.local_ids) {
+    for (auto s: followers.int_ids) {
         co_await _servers[s].server->wait_log_idx_term(leader_log_idx_term);
     }
 }

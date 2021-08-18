@@ -148,11 +148,11 @@ fsm_debug create_follower(raft::server_id id, raft::log log,
 
 // Raft uses UUID 0 as special case.
 // Convert local 0-based integer id to raft +1 UUID
-utils::UUID to_raft_uuid(size_t local_id);
-raft::server_id to_raft_id(size_t local_id);
+utils::UUID to_raft_uuid(size_t int_id);
+raft::server_id to_raft_id(size_t int_id);
 
 // NOTE: can_vote = true
-raft::server_address to_server_address(size_t local_id);
-size_t to_local_id(utils::UUID uuid);
+raft::server_address to_server_address(size_t int_id);
+size_t to_int_id(utils::UUID uuid);
 // Return true upon a random event with given probability
 bool rolladice(float probability = 1.0/2.0);

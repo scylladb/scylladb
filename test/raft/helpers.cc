@@ -141,20 +141,20 @@ fsm_debug create_follower(raft::server_id id, raft::log log, raft::failure_detec
 
 // Raft uses UUID 0 as special case.
 // Convert local 0-based integer id to raft +1 UUID
-utils::UUID to_raft_uuid(size_t local_id) {
-    return utils::UUID{0, local_id + 1};
+utils::UUID to_raft_uuid(size_t int_id) {
+    return utils::UUID{0, int_id + 1};
 }
 
-raft::server_id to_raft_id(size_t local_id) {
-    return raft::server_id{to_raft_uuid(local_id)};
+raft::server_id to_raft_id(size_t int_id) {
+    return raft::server_id{to_raft_uuid(int_id)};
 }
 
 // NOTE: can_vote = true
-raft::server_address to_server_address(size_t local_id) {
-    return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
+raft::server_address to_server_address(size_t int_id) {
+    return raft::server_address{raft::server_id{to_raft_uuid(int_id)}};
 }
 
-size_t to_local_id(utils::UUID uuid) {
+size_t to_int_id(utils::UUID uuid) {
     return uuid.get_least_significant_bits() - 1;
 }
 
