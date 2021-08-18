@@ -621,41 +621,45 @@ inline void write(sstable_version_types v, file_writer& out, const std::unique_p
 }
 
 future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, statistics& s) {
-    return parse(schema, v, in, s.offsets).then([v, &schema, &in, &s] {
+  try {
+    co_await parse(schema, v, in, s.offsets);
+    {
         // Old versions of Scylla do not respect the order.
         // See https://github.com/scylladb/scylla/issues/3937
         boost::sort(s.offsets.elements, [] (auto&& e1, auto&& e2) { return e1.first < e2.first; });
-        return do_for_each(s.offsets.elements.begin(), s.offsets.elements.end(), [v, &schema, &in, &s] (auto val) mutable {
-            return in.seek(val.second).then([v, &schema, &in, &s, type = val.first] {
+        for (auto val : s.offsets.elements) {
+            auto type = val.first;
+            co_await in.seek(val.second);
+            {
                 switch (type) {
                 case metadata_type::Validation:
-                    return parse<validation_metadata>(schema, v, in, s.contents[type]);
+                    co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
+                    break;
                 case metadata_type::Compaction:
-                    return parse<compaction_metadata>(schema, v, in, s.contents[type]);
+                    co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
+                    break;
                 case metadata_type::Stats:
-                    return parse<stats_metadata>(schema, v, in, s.contents[type]);
+                    co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
+                    break;
                 case metadata_type::Serialization:
                     if (v < sstable_version_types::mc) {
                         throw malformed_sstable_exception(
                             "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                     } else {
-                        return parse<serialization_header>(schema, v, in, s.contents[type]);
+                        co_await parse<serialization_header>(schema, v, in, s.contents[type]);
                     }
-                    return make_ready_future<>();
+                    break;
                 default:
                     throw malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
                 }
-            });
-        });
-    }).handle_exception([] (std::exception_ptr ex) {
-        try {
-            std::rethrow_exception(ex);
+            }
+        }
+    }
         } catch (const malformed_sstable_exception&) {
             throw;
         } catch (...) {
-            throw malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", ex));
+            throw malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", std::current_exception()));
         }
-    });
 }
 
 inline void write(sstable_version_types v, file_writer& out, const statistics& s) {
