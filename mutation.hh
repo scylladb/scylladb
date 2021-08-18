@@ -82,8 +82,11 @@ public:
         : _ptr(std::make_unique<data>(std::move(schema), std::move(key), std::move(mp)))
     { }
     mutation(const mutation& m)
-        : _ptr(std::make_unique<data>(schema_ptr(m.schema()), dht::decorated_key(m.decorated_key()), m.partition()))
-    { }
+    {
+        if (m._ptr) {
+            _ptr = std::make_unique<data>(schema_ptr(m.schema()), dht::decorated_key(m.decorated_key()), m.partition());
+        }
+    }
     mutation(mutation&&) = default;
     mutation& operator=(mutation&& x) = default;
     mutation& operator=(const mutation& m);
