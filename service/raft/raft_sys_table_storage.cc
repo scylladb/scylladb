@@ -172,11 +172,13 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
         ser::serialize(data_out_str, eptr->data);
 
         // don't include serialized "data" here since it will require to linearize the stream
-        std::vector<cql3::raw_value> single_stmt_values = {
-            cql3::raw_value::make_value(timeuuid_type->decompose(_group_id.id)),
-            cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->term))),
-            cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->idx)))
-        };
+        std::vector<cql3::raw_value> single_stmt_values;
+        // Silly workaround for https://bugs.llvm.org/show_bug.cgi?id=51515
+        single_stmt_values.reserve(3);
+        single_stmt_values.emplace_back(cql3::raw_value::make_value(timeuuid_type->decompose(_group_id.id)));
+        single_stmt_values.emplace_back(cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->term))));
+        single_stmt_values.emplace_back(cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->idx))));
+
         stmt_values.emplace_back(std::move(single_stmt_values));
         stmt_data_views.emplace_back(std::move(data_tmp_buf));
 
