@@ -774,10 +774,10 @@ public:
     }
 
     // See class comment for info
-    future<sseg_ptr> sync() {
+    future<> sync() {
         return cycle(true);
     }
-    future<sseg_ptr> terminate() {
+    future<> terminate() {
         assert(_closed);
         if (!std::exchange(_terminated, true)) {
             // write a terminating zero block iff we are ending (a reused)
@@ -794,9 +794,7 @@ public:
         }
         // just in case, wait for flushing to finish up to what is now final end
         // pos.
-        return _flush_pos.wait(_file_pos).then([me = shared_from_this()] {
-            return me;
-        });
+        return _flush_pos.wait(_file_pos);
     }
     void issue_close_request() {
         if (!std::exchange(_closed, true)) {
@@ -1052,18 +1050,16 @@ public:
      * Send any buffer contents to disk and get a new tmp buffer
      */
     // See class comment for info
-    future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
-        auto me = shared_from_this();
+    future<> cycle(bool flush_after = false, bool termination = false) {
         auto top = issue_cycle(flush_after, termination);
         if (flush_after) {
             co_await _flush_pos.wait(top);
         } else {
             co_await _written_pos.wait(top);
         }
-        co_return me;
     }
 
-    future<sseg_ptr> batch_cycle(timeout_clock::time_point timeout) {
+    future<> batch_cycle(timeout_clock::time_point timeout) {
         /**
          * For batch mode we force a write "immediately".
          * However, we first wait for all previous writes/flushes
@@ -1072,7 +1068,6 @@ public:
          * This has the benefit of allowing several allocations to
          * queue up in a single buffer.
          */
-        auto me = shared_from_this();
         auto fp = _file_pos;
         try {
             // wait for all writes (and maybe flush) to reach our _start_
@@ -1085,7 +1080,7 @@ public:
                 // (Note: wait_for_pending(pos) waits for operation _at_ pos (and before),
                 assert(_segment_manager->cfg.mode != sync_mode::BATCH || _flush_pos > fp);
                 if (_flush_pos > fp) {
-                    co_return me;
+                    co_return;
                     // previous op we were waiting for was not sync one, so it did not flush
                     // force flush here
                 }
@@ -1098,10 +1093,9 @@ public:
             // we should close the segment.
             // TODO: should we also trunctate away any partial write
             // we did?
-            me->_closed = true; // just mark segment as closed, no writes will be done.
+            _closed = true; // just mark segment as closed, no writes will be done.
             throw;
         };
-        co_return me;
     }
 
     void background_cycle() {
@@ -1320,13 +1314,13 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
             case write_result::ok:
                 co_return writer.result();
             case write_result::must_sync:
-                s = co_await with_timeout(timeout, s->sync());
+                co_await with_timeout(timeout, s->sync());
                 continue;
             case write_result::no_space:
                 s = co_await s->finish_and_get_new(timeout);
                 continue;
             case write_result::ok_need_batch_sync:
-                s = co_await s->batch_cycle(timeout);
+                co_await s->batch_cycle(timeout);
                 co_return writer.result();
         }
     }
