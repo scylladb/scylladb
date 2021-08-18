@@ -335,6 +335,14 @@ public:
 
     stats totals;
 
+    struct {
+        uint64_t
+            write_count = 0, replenish_count = 0, shutdown_count = 0,
+            sync_count = 0, flush_count = 0, delete_count = 0,
+            close_count = 0
+        ;
+    } task_counts;
+
     size_t pending_allocations() const {
         return _request_controller.waiters();
     }
@@ -481,6 +489,7 @@ private:
     class shutdown_marker{};
     class message_queue;
     class pending_tasks;
+    struct mark_frame;
 
     class messages {
     public:
@@ -1481,6 +1490,18 @@ void db::commitlog::segment_manager::wakeup() {
     _message_queue.wakeup();
 }
 
+struct db::commitlog::segment_manager::mark_frame {
+    uint64_t& _var;
+    mark_frame(uint64_t& v)
+        : _var(v)
+    {
+        ++_var;
+    }
+    ~mark_frame() {
+        --_var;
+    }
+};
+
 future<> db::commitlog::segment_manager::message_loop() {
     messages msgs;
     pending_tasks tasks;
@@ -1536,10 +1557,11 @@ void db::commitlog::segment_manager::handle_writes(messages& msgs, pending_tasks
         // note: we are using arg-passing instead of lambda captures to 
         // ensure things are kept alive as long as needed, and not longer,
         // by coroutine frame.
-        tasks.add([](write_request p) -> future<> {
+        tasks.add([this](write_request p) -> future<> {
             auto s = std::move(p.segment);
             try {
-                co_await s->perform_write_request(std::move(p));
+                mark_frame mf(task_counts.write_count);
+                 co_await s->perform_write_request(std::move(p));
             } catch (...) {
                 // Redundant. Maybe make write noexcept? Alternative remove logging
                 // from it.
@@ -1559,6 +1581,8 @@ void db::commitlog::segment_manager::handle_shutdowns(messages& msgs, pending_ta
             try {
                 clogger.debug("Begin shutdown sequence");
 
+                mark_frame mf(task_counts.shutdown_count);
+                
                 co_await sync_all_segments();
                 co_await std::move(block_new_requests);
 
@@ -1595,6 +1619,7 @@ void db::commitlog::segment_manager::handle_closes(messages& msgs, pending_tasks
         tasks.add([this](close_request c) -> future<> {
             auto s = std::move(c.segment);
             try {
+                mark_frame mf(task_counts.close_count);
                 co_await s->perform_close_request(std::move(c));
                 // ensure we run cleanup etc.
                 wakeup();
@@ -1609,8 +1634,9 @@ void db::commitlog::segment_manager::do_periodic_syncs(pending_tasks& tasks) {
     auto def_copy = _segments;
     for (auto& s : def_copy) {
         if (s->must_sync()) {
-            tasks.add([](sseg_ptr s) -> future<> {
+            tasks.add([this](sseg_ptr s) -> future<> {
                 try {
+                    mark_frame mf(task_counts.sync_count);
                     auto wr = s->make_write_request(true);
                     co_await s->perform_write_request(std::move(wr));
                 } catch (...) {
@@ -1628,6 +1654,7 @@ void db::commitlog::segment_manager::do_periodic_flush_callbacks(pending_tasks& 
         auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
 
         if (max != 0 && cur >= max) {
+            mark_frame mf(task_counts.flush_count);
             clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
             _new_counter = 0;
             // TODO: make blocking
@@ -1638,7 +1665,10 @@ void db::commitlog::segment_manager::do_periodic_flush_callbacks(pending_tasks& 
 
 void db::commitlog::segment_manager::do_pending_deletes(pending_tasks& tasks) {
     discard_unused_segments();
-    tasks.add([this] { return do_pending_deletes(); });
+    tasks.add([this]() -> future<> {
+        mark_frame mf(task_counts.delete_count);
+        co_await do_pending_deletes(); 
+    });
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1660,6 +1690,7 @@ void db::commitlog::segment_manager::replenish_reserve(pending_tasks& tasks) {
     tasks.add([this]() -> future<> {
         while (!_reserve_segments.full() && _state == state::active) {
             try {
+                mark_frame mf(task_counts.replenish_count);
                 // note: if we were strict with disk size, we would refuse to do this 
                 // unless disk footprint is lower than threshold. but we cannot (yet?)
                 // trust that flush logic will absolutely free up an existing 
@@ -2255,6 +2286,8 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
                     auto size = co_await seastar::file_size(filename);
                     recycle = (usage - size) <= max_disk_size;
                 }
+
+                clogger.trace("Usage {} / {} -> {}", usage, max_disk_size, recycle ? "recycle" : "delete");
 
                 if (recycle) {
                     descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
