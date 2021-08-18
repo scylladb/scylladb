@@ -3122,3 +3122,69 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
     // These checks are meaningful because legacy hashing is still used for old nodes.
     BOOST_CHECK_EQUAL(compute_legacy_hash(r1, { 0, 1, 2 }), compute_legacy_hash(r2, { 0, 1, 2 }));
 }
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
+    std::mt19937 engine(tests::random::get_int<uint32_t>());
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    auto rnd_schema_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 8));
+    auto rnd_schema = tests::random_schema(engine(), *rnd_schema_spec);
+
+    auto forward_schema = rnd_schema.schema();
+    auto reverse_schema = forward_schema->make_reversed();
+
+    const auto muts = tests::generate_random_mutations(
+            rnd_schema,
+            tests::default_timestamp_generator(),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(1, 1)).get();
+
+    class validating_consumer {
+        mutation_fragment_stream_validator _validator;
+
+    public:
+        explicit validating_consumer(const schema& s) : _validator(s) { }
+
+        void consume_new_partition(const dht::decorated_key&) {
+            BOOST_REQUIRE(_validator(mutation_fragment::kind::partition_start, position_in_partition_view(position_in_partition_view::partition_start_tag_t{})));
+        }
+        void consume(tombstone) { }
+        stop_iteration consume(static_row&& sr) {
+            BOOST_REQUIRE(_validator(mutation_fragment::kind::static_row, sr.position()));
+            return stop_iteration::no;
+        }
+        stop_iteration consume(clustering_row&& cr) {
+            BOOST_REQUIRE(_validator(mutation_fragment::kind::clustering_row, cr.position()));
+            return stop_iteration::no;
+        }
+        stop_iteration consume(range_tombstone&& rt) {
+            BOOST_REQUIRE(_validator(mutation_fragment::kind::range_tombstone, rt.position()));
+            return stop_iteration::no;
+        }
+        stop_iteration consume_end_of_partition() {
+            BOOST_REQUIRE(_validator(mutation_fragment::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{})));
+            return stop_iteration::no;
+        }
+        void consume_end_of_stream() {
+            BOOST_REQUIRE(_validator.on_end_of_stream());
+        }
+    };
+
+    BOOST_TEST_MESSAGE("Forward");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*forward_schema);
+        std::move(mut).consume(consumer, consume_in_reverse::no);
+    }
+    BOOST_TEST_MESSAGE("Reverse");
+    {
+        auto mut = muts.front();
+        validating_consumer consumer(*reverse_schema);
+        std::move(mut).consume(consumer, consume_in_reverse::yes);
+    }
+}
