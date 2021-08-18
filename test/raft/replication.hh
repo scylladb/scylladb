@@ -638,18 +638,18 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
 }
 
 raft_cluster::raft_cluster(test_case test,
-        apply_fn apply,
-        size_t apply_entries, size_t first_val, size_t first_leader,
-        bool prevote, bool packet_drops) :
-            _connected(std::make_unique<struct connected>(test.nodes)),
-            _snapshots(std::make_unique<snapshots>()),
-            _persisted_snapshots(std::make_unique<persisted_snapshots>()),
-            _apply_entries(apply_entries),
-            _next_val(first_val),
-            _packet_drops(packet_drops),
-            _prevote(prevote),
-            _apply(apply),
-            _leader(first_leader) {
+    apply_fn apply,
+    size_t apply_entries, size_t first_val, size_t first_leader,
+    bool prevote, bool packet_drops)
+        : _connected(std::make_unique<struct connected>(test.nodes))
+        , _snapshots(std::make_unique<snapshots>())
+        , _persisted_snapshots(std::make_unique<persisted_snapshots>())
+        , _apply_entries(apply_entries)
+        , _next_val(first_val)
+        , _packet_drops(packet_drops)
+        , _prevote(prevote)
+        , _apply(apply)
+        , _leader(first_leader) {
 
     rpc::reset_network();
 
