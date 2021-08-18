@@ -406,7 +406,8 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
 
             void consume_new_partition(const dht::decorated_key& dk) {
                 assert(!_builder);
-                _builder = mutation_rebuilder(dk, std::move(_s));
+                _builder = mutation_rebuilder(std::move(_s));
+                _builder->consume_new_partition(dk);
             }
 
             stop_iteration consume(tombstone t) {

@@ -25,38 +25,51 @@
 #include "range_tombstone_assembler.hh"
 
 class mutation_rebuilder {
-    mutation _m;
+    schema_ptr _s;
+    mutation_opt _m;
 
 public:
-    mutation_rebuilder(dht::decorated_key dk, schema_ptr s)
-        : _m(std::move(s), std::move(dk)) {
+    explicit mutation_rebuilder(schema_ptr s) : _s(std::move(s)) { }
+
+    void consume_new_partition(const dht::decorated_key& dk) {
+        assert(!_m);
+        _m = mutation(_s, std::move(dk));
     }
 
     stop_iteration consume(tombstone t) {
-        _m.partition().apply(t);
+        assert(_m);
+        _m->partition().apply(t);
         return stop_iteration::no;
     }
 
     stop_iteration consume(range_tombstone&& rt) {
-        _m.partition().apply_row_tombstone(*_m.schema(), std::move(rt));
+        assert(_m);
+        _m->partition().apply_row_tombstone(*_s, std::move(rt));
         return stop_iteration::no;
     }
 
     stop_iteration consume(static_row&& sr) {
-        _m.partition().static_row().apply(*_m.schema(), column_kind::static_column, std::move(sr.cells()));
+        assert(_m);
+        _m->partition().static_row().apply(*_s, column_kind::static_column, std::move(sr.cells()));
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr) {
-        auto& dr = _m.partition().clustered_row(*_m.schema(), std::move(cr.key()));
+        assert(_m);
+        auto& dr = _m->partition().clustered_row(*_s, std::move(cr.key()));
         dr.apply(cr.tomb());
         dr.apply(cr.marker());
-        dr.cells().apply(*_m.schema(), column_kind::regular_column, std::move(cr.cells()));
+        dr.cells().apply(*_s, column_kind::regular_column, std::move(cr.cells()));
         return stop_iteration::no;
     }
 
+    stop_iteration consume_end_of_partition() {
+        assert(_m);
+        return stop_iteration::yes;
+    }
+
     mutation_opt consume_end_of_stream() {
-        return mutation_opt(std::move(_m));
+        return std::move(_m);
     }
 };
 
@@ -65,10 +78,10 @@ public:
 // Does not work with streams in streamed_mutation::forwarding::yes mode.
 class mutation_rebuilder_v2 {
     schema_ptr _s;
-    std::optional<mutation_rebuilder> _builder;
+    mutation_rebuilder _builder;
     range_tombstone_assembler _rt_assembler;
 public:
-    mutation_rebuilder_v2(schema_ptr s) : _s(std::move(s)) { }
+    mutation_rebuilder_v2(schema_ptr s) : _s(std::move(s)), _builder(_s) { }
 public:
     stop_iteration consume(partition_start mf) {
         consume_new_partition(mf.key());
@@ -82,47 +95,38 @@ public:
     }
 public:
     void consume_new_partition(const dht::decorated_key& dk) {
-        assert(!_builder);
-        _builder = mutation_rebuilder(dk, _s);
+        _builder.consume_new_partition(dk);
     }
 
     stop_iteration consume(tombstone t) {
-        assert(_builder);
-        _builder->consume(t);
+        _builder.consume(t);
         return stop_iteration::no;
     }
 
     stop_iteration consume(range_tombstone_change&& rt) {
-        assert(_builder);
         if (auto rt_opt = _rt_assembler.consume(*_s, std::move(rt))) {
-            _builder->consume(std::move(*rt_opt));
+            _builder.consume(std::move(*rt_opt));
         }
         return stop_iteration::no;
     }
 
     stop_iteration consume(static_row&& sr) {
-        assert(_builder);
-        _builder->consume(std::move(sr));
+        _builder.consume(std::move(sr));
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr) {
-        assert(_builder);
-        _builder->consume(std::move(cr));
+        _builder.consume(std::move(cr));
         return stop_iteration::no;
     }
 
     stop_iteration consume_end_of_partition() {
-        assert(_builder);
         _rt_assembler.on_end_of_stream();
         return stop_iteration::yes;
     }
 
     mutation_opt consume_end_of_stream() {
-        if (!_builder) {
-            return mutation_opt();
-        }
         _rt_assembler.on_end_of_stream();
-        return _builder->consume_end_of_stream();
+        return _builder.consume_end_of_stream();
     }
 };

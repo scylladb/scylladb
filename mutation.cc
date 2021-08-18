@@ -196,49 +196,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
         });
     }
     // r.is_buffer_empty() is always false at this point
-    struct adapter {
-        schema_ptr _s;
-        std::optional<mutation_rebuilder> _builder;
-        adapter(schema_ptr s) : _s(std::move(s)) { }
-
-        void consume_new_partition(const dht::decorated_key& dk) {
-            assert(!_builder);
-            _builder = mutation_rebuilder(dk, std::move(_s));
-        }
-
-        stop_iteration consume(tombstone t) {
-            assert(_builder);
-            return _builder->consume(t);
-        }
-
-        stop_iteration consume(range_tombstone&& rt) {
-            assert(_builder);
-            return _builder->consume(std::move(rt));
-        }
-
-        stop_iteration consume(static_row&& sr) {
-            assert(_builder);
-            return _builder->consume(std::move(sr));
-        }
-
-        stop_iteration consume(clustering_row&& cr) {
-            assert(_builder);
-            return _builder->consume(std::move(cr));
-        }
-
-        stop_iteration consume_end_of_partition() {
-            assert(_builder);
-            return stop_iteration::yes;
-        }
-
-        mutation_opt consume_end_of_stream() {
-            if (!_builder) {
-                return mutation_opt();
-            }
-            return _builder->consume_end_of_stream();
-        }
-    };
-    return r.consume(adapter(r.schema()));
+    return r.consume(mutation_rebuilder(r.schema()));
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
