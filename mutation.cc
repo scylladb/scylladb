@@ -199,6 +199,12 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
     return r.consume(mutation_rebuilder(r.schema()));
 }
 
+mutation reverse(mutation mut) {
+    auto reverse_schema = mut.schema()->make_reversed();
+    mutation_rebuilder reverse_rebuilder(reverse_schema);
+    return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
+}
+
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
     const ::schema& s = *m.schema();
     const auto& dk = m.decorated_key();
