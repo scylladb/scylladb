@@ -747,12 +747,12 @@ struct streaming_histogram_element {
 };
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::streaming_histogram& sh) {
-    auto a = std::make_unique<disk_array<uint32_t, streaming_histogram_element>>();
+    auto a = disk_array<uint32_t, streaming_histogram_element>();
 
-    co_await parse(s, v, in, sh.max_bin_size, *a);
+    co_await parse(s, v, in, sh.max_bin_size, a);
     {
 
-        auto length = a->elements.size();
+        auto length = a.elements.size();
         if (length > sh.max_bin_size) {
             throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
         }
@@ -764,14 +764,14 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
         // look for commit with title 'streaming_histogram: fix update' for more details.
         auto possibly_broken_histogram = length == sh.max_bin_size;
         auto less_comp = [] (auto& x, auto& y) { return x.key < y.key; };
-        if (possibly_broken_histogram && !boost::is_sorted(a->elements, less_comp)) {
+        if (possibly_broken_histogram && !boost::is_sorted(a.elements, less_comp)) {
             co_return;
         }
 
         auto transform = [] (auto element) -> std::pair<streaming_histogram_element::key_type, streaming_histogram_element::value_type> {
             return { element.key, element.value };
         };
-        boost::copy(a->elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
+        boost::copy(a.elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
     }
 }
 
