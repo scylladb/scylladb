@@ -27,6 +27,8 @@
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
 #include "clustering_interval_set.hh"
+#include "hashing.hh"
+#include "xx_hasher.hh"
 
 std::ostream&
 operator<<(std::ostream& os, const clustering_row::printer& p) {
@@ -456,3 +458,49 @@ std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
 std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {
     return out << "{" << ::join(",\n  ", set) << "}";
 }
+
+template<typename Hasher>
+void appending_hash<mutation_fragment>::operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const {
+    auto hash_cell = [&] (const column_definition& col, const atomic_cell_or_collection& cell) {
+        feed_hash(h, col.kind);
+        feed_hash(h, col.id);
+        feed_hash(h, cell, col);
+    };
+
+    mf.visit(seastar::make_visitor(
+        [&] (const clustering_row& cr) {
+            feed_hash(h, cr.key(), s);
+            feed_hash(h, cr.tomb());
+            feed_hash(h, cr.marker());
+            cr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+                auto&& col = s.regular_column_at(id);
+                hash_cell(col, cell);
+            });
+        },
+        [&] (const static_row& sr) {
+            sr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+                auto&& col = s.static_column_at(id);
+                hash_cell(col, cell);
+            });
+        },
+        [&] (const range_tombstone& rt) {
+            feed_hash(h, rt.start, s);
+            feed_hash(h, rt.start_kind);
+            feed_hash(h, rt.tomb);
+            feed_hash(h, rt.end, s);
+            feed_hash(h, rt.end_kind);
+        },
+        [&] (const partition_start& ps) {
+            feed_hash(h, ps.key().key(), s);
+            if (ps.partition_tombstone()) {
+                feed_hash(h, ps.partition_tombstone());
+            }
+        },
+        [&] (const partition_end& pe) {
+            throw std::runtime_error("partition_end is not expected");
+        }
+    ));
+}
+
+// Instantiation for repair/row_level.cc
+template void appending_hash<mutation_fragment>::operator()<xx_hasher>(xx_hasher& h, const mutation_fragment& cells, const schema& s) const;
