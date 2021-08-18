@@ -452,8 +452,8 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     expression token_lt_restriction = binary_operator(token{}, oper_t::LT, zero_value);
     expression token_gt_restriction = binary_operator(token{}, oper_t::GT, zero_value);
 
-    expression true_restriction(true);
-    expression false_restriction(false);
+    expression true_restriction = constant::make_bool(true);
+    expression false_restriction = constant::make_bool(false);
     expression token_expr = token{};
     expression pk1_expr = column_value(&col_pk1);
     expression pk2_expr = column_value(&col_pk1);

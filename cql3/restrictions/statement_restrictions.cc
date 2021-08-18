@@ -61,7 +61,7 @@ class statement_restrictions::initial_key_restrictions : public primary_key_rest
 public:
     initial_key_restrictions(bool allow_filtering)
         : _allow_filtering(allow_filtering) {
-        this->expression = true;
+        this->expression = expr::constant::make_bool(true);
     }
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
@@ -204,7 +204,7 @@ static std::vector<expr::expression> extract_partition_range(
             // Partition key columns are not legal in tuples, so ignore tuples.
         }
 
-        void operator()(bool) {}
+        void operator()(const constant&) {}
 
         void operator()(const unresolved_identifier&) {
             on_internal_error(rlogger, "extract_partition_range(unresolved_identifier)");
@@ -314,7 +314,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             // A token cannot be a clustering prefix restriction
         }
 
-        void operator()(bool) {}
+        void operator()(const constant&) {}
 
         void operator()(const unresolved_identifier&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(unresolved_identifier)");
@@ -1011,8 +1011,13 @@ struct multi_column_range_accumulator {
         std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
     }
 
-    void operator()(bool b) {
-        if (!b) {
+    void operator()(const constant& v) {
+        std::optional<bool> bool_val = get_bool_value(v);
+        if (!bool_val.has_value()) {
+            on_internal_error(rlogger, "non-bool constant encountered outside binary operator");
+        }
+
+        if (*bool_val == false) {
             ranges.clear();
         }
     }

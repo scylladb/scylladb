@@ -512,7 +512,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                 // token range.  It is impossible for any fetched row not to match now.
                 return true;
             },
-            [] (bool) -> bool {
+            [] (const constant&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: A constant cannot serve as the LHS of a binary expression");
             },
             [] (const conjunction&) -> bool {
@@ -556,7 +556,15 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
 
 bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
     return std::visit(overloaded_functor{
-            [&] (bool v) { return v; },
+            [] (const constant& constant_val) {
+                std::optional<bool> bool_val = get_bool_value(constant_val);
+                if (bool_val.has_value()) {
+                    return *bool_val;
+                }
+
+                on_internal_error(expr_logger,
+                    "is_satisfied_by: a constant that is not a bool value cannot serve as a restriction by itself");
+            },
             [&] (const conjunction& conj) {
                 return boost::algorithm::all_of(conj.children, [&] (const expression& c) {
                     return is_satisfied_by(c, bag);
@@ -717,8 +725,14 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
 value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
     const auto type = cdef ? get_value_comparator(cdef) : long_type.get();
     return std::visit(overloaded_functor{
-            [] (bool b) {
-                return b ? unbounded_value_set : empty_value_set;
+            [] (const constant& constant_val) {
+                std::optional<bool> bool_val = get_bool_value(constant_val);
+                if (bool_val.has_value()) {
+                    return *bool_val ? unbounded_value_set : empty_value_set;
+                }
+
+                on_internal_error(expr_logger,
+                    "possible_lhs_values: a constant that is not a bool value cannot serve as a restriction by itself");
             },
             [&] (const conjunction& conj) {
                 return boost::accumulate(conj.children, unbounded_value_set,
@@ -808,7 +822,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [&] (const conjunction&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: conjunctions are not supported as the LHS of a binary expression");
                         },
-                        [&] (bool) -> value_set {
+                        [] (const constant&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
                         },
                         [] (const unresolved_identifier&) -> value_set {
@@ -924,7 +938,7 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (const conjunction&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: conjunctions are not supported as the LHS of a binary expression");
                         },
-                        [&] (bool) -> bool {
+                        [] (const constant&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: constants are not supported as the LHS of a binary expression");
                         },
                         [] (const unresolved_identifier&) -> bool {
@@ -985,7 +999,7 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
     std::visit(overloaded_functor{
-            [&] (bool b) { os << (b ? "TRUE" : "FALSE"); },
+            [&] (const constant& v) { os << v.value.to_view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
                 os << "(" << *opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
@@ -1224,7 +1238,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         const column_definition& column;
         const binary_operator* current_binary_operator;
 
-        void operator()(bool) {}
+        void operator()(const constant&) {}
 
         void operator()(const conjunction& conj) {
             for (const expression& child : conj.children) {
@@ -1275,5 +1289,56 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 }
 
 
+constant::constant(cql3::raw_value val, data_type typ)
+    : value(std::move(val)), type(std::move(typ)) {
+}
+
+constant constant::make_null(data_type val_type) {
+    return constant(cql3::raw_value::make_null(), std::move(val_type));
+}
+
+constant constant::make_unset_value(data_type val_type) {
+    return constant(cql3::raw_value::make_unset_value(), std::move(val_type));
+}
+
+constant constant::make_bool(bool bool_val) {
+    return constant(raw_value::make_value(boolean_type->decompose(bool_val)), boolean_type);
+}
+
+bool constant::is_null() const {
+    return value.is_null();
+}
+
+bool constant::is_unset_value() const {
+    return value.is_unset_value();
+}
+
+bool constant::has_empty_value_bytes() const {
+    if (is_null_or_unset()) {
+        return false;
+    }
+
+    return value.to_view().size_bytes() == 0;
+}
+
+bool constant::is_null_or_unset() const {
+    return is_null() || is_unset_value();
+}
+
+std::optional<bool> get_bool_value(const constant& constant_val) {
+    if (constant_val.type->get_kind() != abstract_type::kind::boolean) {
+        return std::nullopt;
+    }
+
+    if (constant_val.is_null_or_unset()) {
+        return std::nullopt;
+    }
+
+    if (constant_val.has_empty_value_bytes()) {
+        return std::nullopt;
+    }
+
+    return constant_val.value.to_view().deserialize<bool>(*boolean_type);
+}
 } // namespace expr
 } // namespace cql3
