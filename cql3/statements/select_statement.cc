@@ -964,6 +964,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     }
 
     auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
+    paging_state_copy->set_remaining(internal_paging_size);
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
     return std::move(paging_state_copy);
