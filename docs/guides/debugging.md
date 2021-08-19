@@ -336,7 +336,7 @@ Move the coredump and the unpackaged relocatable package into some dir
 (host)$ cd /path/to/scylla # with the right commit checked out
 (host)$ ./tools/toolchain/dbuild -it -v $dir:/workdir:z -- bash -l
 (dbuild)$ cd /workdir
-(dbuild)$ cd unpackaged-relocatable-package && ./install.sh && cd ..
+(dbuild)$ ln -s /path/to/unpackaged-relocatable-package && /opt/scylladb # symlink the scylla subdir if you have the unified tarball
 (dbuild)$ gdb --core=$corefile /opt/scylladb/libexec/scylla
 ```
 
