@@ -62,9 +62,10 @@ public:
     class value : public terminal, collection_terminal {
     public:
         std::map<managed_bytes, managed_bytes, serialized_compare> map;
+        data_type _my_type;
 
-        value(std::map<managed_bytes, managed_bytes, serialized_compare> map)
-            : map(std::move(map)) {
+        value(std::map<managed_bytes, managed_bytes, serialized_compare> map, data_type my_type)
+            : map(std::move(map)), _my_type(std::move(my_type)) {
         }
         static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
@@ -76,12 +77,11 @@ public:
 
     // See Lists.DelayedValue
     class delayed_value : public non_terminal {
-        serialized_compare _comparator;
         std::unordered_map<shared_ptr<term>, shared_ptr<term>> _elements;
+        data_type _my_type;
     public:
-        delayed_value(serialized_compare comparator,
-                      std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements)
-                : _comparator(std::move(comparator)), _elements(std::move(elements)) {
+        delayed_value(std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements, data_type my_type)
+                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;

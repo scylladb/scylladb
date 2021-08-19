@@ -224,9 +224,7 @@ map_prepare_term(const collection_constructor& c, database& db, const sstring& k
 
         values.emplace(k, v);
     }
-    maps::delayed_value value(
-            dynamic_cast<const map_type_impl&>(receiver->type->without_reversed()).get_keys_type()->as_less_comparator(),
-            values);
+    maps::delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -300,10 +298,11 @@ set_prepare_term(const collection_constructor& c, database& db, const sstring& k
         }
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now. This branch works for frozen sets/maps only.
-        if (dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
-            // use empty_type for comparator, set is empty anyway.
+        const map_type_impl* maybe_map_type = dynamic_cast<const map_type_impl*>(receiver->type.get());
+        if (maybe_map_type != nullptr) {
+            serialized_compare comparator = maybe_map_type->get_keys_type()->as_less_comparator();
             std::map<managed_bytes, managed_bytes, serialized_compare> m(empty_type->as_less_comparator());
-            return ::make_shared<maps::value>(std::move(m));
+            return ::make_shared<maps::value>(std::move(m), receiver->type);
         }
     }
 

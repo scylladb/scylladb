@@ -73,7 +73,7 @@ maps::value::from_serialized(const raw_value_view& fragmented_value, const map_t
                             type.get_values_type()->decompose(e.second));
             }
         }
-        return maps::value(std::move(map));
+        return maps::value(std::move(map), type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -119,7 +119,7 @@ maps::value::to_string() const {
 }
 
 data_type maps::value::get_value_type() const {
-    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+    return _my_type;
 }
 
 bool
@@ -134,7 +134,10 @@ maps::delayed_value::fill_prepare_context(prepare_context& ctx) const {
 
 shared_ptr<terminal>
 maps::delayed_value::bind(const query_options& options) {
-    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(_comparator);
+    const map_type_impl& my_map_type = dynamic_cast<const map_type_impl&>(_my_type->without_reversed());
+
+    serialized_compare comparator = my_map_type.get_keys_type()->as_less_comparator();
+    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(std::move(comparator));
     for (auto&& entry : _elements) {
         auto&& key = entry.first;
         auto&& value = entry.second;
@@ -161,7 +164,7 @@ maps::delayed_value::bind(const query_options& options) {
         }
         buffers.emplace(*to_managed_bytes_opt(key_bytes), *to_managed_bytes_opt(value_bytes));
     }
-    return ::make_shared<value>(std::move(buffers));
+    return ::make_shared<value>(std::move(buffers), _my_type);
 }
 
 ::shared_ptr<terminal>
