@@ -94,6 +94,10 @@ lists::value::equals(const list_type_impl& lt, const value& v) {
             [t = lt.get_elements_type()] (const managed_bytes_opt& e1, const managed_bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
+data_type lists::value::get_value_type() const {
+    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+}
+
 const utils::chunked_vector<managed_bytes_opt>&
 lists::value::get_elements() const {
     return _elements;

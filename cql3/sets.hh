@@ -70,6 +70,7 @@ public:
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const set_type_impl& st, const value& v);
         virtual sstring to_string() const override;
+        data_type get_value_type() const override;
     };
 
     // See Lists.DelayedValue

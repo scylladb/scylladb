@@ -539,6 +539,17 @@ nested_expression::nested_expression(ExpressionElement auto e)
 std::vector<expression> extract_single_column_restrictions_for_column(const expression&, const column_definition&);
 
 std::optional<bool> get_bool_value(const constant&);
+
+// Takes a prepared expression and calculates its value.
+// Later term will be replaced with expression.
+// For now throws because terminal::get_value() is not implemented
+constant evaluate(const ::shared_ptr<term>&, const query_options&);
+constant evaluate(term*, const query_options&);
+constant evaluate(term&, const query_options&);
+
+// Calls evaluate() on the term and then converts the constant to raw_value_view
+cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
+cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
 } // namespace expr
 
 } // namespace cql3
