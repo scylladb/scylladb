@@ -61,13 +61,14 @@ public:
     class value : public multi_item_terminal {
     public:
         std::vector<managed_bytes_opt> _elements;
+        data_type _my_type;
     public:
-        value(std::vector<managed_bytes_opt> elements)
-                : _elements(std::move(elements)) {
+        value(std::vector<managed_bytes_opt> elements, data_type my_type)
+                : _elements(std::move(elements)), _my_type(my_type) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
           return buffer.with_value([&] (const FragmentedView auto& view) {
-              return value(type.split_fragmented(view));
+              return value(type.split_fragmented(view), type.shared_from_this());
           });
         }
         virtual cql3::raw_value get(const query_options& options) override {
@@ -136,7 +137,7 @@ public:
 
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            return ::make_shared<value>(bind_internal(options));
+            return ::make_shared<value>(bind_internal(options), _type);
         }
 
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
@@ -152,8 +153,10 @@ public:
     class in_value : public terminal {
     private:
         utils::chunked_vector<std::vector<managed_bytes_opt>> _elements;
+        data_type _my_type;
     public:
-        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items) : _elements(std::move(items)) { }
+        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items, data_type my_type)
+            : _elements(std::move(items)), _my_type(std::move(my_type)) { }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
