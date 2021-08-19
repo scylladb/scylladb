@@ -61,9 +61,10 @@ public:
     class value : public multi_item_terminal, collection_terminal {
     public:
         utils::chunked_vector<managed_bytes_opt> _elements;
+        data_type _my_type;
     public:
-        explicit value(utils::chunked_vector<managed_bytes_opt> elements)
-            : _elements(std::move(elements)) {
+        explicit value(utils::chunked_vector<managed_bytes_opt> elements, data_type my_type)
+            : _elements(std::move(elements)), _my_type(std::move(my_type)) {
         }
         static value from_serialized(const raw_value_view& v, const list_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
@@ -86,9 +87,10 @@ public:
      */
     class delayed_value : public non_terminal {
         std::vector<shared_ptr<term>> _elements;
+        data_type _my_type;
     public:
-        explicit delayed_value(std::vector<shared_ptr<term>> elements)
-                : _elements(std::move(elements)) {
+        explicit delayed_value(std::vector<shared_ptr<term>> elements, data_type my_type)
+                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;

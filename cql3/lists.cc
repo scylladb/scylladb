@@ -63,7 +63,7 @@ lists::value::from_serialized(const raw_value_view& val, const list_type_impl& t
                 elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
             }
         }
-        return value(std::move(elements));
+        return value(std::move(elements), type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -95,7 +95,7 @@ lists::value::equals(const list_type_impl& lt, const value& v) {
 }
 
 data_type lists::value::get_value_type() const {
-    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+    return _my_type;
 }
 
 const utils::chunked_vector<managed_bytes_opt>&
@@ -150,7 +150,7 @@ lists::delayed_value::bind(const query_options& options) {
 
         buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
     }
-    return ::make_shared<value>(buffers);
+    return ::make_shared<value>(buffers, _my_type);
 }
 
 ::shared_ptr<terminal>
