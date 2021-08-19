@@ -325,10 +325,8 @@ set_prepare_term(const collection_constructor& c, database& db, const sstring& k
 
         values.push_back(std::move(t));
     }
-    auto compare = dynamic_cast<const set_type_impl&>(receiver->type->without_reversed())
-            .get_elements_type()->as_less_comparator();
 
-    auto value = ::make_shared<sets::delayed_value>(compare, std::move(values));
+    auto value = ::make_shared<sets::delayed_value>(std::move(values), receiver->type);
     if (all_terminal) {
         return value->bind(query_options::DEFAULT);
     } else {

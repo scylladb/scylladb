@@ -44,7 +44,7 @@ sets::value::from_serialized(const raw_value_view& val, const set_type_impl& typ
                 elements.insert(elements.end(), managed_bytes(type.get_elements_type()->decompose(element)));
             }
         }
-        return value(std::move(elements));
+        return value(std::move(elements), type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -90,7 +90,7 @@ sets::value::to_string() const {
 }
 
 data_type sets::value::get_value_type() const {
-    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+    return _my_type;
 }
 
 bool
@@ -105,7 +105,9 @@ sets::delayed_value::fill_prepare_context(prepare_context& ctx) const {
 
 shared_ptr<terminal>
 sets::delayed_value::bind(const query_options& options) {
-    std::set<managed_bytes, serialized_compare> buffers(_comparator);
+    const set_type_impl& my_set_type = dynamic_cast<const set_type_impl&>(_my_type->without_reversed());
+
+    std::set<managed_bytes, serialized_compare> buffers(my_set_type.get_elements_type()->as_less_comparator());
     for (auto&& t : _elements) {
         auto b = t->bind_and_get(options);
 
@@ -123,7 +125,7 @@ sets::delayed_value::bind(const query_options& options) {
         }
         buffers.insert(buffers.end(), *to_managed_bytes_opt(b));
     }
-    return ::make_shared<value>(std::move(buffers));
+    return ::make_shared<value>(std::move(buffers), _my_type);
 }
 
 
