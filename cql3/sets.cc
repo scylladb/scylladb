@@ -89,6 +89,10 @@ sets::value::to_string() const {
     return result;
 }
 
+data_type sets::value::get_value_type() const {
+    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+}
+
 bool
 sets::delayed_value::contains_bind_marker() const {
     // False since we don't support them in collection

@@ -1340,5 +1340,38 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
 
     return constant_val.value.to_view().deserialize<bool>(*boolean_type);
 }
+
+constant evaluate(term* term_ptr, const query_options& options) {
+    if (term_ptr == nullptr) {
+        return constant::make_null();
+    }
+
+    ::shared_ptr<terminal> bound = term_ptr->bind(options);
+    if (bound.get() == nullptr) {
+        return constant::make_null();
+    }
+
+    raw_value raw_val = bound->get(options);
+    data_type val_type = bound->get_value_type();
+    return constant(std::move(raw_val), std::move(val_type));
+}
+
+constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& options) {
+    return evaluate(term_ptr.get(), options);
+}
+
+constant evaluate(term& term_ref, const query_options& options) {
+    return evaluate(&term_ref, options);
+}
+
+cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, const query_options& options) {
+    constant value = evaluate(term_ptr, options);
+    return cql3::raw_value_view::make_temporary(std::move(value.value));
+}
+
+cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& options) {
+    constant value = evaluate(term_ref, options);
+    return cql3::raw_value_view::make_temporary(std::move(value.value));
+}
 } // namespace expr
 } // namespace cql3

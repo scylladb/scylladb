@@ -82,6 +82,10 @@ sstring user_types::value::to_string() const {
     return format("({})", join(", ", _elements));
 }
 
+data_type user_types::value::get_value_type() const {
+    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+}
+
 user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)
         : _type(std::move(type)), _values(std::move(values)) {
 }
