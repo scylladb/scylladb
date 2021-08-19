@@ -320,6 +320,11 @@ flat_mutation_reader read_context::create_reader(
     if (rm.state == reader_state::successful_lookup) {
         if (auto reader_opt = semaphore().unregister_inactive_read(std::move(*rm.rparts->handle))) {
             rm.state = reader_state::used;
+            // The saved reader permit is expected to be the same one passed to create_reader,
+            // as returned from obtain_reader_permit()
+            if (reader_opt->permit() != permit) {
+                on_internal_error(mmq_log, "read_context::create_reader(): passed-in permit is different than saved reader's permit");
+            }
             return std::move(*reader_opt);
         }
     }

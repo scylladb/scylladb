@@ -474,6 +474,8 @@ public:
     /// evicted (while paused). This method should also enter gates, take locks
     /// or whatever is appropriate to make sure resources it is using on the
     /// remote shard stay alive, during the lifetime of the created reader.
+    ///
+    /// The \c permit parameter shall be obtained via `obtain_reader_permit()`
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
             reader_permit permit,
