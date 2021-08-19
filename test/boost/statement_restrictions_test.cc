@@ -420,7 +420,8 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     // AND pk1 AND pk2
     // AND (pk1, pk2)
     std::vector<expression> big_where;
-    ::shared_ptr<constants::value> zero_value = ::make_shared<constants::value>(raw_value::make_value(I(0)));
+    ::shared_ptr<constants::value> zero_value =
+        ::make_shared<constants::value>(raw_value::make_value(I(0)), int32_type);
 
     expression pk1_restriction(binary_operator(column_value(&col_pk1), oper_t::EQ, zero_value));
     expression pk2_restriction(binary_operator(column_value(&col_pk2), oper_t::EQ, zero_value));

@@ -458,7 +458,8 @@ private:
      */
     ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
                                                              std::size_t column_pos, const managed_bytes_opt& value) const {
-        ::shared_ptr<cql3::term> term = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value));
+        ::shared_ptr<cql3::term> term =
+            ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value), _column_defs[column_pos]->type);
         using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);

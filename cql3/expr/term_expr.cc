@@ -619,7 +619,8 @@ untyped_constant_prepare_term(const untyped_constant& uc, database& db, const ss
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
     }
-    return ::make_shared<constants::value>(cql3::raw_value::make_value(untyped_constant_parsed_value(uc, receiver->type)));
+    raw_value raw_val = cql3::raw_value::make_value(untyped_constant_parsed_value(uc, receiver->type));
+    return ::make_shared<constants::value>(std::move(raw_val), receiver->type);
 }
 
 static
