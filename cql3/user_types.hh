@@ -59,9 +59,9 @@ public:
 
     class value : public multi_item_terminal {
         std::vector<managed_bytes_opt> _elements;
+        data_type _my_type;
     public:
-        explicit value(std::vector<managed_bytes_opt>);
-        explicit value(std::vector<managed_bytes_view_opt>);
+        explicit value(std::vector<managed_bytes_opt>, data_type my_type);
 
         static value from_serialized(const raw_value_view&, const user_type_impl&);
 

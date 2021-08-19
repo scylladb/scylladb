@@ -542,7 +542,6 @@ std::optional<bool> get_bool_value(const constant&);
 
 // Takes a prepared expression and calculates its value.
 // Later term will be replaced with expression.
-// For now throws because terminal::get_value() is not implemented
 constant evaluate(const ::shared_ptr<term>&, const query_options&);
 constant evaluate(term*, const query_options&);
 constant evaluate(term&, const query_options&);
