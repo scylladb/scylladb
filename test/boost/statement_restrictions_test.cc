@@ -437,7 +437,9 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
         tuple_constructor column_tuple(cql3::restrictions::column_definitions_as_tuple_constructor(columns));
 
         std::vector<managed_bytes_opt> zeros_tuple_elems(columns.size(), managed_bytes_opt(I(0)));
-        ::shared_ptr<tuples::value> zeros_tuple = ::make_shared<tuples::value>(std::move(zeros_tuple_elems));
+        data_type tup_type = tuple_type_impl::get_instance(std::vector<data_type>(columns.size(), int32_type));
+        ::shared_ptr<tuples::value> zeros_tuple =
+            ::make_shared<tuples::value>(std::move(zeros_tuple_elems), std::move(tup_type));
 
         return binary_operator(column_tuple, oper, zeros_tuple);
     };

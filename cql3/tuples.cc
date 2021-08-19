@@ -27,7 +27,7 @@
 namespace cql3 {
 
 data_type tuples::value::get_value_type() const {
-    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+    return _my_type;
 }
 
 tuples::in_value
@@ -45,14 +45,14 @@ tuples::in_value::from_serialized(const raw_value_view& value_view, const list_t
             // FIXME: Avoid useless copies.
             elements.emplace_back(ttype->split_fragmented(single_fragmented_view(ttype->decompose(e))));
         }
-        return tuples::in_value(elements);
+        return tuples::in_value(elements, type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
 }
 
 data_type tuples::in_value::get_value_type() const {
-    throw std::runtime_error(fmt::format("get_value_type not implemented {}:{}", __FILE__, __LINE__));
+    return _my_type;
 }
 
 tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
