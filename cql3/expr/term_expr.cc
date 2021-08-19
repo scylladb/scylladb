@@ -405,7 +405,7 @@ list_prepare_term(const collection_constructor& c, database& db, const sstring& 
         }
         values.push_back(std::move(t));
     }
-    lists::delayed_value value(values);
+    lists::delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {

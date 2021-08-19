@@ -49,6 +49,7 @@
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/expr/expression.hh"
+#include "types/list.hh"
 
 namespace cql3 {
 
@@ -311,11 +312,21 @@ public:
         : multi_column_restriction::IN(schema, std::move(defs))
         , _values(std::move(value))
     {
+        std::vector<data_type> column_types;
+        column_types.reserve(defs.size());
+        for (const column_definition* cdef : defs) {
+            column_types.push_back(cdef->type);
+        }
+
+        // type of the delayed_value is frozen list of tuples
+        data_type list_elements_type = tuple_type_impl::get_instance(std::move(column_types));
+        data_type in_list_type = list_type_impl::get_instance(std::move(list_elements_type), false);
+
         using namespace expr;
         expression = binary_operator{
             column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
-            ::make_shared<lists::delayed_value>(_values)};
+            ::make_shared<lists::delayed_value>(_values, std::move(in_list_type))};
     }
 };
 
