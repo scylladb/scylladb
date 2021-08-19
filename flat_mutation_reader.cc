@@ -95,9 +95,9 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
-flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query::max_result_size max_size) {
+flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size) {
     class partition_reversing_mutation_reader final : public flat_mutation_reader::impl {
-        flat_mutation_reader* _source;
+        flat_mutation_reader _source;
         range_tombstone_list _range_tombstones;
         std::stack<mutation_fragment> _mutation_fragments;
         mutation_fragment_opt _partition_end;
@@ -132,15 +132,15 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
             return stop_iteration::no;
         }
         future<stop_iteration> consume_partition_from_source() {
-            if (_source->is_buffer_empty()) {
-                if (_source->is_end_of_stream()) {
+            if (_source.is_buffer_empty()) {
+                if (_source.is_end_of_stream()) {
                     _end_of_stream = true;
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
-                return _source->fill_buffer().then([] { return stop_iteration::no; });
+                return _source.fill_buffer().then([] { return stop_iteration::no; });
             }
-            while (!_source->is_buffer_empty() && !is_buffer_full()) {
-                auto mf = _source->pop_mutation_fragment();
+            while (!_source.is_buffer_empty() && !is_buffer_full()) {
+                auto mf = _source.pop_mutation_fragment();
                 if (mf.is_partition_start() || mf.is_static_row()) {
                     push_mutation_fragment(std::move(mf));
                 } else if (mf.is_end_of_partition()) {
@@ -184,9 +184,9 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
             return make_ready_future<stop_iteration>(is_buffer_full());
         }
     public:
-        explicit partition_reversing_mutation_reader(flat_mutation_reader& mr, query::max_result_size max_size)
+        explicit partition_reversing_mutation_reader(flat_mutation_reader mr, query::max_result_size max_size)
             : flat_mutation_reader::impl(mr.schema()->make_reversed(), mr.permit())
-            , _source(&mr)
+            , _source(std::move(mr))
             , _range_tombstones(*_schema)
             , _max_size(max_size)
         { }
@@ -214,7 +214,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
                 }
                 _range_tombstones.clear();
                 _partition_end = std::nullopt;
-                return _source->next_partition();
+                return _source.next_partition();
             }
             return make_ready_future<>();
         }
@@ -228,12 +228,11 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         }
 
         virtual future<> close() noexcept override {
-            // we don't own _source therefore do not close it
-            return make_ready_future<>();
+            return _source.close();
         }
     };
 
-    return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_size);
+    return make_flat_mutation_reader<partition_reversing_mutation_reader>(std::move(original), max_size);
 }
 
 template<typename Source>

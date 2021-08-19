@@ -902,8 +902,7 @@ make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<
 /// Ordering of partitions themselves remains unchanged.
 /// For more details see docs/design-notes/reverse-reads.md.
 ///
-/// \param original the reader to be reversed, has to be kept alive while the
-///     reversing reader is in use.
+/// \param original the reader to be reversed
 /// \param max_size the maximum amount of memory the reader is allowed to use
 ///     for reversing and conversely the maximum size of the results. The
 ///     reverse reader reads entire partitions into memory, before reversing
@@ -914,7 +913,7 @@ make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<
 ///
 /// FIXME: reversing should be done in the sstable layer, see #1413.
 flat_mutation_reader
-make_reversing_reader(flat_mutation_reader& original, query::max_result_size max_size);
+make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size);
 
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
