@@ -327,6 +327,10 @@ With the build-id you can find the relocatable using the
 [scylla-pkg.git/scripts/scylla-s3-reloc (private repo)](https://github.com/scylladb/scylla-pkg/#looking-for-a-build)
 script.
 
+**NOTE**: Use the normal relocatable package, usually called
+`scylla-package.tar.gz`, not not the debuginfo one usually called
+`scylla-debug-package.tar.gz`.
+
 ##### Loading the core
 
 Move the coredump and the unpackaged relocatable package into some dir
@@ -580,6 +584,11 @@ build-id of the executable, then compare it with the build-id obtained from the
 For more information on how to obtain the correct version of libraries and how
 to override the path GDB loads them from, see [Collecting libraries](#collecting-libraries)
 and [Opening the core on another OS](#opening-the-core-on-another-os).
+
+##### Build IDs match but nothing works: can't backtrace, resolve symbols and no thread debugging
+
+Make sure you are using the normal scylla package, not the debuginfo one, see
+[Obtaining the relocatable package](#obtaining-the-relocatable-package).
 
 #### GDB crashes when priting the backtrace or some variable
 
