@@ -843,7 +843,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
 }
 
 static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
-    testlog.info("Testing range queries");
+    testlog.info(__PRETTY_FUNCTION__);
 
     auto s = schema_builder("ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
@@ -1197,7 +1197,7 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
 }
 
 static void test_query_only_static_row(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema s;
 
@@ -1243,7 +1243,7 @@ static void test_query_only_static_row(tests::reader_concurrency_semaphore_wrapp
 }
 
 static void test_query_no_clustering_ranges_no_static_columns(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema s(simple_schema::with_static::no);
 
@@ -1287,6 +1287,8 @@ static void test_query_no_clustering_ranges_no_static_columns(tests::reader_conc
 }
 
 void test_streamed_mutation_forwarding_succeeds_with_no_data(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    testlog.info(__PRETTY_FUNCTION__);
+
     simple_schema s;
     auto cks = s.make_ckeys(6);
 
@@ -1324,6 +1326,8 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(tests::reader_concu
 
 static
 void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    testlog.info(__PRETTY_FUNCTION__);
+
     simple_schema ss;
     auto s = ss.schema();
 
@@ -1421,6 +1425,8 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
 }
 
 void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    testlog.info(__PRETTY_FUNCTION__);
+
     simple_schema s;
     auto pkey = s.make_pkey();
     sstring value(256, 'v');
@@ -1445,6 +1451,8 @@ void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapp
 }
 
 void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    testlog.info(__PRETTY_FUNCTION__);
+
     simple_schema s;
     auto pkey = s.make_pkey();
 
@@ -1635,7 +1643,8 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 }
 
 void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
+
     for_each_mutation([&] (const mutation& m) mutable {
         const auto query_time = gc_clock::now();
 
@@ -1662,6 +1671,8 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
 void test_next_partition(tests::reader_concurrency_semaphore_wrapper&, populate_fn_ex);
 
 void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    testlog.info(__PRETTY_FUNCTION__);
+
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     test_range_tombstones_v2(semaphore, populate);
@@ -1689,6 +1700,8 @@ void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_rang
 }
 
 void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+    testlog.info(__PRETTY_FUNCTION__);
+
     simple_schema s;
     auto pkeys = s.make_pkeys(4);
 
