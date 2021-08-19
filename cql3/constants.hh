@@ -66,7 +66,8 @@ public:
     class value : public terminal {
     public:
         cql3::raw_value _bytes;
-        value(cql3::raw_value bytes_) : _bytes(std::move(bytes_)) {}
+        data_type _my_type;
+        value(cql3::raw_value bytes_, data_type my_type) : _bytes(std::move(bytes_)), _my_type(std::move(my_type)) {}
         virtual cql3::raw_value get(const query_options& options) override { return _bytes; }
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override { return _bytes.to_view(); }
         virtual sstring to_string() const override { return _bytes.to_view().with_value([] (const FragmentedView auto& v) { return to_hex(v); }); }
@@ -77,7 +78,7 @@ public:
 
     class null_value final : public value {
     public:
-        null_value() : value(cql3::raw_value::make_null()) {}
+        null_value() : value(cql3::raw_value::make_null(), empty_type) {}
         virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
         virtual sstring to_string() const override { return "null"; }
     };
@@ -113,7 +114,7 @@ public:
             if (bytes.is_unset_value()) {
                 return UNSET_VALUE;
             }
-            return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes));
+            return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes), _receiver->type);
         }
     };
 
