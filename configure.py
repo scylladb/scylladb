@@ -592,6 +592,9 @@ arg_parser.add_argument('--with', dest='artifacts', action='append', default=[],
 arg_parser.add_argument('--with-seastar', action='store', dest='seastar_path', default='seastar', help='Path to Seastar sources')
 add_tristate(arg_parser, name='dist', dest='enable_dist',
                         help='scylla-tools-java, scylla-jmx and packages')
+arg_parser.add_argument('--dist-only', dest='dist_only', action='store_true', default=False,
+                        help='skip compiling code and run dist targets only')
+
 arg_parser.add_argument('--cflags', action='store', dest='user_cflags', default='',
                         help='Extra flags for the C++ compiler')
 arg_parser.add_argument('--ldflags', action='store', dest='user_ldflags', default='',
@@ -1584,8 +1587,9 @@ def configure_seastar(build_dir, mode, mode_config):
     os.makedirs(seastar_build_dir, exist_ok=True)
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
 
-for mode, mode_config in build_modes.items():
-    configure_seastar(outdir, mode, mode_config)
+if not args.dist_only:
+    for mode, mode_config in build_modes.items():
+        configure_seastar(outdir, mode, mode_config)
 
 pc = {mode: f'{outdir}/{mode}/seastar/seastar.pc' for mode in build_modes}
 ninja = find_executable('ninja') or find_executable('ninja-build')
@@ -1702,8 +1706,9 @@ if args.ragel_exec:
 else:
     ragel_exec = "ragel"
 
-for mode, mode_config in build_modes.items():
-    configure_abseil(outdir, mode, mode_config)
+if not args.dist_only:
+    for mode, mode_config in build_modes.items():
+        configure_abseil(outdir, mode, mode_config)
 
 # configure.py may run automatically from an already-existing build.ninja.
 # If the user interrupts configure.py in the middle, we need build.ninja
@@ -1821,8 +1826,9 @@ with open(buildfile_tmp, 'w') as f:
                 artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
             )
         )
+        include_cxx_target = f'{mode}-build' if not args.dist_only else ''
         include_dist_target = f'dist-{mode}' if args.enable_dist is None or args.enable_dist else ''
-        f.write(f'build {mode}: phony {mode}-build {include_dist_target}\n')
+        f.write(f'build {mode}: phony {include_cxx_target} {include_dist_target}\n')
         compiles = {}
         swaggers = set()
         serializers = {}
@@ -2001,7 +2007,8 @@ with open(buildfile_tmp, 'w') as f:
         f.write(textwrap.dedent('''\
             build $builddir/{mode}/iotune: copy $builddir/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz: package $builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter | always\n'.format(**locals()))
+        include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune' if not args.dist_only else ''
+        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter | always\n'.format(**locals()))
         f.write('  mode = {mode}\n'.format(**locals()))
         f.write('build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{arch}-package.tar.gz\n'.format(**locals()))
         f.write('  mode = {mode}\n'.format(**locals()))
