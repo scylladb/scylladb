@@ -51,7 +51,6 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/util/closeable.hh>
 #include <seastar/core/sleep.hh>
 
 logging::logger rlogger("repair");

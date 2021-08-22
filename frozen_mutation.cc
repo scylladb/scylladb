@@ -20,7 +20,6 @@
  */
 
 #include <seastar/util/closeable.hh>
-
 #include "frozen_mutation.hh"
 #include "mutation_partition.hh"
 #include "mutation.hh"

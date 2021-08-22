@@ -35,6 +35,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/util/defer.hh>
 
 #include <cassert>
 #include <string>

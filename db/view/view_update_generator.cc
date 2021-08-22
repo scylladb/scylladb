@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/defer.hh>
 #include <boost/range/adaptor/map.hpp>
 #include "view_update_generator.hh"
 #include "service/priority_manager.hh"

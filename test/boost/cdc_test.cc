@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/defer.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <string>
 #include <boost/range/adaptor/map.hpp>

@@ -65,6 +65,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/net/byteorder.hh>
+#include <seastar/util/defer.hh>
 
 #include "seastarx.hh"
 

@@ -40,6 +40,7 @@
 #include "storage_service.hh"
 #include "dht/boot_strapper.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/util/defer.hh>
 #include "locator/snitch_base.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"

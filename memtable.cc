@@ -19,8 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <seastar/util/closeable.hh>
-
 #include "memtable.hh"
 #include "database.hh"
 #include "frozen_mutation.hh"

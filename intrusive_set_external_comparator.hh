@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <seastar/util/defer.hh>
 #include <boost/intrusive/set.hpp>
 #include <iterator>
 #include <boost/intrusive/parent_from_member.hpp>

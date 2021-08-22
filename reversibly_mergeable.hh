@@ -22,7 +22,6 @@
 #pragma once
 
 #include "utils/allocation_strategy.hh"
-#include <seastar/util/defer.hh>
 
 //
 // ~~ Definitions ~~

@@ -25,6 +25,7 @@
 #include <seastar/http/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/json/json_elements.hh>
+#include <seastar/util/defer.hh>
 #include "seastarx.hh"
 #include "error.hh"
 #include "utils/rjson.hh"

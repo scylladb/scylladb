@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/closeable.hh>
 #include "distributed_loader.hh"
 #include "database.hh"
 #include "db/config.hh"
@@ -386,9 +387,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, distributed<db
 
         }).get();
 
-        auto stop = defer([&directory] {
-            directory.stop().get();
-        });
+        auto stop = deferred_stop(directory);
 
         lock_table(directory, db, ks, cf).get();
         process_sstable_dir(directory).get();
@@ -454,9 +453,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<database>& db, sstr
 
         }).get();
 
-        auto stop = defer([&directory] {
-            directory.stop().get();
-        });
+        auto stop = deferred_stop(directory);
 
         std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(smp::count);
         lock_table(directory, db, ks, cf).get();
@@ -538,9 +535,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                 return global_table->make_sstable(dir.native(), gen, v, f);
         }).get();
 
-        auto stop = defer([&directory] {
-            directory.stop().get();
-        });
+        auto stop = deferred_stop(directory);
 
         lock_table(directory, db, ks, cf).get();
         process_sstable_dir(directory).get();
