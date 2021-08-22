@@ -458,7 +458,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
                 if (!re) {
                     break;
                 }
-                auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
+                auto re_deleter = defer([re] () noexcept { current_deleter<rows_entry>()(re); });
                 if (!re->dummy()) {
                     _cr = mutation_fragment(*_schema, _permit, std::move(*re));
                     break;
@@ -469,7 +469,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             auto& rts = _cur->partition().mutable_row_tombstones();
             auto rt = rts.pop_front_and_lock();
             if (rt) {
-                auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
+                auto rt_deleter = defer([rt] () noexcept { current_deleter<range_tombstone>()(rt); });
                 _rt = mutation_fragment(*_schema, _permit, std::move(*rt));
             }
         }
@@ -574,7 +574,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
         {
             _end_of_stream = _cur == _end;
             if (!_end_of_stream) {
-                auto mutation_destroyer = defer([this] { destroy_mutations(); });
+                auto mutation_destroyer = defer([this] () noexcept { destroy_mutations(); });
                 start_new_partition();
 
                 do_fill_buffer(db::no_timeout);

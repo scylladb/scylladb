@@ -1159,7 +1159,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
         size_t threshold = size_t(0.75 * free_space);
         region_group_reclaimer recl(threshold, threshold);
         region_group gr(test_name, recl);
-        auto close_gr = defer([&gr] { gr.shutdown().get(); });
+        auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         region r(gr);
 
         with_allocator(r.allocator(), [&] {
@@ -1182,7 +1182,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
             };
 
             utils::phased_barrier request_barrier;
-            auto wait_for_requests = defer([&] { request_barrier.advance_and_await().get(); });
+            auto wait_for_requests = defer([&] () noexcept { request_barrier.advance_and_await().get(); });
 
             for (int i = 0; i < 1000000; ++i) {
                 fill_to_pressure();
@@ -1227,7 +1227,7 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
 
         reclaimer recl(hard_threshold, soft_threshold);
         region_group gr(test_name, recl);
-        auto close_gr = defer([&gr] { gr.shutdown().get(); });
+        auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         region r(gr);
 
         with_allocator(r.allocator(), [&] {
@@ -1312,7 +1312,7 @@ SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocatio
 
     auto& rnd = seastar::testing::local_random_engine;
 
-    auto clean_up = defer([&] {
+    auto clean_up = defer([&] () noexcept {
         with_allocator(evictable.allocator(), [&] {
             evictable_allocs.clear();
         });
@@ -1377,7 +1377,7 @@ SEASTAR_THREAD_TEST_CASE(test_decay_reserves) {
     auto small_thing = bytes(10'000, int8_t(0));
     auto large_thing = bytes(100'000'000, int8_t(0));
 
-    auto cleanup = defer([&] {
+    auto cleanup = defer([&] () noexcept {
         with_allocator(region.allocator(), [&] {
             lru.clear();
         });
@@ -1472,7 +1472,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
 
     auto& rnd = seastar::testing::local_random_engine;
 
-    auto clean_up = defer([&] {
+    auto clean_up = defer([&] () noexcept {
         with_allocator(evictable.allocator(), [&] {
             evictable_allocs.clear();
         });
@@ -1508,7 +1508,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     // Set up the background reclaimer
 
     auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", 100).get0();
-    auto kill_sched_group = defer([&] {
+    auto kill_sched_group = defer([&] () noexcept {
         destroy_scheduling_group(background_reclaim_scheduling_group).get();
     });
 
@@ -1519,8 +1519,8 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
     logalloc::shard_tracker().configure(st_cfg);
 
-    auto stop_lsa_background_reclaim = defer([&] {
-        return logalloc::shard_tracker().stop().get();
+    auto stop_lsa_background_reclaim = defer([&] () noexcept {
+        logalloc::shard_tracker().stop().get();
     });
 
     sleep(500ms).get(); // sleep a little, to give the reclaimer a head start
@@ -1835,7 +1835,7 @@ SEASTAR_THREAD_TEST_CASE(test_weak_ptr) {
     managed_ref<Obj> obj_ptr = with_allocator(region.allocator(), [&] {
         return make_managed<Obj>(cookie);
     });
-    auto del_obj_ptr = defer([&] {
+    auto del_obj_ptr = defer([&] () noexcept {
         with_allocator(region.allocator(), [&] {
             obj_ptr = {};
         });
@@ -1844,7 +1844,7 @@ SEASTAR_THREAD_TEST_CASE(test_weak_ptr) {
     managed_ref<Obj> obj2_ptr = with_allocator(region.allocator(), [&] {
         return make_managed<Obj>(cookie2);
     });
-    auto del_obj2_ptr = defer([&] {
+    auto del_obj2_ptr = defer([&] () noexcept {
         with_allocator(region.allocator(), [&] {
            obj2_ptr = {};
         });

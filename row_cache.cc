@@ -942,7 +942,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
     _tracker.memtable_cleaner().merge(m._cleaner);
     STAP_PROBE(scylla, row_cache_update_start);
-    auto cleanup = defer([&m, this] {
+    auto cleanup = defer([&m, this] () noexcept {
         invalidate_sync(m);
         STAP_PROBE(scylla, row_cache_update_end);
     });
@@ -950,7 +950,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
         size_t size_entry;
         // In case updater fails, we must bring the cache to consistency without deferring.
-        auto cleanup = defer([&m, this] {
+        auto cleanup = defer([&m, this] () noexcept {
             invalidate_sync(m);
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
@@ -1124,7 +1124,7 @@ future<> row_cache::invalidate(external_updater eu, const dht::partition_range& 
 future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&& ranges) {
     return do_update(std::move(eu), [this, ranges = std::move(ranges)] {
         return seastar::async([this, ranges = std::move(ranges)] {
-            auto on_failure = defer([this] {
+            auto on_failure = defer([this] () noexcept {
                 this->clear_now();
                 _prev_snapshot_pos = {};
                 _prev_snapshot = {};

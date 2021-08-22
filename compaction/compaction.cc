@@ -1708,8 +1708,12 @@ static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction
     auto info = compaction::create_compaction_info(cf, descriptor);
     info->sstables = descriptor.sstables.size();
     cf.get_compaction_manager().register_compaction(info);
-    auto deregister_compaction = defer([&cf, info] {
-        cf.get_compaction_manager().deregister_compaction(info);
+    auto deregister_compaction = defer([&cf, info] () noexcept {
+        try {
+            cf.get_compaction_manager().deregister_compaction(info);
+        } catch (...) {
+            clogger.warn("Could not deregister compaction: {}. Ignored.", std::current_exception());
+        }
     });
 
     clogger.info("Scrubbing in validate mode {}", sstables_list_msg);

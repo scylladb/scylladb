@@ -339,7 +339,7 @@ public:
         }
         return _flush_semaphore.wait();
     }
-    void end_flush() {
+    void end_flush() noexcept {
         _flush_semaphore.signal();
         --totals.pending_flushes;
     }
@@ -732,7 +732,7 @@ public:
         auto me = shared_from_this();
         co_await begin_flush();
 
-        auto finally = defer([&] {
+        auto finally = defer([&] () noexcept {
             end_flush();
         });
 
@@ -859,7 +859,7 @@ public:
 
             auto&& priority_class = service::get_local_commitlog_priority();
 
-            auto finally = defer([&] {
+            auto finally = defer([&] () noexcept {
                 _segment_manager->notify_memory_written(size);
                 _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
                 if (_size_on_disk < _file_pos) {
@@ -1631,7 +1631,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
         promise<> p;
         _segment_allocating.emplace(p.get_future());
-        auto finally = defer([&] { _segment_allocating = std::nullopt; });
+        auto finally = defer([&] () noexcept { _segment_allocating = std::nullopt; });
         try {
             gate::holder g(_gate);
             auto s = co_await with_timeout(timeout, new_segment());

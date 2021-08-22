@@ -1136,7 +1136,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
                 }).get();
             }
         });
-        auto stop_off_strategy_updater = defer([uuid, &off_strategy_updater, &as] () mutable {
+        auto stop_off_strategy_updater = defer([uuid, &off_strategy_updater, &as] () mutable noexcept {
             try {
                 rlogger.info("repair[{}]: Started to shutdown off-strategy compaction updater", uuid);
                 if (!as.abort_requested()) {

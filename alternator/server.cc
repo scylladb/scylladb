@@ -403,7 +403,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         co_return api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
     }
     _pending_requests.enter();
-    auto leave = defer([this] { _pending_requests.leave(); });
+    auto leave = defer([this] () noexcept { _pending_requests.leave(); });
     //FIXME: Client state can provide more context, e.g. client's endpoint address
     // We use unique_ptr because client_state cannot be moved or copied
     executor::client_state client_state{executor::client_state::internal_tag()};

@@ -70,7 +70,7 @@ single_column_relation::to_term(const std::vector<lw_shared_ptr<column_specifica
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prepare_context& ctx) {
     const column_definition& column_def = to_column_definition(*schema, *_entity);
-    auto reset_processing_pk_column = defer([&ctx] { ctx.set_processing_pk_restrictions(false); });
+    auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
     if (column_def.is_partition_key()) {
         ctx.set_processing_pk_restrictions(true);
     }
@@ -93,7 +93,7 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prep
 single_column_relation::new_IN_restriction(database& db, schema_ptr schema, prepare_context& ctx) {
     using namespace restrictions;
     const column_definition& column_def = to_column_definition(*schema, *_entity);
-    auto reset_processing_pk_column = defer([&ctx] { ctx.set_processing_pk_restrictions(false); });
+    auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
     if (column_def.is_partition_key()) {
         ctx.set_processing_pk_restrictions(true);
     }
