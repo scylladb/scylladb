@@ -43,6 +43,7 @@
 
 #include "cql3/statements/index_target.hh"
 #include "cql3/util.hh"
+#include "cql3/expr/expression.hh"
 #include "index/target_parser.hh"
 #include "db/query_context.hh"
 #include "schema_builder.hh"

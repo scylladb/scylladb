@@ -52,6 +52,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "database.hh"
 #include "cdc/log.hh"
+#include "utils/overloaded_functor.hh"
 #include <seastar/core/coroutine.hh>
 
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;

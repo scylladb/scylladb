@@ -24,6 +24,7 @@
 #include "api/api-doc/compaction_manager.json.hh"
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
+#include "unimplemented.hh"
 #include <utility>
 
 namespace api {
