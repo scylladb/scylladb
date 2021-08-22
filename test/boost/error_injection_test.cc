@@ -27,6 +27,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "types/list.hh"
 #include "log.hh"
+#include "cql3/query_options.hh"
 #include <chrono>
 
 using namespace std::literals::chrono_literals;

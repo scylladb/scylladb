@@ -43,11 +43,16 @@
 
 #include "schema.hh"
 
-#include "cql3/expr/expression.hh"
 #include "database_fwd.hh"
 
 #include <vector>
 #include <set>
+
+namespace cql3::expr {
+
+enum class oper_t;
+
+}
 
 namespace secondary_index {
 

@@ -52,6 +52,12 @@ namespace cql3 {
     class query_processor;
 }
 
+namespace service {
+
+class client_state;
+
+}
+
 class not_prepared_exception : public std::runtime_error {
 public:
     not_prepared_exception(const cql3::prepared_cache_key_type& id) : std::runtime_error(format("Not prepared: {}", id)) {}

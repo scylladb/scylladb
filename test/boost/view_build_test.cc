@@ -27,6 +27,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_keyspace_view_types.hh"
 #include "db/config.hh"
+#include "cql3/query_options.hh"
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>

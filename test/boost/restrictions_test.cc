@@ -26,6 +26,7 @@
 
 #include "cql3/cql_config.hh"
 #include "cql3/values.hh"
+#include "cql3/query_options.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"
