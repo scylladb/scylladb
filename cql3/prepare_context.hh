@@ -101,11 +101,11 @@ public:
 
     // Inform the context object that it has started or ended processing the
     // partition key part of statement restrictions.
-    void set_processing_pk_restrictions(bool flag) {
+    void set_processing_pk_restrictions(bool flag) noexcept {
         _processing_pk_restrictions = flag;
     }
 
-    bool is_processing_pk_restrictions() const {
+    bool is_processing_pk_restrictions() const noexcept {
         return _processing_pk_restrictions;
     }
 };
