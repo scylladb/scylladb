@@ -294,11 +294,11 @@ public:
     std::unordered_map<sstring, descriptor> _files_to_delete;
     std::vector<file> _files_to_close;
 
-    void account_memory_usage(size_t size) {
+    void account_memory_usage(size_t size) noexcept {
         _request_controller.consume(size);
     }
 
-    void notify_memory_written(size_t size) {
+    void notify_memory_written(size_t size) noexcept {
         _request_controller.signal(size);
     }
 
@@ -1112,22 +1112,22 @@ public:
     void mark_clean() {
         _cf_dirty.clear();
     }
-    bool is_still_allocating() const {
+    bool is_still_allocating() const noexcept {
         return !_closed && position() < _segment_manager->max_size;
     }
-    bool is_clean() const {
+    bool is_clean() const noexcept {
         return _cf_dirty.empty();
     }
-    bool is_unused() const {
+    bool is_unused() const noexcept {
         return !is_still_allocating() && is_clean();
     }
-    bool is_flushed() const {
+    bool is_flushed() const noexcept {
         return position() <= _flush_pos;
     }
-    bool can_delete() const {
+    bool can_delete() const noexcept {
         return is_unused() && is_flushed();
     }
-    bool contains(const replay_position& pos) const {
+    bool contains(const replay_position& pos) const noexcept {
         return pos.id == _desc.id;
     }
     sstring get_segment_name() const {
