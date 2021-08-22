@@ -38,6 +38,7 @@
 
 #include "log.hh"
 #include "message/messaging_service.hh"
+#include "gms/gossiper.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -49,19 +50,15 @@
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include "cql3/query_processor.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_exception.hh"
-#include "service/storage_proxy.hh"
 #include "service/priority_manager.hh"
 #include "service/migration_manager.hh"
 #include "query-request.hh"
 #include "schema_registry.hh"
 #include "mutation_writer/multishard_writer.hh"
-#include "sstables/sstables.hh"
-#include "sstables/sstables_manager.hh"
-#include "db/system_keyspace.hh"
+#include "sstables/sstable_set.hh"
 #include "db/view/view_update_checks.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/map.hpp>
