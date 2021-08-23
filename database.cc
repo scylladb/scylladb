@@ -735,97 +735,78 @@ const utils::UUID& database::get_version() const {
 }
 
 static future<>
-do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
+do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
     using namespace db::schema_tables;
 
-    auto cf_name = make_lw_shared<sstring>(_cf_name);
-    return db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name).then([] (auto rs) {
-        auto names = std::set<sstring>();
-        for (auto& r : rs->rows()) {
-            auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
-            names.emplace(keyspace_name);
+    auto rs = co_await db::system_keyspace::query(proxy, db::schema_tables::NAME, cf_name);
+    auto names = std::set<sstring>();
+    for (auto& r : rs->rows()) {
+        auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
+        names.emplace(keyspace_name);
+    }
+    co_await parallel_for_each(names.begin(), names.end(), [&] (sstring name) mutable -> future<> {
+        if (is_system_keyspace(name)) {
+            co_return;
         }
-        return names;
-    }).then([&proxy, cf_name, func = std::move(func)] (std::set<sstring>&& names) mutable {
-        return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::move(func)] (sstring name) mutable {
-            if (is_system_keyspace(name)) {
-                return make_ready_future<>();
-            }
 
-            return read_schema_partition_for_keyspace(proxy, *cf_name, name).then([func, cf_name] (auto&& v) mutable {
-                return do_with(std::move(v), [func = std::move(func), cf_name] (auto& v) {
-                    return func(v).then_wrapped([cf_name, &v] (future<> f) {
-                        try {
-                            f.get();
-                        } catch (std::exception& e) {
-                            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, *cf_name, e.what());
-                        }
-                    });
-                });
-            });
-        });
+        auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
+        try {
+            co_await func(v);
+        } catch (std::exception& e) {
+            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, e.what());
+        }
     });
 }
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
     using namespace db::schema_tables;
-    return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [&] (schema_result_value_type &v) -> future<> {
         auto ksm = create_keyspace_from_schema_partition(v);
-        return create_keyspace(ksm, true /* bootstrap. do not mark populated yet */, system_keyspace::no);
-    }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this] (schema_result_value_type &v) {
-            auto& ks = this->find_keyspace(v.first);
-            auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
-            for (auto&& type : user_types) {
-                ks.add_user_type(type);
+        co_return co_await create_keyspace(ksm, true /* bootstrap. do not mark populated yet */, system_keyspace::no);
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, [&] (schema_result_value_type &v) -> future<> {
+        auto& ks = this->find_keyspace(v.first);
+        auto&& user_types = create_types_from_schema_partition(*ks.metadata(), v.second);
+        for (auto&& type : user_types) {
+            ks.add_user_type(type);
+        }
+        co_return;
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [&] (schema_result_value_type& v) -> future<> {
+        auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
+        for (auto&& func : user_functions) {
+            cql3::functions::functions::add_function(func);
+        }
+        co_return;
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, [&] (schema_result_value_type &v) -> future<> {
+        std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
+        co_await parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
+            co_await this->add_column_family_and_make_directory(t.second);
+            auto s = t.second;
+            // Recreate missing column mapping entries in case
+            // we failed to persist them for some reason after a schema change
+            bool cm_exists = co_await db::schema_tables::column_mapping_exists(s->id(), s->version());
+            if (cm_exists) {
+                co_return;
             }
-            return make_ready_future<>();
+            co_return co_await db::schema_tables::store_column_mapping(proxy, s, false);
         });
-    }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, [this] (schema_result_value_type& v) {
-            auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
-            for (auto&& func : user_functions) {
-                cql3::functions::functions::add_function(func);
+    });
+    co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [&] (schema_result_value_type &v) -> future<> {
+        std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
+        co_await parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
+            // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
+            // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
+            view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
+            view_ptr v_to_add = fixed_v ? fixed_v : v;
+            co_await this->add_column_family_and_make_directory(v_to_add);
+            if (bool(fixed_v)) {
+                v_to_add = fixed_v;
+                auto&& keyspace = find_keyspace(v->ks_name()).metadata();
+                auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
+                co_await db::schema_tables::merge_schema(proxy, _feat, std::move(mutations));
             }
-            return make_ready_future<>();
-        });
-    }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::TABLES, [this, &proxy] (schema_result_value_type &v) {
-            return create_tables_from_tables_partition(proxy, v.second).then([this, &proxy] (std::map<sstring, schema_ptr> tables) {
-                return parallel_for_each(tables.begin(), tables.end(), [this, &proxy] (auto& t) {
-                    return this->add_column_family_and_make_directory(t.second).then([&proxy, s = t.second] {
-                        // Recreate missing column mapping entries in case
-                        // we failed to persist them for some reason after a schema change
-                        return db::schema_tables::column_mapping_exists(s->id(), s->version()).then([&proxy, s] (bool cm_exists) {
-                            if (cm_exists) {
-                                return make_ready_future<>();
-                            }
-                            return db::schema_tables::store_column_mapping(proxy, s, false);
-                        });
-                    });
-                });
-            });
-            });
-    }).then([&proxy, &mm, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy, &mm] (schema_result_value_type &v) {
-            return create_views_from_schema_partition(proxy, v.second).then([this, &mm, &proxy] (std::vector<view_ptr> views) {
-                return parallel_for_each(views.begin(), views.end(), [this, &mm, &proxy] (auto&& v) {
-                    // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
-                    // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
-                    view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
-                    view_ptr v_to_add = fixed_v ? fixed_v : v;
-                    future<> f = this->add_column_family_and_make_directory(v_to_add);
-                    if (bool(fixed_v)) {
-                        v_to_add = fixed_v;
-                        auto&& keyspace = find_keyspace(v->ks_name()).metadata();
-                        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
-                        f = f.then([this, &proxy, mutations = std::move(mutations)] {
-                            return db::schema_tables::merge_schema(proxy, _feat, std::move(mutations));
-                        });
-                    }
-                    return f;
-                });
-            });
         });
     });
 }
