@@ -1742,7 +1742,7 @@ sstring statement_restrictions::to_string() const {
 
 static bool has_eq_null(const query_options& options, const expression& expr) {
     return find_atom(expr, [&] (const binary_operator& binop) {
-        return binop.op == oper_t::EQ && !binop.rhs->bind_and_get(options);
+        return binop.op == oper_t::EQ && !evaluate_to_raw_view(binop.rhs, options);
     });
 }
 

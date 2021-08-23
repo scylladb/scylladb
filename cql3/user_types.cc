@@ -104,7 +104,7 @@ std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const qu
 
     std::vector<managed_bytes_opt> buffers;
     for (size_t i = 0; i < _type->size(); ++i) {
-        const auto& value = _values[i]->bind_and_get(options);
+        const auto& value = expr::evaluate_to_raw_view(_values[i], options);
         if (!_type->is_multi_cell() && value.is_unset_value()) {
             throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}",
                         _type->field_name_as_string(i), _type->get_name_as_string()));
@@ -202,7 +202,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
-    auto value = _t->bind_and_get(params._options);
+    auto value = expr::evaluate_to_raw_view(_t, params._options);
     if (value.is_unset_value()) {
         return;
     }

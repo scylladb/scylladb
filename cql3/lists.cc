@@ -135,7 +135,7 @@ lists::delayed_value::bind(const query_options& options) {
     utils::chunked_vector<managed_bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
-        auto bo = t->bind_and_get(options);
+        auto bo = expr::evaluate_to_raw_view(t, options);
 
         if (bo.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -154,7 +154,7 @@ lists::delayed_value::bind_ignore_null(const query_options& options) {
     utils::chunked_vector<managed_bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
-        auto bo = t->bind_and_get(options);
+        auto bo = expr::evaluate_to_raw_view(t, options);
 
         if (bo.is_null()) {
             continue;
@@ -224,14 +224,14 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto index = _idx->bind_and_get(params._options);
+    auto index = expr::evaluate_to_raw_view(_idx, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
     if (index.is_unset_value()) {
         throw exceptions::invalid_request_exception("Invalid unset value for list index");
     }
-    auto value = _t->bind_and_get(params._options);
+    auto value = expr::evaluate_to_raw_view(_t, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -273,8 +273,8 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto index = _idx->bind_and_get(params._options);
-    auto value = _t->bind_and_get(params._options);
+    auto index = expr::evaluate_to_raw_view(_idx, params._options);
+    auto value = expr::evaluate_to_raw_view(_t, params._options);
 
     if (!index) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");

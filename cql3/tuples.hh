@@ -45,6 +45,7 @@
 #include "types/collection.hh"
 #include "utils/chunked_vector.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/expr/expression.hh"
 
 class list_type_impl;
 
@@ -113,7 +114,7 @@ public:
             std::vector<managed_bytes_opt> buffers;
             buffers.resize(_elements.size());
             for (size_t i = 0; i < _elements.size(); ++i) {
-                const auto& value = _elements[i]->bind_and_get(options);
+                const auto& value = expr::evaluate_to_raw_view(_elements[i], options);
                 if (value.is_unset_value()) {
                     throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
                 }
