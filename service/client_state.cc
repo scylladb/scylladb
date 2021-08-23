@@ -127,7 +127,7 @@ future<> service::client_state::has_column_family_access(const database& db, con
     });
 }
 
-future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
+future<> service::client_state::has_schema_access(const database& db, const schema& s, auth::permission p) const {
     return do_with(
             s.ks_name(),
             auth::make_data_resource(s.ks_name(),s.cf_name()),
