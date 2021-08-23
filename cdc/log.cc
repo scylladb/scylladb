@@ -259,7 +259,7 @@ private:
     static void check_for_attempt_to_create_nested_cdc_log(database& db, const schema& schema) {
         const auto& cf_name = schema.cf_name();
         const auto cf_name_view = std::string_view(cf_name.data(), cf_name.size());
-        if (is_log_for_some_table(schema.ks_name(), cf_name_view)) {
+        if (is_log_for_some_table(db, schema.ks_name(), cf_name_view)) {
             throw exceptions::invalid_request_exception(format("Cannot create a CDC log for a table {}.{}, because creating nested CDC logs is not allowed",
                     schema.ks_name(), schema.cf_name()));
         }
@@ -435,8 +435,8 @@ bool is_cdc_metacolumn_name(const sstring& name) {
     return name.compare(0, cdc_meta_column_prefix.size(), cdc_meta_column_prefix) == 0;
 }
 
-bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name) {
-    auto base_schema = get_base_table(service::get_local_storage_proxy().get_db().local(), ks_name, table_name);
+bool is_log_for_some_table(const database& db, const sstring& ks_name, const std::string_view& table_name) {
+    auto base_schema = get_base_table(db, ks_name, table_name);
     if (!base_schema) {
         return false;
     }

@@ -199,7 +199,7 @@ future<> service::client_state::has_access(const database& db, const sstring& ks
         const auto resource_view = auth::data_resource_view(cmd.resource);
         if (resource_view.table()) {
             if (cmd.permission == auth::permission::DROP) {
-                if (cdc::is_log_for_some_table(ks, *resource_view.table())) {
+                if (cdc::is_log_for_some_table(db, ks, *resource_view.table())) {
                     return make_exception_future<>(exceptions::unauthorized_exception(
                             format("Cannot {} cdc log table {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
                 }
