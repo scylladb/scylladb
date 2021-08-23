@@ -206,7 +206,7 @@ public:
                 check_that_cdc_log_table_does_not_exist(db, new_schema, log_name(new_schema.cf_name()));
             }
             if (is_cdc) {
-                check_for_attempt_to_create_nested_cdc_log(new_schema);
+                check_for_attempt_to_create_nested_cdc_log(db, new_schema);
                 ensure_that_table_has_no_counter_columns(new_schema);
             }
 
@@ -256,7 +256,7 @@ public:
     future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
 
 private:
-    static void check_for_attempt_to_create_nested_cdc_log(const schema& schema) {
+    static void check_for_attempt_to_create_nested_cdc_log(database& db, const schema& schema) {
         const auto& cf_name = schema.cf_name();
         const auto cf_name_view = std::string_view(cf_name.data(), cf_name.size());
         if (is_log_for_some_table(schema.ks_name(), cf_name_view)) {
