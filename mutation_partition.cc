@@ -20,7 +20,6 @@
  */
 
 #include <boost/range/adaptor/reversed.hpp>
-#include <seastar/util/defer.hh>
 #include "mutation_partition.hh"
 #include "clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"

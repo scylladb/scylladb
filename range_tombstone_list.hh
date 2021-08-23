@@ -206,7 +206,7 @@ public:
     auto pop_as(iterator it) {
         range_tombstone& rt = *it;
         _tombstones.erase(it);
-        auto rt_deleter = seastar::defer([&rt] { current_deleter<range_tombstone>()(&rt); });
+        auto rt_deleter = seastar::defer([&rt] () noexcept { current_deleter<range_tombstone>()(&rt); });
         return T(std::move(rt));
     }
 

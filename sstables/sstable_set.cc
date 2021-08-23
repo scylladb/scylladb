@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/defer.hh>
+
 #include <boost/icl/interval_map.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/remove_if.hpp>

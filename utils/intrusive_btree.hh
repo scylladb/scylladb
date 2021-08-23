@@ -22,7 +22,6 @@
 #pragma once
 
 #include <boost/intrusive/parent_from_member.hpp>
-#include <seastar/util/defer.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <cassert>
 #include <fmt/core.h>

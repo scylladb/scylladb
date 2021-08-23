@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/defer.hh>
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"

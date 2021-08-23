@@ -40,6 +40,7 @@
  */
 
 #include <seastar/core/sleep.hh>
+#include <seastar/util/defer.hh>
 #include "partition_range_compat.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"

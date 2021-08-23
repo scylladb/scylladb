@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/defer.hh>
 #include <boost/range/adaptor/map.hpp>
 #include "view_update_generator.hh"
 #include "service/priority_manager.hh"
@@ -38,7 +39,7 @@ future<> view_update_generator::start() {
     thread_attributes attr;
     attr.sched_group = _db.get_streaming_scheduling_group();
     _started = seastar::async(std::move(attr), [this]() mutable {
-        auto drop_sstable_references = defer([&] {
+        auto drop_sstable_references = defer([&] () noexcept {
             // Clear sstable references so sstables_manager::stop() doesn't hang.
             vug_logger.info("leaving {} unstaged sstables unprocessed",
                     _sstables_to_move.size(), _sstables_with_tables.size());

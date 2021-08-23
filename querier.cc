@@ -261,14 +261,14 @@ void querier_cache::insert_querier(
         return;
     }
   try {
-    auto cleanup_irh = defer([&] {
+    auto cleanup_irh = defer([&] () noexcept {
         sem.unregister_inactive_read(std::move(irh));
     });
 
     auto it = index.emplace(key, std::make_unique<Querier>(std::move(q)));
 
     ++stats.population;
-    auto cleanup_index = defer([&] {
+    auto cleanup_index = defer([&] () noexcept {
         index.erase(it);
         --stats.population;
     });

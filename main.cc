@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/closeable.hh>
 #include "utils/build_id.hh"
 #include "supervisor.hh"
 #include "database.hh"
@@ -622,7 +623,7 @@ int main(int ac, char** av) {
                 logalloc::shard_tracker().configure(st_cfg);
             }).get();
 
-            auto stop_lsa_background_reclaim = defer([&] {
+            auto stop_lsa_background_reclaim = defer([&] () noexcept {
                 smp::invoke_on_all([&] {
                     return logalloc::shard_tracker().stop();
                 }).get();
@@ -873,7 +874,7 @@ int main(int ac, char** av) {
             cql_config.start().get();
             //FIXME: discarded future
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
-            auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
+            auto stop_cql_config_updater = deferred_stop(cql_config_updater);
 
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;

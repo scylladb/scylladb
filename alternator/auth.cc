@@ -24,7 +24,6 @@
 #include <string>
 #include <string_view>
 #include <gnutls/crypto.h>
-#include <seastar/util/defer.hh>
 #include "hashers.hh"
 #include "bytes.hh"
 #include "alternator/auth.hh"

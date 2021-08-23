@@ -45,7 +45,6 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/util/defer.hh>
 #include "utils/atomic_vector.hh"
 
 class keyspace_metadata;

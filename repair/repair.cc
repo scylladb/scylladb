@@ -51,7 +51,6 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/util/closeable.hh>
 #include <seastar/core/sleep.hh>
 
 logging::logger rlogger("repair");
@@ -1137,7 +1136,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
                 }).get();
             }
         });
-        auto stop_off_strategy_updater = defer([uuid, &off_strategy_updater, &as] () mutable {
+        auto stop_off_strategy_updater = defer([uuid, &off_strategy_updater, &as] () mutable noexcept {
             try {
                 rlogger.info("repair[{}]: Started to shutdown off-strategy compaction updater", uuid);
                 if (!as.abort_requested()) {

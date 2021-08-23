@@ -32,7 +32,6 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
-#include <seastar/util/defer.hh>
 #include <seastar/util/log.hh>
 
 #include "utils/updateable_value.hh"

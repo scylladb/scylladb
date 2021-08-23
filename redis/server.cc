@@ -35,6 +35,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/util/defer.hh>
 
 #include <cassert>
 #include <string>
@@ -126,7 +127,7 @@ future<> redis_server::connection::process_request() {
         _pending_requests_gate.enter();
         utils::latency_counter lc;
         lc.start();
-        auto leave = defer([this] { _pending_requests_gate.leave(); });
+        auto leave = defer([this] () noexcept { _pending_requests_gate.leave(); });
         return process_request_internal().then([this, leave = std::move(leave), lc = std::move(lc)] (auto&& result) mutable {
             --_server._stats._requests_serving;
             try {

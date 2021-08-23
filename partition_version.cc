@@ -20,7 +20,6 @@
  */
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
-#include <seastar/util/defer.hh>
 
 #include "partition_version.hh"
 #include "row_cache.hh"

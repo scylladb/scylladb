@@ -33,7 +33,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
-#include <seastar/util/defer.hh>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/erase.hpp>
 #include <boost/algorithm/string/classification.hpp>
