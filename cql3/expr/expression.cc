@@ -43,6 +43,7 @@
 #include "types/set.hh"
 #include "utils/like_matcher.hh"
 #include "query-result-reader.hh"
+#include "types/user.hh"
 
 namespace cql3 {
 namespace expr {
@@ -1409,6 +1410,147 @@ cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, co
 cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& options) {
     constant value = evaluate(term_ref, options);
     return cql3::raw_value_view::make_temporary(std::move(value.value));
+}
+
+utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    if (!val_type.is_list()) {
+        on_internal_error(expr_logger,
+            fmt::format("expr::get_list_elements called on a type that is not a list: {}", val_type.name()));
+    }
+
+    if (val.is_null_or_unset()) {
+        on_internal_error(expr_logger, "expr::get_list_elements called on value that is null or unset");
+    }
+
+    if (val.has_empty_value_bytes()) {
+        on_internal_error(expr_logger, "expr::get_list_elements called on a 0 byte value");
+    }
+
+    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+        return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
+    });
+}
+
+utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    if (!val_type.is_set()) {
+        on_internal_error(expr_logger,
+            fmt::format("expr::get_set_elements called on a type that is not a set: {}", val_type.name()));
+    }
+
+    if (val.is_null_or_unset()) {
+        on_internal_error(expr_logger, "expr::get_set_elements called on value that is null or unset");
+    }
+
+    if (val.has_empty_value_bytes()) {
+        on_internal_error(expr_logger, "expr::get_set_elements called on a 0 byte value");
+    }
+
+    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+        return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
+    });
+}
+
+std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    if (!val_type.is_map()) {
+        on_internal_error(expr_logger,
+            fmt::format("expr::get_map_elements called on a type that is not a map: {}", val_type.name()));
+    }
+
+    if (val.is_null_or_unset()) {
+        on_internal_error(expr_logger, "expr::get_map_elements called on value that is null or unset");
+    }
+
+    if (val.has_empty_value_bytes()) {
+        on_internal_error(expr_logger, "expr::get_map_elements called on a 0 byte value");
+    }
+
+    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+        return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
+    });
+}
+
+std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    if (!val_type.is_tuple()) {
+        on_internal_error(expr_logger,
+            fmt::format("expr::get_tuple_elements called on a type that is not a tuple: {}", val_type.name()));
+    }
+
+    if (val.is_null_or_unset()) {
+        on_internal_error(expr_logger, "expr::get_tuple_elements called on value that is null or unset");
+    }
+
+    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+        const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val_type);
+        return ttype.split_fragmented(value_bytes);
+    });
+}
+
+std::vector<managed_bytes_opt> get_user_type_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    if (!val_type.is_user_type()) {
+        on_internal_error(expr_logger,
+            fmt::format("expr::get_user_type_elements called on a type that is not a user_type: {}", val_type.name()));
+    }
+
+    if (val.is_null_or_unset()) {
+        on_internal_error(expr_logger, "expr::get_user_type_elements called on value that is null or unset");
+    }
+
+    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+        const user_type_impl& utype = dynamic_cast<const user_type_impl&>(val_type);
+        return utype.split_fragmented(value_bytes);
+    });
+}
+
+static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<managed_bytes>&& elements) {
+    return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
+                                          std::make_move_iterator(elements.end()));
+}
+
+std::vector<managed_bytes_opt> get_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    switch (val_type.get_kind()) {
+        case abstract_type::kind::list:
+            return convert_listlike(get_list_elements(val));
+
+        case abstract_type::kind::set:
+            return convert_listlike(get_set_elements(val));
+
+        case abstract_type::kind::tuple:
+            return get_tuple_elements(val);
+
+        case abstract_type::kind::user:
+            return get_user_type_elements(val);
+
+        default:
+            on_internal_error(expr_logger, fmt::format("expr::get_elements called on bad type: {}", val_type.name()));
+    }
+}
+
+utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant& val) {
+    utils::chunked_vector<managed_bytes> elements = get_list_elements(val);
+    const list_type_impl& list_typ = dynamic_cast<const list_type_impl&>(val.type->without_reversed());
+    const tuple_type_impl& tuple_typ = dynamic_cast<const tuple_type_impl&>(*list_typ.get_elements_type());
+
+    utils::chunked_vector<std::vector<managed_bytes_opt>> tuples_list;
+    tuples_list.reserve(elements.size());
+
+    for (managed_bytes& element : elements) {
+        std::vector<managed_bytes_opt> cur_tuple = tuple_typ.split_fragmented(managed_bytes_view(element));
+        tuples_list.emplace_back(std::move(cur_tuple));
+    }
+
+    return tuples_list;
 }
 } // namespace expr
 } // namespace cql3

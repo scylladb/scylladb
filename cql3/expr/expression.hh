@@ -555,6 +555,19 @@ constant evaluate_IN_list(term&, const query_options&);
 // Calls evaluate() on the term and then converts the constant to raw_value_view
 cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
 cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
+
+utils::chunked_vector<managed_bytes> get_list_elements(const constant&);
+utils::chunked_vector<managed_bytes> get_set_elements(const constant&);
+std::vector<managed_bytes_opt> get_tuple_elements(const constant&);
+std::vector<managed_bytes_opt> get_user_type_elements(const constant&);
+std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant&);
+
+// Gets the elements of a constant which can be a list, set, tuple or user type
+std::vector<managed_bytes_opt> get_elements(const constant&);
+
+// Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>
+// It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
+utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
 } // namespace expr
 
 } // namespace cql3
