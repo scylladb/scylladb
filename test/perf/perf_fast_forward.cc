@@ -724,7 +724,7 @@ public:
             cache_insertions(),
             allocations(),
             tasks(),
-            instructions() / fragments_read,
+            fragments_read ? instructions() / fragments_read : 0,
             cpu_utilization() * 100
         };
     }
