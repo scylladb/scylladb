@@ -219,8 +219,15 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
             return make_ready_future<>();
         }
 
-        virtual future<> fast_forward_to(const dht::partition_range&) override {
-            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            clear_buffer();
+            while (!_mutation_fragments.empty()) {
+                _mutation_fragments.pop();
+            }
+            _stack_size = 0;
+            _partition_end = std::nullopt;
+            _end_of_stream = false;
+            return _source.fast_forward_to(pr);
         }
 
         virtual future<> fast_forward_to(position_range) override {
