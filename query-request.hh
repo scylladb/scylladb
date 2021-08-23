@@ -231,6 +231,13 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
 
+// See docs/design-notes/reverse-reads.md
+partition_slice legacy_reverse_slice_to_native_reverse_slice(const schema& schema, partition_slice slice);
+partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schema, partition_slice slice);
+// Fully reverse slice (forward to native reverse)
+// Also set the reversed bit in `partition_slice::options`.
+partition_slice reverse_slice(const schema& schema, partition_slice slice);
+
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 
 // Tagged integers to disambiguate constructor arguments.

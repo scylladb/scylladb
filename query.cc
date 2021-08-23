@@ -29,6 +29,7 @@
 #include "mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
+#include "partition_slice_builder.hh"
 
 namespace query {
 
@@ -112,6 +113,41 @@ void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& range
     clustering_key::make_full(s, full_key);
     return trim_clustering_row_ranges_to(s, ranges,
             reversed ? position_in_partition_view::after_key(full_key) : position_in_partition_view::before_key(full_key), reversed);
+}
+
+static void reverse_clustering_ranges_bounds(clustering_row_ranges& ranges) {
+    for (auto& range : ranges) {
+        if (!range.is_singular()) {
+            range = query::clustering_range(range.end(), range.start());
+        }
+    }
+}
+
+partition_slice legacy_reverse_slice_to_native_reverse_slice(const schema& schema, partition_slice slice) {
+    return partition_slice_builder(schema, std::move(slice))
+        .mutate_ranges([] (clustering_row_ranges& ranges) { reverse_clustering_ranges_bounds(ranges); })
+        .mutate_specific_ranges([] (specific_ranges& ranges) { reverse_clustering_ranges_bounds(ranges.ranges()); })
+        .build();
+}
+
+partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schema, partition_slice slice) {
+    // They are the same, we give them different names to express intent
+    return legacy_reverse_slice_to_native_reverse_slice(schema, std::move(slice));
+}
+
+partition_slice reverse_slice(const schema& schema, partition_slice slice) {
+    return partition_slice_builder(schema, std::move(slice))
+        .mutate_ranges([] (clustering_row_ranges& ranges) {
+            std::reverse(ranges.begin(), ranges.end());
+            reverse_clustering_ranges_bounds(ranges);
+        })
+        .mutate_specific_ranges([] (specific_ranges& sranges) {
+            auto& ranges = sranges.ranges();
+            std::reverse(ranges.begin(), ranges.end());
+            reverse_clustering_ranges_bounds(ranges);
+        })
+        .with_option<partition_slice::option::reversed>()
+        .build();
 }
 
 partition_slice::partition_slice(clustering_row_ranges row_ranges,
