@@ -82,7 +82,7 @@ create_table_statement::create_table_statement(cf_name name,
 }
 
 future<> create_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
+    return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::CREATE);
 }
 
 void create_table_statement::validate(service::storage_proxy&, const service::client_state& state) const {

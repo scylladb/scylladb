@@ -43,6 +43,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "transport/event.hh"
 
 namespace cql3 {
@@ -58,7 +59,7 @@ drop_keyspace_statement::drop_keyspace_statement(const sstring& keyspace, bool i
 
 future<> drop_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    return state.has_keyspace_access(keyspace(), auth::permission::DROP);
+    return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::DROP);
 }
 
 void drop_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state) const

@@ -347,7 +347,7 @@ public:
     future<> check_user_can_login();
 
     future<> has_all_keyspaces_access(auth::permission) const;
-    future<> has_keyspace_access(const sstring&, auth::permission) const;
+    future<> has_keyspace_access(const database& db, const sstring&, auth::permission) const;
     future<> has_column_family_access(const database& db, const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER) const;
     future<> has_schema_access(const schema& s, auth::permission p) const;

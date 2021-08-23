@@ -70,7 +70,7 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
 
 future<> create_type_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
+    return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::CREATE);
 }
 
 inline bool create_type_statement::type_exists_in(::keyspace& ks) const

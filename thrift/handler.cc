@@ -878,7 +878,7 @@ public:
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-            return _query_state.get_client_state().has_keyspace_access(cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
+            return _query_state.get_client_state().has_keyspace_access(_db.local(), cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
                 return _query_processor.local().get_migration_manager().announce_new_column_family(std::move(s)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
@@ -923,7 +923,7 @@ public:
                 throw NotFoundException();
             }
 
-            return _query_state.get_client_state().has_keyspace_access(keyspace, auth::permission::DROP).then([this, keyspace] {
+            return _query_state.get_client_state().has_keyspace_access(_db.local(), keyspace, auth::permission::DROP).then([this, keyspace] {
                 return _query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
@@ -944,7 +944,7 @@ public:
             }
 
             auto ksm = keyspace_from_thrift(ks_def);
-            return _query_state.get_client_state().has_keyspace_access(ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
+            return _query_state.get_client_state().has_keyspace_access(_db.local(), ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
                 return _query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });

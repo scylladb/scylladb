@@ -111,7 +111,7 @@ future<> service::client_state::has_all_keyspaces_access(
     });
 }
 
-future<> service::client_state::has_keyspace_access(const sstring& ks,
+future<> service::client_state::has_keyspace_access(const database& db, const sstring& ks,
                 auth::permission p) const {
     return do_with(ks, auth::make_data_resource(ks), [this, p](auto const& ks, auto const& r) {
         return has_access(ks, {p, r});
