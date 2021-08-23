@@ -501,7 +501,7 @@ static shared_ptr<aggregate_function> make_count_function() {
 // Drops the first arg type from the types declaration (which denotes the accumulator)
 // in order to compute the actual type of given user-defined-aggregate (UDA)
 static std::vector<data_type> state_arg_types_to_uda_arg_types(const std::vector<data_type>& arg_types) {
-    if(arg_types.size() != 2) {
+    if(arg_types.size() < 2) {
         on_internal_error(cql3::functions::log, "State function for user-defined aggregates needs at least two arguments");
     }
     std::vector<data_type> types;
