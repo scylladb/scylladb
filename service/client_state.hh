@@ -353,7 +353,7 @@ public:
     future<> has_schema_access(const database& db, const schema& s, auth::permission p) const;
 
 private:
-    future<> has_access(const sstring& keyspace, auth::command_desc) const;
+    future<> has_access(const database& db, const sstring& keyspace, auth::command_desc) const;
 
 public:
     future<bool> check_has_permission(auth::command_desc) const;

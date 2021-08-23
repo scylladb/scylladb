@@ -113,8 +113,8 @@ future<> service::client_state::has_all_keyspaces_access(
 
 future<> service::client_state::has_keyspace_access(const database& db, const sstring& ks,
                 auth::permission p) const {
-    return do_with(ks, auth::make_data_resource(ks), [this, p](auto const& ks, auto const& r) {
-        return has_access(ks, {p, r});
+    return do_with(ks, auth::make_data_resource(ks), [this, p, &db](auto const& ks, auto const& r) {
+        return has_access(db, ks, {p, r});
     });
 }
 
@@ -122,8 +122,8 @@ future<> service::client_state::has_column_family_access(const database& db, con
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
     validation::validate_column_family(db, ks, cf);
 
-    return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t](const auto& ks, const auto& r) {
-        return has_access(ks, {p, r, t});
+    return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t, &db](const auto& ks, const auto& r) {
+        return has_access(db, ks, {p, r, t});
     });
 }
 
@@ -131,12 +131,12 @@ future<> service::client_state::has_schema_access(const database& db, const sche
     return do_with(
             s.ks_name(),
             auth::make_data_resource(s.ks_name(),s.cf_name()),
-            [this, p](auto const& ks, auto const& r) {
-        return has_access(ks, {p, r});
+            [this, p, &db](auto const& ks, auto const& r) {
+        return has_access(db, ks, {p, r});
     });
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
+future<> service::client_state::has_access(const database& db, const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         return make_exception_future<>(exceptions::invalid_request_exception("You have not set a keyspace for this session"));
     }
