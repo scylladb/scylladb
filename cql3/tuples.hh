@@ -157,9 +157,7 @@ public:
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
-        virtual cql3::raw_value get(const query_options& options) override {
-            throw exceptions::unsupported_operation_exception();
-        }
+        virtual cql3::raw_value get(const query_options& options) override;
 
         utils::chunked_vector<std::vector<managed_bytes_opt>> get_split_values() const {
             return _elements;
