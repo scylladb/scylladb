@@ -139,7 +139,7 @@ maps::delayed_value::bind(const query_options& options) {
         auto&& value = entry.second;
 
         // We don't support values > 64K because the serialization format encode the length as an unsigned short.
-        auto key_bytes = key->bind_and_get(options);
+        auto key_bytes = expr::evaluate_to_raw_view(key, options);
         if (key_bytes.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
@@ -151,7 +151,7 @@ maps::delayed_value::bind(const query_options& options) {
                                                    std::numeric_limits<uint16_t>::max(),
                                                    key_bytes.size_bytes()));
         }
-        auto value_bytes = value->bind_and_get(options);
+        auto value_bytes = expr::evaluate_to_raw_view(value, options);
         if (value_bytes.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");\
         }
@@ -215,8 +215,8 @@ void
 maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     using exceptions::invalid_request_exception;
     assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
-    auto key = _k->bind_and_get(params._options);
-    auto value = _t->bind_and_get(params._options);
+    auto key = expr::evaluate_to_raw_view(_k, params._options);
+    auto value = expr::evaluate_to_raw_view(_t, params._options);
     if (value.is_unset_value()) {
         return;
     }

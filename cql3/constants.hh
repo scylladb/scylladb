@@ -121,7 +121,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = _t->bind_and_get(params._options);
+            auto value = expr::evaluate_to_raw_view(_t, params._options);
             execute(m, prefix, params, column, std::move(value));
         }
 
@@ -138,7 +138,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = _t->bind_and_get(params._options);
+            auto value = expr::evaluate_to_raw_view(_t, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
             } else if (value.is_unset_value()) {
@@ -153,7 +153,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = _t->bind_and_get(params._options);
+            auto value = expr::evaluate_to_raw_view(_t, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
             } else if (value.is_unset_value()) {

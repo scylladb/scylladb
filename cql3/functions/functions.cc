@@ -473,7 +473,7 @@ function_call::bind_and_get(const query_options& options) {
     for (auto&& t : _terms) {
         // For now, we don't allow nulls as argument as no existing function needs it and it
         // simplify things.
-        auto val = t->bind_and_get(options);
+        auto val = expr::evaluate_to_raw_view(t, options);
         if (!val) {
             throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *_fun));
         }

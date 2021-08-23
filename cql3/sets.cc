@@ -105,7 +105,7 @@ sets::delayed_value::bind(const query_options& options) {
 
     std::set<managed_bytes, serialized_compare> buffers(my_set_type.get_elements_type()->as_less_comparator());
     for (auto&& t : _elements) {
-        auto b = t->bind_and_get(options);
+        auto b = expr::evaluate_to_raw_view(t, options);
 
         if (b.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
