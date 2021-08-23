@@ -25,8 +25,6 @@
 #include <seastar/core/seastar.hh>
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/values.hh"
 #include "auth/authenticator.hh"
 #include <seastar/core/distributed.hh>
 #include "timeout_config.hh"
@@ -43,6 +41,13 @@
 #include "generic_server.hh"
 #include "service/query_state.hh"
 #include "cql3/query_options.hh"
+#include "transport/messages/result_message.hh"
+
+namespace cql3 {
+
+class query_processor;
+
+}
 
 namespace scollectd {
 
