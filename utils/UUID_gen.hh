@@ -397,6 +397,16 @@ public:
                (0x0fff000000000000UL & msb) >> 48 |
                 0x0000000000001000L); // sets the version to 1.
     }
+
+    // Produce an UUID which is derived from this UUID in a reversible manner
+    //
+    // Such that:
+    //
+    //      auto original_uuid = UUID_gen::get_time_UUID();
+    //      auto negated_uuid = UUID_gen::negate(original_uuid);
+    //      assert(original_uuid != negated_uuid);
+    //      assert(original_uuid == UUID_gen::negate(negated_uuid));
+    static UUID negate(UUID);
 };
 
 // for the curious, here is how I generated START_EPOCH

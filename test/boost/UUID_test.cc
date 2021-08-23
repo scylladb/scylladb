@@ -230,3 +230,20 @@ BOOST_AUTO_TEST_CASE(test_max_time_uuid) {
     auto unix_timestamp = utils::UUID_gen::unix_timestamp(uuid);
     BOOST_CHECK(unix_timestamp == millis);
 }
+
+BOOST_AUTO_TEST_CASE(test_negate) {
+    using namespace utils;
+
+    auto original_uuid = UUID_gen::get_time_UUID();
+    BOOST_TEST_MESSAGE(fmt::format("original_uuid:   {}", original_uuid));
+
+    auto negated_uuid = UUID_gen::negate(original_uuid);
+    BOOST_TEST_MESSAGE(fmt::format("negated_uuid:    {}", negated_uuid));
+
+    BOOST_REQUIRE(original_uuid != negated_uuid);
+
+    auto re_negated_uuid = UUID_gen::negate(negated_uuid);
+    BOOST_TEST_MESSAGE(fmt::format("re_negated_uuid: {}", re_negated_uuid));
+
+    BOOST_REQUIRE(original_uuid == re_negated_uuid);
+}
