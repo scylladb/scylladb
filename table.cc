@@ -1956,7 +1956,6 @@ future<lw_shared_ptr<query::result>>
 table::query(schema_ptr s,
         reader_permit permit,
         const query::read_command& cmd,
-        query::query_class_config class_config,
         query::result_options opts,
         const dht::partition_range_vector& partition_ranges,
         tracing::trace_state_ptr trace_state,
@@ -1981,7 +1980,8 @@ table::query(schema_ptr s,
 
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto accounter = co_await (opts.request == query::result_request::only_digest
-             ? memory_limiter.new_digest_read(*cmd.max_result_size, short_read_allowed) : memory_limiter.new_data_read(*cmd.max_result_size, short_read_allowed));
+             ? memory_limiter.new_digest_read(permit.max_result_size(), short_read_allowed)
+             : memory_limiter.new_data_read(permit.max_result_size(), short_read_allowed));
 
     query_state qs(s, cmd, opts, partition_ranges, std::move(accounter));
 
@@ -2001,8 +2001,7 @@ table::query(schema_ptr s,
 
         std::exception_ptr ex;
       try {
-        co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp,
-                class_config.max_memory_for_unlimited_query);
+        co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, permit.max_result_size());
       } catch (...) {
         ex = std::current_exception();
       }
@@ -2030,7 +2029,6 @@ future<reconcilable_result>
 table::mutation_query(schema_ptr s,
         reader_permit permit,
         const query::read_command& cmd,
-        query::query_class_config class_config,
         const dht::partition_range& range,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
@@ -2056,7 +2054,7 @@ table::mutation_query(schema_ptr s,
     // legacy format.
     auto result_schema = cmd.slice.options.contains(query::partition_slice::option::reversed) ? s->make_reversed() : s;
     auto rrb = reconcilable_result_builder(*result_schema, cmd.slice, std::move(accounter));
-    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, class_config.max_memory_for_unlimited_query);
+    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, permit.max_result_size());
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
         co_await q.close();

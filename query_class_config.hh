@@ -23,8 +23,6 @@
 
 #include <cinttypes>
 
-class reader_concurrency_semaphore;
-
 namespace query {
 
 struct max_result_size {
@@ -39,10 +37,5 @@ struct max_result_size {
 inline bool operator==(const max_result_size& a, const max_result_size& b) {
     return a.soft_limit == b.soft_limit && a.hard_limit == b.hard_limit;
 }
-
-struct query_class_config {
-    reader_concurrency_semaphore& semaphore;
-    max_result_size max_memory_for_unlimited_query;
-};
 
 }
