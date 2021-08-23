@@ -1119,11 +1119,19 @@ int main(int ac, char** av) {
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
-            supervisor::notify("starting Raft RPC");
-            raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
+
+            const bool raft_enabled = cfg->check_experimental(db::experimental_features_t::RAFT);
+            if (raft_enabled) {
+                supervisor::notify("starting Raft RPC");
+                raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
+            }
             auto stop_raft_rpc = defer_verbose_shutdown("Raft RPC", [&raft_gr] {
                 raft_gr.invoke_on_all(&service::raft_group_registry::uninit).get();
             });
+            if (!raft_enabled) {
+                stop_raft_rpc->cancel();
+            }
+
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();
             auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {

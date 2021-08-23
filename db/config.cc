@@ -931,8 +931,11 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 }
 
 bool db::config::check_experimental(experimental_features_t::feature f) const {
-    if (experimental() && f != experimental_features_t::UNUSED && f != experimental_features_t::UNUSED_CDC) {
-        return true;
+    if (experimental()
+        && f != experimental_features_t::UNUSED
+        && f != experimental_features_t::UNUSED_CDC
+        && f != experimental_features_t::RAFT) {
+            return true;
     }
     const auto& optval = experimental_features();
     return find(begin(optval), end(optval), enum_option<experimental_features_t>{f}) != end(optval);
@@ -987,11 +990,17 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
     // to UNUSED switch for a while, then remove altogether.
     // Change Data Capture is no longer experimental. Map it
     // to UNUSED_CDC switch for a while, then remove altogether.
-    return {{"lwt", UNUSED}, {"udf", UDF}, {"cdc", UNUSED_CDC}, {"alternator-streams", ALTERNATOR_STREAMS}};
+    return {
+        {"lwt", UNUSED},
+        {"udf", UDF},
+        {"cdc", UNUSED_CDC},
+        {"alternator-streams", ALTERNATOR_STREAMS},
+        {"raft", RAFT}
+    };
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
-    return {UDF, ALTERNATOR_STREAMS};
+    return {UDF, ALTERNATOR_STREAMS, RAFT};
 }
 
 std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restriction_t::map() {
