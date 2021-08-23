@@ -82,7 +82,9 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    enum feature { UNUSED, UDF, UNUSED_CDC, ALTERNATOR_STREAMS };
+    // NOTE: RAFT feature is not enabled via `experimental` umbrella flag.
+    // This option should be enabled explicitly.
+    enum feature { UNUSED, UDF, UNUSED_CDC, ALTERNATOR_STREAMS, RAFT };
     static std::unordered_map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
 };

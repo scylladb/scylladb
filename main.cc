@@ -1046,12 +1046,20 @@ int main(int ac, char** av) {
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
-            supervisor::notify("initializing Raft services");
-            raft_srvs.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
-            raft_srvs.invoke_on_all(&raft_services::init).get();
+
+            const bool raft_enabled = cfg->check_experimental(db::experimental_features_t::RAFT);
+            if (raft_enabled) {
+                supervisor::notify("initializing Raft services");
+                raft_srvs.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
+                raft_srvs.invoke_on_all(&raft_services::init).get();
+            }
             auto stop_raft_sc_handlers = defer_verbose_shutdown("Raft services", [&raft_srvs] {
                 raft_srvs.invoke_on_all(&raft_services::uninit).get();
             });
+            if (!raft_enabled) {
+                stop_raft_sc_handlers->cancel();
+            }
+
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging).get();
             auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
