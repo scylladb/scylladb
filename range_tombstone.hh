@@ -74,7 +74,11 @@ public:
             : range_tombstone(rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb)
     { }
     range_tombstone& operator=(range_tombstone&& rt) noexcept {
-        move_assign(std::move(rt));
+        start = std::move(rt.start);
+        start_kind = rt.start_kind;
+        end = std::move(rt.end);
+        end_kind = rt.end_kind;
+        tomb = std::move(rt.tomb);
         return *this;
     }
     range_tombstone& operator=(const range_tombstone& rt) {
@@ -112,8 +116,8 @@ public:
     };
     friend void swap(range_tombstone& rt1, range_tombstone& rt2) noexcept {
         range_tombstone tmp(std::move(rt2), without_link());
-        rt2.move_assign(std::move(rt1));
-        rt1.move_assign(std::move(tmp));
+        rt2 = std::move(rt1);
+        rt1 = std::move(tmp);
     }
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone& rt);
 
@@ -206,15 +210,6 @@ public:
 
     size_t minimal_memory_usage(const schema& s) const noexcept {
         return sizeof(range_tombstone) + minimal_external_memory_usage(s);
-    }
-
-private:
-    void move_assign(range_tombstone&& rt) noexcept {
-        start = std::move(rt.start);
-        start_kind = rt.start_kind;
-        end = std::move(rt.end);
-        end_kind = rt.end_kind;
-        tomb = std::move(rt.tomb);
     }
 };
 
