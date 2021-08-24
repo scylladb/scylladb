@@ -48,6 +48,7 @@ struct mutation_consume_result<void> {
 enum class consume_in_reverse {
     no = 0,
     yes,
+    legacy_half_reverse,
 };
 
 class mutation final {
@@ -127,6 +128,16 @@ public:
     // Consumes the mutation's content.
     //
     // The mutation is in a moved-from alike state after consumption.
+    // There are tree ways to consume the mutation:
+    // * consume_in_reverse::no - consume in forward order, as defined by the
+    //   schema.
+    // * consume_in_reverse::yes - consume in reverse order, as if the schema
+    //   had the opposite clustering order. This effectively reverses the
+    //   mutation's content, according to the native reverse order[1].
+    // * consume_in_reverse::legacy_half_reverse - consume rows and range
+    //   tombstones in legacy reverse order[2].
+    //
+    // For definition of [1] and [2] see docs/design-notes/reverse-reads.md.
     template<FlattenedConsumer Consumer>
     auto consume(Consumer& consumer, consume_in_reverse reverse) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
@@ -151,19 +162,37 @@ private:
 namespace {
 
 template<consume_in_reverse reverse, FlattenedConsumer Consumer>
-stop_iteration consume_clustering_fragments(const schema& s, mutation_partition& partition, Consumer& consumer) {
+stop_iteration consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer) {
     using crs_type = mutation_partition::rows_type;
-    using crs_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, crs_type::reverse_iterator, crs_type::iterator>;
+    using crs_iterator_type = std::conditional_t<reverse == consume_in_reverse::legacy_half_reverse || reverse == consume_in_reverse::yes, crs_type::reverse_iterator, crs_type::iterator>;
     using rts_type = range_tombstone_list;
-    using rts_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, rts_type::reverse_iterator, rts_type::iterator>;
+    using rts_iterator_type = std::conditional_t<reverse == consume_in_reverse::legacy_half_reverse, rts_type::reverse_iterator, rts_type::iterator>;
+
+    if constexpr (reverse == consume_in_reverse::yes) {
+        s = s->make_reversed();
+    }
+
+    // only used when reverse == consume_in_reverse::yes
+    range_tombstone_list reversed_range_tombstones(*s);
 
     crs_iterator_type crs_it, crs_end;
     rts_iterator_type rts_it, rts_end;
-    if constexpr (reverse == consume_in_reverse::yes) {
+    if constexpr (reverse == consume_in_reverse::legacy_half_reverse) {
         crs_it = partition.clustered_rows().rbegin();
         crs_end = partition.clustered_rows().rend();
         rts_it = partition.row_tombstones().rbegin();
         rts_end = partition.row_tombstones().rend();
+    } else if constexpr (reverse == consume_in_reverse::yes) {
+        crs_it = partition.clustered_rows().rbegin();
+        crs_end = partition.clustered_rows().rend();
+
+        while (!partition.row_tombstones().empty()) {
+            auto rt = partition.mutable_row_tombstones().pop_front_and_lock();
+            rt.reverse();
+            reversed_range_tombstones.apply(*s, std::move(rt));
+        }
+        rts_it = reversed_range_tombstones.begin();
+        rts_end = reversed_range_tombstones.end();
     } else {
         crs_it = partition.clustered_rows().begin();
         crs_end = partition.clustered_rows().end();
@@ -173,13 +202,13 @@ stop_iteration consume_clustering_fragments(const schema& s, mutation_partition&
 
     stop_iteration stop = stop_iteration::no;
 
-    position_in_partition::tri_compare cmp(s);
+    position_in_partition::tri_compare cmp(*s);
 
     while (!stop && (crs_it != crs_end || rts_it != rts_end)) {
         bool emit_rt;
         if (crs_it != crs_end && rts_it != rts_end) {
             const auto cmp_res = cmp(rts_it->position(), crs_it->position());
-            if constexpr (reverse == consume_in_reverse::yes) {
+            if constexpr (reverse == consume_in_reverse::legacy_half_reverse) {
                 emit_rt = cmp_res > 0;
             } else {
                 emit_rt = cmp_res < 0;
@@ -221,9 +250,11 @@ auto mutation::consume(Consumer& consumer, consume_in_reverse reverse) && -> mut
     }
 
     if (reverse == consume_in_reverse::yes) {
-        stop = consume_clustering_fragments<consume_in_reverse::yes>(*_ptr->_schema, partition, consumer);
+        stop = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer);
+    } else if (reverse == consume_in_reverse::legacy_half_reverse) {
+        stop = consume_clustering_fragments<consume_in_reverse::legacy_half_reverse>(_ptr->_schema, partition, consumer);
     } else {
-        stop = consume_clustering_fragments<consume_in_reverse::no>(*_ptr->_schema, partition, consumer);
+        stop = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer);
     }
 
     const auto stop_consuming = consumer.consume_end_of_partition();
