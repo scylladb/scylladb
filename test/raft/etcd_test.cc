@@ -35,6 +35,8 @@
 
 // Port of etcd Raft implementation unit tests
 
+#define BOOST_TEST_MODULE raft
+
 #include "test/raft/helpers.hh"
 
 using namespace raft;

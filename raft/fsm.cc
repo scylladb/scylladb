@@ -40,7 +40,9 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     // The snapshot can not contain uncommitted entries
     _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
-    logger.trace("{}: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
+    logger.trace("fsm[{}]: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
+
+    // Init timeout settings
     reset_election_timeout();
 }
 
@@ -144,8 +146,12 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
+    static thread_local std::uniform_int_distribution<> dist;
+    // Timeout within range of [1, conf size]
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re,
+            std::uniform_int_distribution<int>::param_type{1,
+                    std::max((size_t) ELECTION_TIMEOUT.count(),
+                            _log.get_configuration().current.size())})};
 }
 
 void fsm::become_leader() {
@@ -263,8 +269,10 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
         if (is_prevote) {
+            logger.trace("become_candidate[{}] won prevote", _my_id);
             become_candidate(false);
         } else {
+            logger.trace("become_candidate[{}] won vote", _my_id);
             become_leader();
         }
     }
@@ -755,12 +763,12 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     assert(is_candidate());
 
-    logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
+    logger.trace("request_vote_reply[{}] received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
     // Should not register a reply to prevote as a real vote
     if (state.is_prevote != reply.is_prevote) {
-        logger.trace("{} ignoring prevote from {} as state is vote", _my_id, from);
+        logger.trace("request_vote_reply[{}] ignoring prevote from {} as state is vote", _my_id, from);
         return;
     }
     state.votes.register_vote(from, reply.vote_granted);
@@ -770,8 +778,10 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
         break;
     case vote_result::WON:
         if (state.is_prevote) {
+            logger.trace("request_vote_reply[{}] won prevote", _my_id);
             become_candidate(false);
         } else {
+            logger.trace("request_vote_reply[{}] won vote", _my_id);
             become_leader();
         }
         break;

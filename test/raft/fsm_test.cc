@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define BOOST_TEST_MODULE raft
+
 #include "test/raft/helpers.hh"
 
 using namespace raft;
