@@ -224,7 +224,7 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
-        , _range_tombstones(s, _slice.options.contains(query::partition_slice::option::reversed))
+        , _range_tombstones(s, false)
         , _last_dk({dht::token(), partition_key::make_empty()})
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");

@@ -107,13 +107,14 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
     private:
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
-                auto it = std::prev(_range_tombstones.end());
+                // _range_tombstones uses the reverse schema already, so we can use `begin()`
+                auto it = _range_tombstones.begin();
                 push_mutation_fragment(*_schema, _permit, _range_tombstones.pop(it));
             };
-            position_in_partition::less_compare cmp(*_schema);
+            position_in_partition::tri_compare cmp(*_schema);
             while (!_mutation_fragments.empty() && !is_buffer_full()) {
                 auto& mf = _mutation_fragments.top();
-                if (!_range_tombstones.empty() && !cmp(_range_tombstones.rbegin()->end_position(), mf.position())) {
+                if (!_range_tombstones.empty() && cmp(_range_tombstones.begin()->position(), mf.position()) <= 0) {
                     emit_range_tombstone();
                 } else {
                     _stack_size -= mf.memory_usage();
@@ -148,7 +149,9 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
                 } else if (mf.is_range_tombstone()) {
-                    _range_tombstones.apply(*_schema, std::move(mf.as_range_tombstone()));
+                    auto&& rt = std::move(mf).as_range_tombstone();
+                    rt.reverse();
+                    _range_tombstones.apply(*_schema, std::move(rt));
                 } else {
                     _mutation_fragments.emplace(std::move(mf));
                     _stack_size += _mutation_fragments.top().memory_usage();
@@ -182,7 +185,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         }
     public:
         explicit partition_reversing_mutation_reader(flat_mutation_reader& mr, query::max_result_size max_size)
-            : flat_mutation_reader::impl(mr.schema(), mr.permit())
+            : flat_mutation_reader::impl(mr.schema()->make_reversed(), mr.permit())
             , _source(&mr)
             , _range_tombstones(*_schema)
             , _max_size(max_size)

@@ -128,6 +128,13 @@ constexpr auto max_rows_if_set = std::numeric_limits<uint32_t>::max();
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 // Schema-dependent.
+//
+// COMPATIBILITY NOTE: the partition-slice for reverse queries has two different
+// format:
+// * legacy format
+// * native format
+// The wire format uses the legacy format. See docs/design-notes/reverse-reads.md
+// for more details on the formats.
 class partition_slice {
     friend class ::partition_slice_builder;
 public:

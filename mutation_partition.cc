@@ -1978,8 +1978,7 @@ void reconcilable_result_builder::consume_new_partition(const dht::decorated_key
         !has_ck_selector(_slice.row_ranges(_schema, dk.key()));
     _static_row_is_alive = false;
     _live_rows = 0;
-    auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
-    _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), is_reversed));
+    _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), _reversed));
 }
 
 void reconcilable_result_builder::consume(tombstone t) {
@@ -2008,6 +2007,10 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
 
 stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
     _memory_accounter.update(rt.memory_usage(_schema));
+    if (_reversed) {
+        // undo reversing done for the native reversed format, coordinator still uses old reversing format
+        rt.reverse();
+    }
     return _mutation_consumer->consume(std::move(rt));
 }
 

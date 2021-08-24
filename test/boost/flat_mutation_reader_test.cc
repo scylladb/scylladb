@@ -476,8 +476,8 @@ using in_thread = seastar::bool_class<class in_thread_tag>;
 
 struct flat_stream_consumer {
     schema_ptr _schema;
+    schema_ptr _reversed_schema;
     reader_permit _permit;
-    reversed_partitions _reversed;
     skip_after_first_fragment _skip_partition;
     skip_after_first_partition _skip_stream;
     std::vector<mutation> _mutations;
@@ -485,22 +485,17 @@ struct flat_stream_consumer {
     bool _inside_partition = false;
 private:
     void verify_order(position_in_partition_view pos) {
-        position_in_partition::less_compare cmp(*_schema);
-        if (!_reversed) {
-            BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row()
-                          || cmp(*_previous_position, pos));
-        } else {
-            BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row()
-                          || cmp(pos, *_previous_position));
-        }
+        const schema& s = _reversed_schema ? *_reversed_schema : *_schema;
+        position_in_partition::less_compare cmp(s);
+        BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row() || cmp(*_previous_position, pos));
     }
 public:
     flat_stream_consumer(schema_ptr s, reader_permit permit, reversed_partitions reversed,
                          skip_after_first_fragment skip_partition = skip_after_first_fragment::no,
                          skip_after_first_partition skip_stream = skip_after_first_partition::no)
         : _schema(std::move(s))
+        , _reversed_schema(reversed ? _schema->make_reversed() : nullptr)
         , _permit(std::move(permit))
-        , _reversed(reversed)
         , _skip_partition(skip_partition)
         , _skip_stream(skip_stream)
     { }
@@ -534,10 +529,13 @@ public:
     }
     stop_iteration consume(range_tombstone&& rt) {
         BOOST_REQUIRE(_inside_partition);
-        auto pos = _reversed ? rt.end_position() : rt.position();
+        auto pos = rt.position();
         verify_order(pos);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(pos);
+        if (_reversed_schema) {
+            rt.reverse(); // undo the reversing
+        }
         _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(rt)));
         return stop_iteration(bool(_skip_partition));
     }

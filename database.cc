@@ -1376,6 +1376,11 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+    const auto reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
+    if (reversed) {
+        s = s->make_reversed();
+    }
+
     column_family& cf = find_column_family(cmd.cf_id);
     auto& semaphore = get_reader_concurrency_semaphore();
     auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
@@ -1429,6 +1434,11 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+    const auto reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
+    if (reversed) {
+        s = s->make_reversed();
+    }
+
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto accounter = co_await get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed);
     column_family& cf = find_column_family(cmd.cf_id);

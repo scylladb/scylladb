@@ -30,6 +30,12 @@ class specific_ranges {
     std::vector<nonwrapping_range<clustering_key_prefix>> ranges();
 };
 
+// COMPATIBILITY NOTE: the partition-slice for reverse queries has two different
+// format:
+// * legacy format
+// * native format
+// The wire format uses the legacy format. See docs/design-notes/reverse-reads.md
+// for more details on the formats.
 class partition_slice {
     std::vector<nonwrapping_range<clustering_key_prefix>> default_row_ranges();
     utils::small_vector<uint32_t, 8> static_columns;
