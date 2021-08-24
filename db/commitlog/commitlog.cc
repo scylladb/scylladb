@@ -110,6 +110,10 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.use_o_dsync = cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = !cfg.commitlog_use_hard_size_limit();
 
+    if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
+        c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
+    }
+
     return c;
 }
 
