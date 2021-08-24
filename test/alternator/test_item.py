@@ -686,3 +686,24 @@ def test_unused_entries_no_expression(test_table_s):
     with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeNames'):
         test_table_s.get_item(Key={'p': p},
             ExpressionAttributeNames={'#name1': 'x'})
+
+# Test that null characters are allowed inside string and bytes values (they
+# do not terminate strings as in C). Test this for both key and non-key
+# attributes.
+def test_null_in_string(test_table_s):
+    p = random_string() + '\x00' + random_string()
+    val = random_string() + '\x00' + random_string()
+    # sanity check: varify that Python actually put the null in the strings...
+    assert 0 in p.encode('utf-8')
+    assert 0 in val.encode('utf-8')
+    test_table_s.put_item(Item={'p': p, 'val': val})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'val': val}
+
+def test_null_in_bytes(test_table_b):
+    p = random_bytes() + bytes([0]) + random_bytes()
+    val = random_bytes() + bytes([0]) + random_bytes()
+    # sanity check: varify that Python actually put the null in the bytes...
+    assert 0 in p
+    assert 0 in val
+    test_table_b.put_item(Item={'p': p, 'val': val})
+    assert test_table_b.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'val': val}
