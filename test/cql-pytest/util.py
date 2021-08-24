@@ -27,6 +27,9 @@ from contextlib import contextmanager
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))
 
+def random_bytes(length=10):
+    return bytearray(random.getrandbits(8) for _ in range(length))
+
 # A function for picking a unique name for test keyspace or table.
 # This name doesn't need to be quoted in CQL - it only contains
 # lowercase letters, numbers, and underscores, and starts with a letter.
