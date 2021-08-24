@@ -47,7 +47,15 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
             auto metadata = mutation_source_metadata{};
             auto& cs = cf->get_compaction_strategy();
             const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
-            auto consumer = cs.make_interposer_consumer(metadata,
+            auto make_interposer_consumer = [&cs, offstrategy] (const mutation_source_metadata& ms_meta, reader_consumer end_consumer) mutable {
+                // postpone data segregation to off-strategy compaction if enabled
+                if (offstrategy) {
+                    return end_consumer;
+                }
+                return cs.make_interposer_consumer(ms_meta, std::move(end_consumer));
+            };
+
+            auto consumer = make_interposer_consumer(metadata,
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy, reason] (flat_mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
