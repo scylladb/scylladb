@@ -93,6 +93,7 @@ private:
 public:
     // ForwardIterator<range_tombstone>
     using iterator = range_tombstones_type::iterator;
+    using reverse_iterator = range_tombstones_type::reverse_iterator;
     using const_iterator = range_tombstones_type::const_iterator;
 
     struct copy_comparator_only { };

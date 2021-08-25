@@ -154,7 +154,7 @@ template<consume_in_reverse reverse, FlattenedConsumer Consumer>
 stop_iteration consume_clustering_fragments(const schema& s, mutation_partition& partition, Consumer& consumer) {
     using crs_type = mutation_partition::rows_type;
     using crs_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, crs_type::reverse_iterator, crs_type::iterator>;
-    using rts_type = range_tombstone::container_type;
+    using rts_type = range_tombstone_list;
     using rts_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, rts_type::reverse_iterator, rts_type::iterator>;
 
     crs_iterator_type crs_it, crs_end;
