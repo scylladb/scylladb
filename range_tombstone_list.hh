@@ -186,9 +186,8 @@ public:
     range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>
+    requires std::is_invocable_r_v<bool, Pred, const range_tombstone&>
     void erase_where(Pred filter) {
-        static_assert(std::is_same<bool, std::result_of_t<Pred(const range_tombstone&)>>::value,
-                      "bad Pred signature");
         auto it = begin();
         while (it != end()) {
             if (filter(*it)) {
