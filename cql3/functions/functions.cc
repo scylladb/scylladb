@@ -463,11 +463,11 @@ function_call::fill_prepare_context(prepare_context& ctx) const {
 
 shared_ptr<terminal>
 function_call::bind(const query_options& options) {
-    return make_terminal(_fun, cql3::raw_value::make_value(bind_and_get(options)), options.get_cql_serialization_format());
+    return make_terminal(_fun, cql3::raw_value::make_value(bind_and_get_internal(options)), options.get_cql_serialization_format());
 }
 
 cql3::raw_value_view
-function_call::bind_and_get(const query_options& options) {
+function_call::bind_and_get_internal(const query_options& options) {
     std::vector<bytes_opt> buffers;
     buffers.reserve(_terms.size());
     for (auto&& t : _terms) {

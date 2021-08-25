@@ -82,7 +82,6 @@ public:
         std::vector<managed_bytes_opt> bind_internal(const query_options& options);
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
     };
 
     class marker : public abstract_marker {
