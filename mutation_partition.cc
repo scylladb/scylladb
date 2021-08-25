@@ -1238,10 +1238,7 @@ size_t mutation_partition::external_memory_usage(const schema& s) const {
     for (auto& clr : clustered_rows()) {
         sum += clr.memory_usage(s);
     }
-
-    for (auto& rtb : row_tombstones()) {
-        sum += rtb.memory_usage(s);
-    }
+    sum += row_tombstones().external_memory_usage(s);
 
     return sum;
 }
