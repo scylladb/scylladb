@@ -58,19 +58,17 @@ public:
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification&);
     static lw_shared_ptr<column_specification> uuid_index_spec_of(const column_specification&);
 
-    class value : public multi_item_terminal, collection_terminal {
+    class value : public terminal, collection_terminal {
     public:
         utils::chunked_vector<managed_bytes_opt> _elements;
     public:
         explicit value(utils::chunked_vector<managed_bytes_opt> elements, data_type my_type)
-            : multi_item_terminal(std::move(my_type)), _elements(std::move(elements)) {
+            : terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& v, const list_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const list_type_impl& lt, const value& v);
-        const utils::chunked_vector<managed_bytes_opt>& get_elements() const;
-        virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const;
         friend class lists;
     };

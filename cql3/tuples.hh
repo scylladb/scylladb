@@ -59,12 +59,12 @@ public:
     /**
      * A tuple of terminal values (e.g (123, 'abc')).
      */
-    class value : public multi_item_terminal {
+    class value : public terminal {
     public:
         std::vector<managed_bytes_opt> _elements;
     public:
         value(std::vector<managed_bytes_opt> elements, data_type my_type)
-                : multi_item_terminal(std::move(my_type)), _elements(std::move(elements)) {
+                : terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
           return buffer.with_value([&] (const FragmentedView auto& view) {
@@ -73,13 +73,6 @@ public:
         }
         virtual cql3::raw_value get(const query_options& options) override {
             return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
-        }
-
-        const std::vector<managed_bytes_opt>& get_elements() const {
-            return _elements;
-        }
-        virtual std::vector<managed_bytes_opt> copy_elements() const override {
-            return _elements;
         }
         size_t size() const {
             return _elements.size();
