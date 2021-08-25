@@ -244,7 +244,7 @@ public:
 
 template<typename T, typename ReturnType>
 concept MutationFragmentConsumer =
-    requires(T t, static_row sr, clustering_row cr, range_tombstone rt, partition_start ph, partition_end pe) {
+    requires(T& t, static_row sr, clustering_row cr, range_tombstone rt, partition_start ph, partition_end pe) {
         { t.consume(std::move(sr)) } -> std::same_as<ReturnType>;
         { t.consume(std::move(cr)) } -> std::same_as<ReturnType>;
         { t.consume(std::move(rt)) } -> std::same_as<ReturnType>;

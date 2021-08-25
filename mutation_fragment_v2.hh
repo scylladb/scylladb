@@ -74,7 +74,7 @@ public:
 
 template<typename T, typename ReturnType>
 concept MutationFragmentConsumerV2 =
-    requires(T t,
+    requires(T& t,
             static_row sr,
             clustering_row cr,
             range_tombstone_change rt_chg,
