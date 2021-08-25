@@ -37,9 +37,6 @@
 
 namespace cql3::expr {
 
-using column_specification_or_tuple = std::variant<lw_shared_ptr<column_specification>,
-                                                   std::vector<lw_shared_ptr<column_specification>>>;
-
 static
 lw_shared_ptr<column_specification>
 usertype_field_spec_of(const column_specification& column, size_t field) {
@@ -87,8 +84,7 @@ usertype_constructor_test_assignment(const usertype_constructor& u, database& db
 
 static
 shared_ptr<term>
-usertype_constructor_prepare_term(const usertype_constructor& u, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+usertype_constructor_prepare_term(const usertype_constructor& u, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     usertype_constructor_validate_assignable_to(u, db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
@@ -202,8 +198,7 @@ map_test_assignment(const collection_constructor& c, database& db, const sstring
 
 static
 ::shared_ptr<term>
-map_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+map_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     map_validate_assignable_to(c, db, keyspace, *receiver);
 
     auto key_spec = maps::key_spec_of(*receiver);
@@ -291,8 +286,7 @@ set_test_assignment(const collection_constructor& c, database& db, const sstring
 
 static
 shared_ptr<term>
-set_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+set_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     set_validate_assignable_to(c, db, keyspace, *receiver);
 
     if (c.elements.empty()) {
@@ -385,8 +379,7 @@ list_test_assignment(const collection_constructor& c, database& db, const sstrin
 
 static
 shared_ptr<term>
-list_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+list_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -510,19 +503,6 @@ tuple_constructor_prepare_tuple(const tuple_constructor& tc, database& db, const
 }
 
 static
-shared_ptr<term>
-tuple_constructor_prepare_term(const tuple_constructor& tc, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
-    return std::visit(overloaded_functor{
-        [&] (const lw_shared_ptr<column_specification>& nontuple) {
-            return tuple_constructor_prepare_nontuple(tc, db, keyspace, nontuple);
-        },
-        [&] (const std::vector<lw_shared_ptr<column_specification>>& tuple) {
-            return tuple_constructor_prepare_tuple(tc, db, keyspace, tuple);
-        },
-    }, receiver);
-}
-
-static
 std::ostream&
 operator<<(std::ostream&out, untyped_constant::type_class t)
 {
@@ -633,9 +613,8 @@ untyped_constant_test_assignment(const untyped_constant& uc, database& db, const
 
 static
 ::shared_ptr<term>
-untyped_constant_prepare_term(const untyped_constant& uc, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_)
+untyped_constant_prepare_term(const untyped_constant& uc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
@@ -651,9 +630,8 @@ bind_variable_test_assignment(const bind_variable& bv, database& db, const sstri
 
 static
 ::shared_ptr<term>
-bind_variable_scalar_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_)
+bind_variable_scalar_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
     if (receiver->type->is_collection()) {
         if (receiver->type->without_reversed().is_list()) {
             return ::make_shared<lists::marker>(bv.bind_index, receiver);
@@ -681,8 +659,7 @@ bind_variable_scalar_in_make_receiver(const column_specification& receiver) {
 
 static
 ::shared_ptr<term>
-bind_variable_scalar_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+bind_variable_scalar_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return ::make_shared<lists::marker>(bv.bind_index, bind_variable_scalar_in_make_receiver(*receiver));
 }
 
@@ -708,8 +685,7 @@ bind_variable_tuple_make_receiver(const std::vector<lw_shared_ptr<column_specifi
 
 static
 ::shared_ptr<term>
-bind_variable_tuple_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
-    auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
+bind_variable_tuple_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return make_shared<tuples::marker>(bv.bind_index, bind_variable_tuple_make_receiver(receivers));
 }
 
@@ -740,8 +716,7 @@ bind_variable_tuple_in_make_receiver(const std::vector<lw_shared_ptr<column_spec
 
 static
 ::shared_ptr<term>
-bind_variable_tuple_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
-    auto& receivers = std::get<std::vector<lw_shared_ptr<column_specification>>>(receiver);
+bind_variable_tuple_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return make_shared<tuples::in_marker>(bv.bind_index, bind_variable_tuple_in_make_receiver(receivers));
 }
 
@@ -757,8 +732,8 @@ null_test_assignment(database& db,
 
 static
 ::shared_ptr<term>
-null_prepare_term(database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
-    if (!is_assignable(null_test_assignment(db, keyspace, *std::get<lw_shared_ptr<column_specification>>(receiver)))) {
+null_prepare_term(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    if (!is_assignable(null_test_assignment(db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
     }
     return constants::NULL_VALUE;
@@ -798,8 +773,7 @@ cast_test_assignment(const cast& c, database& db, const sstring& keyspace, const
 
 static
 shared_ptr<term>
-cast_prepare_term(const cast& c, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     if (!is_assignable(test_assignment(*c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
         throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", *c.arg, type));
@@ -810,9 +784,8 @@ cast_prepare_term(const cast& c, database& db, const sstring& keyspace, const co
     return prepare_term(*c.arg, db, keyspace, receiver);
 }
 
-static
 ::shared_ptr<term>
-prepare_term_internal(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
+prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::prepare()");
@@ -839,7 +812,7 @@ prepare_term_internal(const expression& expr, database& db, const sstring& keysp
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::prepare()");
         },
         [&] (const function_call& fc) -> ::shared_ptr<term> {
-            return functions::prepare_function_call(fc, db, keyspace, std::get<lw_shared_ptr<column_specification>>(receiver));
+            return functions::prepare_function_call(fc, db, keyspace, std::move(receiver));
         },
         [&] (const cast& c) -> ::shared_ptr<term> {
             return cast_prepare_term(c, db, keyspace, receiver);
@@ -854,8 +827,8 @@ prepare_term_internal(const expression& expr, database& db, const sstring& keysp
             switch (bv.shape) {
             case expr::bind_variable::shape_type::scalar:  return bind_variable_scalar_prepare_term(bv, db, keyspace, receiver);
             case expr::bind_variable::shape_type::scalar_in: return bind_variable_scalar_in_prepare_term(bv, db, keyspace, receiver);
-            case expr::bind_variable::shape_type::tuple: return bind_variable_tuple_prepare_term(bv, db, keyspace, receiver);
-            case expr::bind_variable::shape_type::tuple_in: return bind_variable_tuple_in_prepare_term(bv, db, keyspace, receiver);
+            case expr::bind_variable::shape_type::tuple: on_internal_error(expr_logger, "prepare_term(bind_variable(tuple))");
+            case expr::bind_variable::shape_type::tuple_in: on_internal_error(expr_logger, "prepare_term(bind_variable(tuple_in))");
             }
             on_internal_error(expr_logger, "unexpected shape in bind_variable");
         },
@@ -863,7 +836,7 @@ prepare_term_internal(const expression& expr, database& db, const sstring& keysp
             return untyped_constant_prepare_term(uc, db, keyspace, receiver);
         },
         [&] (const tuple_constructor& tc) -> ::shared_ptr<term> {
-            return tuple_constructor_prepare_term(tc, db, keyspace, receiver);
+            return tuple_constructor_prepare_nontuple(tc, db, keyspace, receiver);
         },
         [&] (const collection_constructor& c) -> ::shared_ptr<term> {
             switch (c.style) {
@@ -880,13 +853,24 @@ prepare_term_internal(const expression& expr, database& db, const sstring& keysp
 }
 
 ::shared_ptr<term>
-prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
-    return prepare_term_internal(expr, db, keyspace, std::move(receiver));
-}
-
-::shared_ptr<term>
 prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    return prepare_term_internal(expr, db, keyspace, std::move(receivers));
+    return std::visit(overloaded_functor{
+        [&] (const bind_variable& bv) -> ::shared_ptr<term> {
+            switch (bv.shape) {
+            case expr::bind_variable::shape_type::scalar: on_internal_error(expr_logger, "prepare_term_multi_column(bind_variable(scalar))");
+            case expr::bind_variable::shape_type::scalar_in: on_internal_error(expr_logger, "prepare_term_multi_column(bind_variable(scalar_in))");
+            case expr::bind_variable::shape_type::tuple: return bind_variable_tuple_prepare_term(bv, db, keyspace, receivers);
+            case expr::bind_variable::shape_type::tuple_in: return bind_variable_tuple_in_prepare_term(bv, db, keyspace, receivers);
+            }
+            on_internal_error(expr_logger, "unexpected shape in bind_variable");
+        },
+        [&] (const tuple_constructor& tc) -> ::shared_ptr<term> {
+            return tuple_constructor_prepare_tuple(tc, db, keyspace, receivers);
+        },
+        [] (const auto& default_case) -> ::shared_ptr<term> {
+            on_internal_error(expr_logger, fmt::format("prepare_term_multi_column({})", typeid(default_case).name()));
+        },
+    }, expr);
 }
 
 assignment_testable::test_result
