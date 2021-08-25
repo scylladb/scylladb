@@ -51,7 +51,7 @@
 namespace cql3 {
 
 user_types::value::value(std::vector<managed_bytes_opt> elements, data_type my_type)
-        : multi_item_terminal(std::move(my_type)), _elements(std::move(elements)) {
+        : terminal(std::move(my_type)), _elements(std::move(elements)) {
 }
 
 user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
@@ -68,14 +68,6 @@ user_types::value user_types::value::from_serialized(const raw_value_view& v, co
 
 cql3::raw_value user_types::value::get(const query_options&) {
     return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
-}
-
-const std::vector<managed_bytes_opt>& user_types::value::get_elements() const {
-    return _elements;
-}
-
-std::vector<managed_bytes_opt> user_types::value::copy_elements() const {
-    return _elements;
 }
 
 sstring user_types::value::to_string() const {

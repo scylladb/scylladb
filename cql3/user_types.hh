@@ -57,7 +57,7 @@ class user_types {
 public:
     static lw_shared_ptr<column_specification> field_spec_of(const column_specification& column, size_t field);
 
-    class value : public multi_item_terminal {
+    class value : public terminal {
         std::vector<managed_bytes_opt> _elements;
     public:
         explicit value(std::vector<managed_bytes_opt>, data_type my_type);
@@ -65,8 +65,6 @@ public:
         static value from_serialized(const raw_value_view&, const user_type_impl&);
 
         virtual cql3::raw_value get(const query_options&) override;
-        const std::vector<managed_bytes_opt>& get_elements() const;
-        virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const override;
     };
 

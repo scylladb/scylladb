@@ -148,14 +148,6 @@ public:
     }
 };
 
-class multi_item_terminal : public terminal {
-public:
-    multi_item_terminal(data_type my_type) : terminal(std::move(my_type)) {
-    }
-
-    virtual std::vector<managed_bytes_opt> copy_elements() const = 0;
-};
-
 class collection_terminal {
 public:
     virtual ~collection_terminal() {}
