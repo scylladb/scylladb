@@ -217,7 +217,6 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
         _rows.erase_and_dispose(it, _rows.end(), deleter);
     }
     {
-        range_tombstone_list::const_iterator it = _row_tombstones.begin();
         for (auto&& range : ck_ranges.ranges()) {
             for (auto&& x_rt : x._row_tombstones.slice(schema, range)) {
                 auto rt = x_rt;
