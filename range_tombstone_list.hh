@@ -30,8 +30,69 @@
 
 class position_in_partition_view;
 
+class range_tombstone_entry {
+    range_tombstone _tombstone;
+    bi::set_member_hook<bi::link_mode<bi::auto_unlink>> _link;
+
+public:
+    struct compare {
+        range_tombstone::compare _c;
+        compare(const schema& s) : _c(s) {}
+        bool operator()(const range_tombstone_entry& rt1, const range_tombstone_entry& rt2) const {
+            return _c(rt1._tombstone, rt2._tombstone);
+        }
+    };
+
+    using container_type = bi::set<range_tombstone_entry,
+            bi::member_hook<range_tombstone_entry, bi::set_member_hook<bi::link_mode<bi::auto_unlink>>, &range_tombstone_entry::_link>,
+            bi::compare<range_tombstone_entry::compare>,
+            bi::constant_time_size<false>>;
+
+    range_tombstone_entry(const range_tombstone_entry& rt)
+        : _tombstone(rt._tombstone)
+    {
+    }
+
+    range_tombstone_entry(range_tombstone_entry&& rt) noexcept
+            : _tombstone(std::move(rt._tombstone))
+    {
+        update_node(rt._link);
+    }
+    range_tombstone_entry(range_tombstone&& rt) noexcept
+        : _tombstone(std::move(rt))
+    { }
+
+    range_tombstone_entry& operator=(range_tombstone_entry&& rt) noexcept {
+        update_node(rt._link);
+        _tombstone = std::move(rt._tombstone);
+        return *this;
+    }
+
+    range_tombstone& tombstone() noexcept { return _tombstone; }
+    const range_tombstone& tombstone() const noexcept { return _tombstone; }
+
+    const bound_view start_bound() const { return _tombstone.start_bound(); }
+    const bound_view end_bound() const { return _tombstone.end_bound(); }
+    position_in_partition_view position() const { return _tombstone.position(); }
+    position_in_partition_view end_position() const { return _tombstone.end_position(); }
+
+    size_t memory_usage(const schema& s) const noexcept {
+        return sizeof(range_tombstone_entry) + _tombstone.external_memory_usage(s);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& rt);
+
+private:
+    void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) noexcept {
+        if (other_link.is_linked()) {
+            // Move the link in case we're being relocated by LSA.
+            container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());
+            container_type::node_algorithms::init(other_link.this_ptr());
+        }
+    }
+};
+
 class range_tombstone_list final {
-    using range_tombstone_entry = range_tombstone; // temporary
     using range_tombstones_type = range_tombstone_entry::container_type;
     class insert_undo_op {
         const range_tombstone_entry& _new_rt;
@@ -207,7 +268,7 @@ public:
     }
 
     range_tombstone pop(iterator it) {
-        range_tombstone rt(std::move(*it), range_tombstone::without_link{});
+        range_tombstone rt(std::move(it->tombstone()));
         _tombstones.erase_and_dispose(it, current_deleter<range_tombstone_entry>());
         return rt;
     }

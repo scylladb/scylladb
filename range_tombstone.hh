@@ -35,7 +35,6 @@ namespace bi = boost::intrusive;
  * Represents a ranged deletion operation. Can be empty.
  */
 class range_tombstone final {
-    bi::set_member_hook<bi::link_mode<bi::auto_unlink>> _link;
 public:
     clustering_key_prefix start;
     bound_kind start_kind;
@@ -66,7 +65,6 @@ public:
     { }
     range_tombstone(range_tombstone&& rt) noexcept
             : range_tombstone(std::move(rt.start), rt.start_kind, std::move(rt.end), rt.end_kind, std::move(rt.tomb)) {
-        update_node(rt._link);
     }
     struct without_link { };
     range_tombstone(range_tombstone&& rt, without_link) noexcept
@@ -76,7 +74,6 @@ public:
             : range_tombstone(rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb)
     { }
     range_tombstone& operator=(range_tombstone&& rt) noexcept {
-        update_node(rt._link);
         move_assign(std::move(rt));
         return *this;
     }
@@ -119,10 +116,6 @@ public:
         rt1.move_assign(std::move(tmp));
     }
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone& rt);
-    using container_type = bi::set<range_tombstone,
-            bi::member_hook<range_tombstone, bi::set_member_hook<bi::link_mode<bi::auto_unlink>>, &range_tombstone::_link>,
-            bi::compare<range_tombstone::compare>,
-            bi::constant_time_size<false>>;
 
     static bool is_single_clustering_row_tombstone(const schema& s, const clustering_key_prefix& start,
         bound_kind start_kind, const clustering_key_prefix& end, bound_kind end_kind)
@@ -214,6 +207,7 @@ public:
     size_t minimal_memory_usage(const schema& s) const noexcept {
         return sizeof(range_tombstone) + minimal_external_memory_usage(s);
     }
+
 private:
     void move_assign(range_tombstone&& rt) noexcept {
         start = std::move(rt.start);
@@ -222,16 +216,6 @@ private:
         end_kind = rt.end_kind;
         tomb = std::move(rt.tomb);
     }
-    void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) noexcept {
-        if (other_link.is_linked()) {
-            // Move the link in case we're being relocated by LSA.
-            container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());
-            container_type::node_algorithms::init(other_link.this_ptr());
-        }
-    }
-public:
-    range_tombstone& tombstone() noexcept { return *this; }
-    const range_tombstone& tombstone() const noexcept { return *this; }
 };
 
 template<>

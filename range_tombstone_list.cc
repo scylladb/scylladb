@@ -38,7 +38,7 @@ range_tombstone_list::~range_tombstone_list() {
 
 template <typename... Args>
 static auto construct_range_tombstone_entry(Args&&... args) {
-    return alloc_strategy_unique_ptr<range_tombstone>(current_allocator().construct<range_tombstone>(std::forward<Args>(args)...));
+    return alloc_strategy_unique_ptr<range_tombstone_entry>(current_allocator().construct<range_tombstone_entry>(range_tombstone(std::forward<Args>(args)...)));
 }
 
 void range_tombstone_list::apply_reversibly(const schema& s,
@@ -446,6 +446,10 @@ void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone_list& list) {
     return out << "{" << ::join(", ", list) << "}";
+}
+
+std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& rt) {
+    return out << rt._tombstone;
 }
 
 bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& other) const {
