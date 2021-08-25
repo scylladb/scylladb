@@ -556,8 +556,7 @@ make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serializatio
 }
 
 ::shared_ptr<term>
-prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver_) {
-    auto& receiver = std::get<lw_shared_ptr<column_specification>>(receiver_);
+prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<function>& func) {
             return func;

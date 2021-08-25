@@ -478,7 +478,8 @@ extern expression replace_column_def(const expression&, const column_definition*
 extern expression replace_token(const expression&, const column_definition*);
 
 
-extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver);
+extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+extern ::shared_ptr<term> prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
 
 
 /**

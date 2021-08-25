@@ -218,7 +218,7 @@ protected:
     virtual shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                      const expr::expression& raw, database& db, const sstring& keyspace,
                                      prepare_context& ctx) const override {
-        auto t = prepare_term(raw, db, keyspace, receivers);
+        auto t = prepare_term_multi_column(raw, db, keyspace, receivers);
         t->fill_prepare_context(ctx);
         return t;
     }

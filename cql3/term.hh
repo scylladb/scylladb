@@ -54,10 +54,6 @@ class term;
 class terminal;
 class prepare_context;
 
-
-using column_specification_or_tuple = std::variant<lw_shared_ptr<column_specification>,
-                                                    std::vector<lw_shared_ptr<column_specification>>>;
-
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
  *

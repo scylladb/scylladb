@@ -37,6 +37,9 @@
 
 namespace cql3::expr {
 
+using column_specification_or_tuple = std::variant<lw_shared_ptr<column_specification>,
+                                                   std::vector<lw_shared_ptr<column_specification>>>;
+
 static
 lw_shared_ptr<column_specification>
 usertype_field_spec_of(const column_specification& column, size_t field) {
@@ -807,8 +810,9 @@ cast_prepare_term(const cast& c, database& db, const sstring& keyspace, const co
     return prepare_term(*c.arg, db, keyspace, receiver);
 }
 
+static
 ::shared_ptr<term>
-prepare_term(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
+prepare_term_internal(const expression& expr, database& db, const sstring& keyspace, const column_specification_or_tuple& receiver) {
     return std::visit(overloaded_functor{
         [&] (bool bool_constant) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::prepare()");
@@ -835,7 +839,7 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, cons
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::prepare()");
         },
         [&] (const function_call& fc) -> ::shared_ptr<term> {
-            return functions::prepare_function_call(fc, db, keyspace, receiver);
+            return functions::prepare_function_call(fc, db, keyspace, std::get<lw_shared_ptr<column_specification>>(receiver));
         },
         [&] (const cast& c) -> ::shared_ptr<term> {
             return cast_prepare_term(c, db, keyspace, receiver);
@@ -873,6 +877,16 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, cons
             return usertype_constructor_prepare_term(uc, db, keyspace, receiver);
         },
     }, expr);
+}
+
+::shared_ptr<term>
+prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    return prepare_term_internal(expr, db, keyspace, std::move(receiver));
+}
+
+::shared_ptr<term>
+prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+    return prepare_term_internal(expr, db, keyspace, std::move(receivers));
 }
 
 assignment_testable::test_result
