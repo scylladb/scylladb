@@ -270,7 +270,7 @@ public:
         _tombstones.apply(s, mfo->as_range_tombstone());
         position_in_partition::equal_compare eq(s);
         while (mutation_fragment* next = _reader.peek().get0()) {
-            if (!next->is_range_tombstone() || !are_tombstones_mergeable(s, *actual_list.begin(), next->as_range_tombstone())) {
+            if (!next->is_range_tombstone() || !are_tombstones_mergeable(s, actual_list.begin()->tombstone(), next->as_range_tombstone())) {
                 break;
             }
             auto rt = _reader().get0()->as_range_tombstone();

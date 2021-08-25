@@ -169,7 +169,8 @@ auto write_row_marker(Writer&& writer, const row_marker& marker)
 template <typename RowTombstones>
 static void write_tombstones(const schema& s, RowTombstones& row_tombstones, const range_tombstone_list& rt_list)
 {
-    for (auto&& rt : rt_list) {
+    for (auto&& rte : rt_list) {
+        auto& rt = rte.tombstone();
         row_tombstones.add().write_start(rt.start).write_tomb(rt.tomb).write_start_kind(rt.start_kind)
             .write_end(rt.end).write_end_kind(rt.end_kind).end_range_tombstone();
     }

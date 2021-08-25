@@ -181,7 +181,7 @@ public:
         range_tombstone* rt = _tombstones.unlink_leftmost_without_rebalance();
         assert(rt != nullptr);
         auto _ = seastar::defer([rt] () noexcept { current_deleter<range_tombstone>()(rt); });
-        return std::move(*rt);
+        return std::move(rt->tombstone());
     }
 
     // Ensures that every range tombstone is strictly contained within given clustering ranges.
@@ -194,7 +194,7 @@ public:
     void erase_where(Pred filter) {
         auto it = begin();
         while (it != end()) {
-            if (filter(*it)) {
+            if (filter(it->tombstone())) {
                 it = _tombstones.erase_and_dispose(it, current_deleter<range_tombstone>());
             } else {
                 ++it;
@@ -223,7 +223,7 @@ public:
     size_t external_memory_usage(const schema& s) const noexcept {
         size_t result = 0;
         for (auto& rtb : _tombstones) {
-            result += rtb.memory_usage(s);
+            result += rtb.tombstone().memory_usage(s);
         }
         return result;
     }

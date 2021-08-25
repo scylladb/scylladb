@@ -557,7 +557,7 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
 
     if (!v->next()) { // Optimization for single-version snapshots
         for (auto&& rt : v->partition().row_tombstones().slice(*_schema, start, end)) {
-            if (callback(rt) == stop_iteration::yes) {
+            if (callback(rt.tombstone()) == stop_iteration::yes) {
                 return stop_iteration::no;
             }
         }
@@ -586,7 +586,7 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
     while (!streams.empty()) {
         std::pop_heap(streams.begin(), streams.end(), stream_less);
         range_tombstone_list::iterator_range& stream = streams.back();
-        if (callback(*stream.begin()) == stop_iteration::yes) {
+        if (callback(stream.begin()->tombstone()) == stop_iteration::yes) {
             return stop_iteration::no;
         }
         stream.advance_begin(1);

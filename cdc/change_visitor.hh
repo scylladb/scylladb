@@ -268,8 +268,8 @@ void inspect_mutation(const mutation& m, V& v) {
     }
 
     for (auto& rt: p.row_tombstones()) {
-        assert(rt.tomb.timestamp != api::missing_timestamp);
-        v.range_delete(rt);
+        assert(rt.tombstone().tomb.timestamp != api::missing_timestamp);
+        v.range_delete(rt.tombstone());
         if (v.finished()) {
             return;
         }

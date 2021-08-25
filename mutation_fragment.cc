@@ -395,7 +395,7 @@ mutation_fragment_opt range_tombstone_stream::get_next()
 
 const range_tombstone& range_tombstone_stream::peek_next() const
 {
-    return *_list.begin();
+    return _list.begin()->tombstone();
 }
 
 void range_tombstone_stream::forward_to(position_in_partition_view pos) {

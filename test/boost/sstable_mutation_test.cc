@@ -442,7 +442,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto rts = mut->partition().row_tombstones();
         BOOST_REQUIRE(rts.size() == 1);
         auto it = rts.begin();
-        BOOST_REQUIRE(it->equal(*s, range_tombstone(
+        BOOST_REQUIRE(it->tombstone().equal(*s, range_tombstone(
                         c_key_start,
                         bound_kind::excl_start,
                         c_key_end,
@@ -617,19 +617,19 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
                     auto rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 2);
                     auto it = rts.begin();
-                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                    BOOST_REQUIRE(it->tombstone().equal(*s, range_tombstone(
                                     make_ckey("aaa"),
                                     bound_kind::incl_start,
                                     make_ckey("aaa", "bbb"),
                                     bound_kind::excl_end,
-                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                                    tombstone(1459334681228103LL, it->tombstone().tomb.deletion_time))));
                     ++it;
-                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                    BOOST_REQUIRE(it->tombstone().equal(*s, range_tombstone(
                                     make_ckey("aaa", "bbb"),
                                     bound_kind::excl_start,
                                     make_ckey("aaa"),
                                     bound_kind::incl_end,
-                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                                    tombstone(1459334681228103LL, it->tombstone().tomb.deletion_time))));
                     auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 1);
                     for (auto& e : rows) {
@@ -679,12 +679,12 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
                     auto rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 1);
                     auto it = rts.begin();
-                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                    BOOST_REQUIRE(it->tombstone().equal(*s, range_tombstone(
                                     make_ckey("aaa"),
                                     bound_kind::incl_start,
                                     make_ckey("aaa"),
                                     bound_kind::incl_end,
-                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                                    tombstone(1459334681228103LL, it->tombstone().tomb.deletion_time))));
                     auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 0);
                     return stop_iteration::no;
@@ -764,19 +764,19 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
                     auto it = rts.begin();
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::excl_end)));
-                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
+                    BOOST_REQUIRE(it->tombstone().tomb.timestamp == 1459438519943668L);
                     ++it;
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::excl_end)));
-                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
+                    BOOST_REQUIRE(it->tombstone().tomb.timestamp == 1459438519950348L);
                     ++it;
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::excl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_end)));
-                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
+                    BOOST_REQUIRE(it->tombstone().tomb.timestamp == 1459438519950348L);
                     ++it;
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::excl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_end)));
-                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
+                    BOOST_REQUIRE(it->tombstone().tomb.timestamp == 1459438519943668L);
                     ++it;
                     BOOST_REQUIRE(it == rts.end());
 

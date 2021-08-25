@@ -229,6 +229,9 @@ private:
             container_type::node_algorithms::init(other_link.this_ptr());
         }
     }
+public:
+    range_tombstone& tombstone() noexcept { return *this; }
+    const range_tombstone& tombstone() const noexcept { return *this; }
 };
 
 template<>

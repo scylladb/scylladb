@@ -184,7 +184,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
                 _rows.insert_before_hint(_rows.end(), std::move(ce), rows_entry::tri_compare(schema));
             }
             for (auto&& rt : x._row_tombstones.slice(schema, r)) {
-                _row_tombstones.apply(schema, rt);
+                _row_tombstones.apply(schema, rt.tombstone());
             }
         }
     } catch (...) {
@@ -219,7 +219,7 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
     {
         for (auto&& range : ck_ranges.ranges()) {
             for (auto&& x_rt : x._row_tombstones.slice(schema, range)) {
-                auto rt = x_rt;
+                auto rt = x_rt.tombstone();
                 rt.trim(schema,
                         position_in_partition_view::for_range_start(range),
                         position_in_partition_view::for_range_end(range));
@@ -1119,7 +1119,7 @@ bool mutation_partition::equal(const schema& this_schema, const mutation_partiti
 
     if (!std::equal(_row_tombstones.begin(), _row_tombstones.end(),
         p._row_tombstones.begin(), p._row_tombstones.end(),
-        [&] (const range_tombstone& rt1, const range_tombstone& rt2) { return rt1.equal(this_schema, rt2); }
+        [&] (const auto& rt1, const auto& rt2) { return rt1.tombstone().equal(this_schema, rt2.tombstone()); }
     )) {
         return false;
     }
@@ -1772,8 +1772,8 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
             v.accept_static_cell(id, cell.as_collection_mutation());
         }
     });
-    for (const range_tombstone& rt : _row_tombstones) {
-        v.accept_row_tombstone(rt);
+    for (const auto& rt : _row_tombstones) {
+        v.accept_row_tombstone(rt.tombstone());
     }
     for (const rows_entry& e : _rows) {
         const deletable_row& dr = e.row();
