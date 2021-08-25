@@ -85,14 +85,6 @@ public:
     virtual ::shared_ptr<terminal> bind(const query_options& options) = 0;
 
     /**
-     * A shorter for bind(values).get().
-     * We expose it mainly because for constants it can avoids allocating a temporary
-     * object between the bind and the get (note that we still want to be able
-     * to separate bind and get for collections).
-     */
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) = 0;
-
-    /**
      * Whether or not that term contains at least one bind marker.
      *
      * Note that this is slightly different from being or not a NonTerminal,
@@ -149,10 +141,6 @@ public:
      */
     virtual cql3::raw_value get(const query_options& options) = 0;
 
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
-        return raw_value_view::make_temporary(get(options));
-    }
-
     virtual sstring to_string() const = 0;
 
     data_type get_value_type() const {
@@ -186,14 +174,6 @@ public:
  *   - a non pure function (even if it doesn't have bind marker - see #5616)
  */
 class non_terminal : public term {
-public:
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
-        auto t = bind(options);
-        if (t) {
-            return cql3::raw_value_view::make_temporary(t->get(options));
-        }
-        return cql3::raw_value_view::make_null();
-    };
 };
 
 }

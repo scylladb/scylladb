@@ -126,10 +126,6 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
     return ::make_shared<user_types::value>(bind_internal(options), _type);
 }
 
-cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
-    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value_fragmented(bind_internal(options))));
-}
-
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
     auto value = options.get_value_at(_bind_index);
     if (value.is_null()) {
