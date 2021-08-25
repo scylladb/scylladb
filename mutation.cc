@@ -186,13 +186,13 @@ mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
     return mutation(schema(), decorated_key(), partition().sliced(*schema(), ranges));
 }
 
-future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& r, db::timeout_clock::time_point timeout) {
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& r) {
     if (r.is_buffer_empty()) {
         if (r.is_end_of_stream()) {
             return make_ready_future<mutation_opt>();
         }
-        return r.fill_buffer(timeout).then([&r, timeout] {
-            return read_mutation_from_flat_mutation_reader(r, timeout);
+        return r.fill_buffer().then([&r] {
+            return read_mutation_from_flat_mutation_reader(r);
         });
     }
     // r.is_buffer_empty() is always false at this point
@@ -238,7 +238,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
             return _builder->consume_end_of_stream();
         }
     };
-    return r.consume(adapter(r.schema()), timeout);
+    return r.consume(adapter(r.schema()));
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {

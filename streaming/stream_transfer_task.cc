@@ -134,7 +134,7 @@ struct send_info {
 };
 
 future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
- return si->reader.peek(db::no_timeout).then([si] (mutation_fragment* mfp) {
+ return si->reader.peek().then([si] (mutation_fragment* mfp) {
   if (!mfp) {
     // The reader contains no data
     sslog.info("[Stream #{}] Skip sending ks={}, cf={}, reader contains no data, with new rpc streaming",
@@ -169,7 +169,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
             mutation_fragment_stream_validator validator(*(si->reader.schema()));
             return do_with(std::move(sink), std::move(validator), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink, mutation_fragment_stream_validator& validator) {
                 return repeat([&sink, &validator, si, got_error_from_peer] () mutable {
-                    return si->reader(db::no_timeout).then([&sink, &validator, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
+                    return si->reader().then([&sink, &validator, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
                         if (*got_error_from_peer) {
                             return make_exception_future<stop_iteration>(std::runtime_error("Got status error code from peer"));
                         }

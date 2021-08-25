@@ -41,7 +41,7 @@ public:
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
     virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) = 0;
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
@@ -84,9 +84,9 @@ public:
         , _rd(std::move(rd))
         , _filter(std::forward<MutationFilter>(filter)) {
     }
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-        return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
-            return _rd.fill_buffer(timeout).then([this] {
+    virtual future<> fill_buffer() override {
+        return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this] {
+            return _rd.fill_buffer().then([this] {
                 return do_until([this] { return _rd.is_buffer_empty(); }, [this] {
                     auto mf = _rd.pop_mutation_fragment();
                     if (mf.is_partition_start()) {
@@ -111,15 +111,15 @@ public:
         }
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         clear_buffer();
         _end_of_stream = false;
-        return _rd.fast_forward_to(pr, timeout);
+        return _rd.fast_forward_to(pr);
     }
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(position_range pr) override {
         forward_buffer_to(pr.start());
         _end_of_stream = false;
-        return _rd.fast_forward_to(std::move(pr), timeout);
+        return _rd.fast_forward_to(std::move(pr));
     }
     virtual future<> close() noexcept {
         return _rd.close();
@@ -474,6 +474,8 @@ public:
     /// evicted (while paused). This method should also enter gates, take locks
     /// or whatever is appropriate to make sure resources it is using on the
     /// remote shard stay alive, during the lifetime of the created reader.
+    ///
+    /// The \c permit parameter shall be obtained via `obtain_reader_permit()`
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
             reader_permit permit,

@@ -217,7 +217,7 @@ public:
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);
             return do_until([done] { return *done; }, [this, done, total, &r] {
-                return read_mutation_from_flat_mutation_reader(r, db::no_timeout).then([this, done, total] (mutation_opt m) {
+                return read_mutation_from_flat_mutation_reader(r).then([this, done, total] (mutation_opt m) {
                     if (!m) {
                         *done = true;
                     } else {

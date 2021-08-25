@@ -47,10 +47,10 @@ class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
 public:
     size_estimates_mutation_reader(database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override;
+    virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override;
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override;
+    virtual future<> fast_forward_to(const dht::partition_range&) override;
+    virtual future<> fast_forward_to(position_range) override;
     virtual future<> close() noexcept override;
 private:
     future<> get_next_partition();

@@ -39,13 +39,13 @@ class normalizing_reader : public flat_mutation_reader::impl {
 public:
     normalizing_reader(flat_mutation_reader rd);
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
+    virtual future<> fill_buffer() override;
 
     virtual future<> next_partition() override;
 
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
 
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> fast_forward_to(position_range pr) override;
 
     virtual future<> close() noexcept override;
 };

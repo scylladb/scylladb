@@ -94,7 +94,7 @@ static mutation_partition get_partition(reader_permit permit, memtable& mt, cons
     auto range = dht::partition_range::make_singular(dk);
     auto reader = mt.make_flat_reader(mt.schema(), std::move(permit), range);
     auto close_reader = deferred_close(reader);
-    auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
+    auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
 }
@@ -454,7 +454,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
 
         auto rd = mt->make_flat_reader(schema, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
-        auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+        auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd).get0();
         BOOST_REQUIRE(res_mut_opt);
 
         res_mut_opt->partition().compact_for_query(*schema, gc_clock::now(), {query::full_clustering_range}, true, false,
@@ -2955,7 +2955,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 
-    auto [survived_partitions, purged_partitions] = reader.consume(std::move(consumer), db::no_timeout).get0();
+    auto [survived_partitions, purged_partitions] = reader.consume(std::move(consumer)).get0();
 
     testlog.info("Survived data: {}", create_stats(survived_partitions));
     testlog.info("Purged data:   {}", create_stats(purged_partitions));

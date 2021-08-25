@@ -3262,7 +3262,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
         bool failed = false;
         try {
             netw::messaging_service& ms = _messaging.local();
-            while (auto mf = co_await reader(db::no_timeout)) {
+            while (auto mf = co_await reader()) {
                 bool is_partition_start = mf->is_partition_start();
                 if (is_partition_start) {
                     ++num_partitions_processed;

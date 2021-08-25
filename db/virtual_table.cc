@@ -81,14 +81,14 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
 
         auto units = make_lw_shared<my_units>(permit.consume_memory(0));
 
-        auto populate = [this, mt = make_lw_shared<memtable>(schema()), s, units, range, slice, pc, trace_state, fwd, fwd_mr] (db::timeout_clock::time_point timeout) mutable {
+        auto populate = [this, mt = make_lw_shared<memtable>(schema()), s, units, range, slice, pc, trace_state, fwd, fwd_mr] () mutable {
             auto mutation_sink = [units, mt] (mutation m) mutable {
                 mt->apply(m);
                 units->units.add(units->units.permit().consume_memory(mt->occupancy().used_space() - units->memory_used));
                 units->memory_used = mt->occupancy().used_space();
             };
 
-            return execute(mutation_sink, timeout).then([this, mt, s, units, &range, &slice, &pc, &trace_state, &fwd, &fwd_mr] () {
+            return execute(mutation_sink).then([this, mt, s, units, &range, &slice, &pc, &trace_state, &fwd, &fwd_mr] () {
                 auto rd = mt->as_data_source().make_reader(s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {

@@ -190,7 +190,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             return env.reusable_sst(s, tmpdir_path, 11).then([&env, s, verifier, tomb, &static_set_col] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, verifier, tomb, &static_set_col] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
                         auto verify_set = [&tomb] (const collection_mutation_description& m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
                             BOOST_REQUIRE(m.tomb == tomb);
@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                 }).then([&env, sstp, s, verifier] {
                     return do_with(dht::partition_range::make_singular(make_dkey(s, "key2")), [&env, sstp, s, verifier] (auto& pr) {
                         auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                        return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, verifier, rd] (auto mutation) {
+                        return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, verifier, rd] (auto mutation) {
                             auto m = verifier(mutation);
                             BOOST_REQUIRE(!m.tomb);
                             BOOST_REQUIRE(m.cells.size() == 1);
@@ -255,7 +255,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
             return env.reusable_sst(s, tmpdir_path, 12).then([&env, s, tomb] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, tomb, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
@@ -293,7 +293,7 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
             return env.reusable_sst(s, tmpdir_path, generation).then([&env, s, tomb] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, tomb, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
@@ -376,7 +376,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
             return env.reusable_sst(s, tmpdir_path, 37).then([&env, s, tmpdir_path] (auto sstp) {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
 
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
@@ -413,7 +413,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
             return env.reusable_sst(s, tmpdir_path, 38).then([&env, s] (auto sstp) {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
@@ -451,7 +451,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
             return env.reusable_sst(s, tmpdir_path, 39).then([&env, s] (auto sstp) {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto& row = mp.clustered_row(*s, clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
@@ -486,7 +486,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
             return env.reusable_sst(s, tmpdir_path, 41).then([&env, s, tomb] (auto sstp) mutable {
                 return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
                     auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, tomb, rd] (auto mutation) {
+                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto& c_row = *(mp.clustered_rows().begin());
@@ -521,7 +521,7 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
             return env.reusable_sst(s, tmpdir_path, 47).then([&env, s] (auto sstp) mutable {
                 auto reader = make_lw_shared<flat_mutation_reader>(sstable_reader(sstp, s, env.make_reader_permit()));
                 return repeat([reader] {
-                    return (*reader)(db::no_timeout).then([] (mutation_fragment_opt m) {
+                    return (*reader)().then([] (mutation_fragment_opt m) {
                         if (!m) {
                             return make_ready_future<stop_iteration>(stop_iteration::yes);
                         }
@@ -644,7 +644,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
             auto f = sst->load();
             return f.then([&env, sst, s] {
                 auto reader = make_lw_shared<flat_mutation_reader>(sstable_reader(sst, s, env.make_reader_permit()));
-                return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s] (mutation_opt m) {
+                return read_mutation_from_flat_mutation_reader(*reader).then([reader, s] (mutation_opt m) {
                     BOOST_REQUIRE(m);
                     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
                     auto rows = m->partition().clustered_rows();
@@ -655,7 +655,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                     BOOST_REQUIRE_EQUAL(cells.size(), 1);
                     auto& cdef = *s->get_column_definition("e");
                     BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), managed_bytes(int32_type->decompose(5)));
-                    return (*reader)(db::no_timeout);
+                    return (*reader)();
                 }).then([reader, s] (mutation_fragment_opt m) {
                     BOOST_REQUIRE(!m);
                 }).finally([reader] {
@@ -676,7 +676,7 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
     partition_key::equality pk_eq(*s);
     clustering_key::equality ck_eq(*s);
 
-    auto mfopt = reader(db::no_timeout).get0();
+    auto mfopt = reader().get0();
     while (mfopt) {
         BOOST_REQUIRE(mfopt->is_partition_start());
         auto it = std::find_if(expected.begin(), expected.end(), [&] (auto&& x) {
@@ -686,7 +686,7 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
         auto expected_cr = std::move(it->second);
         expected.erase(it);
 
-        mfopt = reader(db::no_timeout).get0();
+        mfopt = reader().get0();
         BOOST_REQUIRE(mfopt);
         while (!mfopt->is_end_of_partition()) {
             if (mfopt->is_clustering_row()) {
@@ -700,12 +700,12 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
                 BOOST_REQUIRE(it != expected_cr.end());
                 expected_cr.erase(it);
             }
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
             BOOST_REQUIRE(mfopt);
         }
         BOOST_REQUIRE(expected_cr.empty());
 
-        mfopt = reader(db::no_timeout).get0();
+        mfopt = reader().get0();
     }
     BOOST_REQUIRE(expected.empty());
 }
@@ -903,11 +903,11 @@ SEASTAR_TEST_CASE(test_counter_read) {
             auto reader = sstable_reader(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
-            auto mfopt = reader(db::no_timeout).get0();
+            auto mfopt = reader().get0();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_partition_start());
 
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_clustering_row());
             const clustering_row* cr = &mfopt->as_clustering_row();
@@ -935,7 +935,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 }
             });
 
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_clustering_row());
             cr = &mfopt->as_clustering_row();
@@ -948,11 +948,11 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 }
             });
 
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_end_of_partition());
 
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
             BOOST_REQUIRE(!mfopt);
           }
         });
@@ -2471,32 +2471,32 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
             };
 
             {
-                auto mfopt = reader(db::no_timeout).get0();
+                auto mfopt = reader().get0();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_partition_start());
-                verify_row(reader(db::no_timeout).get0(), 28545);
-                verify_row(reader(db::no_timeout).get0(), 27967);
-                verify_row(reader(db::no_timeout).get0(), 28342);
-                verify_row(reader(db::no_timeout).get0(), 28325);
-                mfopt = reader(db::no_timeout).get0();
+                verify_row(reader().get0(), 28545);
+                verify_row(reader().get0(), 27967);
+                verify_row(reader().get0(), 28342);
+                verify_row(reader().get0(), 28325);
+                mfopt = reader().get0();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_end_of_partition());
             }
 
             {
-                auto mfopt = reader(db::no_timeout).get0();
+                auto mfopt = reader().get0();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_partition_start());
-                verify_row(reader(db::no_timeout).get0(), 28386);
-                verify_row(reader(db::no_timeout).get0(), 28378);
-                verify_row(reader(db::no_timeout).get0(), 28129);
-                verify_row(reader(db::no_timeout).get0(), 28260);
-                mfopt = reader(db::no_timeout).get0();
+                verify_row(reader().get0(), 28386);
+                verify_row(reader().get0(), 28378);
+                verify_row(reader().get0(), 28129);
+                verify_row(reader().get0(), 28260);
+                mfopt = reader().get0();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_end_of_partition());
             }
 
-            BOOST_REQUIRE(!reader(db::no_timeout).get0());
+            BOOST_REQUIRE(!reader().get0());
         }
       });
 }
@@ -2820,7 +2820,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
 
             auto sst_mr = sst->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(sst_mr);
-            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr, db::no_timeout).get0();
+            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get0();
 
             // The real test here is that we don't assert() in
             // sstables::prepare_summary() with the write_components() call above,
@@ -2900,7 +2900,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
 
             try {
                 auto wr = sst->get_writer(*s, 1, cfg, encoding_stats{}, default_priority_class());
-                mr.consume_in_thread(std::move(wr), db::no_timeout);
+                mr.consume_in_thread(std::move(wr));
                 BOOST_FAIL("write_components() should have failed");
             } catch (const std::runtime_error&) {
                 testlog.info("failed as expected: {}", std::current_exception());
@@ -2991,3 +2991,31 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
     });
 }
 
+SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        return async([&env, tmpdir_path] {
+            auto s = complex_schema();
+
+            auto mt = make_lw_shared<memtable>(s);
+
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
+
+            mutation m(s, key);
+
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply_delete(*s, cp, tomb);
+            mt->apply(std::move(m));
+
+            auto sst = env.make_sstable(s, tmpdir_path, 12, sstables::get_highest_sstable_version(), big);
+            write_memtable_to_sstable_for_test(*mt, sst).get();
+            auto sstp = env.reusable_sst(s, tmpdir_path, 12).get0();
+            auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+            auto timeout = db::timeout_clock::now();
+            auto rd = sstp->make_reader(s, env.make_reader_permit(timeout), pr, s->full_slice());
+            auto close_rd = deferred_close(rd);
+            auto f = read_mutation_from_flat_mutation_reader(rd);
+            BOOST_REQUIRE_THROW(f.get(), timed_out_error);
+        });
+    });
+}

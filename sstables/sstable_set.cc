@@ -660,7 +660,7 @@ public:
         return readers;
     }
 
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
         auto pos = dht::ring_position_view::for_range_start(*_pr);

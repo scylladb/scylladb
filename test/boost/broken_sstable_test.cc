@@ -47,7 +47,7 @@ static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstr
         sstable_ptr sstp = env.reusable_sst(s, dir, generation, version).get0();
         auto r = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
         auto close_r = deferred_close(r);
-        r.consume(my_consumer{}, db::no_timeout).get();
+        r.consume(my_consumer{}).get();
         BOOST_FAIL("expecting exception");
     } catch (malformed_sstable_exception& e) {
         auto ex_what = sstring(e.what());

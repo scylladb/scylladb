@@ -44,18 +44,17 @@ using merger_vector = utils::small_vector<T, merger_small_vector_size>;
 using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment>::iterator>;
 
 template<typename Producer>
-concept FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range,
-        db::timeout_clock::time_point timeout) {
+concept FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range) {
     // The returned fragments are expected to have the same
     // position_in_partition. Iterators and references are expected
     // to be valid until the next call to operator()().
-    { p(timeout) } -> std::same_as<future<mutation_fragment_batch>>;
+    { p() } -> std::same_as<future<mutation_fragment_batch>>;
 
     // The following functions have the same semantics as their
     // flat_mutation_reader counterparts.
     { p.next_partition() } -> std::same_as<future<>>;
-    { p.fast_forward_to(part_range, timeout) } -> std::same_as<future<>>;
-    { p.fast_forward_to(pos_range, timeout) } -> std::same_as<future<>>;
+    { p.fast_forward_to(part_range) } -> std::same_as<future<>>;
+    { p.fast_forward_to(pos_range) } -> std::same_as<future<>>;
 };
 
 /**
@@ -93,12 +92,12 @@ class mutation_fragment_merger {
     iterator _it{};
     iterator _end{};
 
-    future<> fetch(db::timeout_clock::time_point timeout) {
+    future<> fetch() {
         if (!empty()) {
             return make_ready_future<>();
         }
 
-        return _producer(timeout).then([this] (mutation_fragment_batch fragments) {
+        return _producer().then([this] (mutation_fragment_batch fragments) {
             _it = fragments.begin();
             _end = fragments.end();
         });
@@ -122,8 +121,8 @@ public:
         , _producer(std::move(producer)) {
     }
 
-    future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout) {
-        return fetch(timeout).then([this] () -> mutation_fragment_opt {
+    future<mutation_fragment_opt> operator()() {
+        return fetch().then([this] () -> mutation_fragment_opt {
             if (empty()) {
                 return mutation_fragment_opt();
             }
@@ -139,12 +138,12 @@ public:
         return _producer.next_partition();
     }
 
-    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
-        return _producer.fast_forward_to(pr, timeout);
+    future<> fast_forward_to(const dht::partition_range& pr) {
+        return _producer.fast_forward_to(pr);
     }
 
-    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
-        return _producer.fast_forward_to(std::move(pr), timeout);
+    future<> fast_forward_to(position_range pr) {
+        return _producer.fast_forward_to(std::move(pr));
     }
 
     future<> close() noexcept {
@@ -234,9 +233,9 @@ private:
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
     void add_readers(std::vector<flat_mutation_reader> new_readers);
     bool in_gallop_mode() const;
-    future<needs_merge> prepare_one(db::timeout_clock::time_point timeout, reader_and_last_fragment_kind rk, reader_galloping reader_galloping);
-    future<needs_merge> advance_galloping_reader(db::timeout_clock::time_point timeout);
-    future<> prepare_next(db::timeout_clock::time_point timeout);
+    future<needs_merge> prepare_one(reader_and_last_fragment_kind rk, reader_galloping reader_galloping);
+    future<needs_merge> advance_galloping_reader();
+    future<> prepare_next();
     // Collect all forwardable readers into _next, and remove them from
     // their previous containers (_halted_readers and _fragment_heap).
     void prepare_forwardable_readers();
@@ -247,10 +246,10 @@ public:
             mutation_reader::forwarding fwd_mr);
     // Produces the next batch of mutation-fragments of the same
     // position.
-    future<mutation_fragment_batch> operator()(db::timeout_clock::time_point timeout);
+    future<mutation_fragment_batch> operator()();
     future<> next_partition();
-    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
-    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
+    future<> fast_forward_to(const dht::partition_range& pr);
+    future<> fast_forward_to(position_range pr);
     future<> close() noexcept;
 };
 
@@ -275,10 +274,10 @@ public:
         , _merger(_schema, std::move(producer))
         , _fwd_sm(fwd_sm) {}
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
+    virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range pr) override;
     virtual future<> close() noexcept override;
 };
 
@@ -304,7 +303,7 @@ public:
         return std::exchange(_readers, {});
     }
 
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range&) override {
         return {};
     }
 };
@@ -365,25 +364,25 @@ void mutation_reader_merger::maybe_add_readers_at_partition_boundary() {
     }
 }
 
-future<mutation_reader_merger::needs_merge> mutation_reader_merger::advance_galloping_reader(db::timeout_clock::time_point timeout) {
-    return prepare_one(timeout, _galloping_reader, reader_galloping::yes).then([this] (needs_merge needs_merge) {
+future<mutation_reader_merger::needs_merge> mutation_reader_merger::advance_galloping_reader() {
+    return prepare_one(_galloping_reader, reader_galloping::yes).then([this] (needs_merge needs_merge) {
         maybe_add_readers_at_partition_boundary();
         return needs_merge;
     });
 }
 
-future<> mutation_reader_merger::prepare_next(db::timeout_clock::time_point timeout) {
-    return parallel_for_each(_next, [this, timeout] (reader_and_last_fragment_kind rk) {
-        return prepare_one(timeout, rk, reader_galloping::no).discard_result();
+future<> mutation_reader_merger::prepare_next() {
+    return parallel_for_each(_next, [this] (reader_and_last_fragment_kind rk) {
+        return prepare_one(rk, reader_galloping::no).discard_result();
     }).then([this] {
         _next.clear();
         maybe_add_readers_at_partition_boundary();
     });
 }
 
-future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(db::timeout_clock::time_point timeout,
+future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         reader_and_last_fragment_kind rk, reader_galloping reader_galloping) {
-    return (*rk.reader)(timeout).then([this, rk, reader_galloping] (mutation_fragment_opt mfo) {
+    return (*rk.reader)().then([this, rk, reader_galloping] (mutation_fragment_opt mfo) {
         auto to_close = make_ready_future<>();
         if (mfo) {
             if (mfo->is_partition_start()) {
@@ -471,7 +470,7 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
     maybe_add_readers(std::nullopt);
 }
 
-future<mutation_fragment_batch> mutation_reader_merger::operator()(db::timeout_clock::time_point timeout) {
+future<mutation_fragment_batch> mutation_reader_merger::operator()() {
     // Avoid merging-related logic if we know that only a single reader owns
     // current partition.
     if (_single_reader.reader != reader_iterator{}) {
@@ -480,7 +479,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()(db::timeout_c
                 _current.clear();
                 return make_ready_future<mutation_fragment_batch>(_current);
             }
-            return _single_reader.reader->fill_buffer(timeout).then([this, timeout] { return operator()(timeout); });
+            return _single_reader.reader->fill_buffer().then([this] { return operator()(); });
         }
         _current.clear();
         _current.emplace_back(_single_reader.reader->pop_mutation_fragment());
@@ -492,18 +491,18 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()(db::timeout_c
     }
 
     if (in_gallop_mode()) {
-        return advance_galloping_reader(timeout).then([this, timeout] (needs_merge needs_merge) {
+        return advance_galloping_reader().then([this] (needs_merge needs_merge) {
             if (!needs_merge) {
                 return make_ready_future<mutation_fragment_batch>(_current);
             }
             // Galloping reader may have lost to some other reader. In that case, we should proceed
             // with standard merging logic.
-            return (*this)(timeout);
+            return (*this)();
         });
     }
 
     if (!_next.empty()) {
-        return prepare_next(timeout).then([this, timeout] { return (*this)(timeout); });
+        return prepare_next().then([this] { return (*this)(); });
     }
 
     _current.clear();
@@ -581,7 +580,7 @@ future<> mutation_reader_merger::next_partition() {
     }
 }
 
-future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr) {
     _single_reader = { };
     _gallop_mode_hits = 0;
     _next.clear();
@@ -592,17 +591,17 @@ future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr,
     for (auto it = _all_readers.begin(); it != _all_readers.end(); ++it) {
         _next.emplace_back(it, mutation_fragment::kind::partition_end);
     }
-    return parallel_for_each(_all_readers, [this, &pr, timeout] (flat_mutation_reader& mr) {
-        return mr.fast_forward_to(pr, timeout);
-    }).then([this, &pr, timeout] {
-        add_readers(_selector->fast_forward_to(pr, timeout));
+    return parallel_for_each(_all_readers, [this, &pr] (flat_mutation_reader& mr) {
+        return mr.fast_forward_to(pr);
+    }).then([this, &pr] {
+        add_readers(_selector->fast_forward_to(pr));
     });
 }
 
-future<> mutation_reader_merger::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+future<> mutation_reader_merger::fast_forward_to(position_range pr) {
     prepare_forwardable_readers();
-    return parallel_for_each(_next, [this, pr = std::move(pr), timeout] (reader_and_last_fragment_kind rk) {
-        return rk.reader->fast_forward_to(pr, timeout);
+    return parallel_for_each(_next, [this, pr = std::move(pr)] (reader_and_last_fragment_kind rk) {
+        return rk.reader->fast_forward_to(pr);
     });
 }
 
@@ -617,9 +616,9 @@ future<> mutation_reader_merger::close() noexcept {
 }
 
 template <FragmentProducer P>
-future<> merging_reader<P>::fill_buffer(db::timeout_clock::time_point timeout) {
-    return repeat([this, timeout] {
-        return _merger(timeout).then([this] (mutation_fragment_opt mfo) {
+future<> merging_reader<P>::fill_buffer() {
+    return repeat([this] {
+        return _merger().then([this] (mutation_fragment_opt mfo) {
             if (!mfo) {
                 _end_of_stream = true;
                 return stop_iteration::yes;
@@ -655,17 +654,17 @@ future<> merging_reader<P>::next_partition() {
 }
 
 template <FragmentProducer P>
-future<> merging_reader<P>::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> merging_reader<P>::fast_forward_to(const dht::partition_range& pr) {
     clear_buffer();
     _end_of_stream = false;
-    return _merger.fast_forward_to(pr, timeout);
+    return _merger.fast_forward_to(pr);
 }
 
 template <FragmentProducer P>
-future<> merging_reader<P>::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+future<> merging_reader<P>::fast_forward_to(position_range pr) {
     forward_buffer_to(pr.start());
     _end_of_stream = false;
-    return _merger.fast_forward_to(std::move(pr), timeout);
+    return _merger.fast_forward_to(std::move(pr));
 }
 
 template <FragmentProducer P>
@@ -789,16 +788,15 @@ class foreign_reader : public flat_mutation_reader::impl {
     // now). If all works well read-aheads complete by the next operation and
     // we don't have to wait on the remote reader filling its buffer.
     template <typename Operation, typename Result = futurize_t<std::result_of_t<Operation()>>>
-    Result forward_operation(db::timeout_clock::time_point timeout, Operation op) {
+    Result forward_operation(Operation op) {
         reader_permit::blocked_guard bg{_permit};
         return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
-                timeout,
                 op = std::move(op)] () mutable {
             auto exec_op_and_read_ahead = [=] () mutable {
                 // Not really variadic, we expect 0 (void) or 1 parameter.
                 return op().then([=] (auto... result) {
-                    auto f = reader->is_end_of_stream() ? nullptr : std::make_unique<future<>>(reader->fill_buffer(timeout));
+                    auto f = reader->is_end_of_stream() ? nullptr : std::make_unique<future<>>(reader->fill_buffer());
                     return make_ready_future<std::tuple<foreign_unique_ptr<future<>>, decltype(result)...>>(
                                 std::tuple(make_foreign(std::move(f)), std::move(result)...));
                 });
@@ -831,10 +829,10 @@ public:
     foreign_reader(foreign_reader&&) = delete;
     foreign_reader& operator=(foreign_reader&&) = delete;
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
+    virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range pr) override;
     virtual future<> close() noexcept override;
 };
 
@@ -847,13 +845,13 @@ foreign_reader::foreign_reader(schema_ptr schema,
     , _fwd_sm(fwd_sm) {
 }
 
-future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
+future<> foreign_reader::fill_buffer() {
     if (_end_of_stream || is_buffer_full()) {
         return make_ready_future();
     }
 
-    return forward_operation(timeout, [reader = _reader.get(), timeout] () {
-        auto f = reader->is_buffer_empty() ? reader->fill_buffer(timeout) : make_ready_future<>();
+    return forward_operation([reader = _reader.get()] () {
+        auto f = reader->is_buffer_empty() ? reader->fill_buffer() : make_ready_future<>();
         return f.then([=] {
             return make_ready_future<remote_fill_buffer_result>(remote_fill_buffer_result(reader->detach_buffer(), reader->is_end_of_stream()));
         });
@@ -877,24 +875,24 @@ future<> foreign_reader::next_partition() {
         }
         _end_of_stream = false;
     }
-    co_await forward_operation(db::no_timeout, [reader = _reader.get()] () {
+    co_await forward_operation([reader = _reader.get()] () {
         return reader->next_partition();
     });
 }
 
-future<> foreign_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> foreign_reader::fast_forward_to(const dht::partition_range& pr) {
     clear_buffer();
     _end_of_stream = false;
-    return forward_operation(timeout, [reader = _reader.get(), &pr, timeout] () {
-        return reader->fast_forward_to(pr, timeout);
+    return forward_operation([reader = _reader.get(), &pr] () {
+        return reader->fast_forward_to(pr);
     });
 }
 
-future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+future<> foreign_reader::fast_forward_to(position_range pr) {
     forward_buffer_to(pr.start());
     _end_of_stream = false;
-    return forward_operation(timeout, [reader = _reader.get(), pr = std::move(pr), timeout] () {
-        return reader->fast_forward_to(std::move(pr), timeout);
+    return forward_operation([reader = _reader.get(), pr = std::move(pr)] () {
+        return reader->fast_forward_to(std::move(pr));
     });
 }
 
@@ -971,13 +969,13 @@ private:
     void update_next_position(flat_mutation_reader& reader);
     void adjust_partition_slice();
     flat_mutation_reader recreate_reader();
-    future<flat_mutation_reader> resume_or_create_reader(db::timeout_clock::time_point timeout);
+    future<flat_mutation_reader> resume_or_create_reader();
     void maybe_validate_partition_start(const flat_mutation_reader::tracked_buffer& buffer);
     void validate_position_in_partition(position_in_partition_view pos) const;
     bool should_drop_fragment(const mutation_fragment& mf);
     bool maybe_trim_range_tombstone(mutation_fragment& mf) const;
-    future<> do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
-    future<> fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
+    future<> do_fill_buffer(flat_mutation_reader& reader);
+    future<> fill_buffer(flat_mutation_reader& reader);
 
 public:
     evictable_reader(
@@ -990,10 +988,10 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr);
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
+    virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range) override {
         throw_with_backtrace<std::bad_function_call>();
     }
     virtual future<> close() noexcept override {
@@ -1140,14 +1138,14 @@ flat_mutation_reader evictable_reader::recreate_reader() {
             _fwd_mr);
 }
 
-future<flat_mutation_reader> evictable_reader::resume_or_create_reader(db::timeout_clock::time_point timeout) {
+future<flat_mutation_reader> evictable_reader::resume_or_create_reader() {
     if (_reader) {
         co_return std::move(*_reader);
     }
     if (auto reader_opt = try_resume()) {
         co_return std::move(*reader_opt);
     }
-    co_await _permit.maybe_wait_readmission(timeout);
+    co_await _permit.maybe_wait_readmission();
     co_return recreate_reader();
 }
 
@@ -1285,9 +1283,9 @@ bool evictable_reader::maybe_trim_range_tombstone(mutation_fragment& mf) const {
     return true;
 }
 
-future<> evictable_reader::do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout) {
+future<> evictable_reader::do_fill_buffer(flat_mutation_reader& reader) {
     if (!_drop_partition_start && !_drop_static_row) {
-        auto fill_buf_fut = reader.fill_buffer(timeout);
+        auto fill_buf_fut = reader.fill_buffer();
         if (_validate_partition_key) {
             fill_buf_fut = fill_buf_fut.then([this, &reader] {
                 maybe_validate_partition_start(reader.buffer());
@@ -1295,8 +1293,8 @@ future<> evictable_reader::do_fill_buffer(flat_mutation_reader& reader, db::time
         }
         return fill_buf_fut;
     }
-    return repeat([this, &reader, timeout] {
-        return reader.fill_buffer(timeout).then([this, &reader] {
+    return repeat([this, &reader] {
+        return reader.fill_buffer().then([this, &reader] {
             maybe_validate_partition_start(reader.buffer());
             while (!reader.is_buffer_empty() && should_drop_fragment(reader.peek_buffer())) {
                 reader.pop_mutation_fragment();
@@ -1306,8 +1304,8 @@ future<> evictable_reader::do_fill_buffer(flat_mutation_reader& reader, db::time
     });
 }
 
-future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout) {
-    return do_fill_buffer(reader, timeout).then([this, &reader, timeout] {
+future<> evictable_reader::fill_buffer(flat_mutation_reader& reader) {
+    return do_fill_buffer(reader).then([this, &reader] {
         if (reader.is_buffer_empty()) {
             return make_ready_future<>();
         }
@@ -1352,9 +1350,9 @@ future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout
         // to read until we are sure we've read all fragments sharing the same
         // position, so that we can safely continue reading from after said
         // position.
-        return do_until(stop, [this, &reader, timeout] {
+        return do_until(stop, [this, &reader] {
             if (reader.is_buffer_empty()) {
-                return do_fill_buffer(reader, timeout);
+                return do_fill_buffer(reader);
             }
             if (_trim_range_tombstones) {
                 auto mf = reader.pop_mutation_fragment();
@@ -1391,12 +1389,12 @@ evictable_reader::evictable_reader(
     , _tri_cmp(*_schema) {
 }
 
-future<> evictable_reader::fill_buffer(db::timeout_clock::time_point timeout) {
+future<> evictable_reader::fill_buffer() {
     if (is_end_of_stream()) {
         co_return;
     }
-    _reader = co_await resume_or_create_reader(timeout);
-    co_await fill_buffer(*_reader, timeout);
+    _reader = co_await resume_or_create_reader();
+    co_await fill_buffer(*_reader);
     _end_of_stream = _reader->is_end_of_stream() && _reader->is_buffer_empty();
     maybe_pause(std::move(*_reader));
 }
@@ -1407,12 +1405,12 @@ future<> evictable_reader::next_partition() {
     if (!is_buffer_empty()) {
         co_return;
     }
-    auto reader = co_await resume_or_create_reader(db::no_timeout);
+    auto reader = co_await resume_or_create_reader();
     co_await reader.next_partition();
     maybe_pause(std::move(reader));
 }
 
-future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> evictable_reader::fast_forward_to(const dht::partition_range& pr) {
     _pr = &pr;
     _last_pkey.reset();
     _next_position_in_partition = position_in_partition::for_partition_start();
@@ -1420,12 +1418,12 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::t
     _end_of_stream = false;
 
     if (_reader) {
-        co_await _reader->fast_forward_to(pr, timeout);
+        co_await _reader->fast_forward_to(pr);
         _range_override.reset();
         co_return;
     }
     if (auto reader_opt = try_resume()) {
-        co_await reader_opt->fast_forward_to(pr, timeout);
+        co_await reader_opt->fast_forward_to(pr);
         _range_override.reset();
         maybe_pause(std::move(*reader_opt));
     }
@@ -1490,7 +1488,7 @@ private:
     foreign_ptr<std::unique_ptr<evictable_reader>> _reader;
 
 private:
-    future<> do_fill_buffer(db::timeout_clock::time_point timeout);
+    future<> do_fill_buffer();
 
 public:
     shard_reader(
@@ -1522,15 +1520,15 @@ public:
     const mutation_fragment& peek_buffer() const {
         return buffer().front();
     }
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
+    virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range) override;
     virtual future<> close() noexcept override;
     bool done() const {
         return _reader && is_buffer_empty() && is_end_of_stream();
     }
-    void read_ahead(db::timeout_clock::time_point timeout);
+    void read_ahead();
     bool is_read_ahead_in_progress() const {
         return _read_ahead.has_value();
     }
@@ -1571,7 +1569,7 @@ future<> shard_reader::close() noexcept {
     }
 }
 
-future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
+future<> shard_reader::do_fill_buffer() {
     auto fill_buf_fut = make_ready_future<remote_fill_buffer_result>();
 
     struct reader_and_buffer_fill_result {
@@ -1580,7 +1578,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     };
 
     if (!_reader) {
-        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] () -> future<reader_and_buffer_fill_result> {
+        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema)] () -> future<reader_and_buffer_fill_result> {
             auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                         schema_ptr s,
                         reader_permit permit,
@@ -1593,7 +1591,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
                 return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
             });
             auto s = gs.get();
-            auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout);
+            auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout());
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                         s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
 
@@ -1601,7 +1599,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             try {
                 tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
                 reader_permit::used_guard ug{rreader->permit()};
-                co_await rreader->fill_buffer(timeout);
+                co_await rreader->fill_buffer();
                 auto res = remote_fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
                 co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
             } catch (...) {
@@ -1609,14 +1607,14 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             }
             co_await rreader->close();
             std::rethrow_exception(std::move(ex));
-        }).then([this, timeout] (reader_and_buffer_fill_result res) {
+        }).then([this] (reader_and_buffer_fill_result res) {
             _reader = std::move(res.reader);
             return std::move(res.result);
         });
     } else {
-        fill_buf_fut = smp::submit_to(_shard, [this, timeout] () mutable {
+        fill_buf_fut = smp::submit_to(_shard, [this] () mutable {
             reader_permit::used_guard ug{_reader->permit()};
-            return _reader->fill_buffer(timeout).then([this, ug = std::move(ug)] {
+            return _reader->fill_buffer().then([this, ug = std::move(ug)] {
                 return remote_fill_buffer_result(_reader->detach_buffer(), _reader->is_end_of_stream());
             });
         });
@@ -1630,7 +1628,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     });
 }
 
-future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
+future<> shard_reader::fill_buffer() {
     // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
     reader_permit::blocked_guard guard(_permit);
     if (_read_ahead) {
@@ -1640,7 +1638,7 @@ future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (!is_buffer_empty()) {
         co_return;
     }
-    co_await do_fill_buffer(timeout);
+    co_await do_fill_buffer();
 }
 
 future<> shard_reader::next_partition() {
@@ -1663,7 +1661,7 @@ future<> shard_reader::next_partition() {
     });
 }
 
-future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> shard_reader::fast_forward_to(const dht::partition_range& pr) {
     _pr = &pr;
 
     if (!_reader && !_read_ahead) {
@@ -1680,21 +1678,21 @@ future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeo
     _end_of_stream = false;
     clear_buffer();
 
-    co_await smp::submit_to(_shard, [this, &pr, timeout] {
-        return _reader->fast_forward_to(pr, timeout);
+    co_await smp::submit_to(_shard, [this, &pr] {
+        return _reader->fast_forward_to(pr);
     });
 }
 
-future<> shard_reader::fast_forward_to(position_range, db::timeout_clock::time_point timeout) {
+future<> shard_reader::fast_forward_to(position_range) {
     return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
 }
 
-void shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
+void shard_reader::read_ahead() {
     if (_read_ahead || is_end_of_stream() || !is_buffer_empty()) {
         return;
     }
 
-    _read_ahead.emplace(do_fill_buffer(timeout));
+    _read_ahead.emplace(do_fill_buffer());
 }
 
 } // anonymous namespace
@@ -1723,7 +1721,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
 
     void on_partition_range_change(const dht::partition_range& pr);
     bool maybe_move_to_next_shard(const dht::token* const t = nullptr);
-    future<> handle_empty_reader_buffer(db::timeout_clock::time_point timeout);
+    future<> handle_empty_reader_buffer();
 
 public:
     multishard_combining_reader(
@@ -1743,10 +1741,10 @@ public:
     multishard_combining_reader(multishard_combining_reader&&) = delete;
     multishard_combining_reader& operator=(multishard_combining_reader&&) = delete;
 
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
+    virtual future<> fill_buffer() override;
     virtual future<> next_partition() override;
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range pr) override;
     virtual future<> close() noexcept override;
 };
 
@@ -1789,7 +1787,7 @@ bool multishard_combining_reader::maybe_move_to_next_shard(const dht::token* con
     return true;
 }
 
-future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clock::time_point timeout) {
+future<> multishard_combining_reader::handle_empty_reader_buffer() {
     auto& reader = *_shard_readers[_current_shard];
 
     if (reader.is_end_of_stream()) {
@@ -1800,7 +1798,7 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
         }
         return make_ready_future<>();
     } else if (reader.is_read_ahead_in_progress()) {
-        return reader.fill_buffer(timeout);
+        return reader.fill_buffer();
     } else {
         // If we crossed shards and the next reader has an empty buffer we
         // double concurrency so the next time we cross shards we will have
@@ -1818,10 +1816,10 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
                 boost::pop_heap(shard_selection_min_heap_copy);
                 const auto next_shard = shard_selection_min_heap_copy.back().shard;
                 shard_selection_min_heap_copy.pop_back();
-                _shard_readers[next_shard]->read_ahead(timeout);
+                _shard_readers[next_shard]->read_ahead();
             }
         }
-        return reader.fill_buffer(timeout);
+        return reader.fill_buffer();
     }
 }
 
@@ -1845,13 +1843,13 @@ multishard_combining_reader::multishard_combining_reader(
     }
 }
 
-future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point timeout) {
+future<> multishard_combining_reader::fill_buffer() {
     _crossed_shards = false;
-    return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
+    return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this] {
         auto& reader = *_shard_readers[_current_shard];
 
         if (reader.is_buffer_empty()) {
-            return handle_empty_reader_buffer(timeout);
+            return handle_empty_reader_buffer();
         }
 
         while (!reader.is_buffer_empty() && !is_buffer_full()) {
@@ -1872,16 +1870,16 @@ future<> multishard_combining_reader::next_partition() {
     return make_ready_future<>();
 }
 
-future<> multishard_combining_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+future<> multishard_combining_reader::fast_forward_to(const dht::partition_range& pr) {
     clear_buffer();
     _end_of_stream = false;
     on_partition_range_change(pr);
-    return parallel_for_each(_shard_readers, [&pr, timeout] (std::unique_ptr<shard_reader>& sr) {
-        return sr->fast_forward_to(pr, timeout);
+    return parallel_for_each(_shard_readers, [&pr] (std::unique_ptr<shard_reader>& sr) {
+        return sr->fast_forward_to(pr);
     });
 }
 
-future<> multishard_combining_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+future<> multishard_combining_reader::fast_forward_to(position_range pr) {
     return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
 }
 
@@ -1941,7 +1939,7 @@ public:
     explicit queue_reader(schema_ptr s, reader_permit permit)
         : impl(std::move(s), std::move(permit)) {
     }
-    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+    virtual future<> fill_buffer() override {
         if (_ex) {
             return make_exception_future<>(_ex);
         }
@@ -1958,16 +1956,16 @@ public:
     virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty() && !is_end_of_stream()) {
-            return fill_buffer(db::no_timeout).then([this] {
+            return fill_buffer().then([this] {
                 return next_partition();
             });
         }
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+    virtual future<> fast_forward_to(position_range) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual future<> close() noexcept override {
@@ -2165,9 +2163,9 @@ public:
         , _compactor(*_schema, compaction_time, get_max_purgeable)
         , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{}) {
     }
-    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
-            return _reader.fill_buffer(timeout).then([this, timeout] {
+    virtual future<> fill_buffer() override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            return _reader.fill_buffer().then([this] {
                 if (_reader.is_buffer_empty()) {
                     _end_of_stream = _reader.is_end_of_stream();
                 }
@@ -2218,13 +2216,13 @@ public:
         maybe_inject_partition_end();
         return _reader.next_partition();
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         clear_buffer();
         _end_of_stream = false;
         maybe_inject_partition_end();
-        return _reader.fast_forward_to(pr, timeout);
+        return _reader.fast_forward_to(pr);
     }
-    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+    virtual future<> fast_forward_to(position_range pr) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual future<> close() noexcept override {
@@ -2367,8 +2365,8 @@ class clustering_order_reader_merger {
     // and all fragments previously returned from the reader have already been returned by operator().
     //
     // The peeked reader is pushed onto the _peeked_readers heap.
-    future<> peek_reader(reader_iterator it, db::timeout_clock::time_point timeout) {
-        return it->reader.peek(timeout).then([this, timeout, it] (mutation_fragment* mf) {
+    future<> peek_reader(reader_iterator it) {
+        return it->reader.peek().then([this, it] (mutation_fragment* mf) {
             if (!mf) {
                 // The reader returned end-of-stream before returning end-of-partition
                 // (otherwise we would have removed it in a previous peek). This means that
@@ -2410,8 +2408,8 @@ class clustering_order_reader_merger {
                 }
 
                 it->reader.pop_mutation_fragment();
-                auto f = _forwarded_to ? it->reader.fast_forward_to(*_forwarded_to, timeout) : make_ready_future<>();
-                return f.then([this, timeout, it] { return peek_reader(it, timeout); });
+                auto f = _forwarded_to ? it->reader.fast_forward_to(*_forwarded_to) : make_ready_future<>();
+                return f.then([this, it] { return peek_reader(it); });
             }
 
             // We assume that the schema does not have any static columns, so there cannot be any static rows.
@@ -2433,9 +2431,9 @@ class clustering_order_reader_merger {
         });
     }
 
-    future<> peek_readers(db::timeout_clock::time_point timeout) {
-        return parallel_for_each(_unpeeked_readers, [this, timeout] (reader_iterator it) {
-            return peek_reader(it, timeout);
+    future<> peek_readers() {
+        return parallel_for_each(_unpeeked_readers, [this] (reader_iterator it) {
+            return peek_reader(it);
         }).then([this] {
             _unpeeked_readers.clear();
         });
@@ -2447,8 +2445,8 @@ class clustering_order_reader_merger {
     //
     // If the galloping reader wins with other readers again, the fragment is returned as the next batch.
     // Otherwise, the reader is pushed onto _peeked_readers and we retry in non-galloping mode.
-    future<mutation_fragment_batch> peek_galloping_reader(db::timeout_clock::time_point timeout) {
-        return _galloping_reader->reader.peek(timeout).then([this, timeout] (mutation_fragment* mf) {
+    future<mutation_fragment_batch> peek_galloping_reader() {
+        return _galloping_reader->reader.peek().then([this] (mutation_fragment* mf) {
             bool erase = false;
             if (mf) {
                 if (mf->is_partition_start()) {
@@ -2495,10 +2493,10 @@ class clustering_order_reader_merger {
 
             // The galloping reader has either been removed, halted, or lost with the other readers.
             // Proceed with the normal path.
-          return maybe_erase.then([this, timeout] {
+          return maybe_erase.then([this] {
             _galloping_reader = {};
             _gallop_mode_hits = 0;
-            return (*this)(timeout);
+            return (*this)();
           });
         });
     }
@@ -2522,15 +2520,15 @@ public:
     // We assume that operator() is called sequentially and that the caller doesn't use the batch
     // returned by the previous operator() call after calling operator() again
     // (the data from the previous batch is destroyed).
-    future<mutation_fragment_batch> operator()(db::timeout_clock::time_point timeout) {
+    future<mutation_fragment_batch> operator()() {
         _current_batch.clear();
 
         if (in_gallop_mode()) {
-            return peek_galloping_reader(timeout);
+            return peek_galloping_reader();
         }
 
         if (!_unpeeked_readers.empty()) {
-            return peek_readers(timeout).then([this, timeout] { return (*this)(timeout); });
+            return peek_readers().then([this] { return (*this)(); });
         }
 
         // Before we return a batch of fragments using currently opened readers we must check the queue
@@ -2555,7 +2553,7 @@ public:
                 _all_readers.push_front(std::move(r));
                 _unpeeked_readers.push_back(_all_readers.begin());
             }
-            return peek_readers(timeout).then([this, timeout] { return (*this)(timeout); });
+            return peek_readers().then([this] { return (*this)(); });
         }
 
         if (_peeked_readers.empty()) {
@@ -2612,13 +2610,13 @@ public:
     }
 
 
-    future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) {
+    future<> fast_forward_to(const dht::partition_range&) {
         throw std::runtime_error(
             "clustering_order_reader_merger::fast_forward_to: this reader works only for single partition queries");
     }
 
 
-    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+    future<> fast_forward_to(position_range pr) {
         if (!_partition_start_fetched) {
             on_internal_error(mrlog, "reader was forwarded before returning partition start");
         }
@@ -2639,8 +2637,8 @@ public:
         _forwarded_to = pr;
         _pr_end = _forwarded_to->end();
 
-        return parallel_for_each(_unpeeked_readers, [this, pr = std::move(pr), timeout] (reader_iterator it) {
-            return it->reader.fast_forward_to(pr, timeout);
+        return parallel_for_each(_unpeeked_readers, [this, pr = std::move(pr)] (reader_iterator it) {
+            return it->reader.fast_forward_to(pr);
         });
     }
 

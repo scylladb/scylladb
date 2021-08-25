@@ -91,7 +91,7 @@ shard_writer::shard_writer(schema_ptr s,
 }
 
 future<> shard_writer::consume() {
-    return _reader.peek(db::no_timeout).then([this] (mutation_fragment* mf_ptr) {
+    return _reader.peek().then([this] (mutation_fragment* mf_ptr) {
         if (mf_ptr) {
             return _consumer(std::move(_reader));
         }
@@ -124,7 +124,7 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
             reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
         auto s = gs.get();
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer");
-        auto permit = semaphore->make_tracking_only_permit(s.get(), "multishard-writer");
+        auto permit = semaphore->make_tracking_only_permit(s.get(), "multishard-writer", db::no_timeout);
         auto this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
         return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(semaphore), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
@@ -182,7 +182,7 @@ future<> multishard_writer::wait_pending_consumers() {
 
 future<> multishard_writer::distribute_mutation_fragments() {
     return repeat([this] () mutable {
-        return _producer(db::no_timeout).then([this] (mutation_fragment_opt mf_opt) mutable {
+        return _producer().then([this] (mutation_fragment_opt mf_opt) mutable {
             if (mf_opt) {
                 return handle_mutation_fragment(std::move(*mf_opt));
             } else {

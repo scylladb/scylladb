@@ -34,8 +34,8 @@ public:
             : memtable_filling_virtual_table(s)
             , _mutations(std::move(mutations)) {}
 
-    future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) override {
-        return with_timeout(timeout, do_for_each(_mutations, [mutation_sink = std::move(mutation_sink)] (const mutation& m) { mutation_sink(m); }));
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        return with_timeout(db::no_timeout, do_for_each(_mutations, [mutation_sink = std::move(mutation_sink)] (const mutation& m) { mutation_sink(m); }));
     }
 };
 
@@ -58,7 +58,7 @@ public:
             auto close_rdr = deferred_close(rdr);
             rdr.consume_pausable([&rc] (mutation_fragment mf) {
                 return rc.take(std::move(mf)).then([] { return stop_iteration::no; });
-            }, db::no_timeout).get();
+            }).get();
         });
     }
 };

@@ -209,9 +209,9 @@ private:
 
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
-    future<> enqueue_waiter(reader_permit permit, db::timeout_clock::time_point timeout, read_func func);
+    future<> enqueue_waiter(reader_permit permit, read_func func);
     void evict_readers_in_background();
-    future<> do_wait_admission(reader_permit permit, db::timeout_clock::time_point timeout, read_func func = {});
+    future<> do_wait_admission(reader_permit permit, read_func func = {});
     void maybe_admit_waiters() noexcept;
 
     void on_permit_created(reader_permit::impl&);
@@ -344,8 +344,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name);
-    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name);
+    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name, db::timeout_clock::time_point timeout);
+    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name, db::timeout_clock::time_point timeout);
 
     /// Run the function through the semaphore's execution stage with an admitted permit
     ///

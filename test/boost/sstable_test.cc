@@ -472,7 +472,7 @@ SEASTAR_TEST_CASE(wrong_range) {
         return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata")), [&env, sstp] (auto& range) {
             auto s = columns_schema();
             return with_closeable(sstp->make_reader(s, env.make_reader_permit(), range, s->full_slice()), [sstp, s] (auto& rd) {
-              return read_mutation_from_flat_mutation_reader(rd, db::no_timeout).then([sstp, s] (auto mutation) {
+              return read_mutation_from_flat_mutation_reader(rd).then([sstp, s] (auto mutation) {
                 return make_ready_future<>();
               });
             });
@@ -610,17 +610,17 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
         auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, ps);
         auto close_rd = deferred_close(rd);
-        auto mfopt = rd(db::no_timeout).get0();
+        auto mfopt = rd().get0();
         if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        mfopt = rd(db::no_timeout).get0();
+        mfopt = rd().get0();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = rd(db::no_timeout).get0();
+            mfopt = rd().get0();
         }
         return nrows;
     });
@@ -632,17 +632,17 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
         auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
         auto close_rd = deferred_close(rd);
-        auto mfopt = rd(db::no_timeout).get0();
+        auto mfopt = rd().get0();
         if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        mfopt = rd(db::no_timeout).get0();
+        mfopt = rd().get0();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = rd(db::no_timeout).get0();
+            mfopt = rd().get0();
         }
         return nrows;
     });
@@ -656,17 +656,17 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
         auto reader = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, ps);
         auto close_reader = deferred_close(reader);
         int nrows = 0;
-        auto mfopt = reader(db::no_timeout).get0();
+        auto mfopt = reader().get0();
         while (mfopt) {
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
             BOOST_REQUIRE(mfopt);
             while (!mfopt->is_end_of_partition()) {
                 if (mfopt->is_clustering_row()) {
                     nrows++;
                 }
-                mfopt = reader(db::no_timeout).get0();
+                mfopt = reader().get0();
             }
-            mfopt = reader(db::no_timeout).get0();
+            mfopt = reader().get0();
         }
         return nrows;
     });
