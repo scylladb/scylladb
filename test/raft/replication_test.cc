@@ -547,3 +547,22 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_log, (test_case{
             check_rpc_config{{node_id{0},node_id{1},node_id{2}},
                               rpc_address_set{node_id{0},node_id{1},node_id{2}}},
          }}));
+
+// 1 nodes, 4 existing leader entries, try to read
+RAFT_TEST_CASE(simple_leader_read, (test_case{
+         .nodes = 1,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
+         .updates = {read_value{0, 4}}}));
+
+// 2 nodes, 4 existing leader entries, try to read on node 2
+RAFT_TEST_CASE(simple_follower_read, (test_case{
+         .nodes = 2,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
+         .updates = {read_value{1, 4}}}));
+
+
+// 4 nodes, add some entries, disconnect one node, add more entries, connect back,
+// try to read on previously disconnected node
+RAFT_TEST_CASE(follower_read_after_partition, (test_case{
+         .nodes = 4,
+         .updates = {entries{4}, partition{0, 1, 2}, entries{4}, partition{0, 1, 2, 3}, read_value{3, 8}}}));

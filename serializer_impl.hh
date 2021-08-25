@@ -696,6 +696,19 @@ struct serializer<enum_set<Enum>> {
     }
 };
 
+template<>
+struct serializer<std::monostate> {
+    template<typename Input>
+    static std::monostate read(Input& in) {
+        return std::monostate{};
+    }
+    template<typename Output>
+    static void write(Output& out, std::monostate v) {}
+    template<typename Input>
+    static void skip(Input& in) {
+    }
+};
+
 template<typename T>
 size_type get_sizeof(const T& obj) {
     seastar::measuring_output_stream ms;

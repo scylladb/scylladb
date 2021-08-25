@@ -220,9 +220,14 @@ struct tick {
     uint64_t ticks;
 };
 
+struct read_value {
+    size_t node_idx; // which node should read
+    size_t expected_index; // expected read index
+};
+
 using update = std::variant<entries, new_leader, partition, isolate, disconnect,
       stop, reset, wait_log, set_config, check_rpc_config, check_rpc_added,
-      check_rpc_removed, rpc_reset_counters, tick>;
+      check_rpc_removed, rpc_reset_counters, tick, read_value>;
 
 struct log_entry {
     unsigned term;
@@ -348,6 +353,7 @@ public:
     future<> reconfigure_all();
     future<> partition(::partition p);
     future<> tick(::tick t);
+    future<> read(read_value r);
     future<> stop(::stop server);
     future<> reset(::reset server);
     void disconnect(::disconnect nodes);
@@ -672,6 +678,37 @@ public:
     virtual future<> abort() {
         tlogger.debug("[{}] rpc aborting", _id);
         return _gate.close();
+    }
+    virtual void send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
+        if (!_net.count(id)) {
+            return;
+        }
+        if (!(*_connected)(id, _id)) {
+            return;
+        }
+        if (!drop_packet()) {
+            _net[id]->_client->read_quorum_request(_id, read_quorum);
+        }
+    }
+    virtual void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& reply) {
+        if (!_net.count(id)) {
+            return;
+        }
+        if (!(*_connected)(id, _id)) {
+            return;
+        }
+        if (!drop_packet()) {
+            _net[id]->_client->read_quorum_reply(_id, std::move(reply));
+        }
+    }
+    virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) {
+        if (!_net.count(id)) {
+            return make_exception_future<raft::read_barrier_reply>(std::runtime_error("trying to send a message to an unknown node"));
+        }
+        if (!(*_connected)(id, _id)) {
+            return make_exception_future<raft::read_barrier_reply>(std::runtime_error("cannot send append since nodes are disconnected"));
+        }
+        return _net[id]->_client->execute_read_barrier(_id);
     }
     virtual void add_server(raft::server_id id, bytes node_info) {
         _known_peers.insert(raft::server_address{id});
@@ -1215,6 +1252,16 @@ future<> raft_cluster<Clock>::tick(::tick t) {
 }
 
 template <typename Clock>
+future<> raft_cluster<Clock>::read(read_value r) {
+    co_await _servers[r.node_idx].server->read_barrier();
+    auto val = _servers[r.node_idx].sm->hasher->finalize_uint64();
+    auto expected = hasher_int::hash_range(r.expected_index).finalize_uint64();
+    BOOST_CHECK_MESSAGE(val == expected,
+            format("Read on server {} saw the wrong value {} != {}", r.node_idx, val, expected));
+}
+
+
+template <typename Clock>
 future<> raft_cluster<Clock>::stop(::stop server) {
     co_await stop_server(server.id);
 }
@@ -1356,6 +1403,9 @@ struct run_test {
             },
             [&rafts] (tick update) -> future<> {
                 co_await rafts.tick(update);
+            },
+            [&rafts] (read_value update) -> future<> {
+                co_await rafts.read(update);
             }
             ), std::move(update));
         }

@@ -39,6 +39,7 @@ struct fsm_output {
     // Latest configuration obtained from the log in case it has changed
     // since last fsm output poll.
     std::optional<server_address_set> rpc_configuration;
+    std::optional<read_id> max_read_id_with_quorum;
     // Set to true if a leadership transfer was aborted since the last output
     bool abort_leadership_transfer;
 
@@ -102,6 +103,15 @@ struct leader {
     // If timeout_now was already sent to one of the followers contains the id of the follower
     // it was sent to
     std::optional<server_id> timeout_now_sent;
+    // A source of read ids - a monotonically growing (in single term) identifiers of
+    // reads issued by the state machine. Using monotonic ids allows the leader to
+    // resolve all preceding read requests when a quorum of acks from followers arrive
+    // to any newer request without tracking each request individually.
+    read_id last_read_id{0};
+    // Set to true when last_read_id increases and reset back in get_output() call
+    bool last_read_id_changed = false;
+    read_id max_read_id_with_quorum{0};
+
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
     ~leader();
@@ -196,6 +206,9 @@ class fsm {
         }
     } _observed;
 
+    // The next state that will be returned by get_output();
+    fsm_output _output;
+
     logical_clock _clock;
     // Start of the current election epoch - a time point relative
     // to which we expire election timeout.
@@ -222,15 +235,6 @@ private:
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
-    server_id current_leader() const {
-        if (is_leader()) {
-            return _my_id;
-        } else if (is_candidate()) {
-            return {};
-        } else {
-            return follower_state().current_leader;
-        }
-    }
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
     // Signals _sm_events. May resign leadership if we committed
@@ -308,6 +312,21 @@ private:
     }
 
     void send_timeout_now(server_id);
+
+    // Issue the next read identifier
+    read_id next_read_id() {
+        assert(is_leader());
+        ++leader_state().last_read_id;
+        leader_state().last_read_id_changed = true;
+        _sm_events.signal();
+        return leader_state().last_read_id;
+    }
+
+    // Send read_quorum message to all voting members
+    void broadcast_read_quorum(read_id);
+
+    // Process received read_quorum_reply on a leader
+    void handle_read_quorum_reply(server_id, const read_quorum_reply&);
 protected: // For testing
 
     void become_follower(server_id leader);
@@ -354,6 +373,16 @@ public:
     // Precondition: `log_last_idx()` >= `idx` >= `log_last_snapshot_idx()`.
     const configuration& log_last_conf_for(index_t idx) const {
         return _log.last_conf_for(idx);
+    }
+
+    server_id current_leader() const {
+        if (is_leader()) {
+            return _my_id;
+        } else if (is_candidate()) {
+            return {};
+        } else {
+            return follower_state().current_leader;
+        }
     }
 
     // Call this function to wait for the number of log entries to
@@ -407,7 +436,6 @@ public:
 
     void stop();
 
-    // @sa can_read()
     term_t get_current_term() const {
         return _current_term;
     }
@@ -418,16 +446,12 @@ public:
         return _clock.now() - _last_election_time;
     }
 
-    // Should be called on leader only, throws otherwise.
-    // Returns true if the current leader has at least one entry
-    // committed and a quorum of followers was alive in the last
-    // tick period.
-    bool can_read();
-
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
     // entry. Returns false if the snapshot is older than existing one.
     bool apply_snapshot(snapshot snp, size_t traling, bool local);
+
+    std::optional<std::pair<read_id, index_t>> start_read_barrier(server_id requester);
 
     size_t in_memory_log_size() const {
         return _log.in_memory_size();
@@ -454,6 +478,8 @@ void fsm::step(server_id from, const leader& s, Message&& msg) {
                      .success = false });
     } else if constexpr (std::is_same_v<Message, snapshot_reply>) {
         install_snapshot_reply(from, std::move(msg));
+    } else if constexpr (std::is_same_v<Message, read_quorum_reply>) {
+        handle_read_quorum_reply(from, msg);
     }
 }
 
@@ -483,6 +509,10 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
         // recovering from a partition so there is no need for the
         // extra round trip.
         become_candidate(false, true);
+    } else if constexpr (std::is_same_v<Message, read_quorum>) {
+        logger.trace("[{}] receive read_quorum from {} for read id {}", _my_id, from, msg.id);
+        advance_commit_idx(msg.leader_commit_idx);
+        send_to(from, read_quorum_reply{_current_term, _commit_idx, msg.id});
     }
 }
 
@@ -512,31 +542,36 @@ void fsm::step(server_id from, Message&& msg) {
             _my_id, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request> ||
-                      std::is_same_v<Message, install_snapshot>) {
+                      std::is_same_v<Message, install_snapshot> ||
+                      std::is_same_v<Message, read_quorum>) {
             leader = from;
-        } else {
-            if constexpr (std::is_same_v<Message, vote_request>) {
-                if (from == current_leader()) {
-                    // Leader request is considered to avoid hung elections
-                    // in presence of a disrupting candidate without prevote
-                    // while failure detector reports leader is still up
-                    logger.trace("{} [term: {}] vote request from leader {}"
-                            "within a minimum election timeout, elapsed {}",
-                            _my_id, _current_term, current_leader(),
-                            election_elapsed());
-                } else if (current_leader() != server_id{} &&
-                        election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
-                    // 4.2.3 Disruptive servers
-                    // If a server receives a RequestVote request
-                    // within the minimum election timeout of
-                    // hearing from a current leader, it does not
-                    // update its term or grant its vote.
-                    // Unless `force` flag is set which indicates that the current leader
-                    // wants to stepdown.
-                    logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
-                        _my_id, _current_term, election_elapsed(), current_leader());
-                    return;
-                }
+        } else if constexpr (std::is_same_v<Message, read_quorum_reply> ) {
+            // Got a reply to read barrier with higher term. This should not happen.
+            // Log and ignore
+            logger.error("{} [term: {}] ignoring read barrier reply with higher term {}",
+                _my_id, _current_term, msg.current_term);
+            return;
+        } else if constexpr (std::is_same_v<Message, vote_request>) {
+            if (from == current_leader()) {
+                // Leader request is considered to avoid hung elections
+                // in presence of a disrupting candidate without prevote
+                // while failure detector reports leader is still up
+                logger.trace("{} [term: {}] vote request from leader {}"
+                        "within a minimum election timeout, elapsed {}",
+                        _my_id, _current_term, current_leader(),
+                        election_elapsed());
+            } else if (current_leader() != server_id{} &&
+                    election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
+                // 4.2.3 Disruptive servers
+                // If a server receives a RequestVote request
+                // within the minimum election timeout of
+                // hearing from a current leader, it does not
+                // update its term or grant its vote.
+                // Unless `force` flag is set which indicates that the current leader
+                // wants to stepdown.
+                logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
+                    _my_id, _current_term, election_elapsed(), current_leader());
+                return;
             }
         }
         bool ignore_term = false;
@@ -557,9 +592,9 @@ void fsm::step(server_id from, Message&& msg) {
             update_current_term(msg.current_term);
         }
     } else if (msg.current_term < _current_term) {
-        if constexpr (std::is_same_v<Message, append_request>) {
+        if constexpr (std::is_same_v<Message, append_request> || std::is_same_v<Message, read_quorum>) {
             // Instructs the leader to step down.
-            append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
+            append_reply reply{_current_term, _commit_idx, append_reply::rejected{index_t{}, _log.last_idx()}};
             send_to(from, std::move(reply));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
             send_to(from, snapshot_reply{.current_term = _current_term,
@@ -577,7 +612,8 @@ void fsm::step(server_id from, Message&& msg) {
 
     } else /* _current_term == msg.current_term */ {
         if constexpr (std::is_same_v<Message, append_request> ||
-                      std::is_same_v<Message, install_snapshot>) {
+                      std::is_same_v<Message, install_snapshot> ||
+                      std::is_same_v<Message, read_quorum>) {
             if (is_candidate()) {
                 // 3.4 Leader Election
                 // While waiting for votes, a candidate may receive an AppendEntries
@@ -594,8 +630,14 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader becomes idle.
                 follower_state().current_leader = from;
             }
+
+            // 3.4. Leader election
+            // A server remains in follower state as long as it receives
+            // valid RPCs from a leader.
+            _last_election_time = _clock.now();
+
             if (current_leader() != from) {
-                on_internal_error_noexcept(logger, "Got append request or install snapshot from an unexpected leader");
+                on_internal_error_noexcept(logger, "Got append request/install snapshot/read_quorum from an unexpected leader");
             }
         }
     }

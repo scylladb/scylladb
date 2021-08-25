@@ -40,6 +40,9 @@ public:
     index_t match_idx = index_t(0);
     // Index that we know to be committed by the follower
     index_t commit_idx = index_t(0);
+    // Highest read id the follower replied to
+    read_id max_acked_read = read_id{0};
+
     // True if the follower is a voting one
     bool can_vote = true;
 
@@ -114,7 +117,7 @@ public:
     void set_configuration(const configuration& configuration, index_t next_idx);
     // Calculate the current commit index based on the current
     // simple or joint quorum.
-    index_t committed(index_t prev_commit_idx);
+    template<typename Index> Index committed(Index prev_commit_idx);
 
     class activity_tracker {
         tracker& _tracker;

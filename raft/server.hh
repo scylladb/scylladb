@@ -102,33 +102,6 @@ public:
     // May be called before attempting a read from the local state
     // machine. The read should proceed only after the returned
     // future has resolved successfully.
-    // If called not on a leader throws not_a_leader error.
-    // After calling this function and resolving the returned
-    // future:
-    //
-    // 1) The result of all completed
-    //    add_entries(wait_type::applied) can be observed by
-    //    direct access to the local state machine.
-    // 2) A subsequent add_entry() is likely to find this
-    //    server still in the leader role.
-    // 3) If the caller ensures that writes to the state machine
-    //    are linearised and the current term didn't change
-    //    between read_barrier() and add_entry(), (@sa
-    //    get_current_term()), a pair of read from the state
-    //    machine and add_entry() will be linearised as well.
-    //
-    // To sum up, @read_barrier() can be used as a poor man
-    // distributed Compare-And-Swap:
-    //
-    // lock()
-    // term_t term = get_current_term()
-    // co_await read_barrier()
-    // ... Read previous value from the state machine ...
-    // ... Create a new value ...
-    // if (term == get_current_term())) {
-    //      co_await add_entry();
-    // }
-    // unlock()
     virtual future<> read_barrier() = 0;
 
     // Initiate leader stepdown process.

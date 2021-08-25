@@ -106,6 +106,29 @@ void raft_group_registry::init_rpc_verbs() {
             return make_ready_future<>();
         });
     });
+
+    _ms.register_raft_read_quorum([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum read_quorum) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum] (raft_rpc& rpc) mutable {
+            rpc.read_quorum_request(std::move(from), std::move(read_quorum));
+            return make_ready_future<>();
+        });
+    });
+
+    _ms.register_raft_read_quorum_reply([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum_reply read_quorum_reply) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum_reply] (raft_rpc& rpc) mutable {
+            rpc.read_quorum_reply(std::move(from), std::move(read_quorum_reply));
+            return make_ready_future<>();
+        });
+    });
+
+    _ms.register_raft_execute_read_barrier_on_leader([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            raft::group_id gid, raft::server_id from, raft::server_id dst) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from] (raft_rpc& rpc) mutable {
+            return rpc.execute_read_barrier(from);
+        });
+    });
 }
 
 future<> raft_group_registry::uninit_rpc_verbs() {
@@ -115,7 +138,10 @@ future<> raft_group_registry::uninit_rpc_verbs() {
         _ms.unregister_raft_append_entries_reply(),
         _ms.unregister_raft_vote_request(),
         _ms.unregister_raft_vote_reply(),
-        _ms.unregister_raft_timeout_now()
+        _ms.unregister_raft_timeout_now(),
+        _ms.unregister_raft_read_quorum(),
+        _ms.unregister_raft_read_quorum_reply(),
+        _ms.unregister_raft_execute_read_barrier_on_leader()
     ).discard_result();
 }
 
