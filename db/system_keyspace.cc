@@ -243,17 +243,42 @@ schema_ptr raft() {
 
 // Note that this table does not include actula user snapshot data since it's dependent
 // on user-provided state machine and could be stored anywhere else in any other form.
+// This should be seen as a snapshot descriptor, instead.
 schema_ptr raft_snapshots() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, RAFT_SNAPSHOTS);
         return schema_builder(NAME, RAFT_SNAPSHOTS, std::optional(id))
             .with_column("group_id", timeuuid_type, column_kind::partition_key)
-            .with_column("id", uuid_type, column_kind::clustering_key)
+            // To be able to start multiple raft servers inside one raft group
+            // on the same node, we need to include the server_id in the
+            // partition key, as well.
+            .with_column("server_id", uuid_type, column_kind::partition_key)
+            .with_column("snapshot_id", uuid_type)
+            // Index and term of last entry in the snapshot
             .with_column("idx", long_type)
             .with_column("term", long_type)
-            .with_column("config", bytes_type) // serialized
 
-            .set_comment("Persisted RAFT snapshots info")
+            .set_comment("Persisted RAFT snapshot descriptors info")
+            .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true)
+            .with_null_sharder()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr raft_config() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, RAFT_CONFIG);
+        return schema_builder(NAME, RAFT_CONFIG, std::optional(id))
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
+            .with_column("my_server_id", uuid_type, column_kind::partition_key)
+            .with_column("server_id", uuid_type, column_kind::clustering_key)
+            .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
+            .with_column("can_vote", boolean_type)
+            .with_column("ip_addr", inet_addr_type)
+
+            .set_comment("RAFT configuration for the latest snapshot descriptor")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
             .with_null_sharder()
@@ -1962,7 +1987,7 @@ std::vector<schema_ptr> all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
     if (cfg.check_experimental(db::experimental_features_t::RAFT)) {
-        r.insert(r.end(), {raft(), raft_snapshots()});
+        r.insert(r.end(), {raft(), raft_snapshots(), raft_config()});
     }
     // legacy schema
     r.insert(r.end(), {

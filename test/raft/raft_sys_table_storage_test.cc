@@ -29,6 +29,8 @@
 #include "test/lib/cql_test_env.hh"
 #include "cql3/query_processor.hh"
 
+#include "gms/inet_address_serializer.hh"
+
 namespace raft{
 
 // these operators provided exclusively for testing purposes
@@ -108,7 +110,9 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
 
         raft::term_t snp_term(1);
         raft::index_t snp_idx(1);
-        raft::configuration snp_cfg({raft::server_id::create_random_id()});
+        raft::server_address srv_addr{raft::server_id::create_random_id()};
+        srv_addr.info = ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"));
+        raft::configuration snp_cfg({std::move(srv_addr)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
         raft::snapshot snp{
@@ -171,7 +175,9 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
 
         raft::term_t snp_term(3);
         raft::index_t snp_idx(3);
-        raft::configuration snp_cfg({raft::server_id::create_random_id()});
+        raft::server_address srv_addr{raft::server_id::create_random_id()};
+        srv_addr.info = ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"));
+        raft::configuration snp_cfg({std::move(srv_addr)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
         raft::snapshot snp{

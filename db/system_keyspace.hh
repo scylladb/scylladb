@@ -114,6 +114,7 @@ static constexpr auto LARGE_CELLS = "large_cells";
 static constexpr auto SCYLLA_LOCAL = "scylla_local";
 static constexpr auto RAFT = "raft";
 static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
+static constexpr auto RAFT_CONFIG = "raft_config";
 extern const char *const CLIENTS;
 
 namespace v3 {
