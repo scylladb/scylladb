@@ -1107,9 +1107,9 @@ private:
             goto column_label;
         range_tombstone_body_label:
             co_yield read_unsigned_vint(*_processing_data);
-            // Ignore result
+            // Ignore result (marker_body_size or row_body_size)
             co_yield read_unsigned_vint(*_processing_data);
-            // Ignore result
+            // Ignore result (prev_unfiltered_size)
             co_yield read_unsigned_vint(*_processing_data);
             _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
             co_yield read_unsigned_vint(*_processing_data);
