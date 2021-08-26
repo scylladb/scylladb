@@ -90,6 +90,8 @@ namespace db {
 
 sstring system_keyspace_name();
 
+class config;
+
 namespace system_keyspace {
 
 static constexpr auto NAME = "system";
@@ -213,7 +215,7 @@ future<> remove_endpoint(gms::inet_address ep);
 future<> set_scylla_local_param(const sstring& key, const sstring& value);
 future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
-std::vector<schema_ptr> all_tables();
+std::vector<schema_ptr> all_tables(const db::config& cfg);
 future<> make(database& db, service::storage_service& ss);
 
 /// overloads
