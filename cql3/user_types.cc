@@ -119,7 +119,17 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
 }
 
 expr::expression user_types::delayed_value::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    expr::usertype_constructor::elements_map_type new_elements;
+    for (size_t i = 0; i < _values.size(); i++) {
+        column_identifier field_name(_type->field_names().at(i), _type->string_field_names().at(i));
+        expr::nested_expression field_value(expr::to_expression(_values[i]));
+        new_elements.emplace(std::move(field_name), std::move(field_value));
+    }
+
+    return expr::usertype_constructor {
+        .elements = std::move(new_elements),
+        .type = _type
+    };
 }
 
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
