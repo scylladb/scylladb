@@ -693,6 +693,12 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
     }, std::move(cfg_in));
 }
 
+cql_test_config raft_cql_test_config() {
+    cql_test_config c;
+    c.db_config->experimental_features({db::experimental_features_t::RAFT});
+    return c;
+}
+
 namespace debug {
 
 seastar::sharded<database>* db;

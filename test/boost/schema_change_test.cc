@@ -804,5 +804,5 @@ SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
                 BOOST_REQUIRE_EQUAL(s->get_sharder().shard_count(), 1);
             }
         }).get();
-    });
+    }, raft_cql_test_config());
 }

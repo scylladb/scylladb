@@ -1751,7 +1751,7 @@ future<> set_bootstrap_state(bootstrap_state state) {
     });
 }
 
-std::vector<schema_ptr> all_tables() {
+std::vector<schema_ptr> all_tables(const db::config& cfg) {
     std::vector<schema_ptr> r;
     auto schema_tables = db::schema_tables::all_tables(schema_features::full());
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
@@ -1760,12 +1760,14 @@ std::vector<schema_ptr> all_tables() {
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
-                    raft(), raft_snapshots(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
                     v3::cdc_local(),
     });
+    if (cfg.check_experimental(db::experimental_features_t::RAFT)) {
+        r.insert(r.end(), {raft(), raft_snapshots()});
+    }
     // legacy schema
     r.insert(r.end(), {
                     // TODO: once we migrate hints/batchlog and add convertor
@@ -1797,7 +1799,7 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
 future<> make(database& db) {
     auto enable_cache = db.get_config().enable_cache();
     bool durable = db.get_config().data_file_directories().size() > 0;
-    for (auto&& table : all_tables()) {
+    for (auto&& table : all_tables(db.get_config())) {
         auto ks_name = table->ks_name();
         if (!db.has_keyspace(ks_name)) {
             auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
