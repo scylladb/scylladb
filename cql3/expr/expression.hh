@@ -29,7 +29,6 @@
 
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
-#include "cql3/term.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
@@ -39,6 +38,7 @@
 #include "seastarx.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/variant_element.hh"
+#include "cql3/values.hh"
 
 class row;
 
@@ -52,6 +52,7 @@ namespace query {
 } // namespace query
 
 namespace cql3 {
+struct term;
 
 class column_identifier_raw;
 class query_options;

@@ -44,6 +44,7 @@
 #include "cql3/assignment_testable.hh"
 #include "cql3/query_options.hh"
 #include "cql3/values.hh"
+#include "cql3/expr/expression.hh"
 
 #include <variant>
 #include <vector>
@@ -99,6 +100,10 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const term& t) {
         return out << t.to_string();
+    }
+
+    expr::expression to_expression() {
+        throw std::runtime_error("unimplemented");
     }
 };
 

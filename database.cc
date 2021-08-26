@@ -53,6 +53,7 @@
 #include "db/schema_tables.hh"
 #include "compaction/compaction_manager.hh"
 #include "gms/feature_service.hh"
+#include "timeout_config.hh"
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
