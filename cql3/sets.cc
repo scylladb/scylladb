@@ -124,6 +124,9 @@ sets::delayed_value::bind(const query_options& options) {
     return ::make_shared<value>(std::move(buffers), _my_type);
 }
 
+expr::expression sets::delayed_value::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+}
 
 sets::marker::marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
     : abstract_marker{bind_index, std::move(receiver)} {
@@ -150,6 +153,10 @@ sets::marker::bind(const query_options& options) {
         }
         return make_shared<cql3::sets::value>(value::from_serialized(value, type, options.get_cql_serialization_format()));
     }
+}
+
+expr::expression sets::marker::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
 }
 
 void

@@ -569,6 +569,8 @@ std::vector<managed_bytes_opt> get_elements(const constant&);
 // Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>
 // It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
 utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
+
+expression to_expression(const ::shared_ptr<term>&);
 } // namespace expr
 
 } // namespace cql3

@@ -58,4 +58,8 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
     }
 }
 
+expr::expression constants::marker::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+}
+
 }

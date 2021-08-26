@@ -158,6 +158,10 @@ lists::delayed_value::bind_ignore_null(const query_options& options) {
     return ::make_shared<value>(buffers, _my_type);
 }
 
+expr::expression lists::delayed_value::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+}
+
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
     const auto& value = options.get_value_at(_bind_index);
@@ -175,6 +179,10 @@ lists::marker::bind(const query_options& options) {
                     format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
         }
     }
+}
+
+expr::expression lists::marker::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
 }
 
 void

@@ -102,9 +102,7 @@ public:
         return out << t.to_string();
     }
 
-    expr::expression to_expression() {
-        throw std::runtime_error("unimplemented");
-    }
+    virtual expr::expression to_expression() = 0;
 };
 
 /**
@@ -150,6 +148,11 @@ public:
 
     data_type get_value_type() const {
         return _my_type;
+    }
+
+    virtual expr::expression to_expression() override {
+        cql3::raw_value raw_val = get(query_options::DEFAULT);
+        return expr::constant(std::move(raw_val), get_value_type());
     }
 };
 

@@ -101,6 +101,7 @@ public:
             return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes), _receiver->type);
         }
 
+        virtual expr::expression to_expression() override;
     private:
         cql3::raw_value_view bind_and_get_internal(const query_options& options) {
             try {

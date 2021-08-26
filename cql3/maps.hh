@@ -84,6 +84,8 @@ public:
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
         virtual shared_ptr<terminal> bind(const query_options& options) override;
+
+        virtual expr::expression to_expression() override;
     };
 
     class marker : public abstract_marker {
@@ -92,6 +94,7 @@ public:
             : abstract_marker{bind_index, std::move(receiver)}
         { }
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
+        virtual expr::expression to_expression() override;
     };
 
     class setter : public operation {

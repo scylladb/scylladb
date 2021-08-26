@@ -501,6 +501,10 @@ function_call::bind_and_get_internal(const query_options& options) {
     return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(result));
 }
 
+expr::expression function_call::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+}
+
 static
 bytes_opt
 execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {

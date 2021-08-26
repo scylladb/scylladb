@@ -1468,5 +1468,13 @@ utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_element
 
     return tuples_list;
 }
+
+expression to_expression(const ::shared_ptr<term>& term_ptr) {
+    if (term_ptr.get() == nullptr) {
+        return constant::make_null();
+    }
+
+    return term_ptr->to_expression();
+}
 } // namespace expr
 } // namespace cql3

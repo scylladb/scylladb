@@ -118,6 +118,10 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
     return ::make_shared<user_types::value>(bind_internal(options), _type);
 }
 
+expr::expression user_types::delayed_value::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+}
+
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
     auto value = options.get_value_at(_bind_index);
     if (value.is_null()) {
@@ -127,6 +131,10 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     }
     return make_shared<user_types::value>(value::from_serialized(value, static_cast<const user_type_impl&>(*_receiver->type)));
+}
+
+expr::expression user_types::marker::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {

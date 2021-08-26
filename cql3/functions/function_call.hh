@@ -76,6 +76,8 @@ public:
         _id = id;
     }
     virtual shared_ptr<terminal> bind(const query_options& options) override;
+
+    virtual expr::expression to_expression() override;
 public:
     virtual bool contains_bind_marker() const override;
 private:

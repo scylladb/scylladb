@@ -163,6 +163,10 @@ maps::delayed_value::bind(const query_options& options) {
     return ::make_shared<value>(std::move(buffers), _my_type);
 }
 
+expr::expression maps::delayed_value::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+}
+
 ::shared_ptr<terminal>
 maps::marker::bind(const query_options& options) {
     auto val = options.get_value_at(_bind_index);
@@ -183,6 +187,10 @@ maps::marker::bind(const query_options& options) {
                     val,
                     dynamic_cast<const map_type_impl&>(_receiver->type->without_reversed()),
                     options.get_cql_serialization_format()));
+}
+
+expr::expression maps::marker::to_expression() {
+    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
 }
 
 void
