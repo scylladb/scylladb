@@ -502,7 +502,17 @@ function_call::bind_and_get_internal(const query_options& options) {
 }
 
 expr::expression function_call::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    std::vector<expr::expression> args;
+    args.reserve(_terms.size());
+
+    for (const ::shared_ptr<term>& t : _terms) {
+        args.emplace_back(expr::to_expression(t));
+    }
+
+    return expr::function_call {
+        .func = _fun,
+        .args = std::move(args),
+    };
 }
 
 static
