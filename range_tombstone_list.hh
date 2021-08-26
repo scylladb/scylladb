@@ -176,8 +176,12 @@ public:
     iterator erase(const_iterator, const_iterator);
 
     // Pops the first element and bans (in theory) further additions
-    range_tombstone* pop_front_and_lock() {
-        return _tombstones.unlink_leftmost_without_rebalance();
+    // The list is assumed not to be empty
+    range_tombstone pop_front_and_lock() {
+        range_tombstone* rt = _tombstones.unlink_leftmost_without_rebalance();
+        assert(rt != nullptr);
+        auto _ = seastar::defer([rt] () noexcept { current_deleter<range_tombstone>()(rt); });
+        return std::move(*rt);
     }
 
     // Ensures that every range tombstone is strictly contained within given clustering ranges.

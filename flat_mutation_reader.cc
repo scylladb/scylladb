@@ -467,10 +467,8 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
         }
         void prepare_next_range_tombstone() {
             auto& rts = _cur->partition().mutable_row_tombstones();
-            auto rt = rts.pop_front_and_lock();
-            if (rt) {
-                auto rt_deleter = defer([rt] () noexcept { current_deleter<range_tombstone>()(rt); });
-                _rt = mutation_fragment(*_schema, _permit, std::move(*rt));
+            if (!rts.empty()) {
+                _rt = mutation_fragment(*_schema, _permit, rts.pop_front_and_lock());
             }
         }
         mutation_fragment_opt read_next() {
@@ -522,10 +520,10 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             crs.clear_and_dispose(deleter);
 
             auto &rts = _cur->partition().mutable_row_tombstones();
-            auto rt = rts.pop_front_and_lock();
-            while (rt) {
-                current_deleter<range_tombstone>()(rt);
-                rt = rts.pop_front_and_lock();
+            // cannot use .clear() here, pop_front_and_lock leaves
+            // boost set in a sate that crashes if being cleared.
+            while (!rts.empty()) {
+                rts.pop_front_and_lock();
             }
         }
         struct cmp {
