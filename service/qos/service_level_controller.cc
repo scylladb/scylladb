@@ -267,16 +267,17 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
     auto sl_it = _service_levels_db.find(name);
     if (sl_it != _service_levels_db.end()) {
         _service_levels_db.erase(sl_it);
-    }
-    return seastar::async( [this, name] {
-        _subscribers.for_each([name] (qos_configuration_change_subscriber* subscriber) {
-            try {
-                subscriber->on_after_service_level_remove(name).get();
-            } catch (...) {
-                sl_logger.error("notify_service_level_removed: exception occurred in one of the observers callbacks {}", std::current_exception());
-            }
+        return seastar::async( [this, name] {
+            _subscribers.for_each([name] (qos_configuration_change_subscriber* subscriber) {
+                try {
+                    subscriber->on_after_service_level_remove(name).get();
+                } catch (...) {
+                    sl_logger.error("notify_service_level_removed: exception occurred in one of the observers callbacks {}", std::current_exception());
+                }
+            });
         });
-    });
+    }
+    return make_ready_future<>();
 }
 
 void service_level_controller::update_from_distributed_data(std::chrono::duration<float> interval) {
