@@ -574,6 +574,15 @@ constant evaluate_IN_list(term&, const query_options&);
 cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
 cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
 
+// Takes a prepared expression and calculates its value.
+// Evaluates bound values, calls functions and returns just the bytes and type.
+constant evaluate(const expression& e, const query_options&);
+constant evaluate(const bind_variable&, const query_options&);
+constant evaluate(const tuple_constructor&, const query_options&);
+constant evaluate(const collection_constructor&, const query_options&);
+constant evaluate(const usertype_constructor&, const query_options&);
+constant evaluate(const function_call&, const query_options&);
+
 utils::chunked_vector<managed_bytes> get_list_elements(const constant&);
 utils::chunked_vector<managed_bytes> get_set_elements(const constant&);
 std::vector<managed_bytes_opt> get_tuple_elements(const constant&);

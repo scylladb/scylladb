@@ -1369,6 +1369,68 @@ cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& o
     return cql3::raw_value_view::make_temporary(std::move(value.value));
 }
 
+constant evaluate(const expression& e, const query_options& options) {
+    return std::visit(overloaded_functor {
+        [](const binary_operator&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a binary_operator");
+        },
+        [](const conjunction&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a conjunction");
+        },
+        [](const token&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate token");
+        },
+        [](const unresolved_identifier&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
+        },
+        [](const column_mutation_attribute&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
+        },
+        [](const cast&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a cast");
+        },
+        [](const field_selection&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a field_selection");
+        },
+
+        // TODO Should these be evaluable?
+        [](const column_value&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a column_value");
+        },
+        [](const untyped_constant&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
+        },
+
+        [](const null&) { return constant::make_null(); },
+        [](const constant& c) { return c; },
+        [&](const bind_variable& bind_var) { return evaluate(bind_var, options); },
+        [&](const tuple_constructor& tup) { return evaluate(tup, options); },
+        [&](const collection_constructor& col) { return evaluate(col, options); },
+        [&](const usertype_constructor& user_val) { return evaluate(user_val, options); },
+        [&](const function_call& fun_call) { return evaluate(fun_call, options); }
+    }, e);
+}
+
+constant evaluate(const bind_variable& bind_var, const query_options& options) {
+    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+}
+
+constant evaluate(const tuple_constructor& tuple, const query_options& options) {
+    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+}
+
+constant evaluate(const collection_constructor& collection, const query_options& options) {
+    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+}
+
+constant evaluate(const usertype_constructor& user_val, const query_options& options) {
+    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+}
+
+constant evaluate(const function_call& fun_call, const query_options& options) {
+    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+}
+
 static void ensure_can_get_value_elements(const constant& val,
                                           abstract_type::kind expected_type_kind,
                                           const char* caller_name) {
