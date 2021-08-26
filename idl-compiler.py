@@ -86,7 +86,22 @@ def print_cw(f):
 ###
 ### AST Nodes
 ###
-class BasicType:
+class ASTBase:
+    name: str
+    ns_context: list[str]
+
+    def __init__(self, name):
+        self.name = name
+
+    @staticmethod
+    def combine_ns(namespaces):
+        return "::".join(namespaces)
+
+    def ns_qualified_name(self):
+        return self.name if not self.ns_context \
+            else self.combine_ns(self.ns_context) + "::" + self.name
+
+class BasicType(ASTBase):
     '''AST node that represents terminal grammar nodes for the non-template
     types, defined either inside or outside the IDL.
 
@@ -98,7 +113,7 @@ class BasicType:
     with a `const` specifier, an additional `serializer<const T>` specialization
     is generated for it.'''
     def __init__(self, name, is_const=False):
-        self.name = name
+        super().__init__(name)
         self.is_const = is_const
 
     def __str__(self):
@@ -108,7 +123,7 @@ class BasicType:
         return self.__str__()
 
 
-class TemplateType:
+class TemplateType(ASTBase):
     '''AST node representing template types, for example: `std::vector<T>`.
 
     These can appear either in the definition of the class fields or as a part of
@@ -116,7 +131,7 @@ class TemplateType:
 
     Such types can either be defined inside or outside the IDL.'''
     def __init__(self, name, template_parameters):
-        self.name = name
+        super().__init__(name)
         # FIXME: dirty hack to translate non-type template parameters (numbers) to BasicType objects
         self.template_parameters = [
             t if isinstance(t, BasicType) or isinstance(t, TemplateType) else BasicType(name=str(t)) \
@@ -129,12 +144,12 @@ class TemplateType:
         return self.__str__()
 
 
-class EnumValue:
+class EnumValue(ASTBase):
     '''AST node representing a single `name=value` enumerator in the enum.
 
     Initializer part is optional, the same as in C++ enums.'''
     def __init__(self, name, initializer=None):
-        self.name = name
+        super().__init__(name)
         self.initializer = initializer
 
     def __str__(self):
@@ -144,13 +159,13 @@ class EnumValue:
         return self.__str__()
 
 
-class EnumDef:
+class EnumDef(ASTBase):
     '''AST node representing C++ `enum class` construct.
 
     Consists of individual initializers in form of `EnumValue` objects.
     Should have an underlying type explicitly specified.'''
     def __init__(self, name, underlying_type, members):
-        self.name = name
+        super().__init__(name)
         self.underlying_type = underlying_type
         self.members = members
 
@@ -160,29 +175,29 @@ class EnumDef:
     def __repr__(self):
         return self.__str__()
 
-    def serializer_write_impl(self, cout, template_decl, namespaces):
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_write_impl(self, cout):
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Output>
 void serializer<{name}>::write(Output& buf, const {name}& v) {{
   serialize(buf, static_cast<{self.underlying_type}>(v));
 }}""")
 
 
-    def serializer_read_impl(self, cout, template_decl, namespaces):
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_read_impl(self, cout):
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template<typename Input>
 {name} serializer<{name}>::read(Input& buf) {{
   return static_cast<{name}>(deserialize(buf, boost::type<{self.underlying_type}>()));
 }}""")
 
 
-class Attribute:
+class Attribute(ASTBase):
     ''' AST node for representing class and field attributes.
 
     The following attributes are supported:
@@ -191,7 +206,7 @@ class Attribute:
      - `[[version id]] field attribute, marks that a field is available starting
        from a specific version.'''
     def __init__(self, name):
-        self.name = name
+        super().__init__(name)
 
     def __str__(self):
         return f"[[{self.name}]]"
@@ -200,13 +215,13 @@ class Attribute:
         return self.__str__()
 
 
-class DataClassMember:
+class DataClassMember(ASTBase):
     '''AST node representing a data field in a class.
 
     Can optionally have a version attribute and a default value specified.'''
     def __init__(self, type, name, attribute=None, default_value=None):
+        super().__init__(name)
         self.type = type
-        self.name = name
         self.attribute = attribute
         self.default_value = default_value
 
@@ -217,7 +232,7 @@ class DataClassMember:
         return self.__str__()
 
 
-class FunctionClassMember:
+class FunctionClassMember(ASTBase):
     '''AST node representing getter function in a class definition.
 
     Can optionally have a version attribute and a default value specified.
@@ -225,8 +240,8 @@ class FunctionClassMember:
     Getter functions should be used whenever it's needed to access private
     members of a class.'''
     def __init__(self, type, name, attribute=None, default_value=None):
+        super().__init__(name)
         self.type = type
-        self.name = name
         self.attribute = attribute
         self.default_value = default_value
 
@@ -237,12 +252,12 @@ class FunctionClassMember:
         return self.__str__()
 
 
-class ClassTemplateParam:
+class ClassTemplateParam(ASTBase):
     '''AST node representing a single template argument of a class template
     definition, such as `typename T`.'''
     def __init__(self, typename, name):
+        super().__init__(name)
         self.typename = typename
-        self.name = name
 
     def __str__(self):
         return f"<ClassTemplateParam(typename={self.typename}, name={self.name})>"
@@ -251,7 +266,7 @@ class ClassTemplateParam:
         return self.__str__()
 
 
-class ClassDef:
+class ClassDef(ASTBase):
     '''AST node representing a class definition. Can use either `class` or `struct`
     keyword to define a class.
 
@@ -267,7 +282,7 @@ class ClassDef:
     Classes are also can be declared as template classes, much the same as in C++.
     In this case the template declaration syntax mimics C++ templates.'''
     def __init__(self, name, members, final, stub, attribute, template_params):
-        self.name = name
+        super().__init__(name)
         self.members = members
         self.final = final
         self.stub = stub
@@ -280,12 +295,12 @@ class ClassDef:
     def __repr__(self):
         return self.__str__()
 
-    def serializer_write_impl(self, cout, template_decl, template_class_param, namespaces):
-        name = ns_qualified_name(self.name, namespaces)
-        full_name = name + template_class_param
+    def serializer_write_impl(self, cout):
+        name = self.ns_qualified_name()
+        full_name = name + self.template_param_names_str
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         if not self.final:
@@ -298,20 +313,19 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         fprintln(cout, "}")
 
 
-    def serializer_read_impl(self, cout, template_decl, template_class_param, namespaces):
-        is_final = self.final
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_read_impl(self, cout):
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Input>
-{name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
+{name}{self.template_param_names_str} serializer<{name}{self.template_param_names_str}>::read(Input& buf) {{
  return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
         if not self.members:
-            if not is_final:
+            if not self.final:
                 fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
   buf.skip(size - sizeof({SIZETYPE}));""")
-        elif not is_final:
+        elif not self.final:
             fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
   auto in = buf.read_substream(size - sizeof({SIZETYPE}));""")
         else:
@@ -335,22 +349,21 @@ template <typename Input>
                 fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, boost::type<{param_type(param.type)}>());""")
             params.append("std::move(" + local_param + ")")
         fprintln(cout, f"""
-  {name}{template_class_param} res {{{", ".join(params)}}};
+  {name}{self.template_param_names_str} res {{{", ".join(params)}}};
   return res;
  }});
 }}""")
 
 
-    def serializer_skip_impl(self, cout, template_decl, template_class_param, namespaces):
-        is_final = self.final
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_skip_impl(self, cout):
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Input>
-void serializer<{name}{template_class_param}>::skip(Input& buf) {{
+void serializer<{name}{self.template_param_names_str}>::skip(Input& buf) {{
  seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
-        if not is_final:
+        if not self.final:
             fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
   buf.skip(size - sizeof({SIZETYPE}));""")
         else:
@@ -360,7 +373,7 @@ void serializer<{name}{template_class_param}>::skip(Input& buf) {{
         fprintln(cout, """ });\n}""")
 
 
-class NamespaceDef:
+class NamespaceDef(ASTBase):
     '''AST node representing a namespace scope.
 
     It has the same meaning as in C++ or other languages with similar facilities.
@@ -370,7 +383,7 @@ class NamespaceDef:
      - class definitions
      - enum definitions'''
     def __init__(self, name, members):
-        self.name = name
+        super().__init__(name)
         self.members = members
 
     def __str__(self):
@@ -449,6 +462,7 @@ def namespace_parse_action(tokens):
 
 
 def parse_file(file_name):
+    '''Parse the input from the file using IDL grammar syntax and generate AST'''
 
     number = pp.pyparsing_common.signed_integer
     identifier = pp.pyparsing_common.identifier
@@ -529,10 +543,6 @@ def parse_file(file_name):
     return rt.parseFile(file_name, parseAll=True)
 
 
-def combine_ns(namespaces):
-    return "::".join(namespaces)
-
-
 def declare_methods(hout, name, template_param=""):
     fprintln(hout, f"""
 template <{template_param}>
@@ -556,24 +566,20 @@ struct serializer<const {name}> : public serializer<{name}>
 """)
 
 
-def ns_qualified_name(name, namespaces):
-    return name if not namespaces else combine_ns(namespaces) + "::" + name
-
-
 def template_params_str(template_params):
     if not template_params:
         return ""
     return ", ".join(map(lambda param: param.typename + " " + param.name, template_params))
 
 
-def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
-    temp_def = template_params_str(parent_template_param)
-    template_decl = "template <" + temp_def + ">" if temp_def else ""
-    name = ns_qualified_name(enum.name, namespaces)
+def handle_enum(enum, hout, cout):
+    '''Generate serializer declarations and definitions for an IDL enum'''
+    temp_def = template_params_str(enum.parent_template_params)
+    name = enum.ns_qualified_name()
     declare_methods(hout, name, temp_def)
 
-    enum.serializer_write_impl(cout, template_decl, namespaces)
-    enum.serializer_read_impl(cout, template_decl, namespaces)
+    enum.serializer_write_impl(cout)
+    enum.serializer_read_impl(cout)
 
 
 def join_template(template_params):
@@ -595,6 +601,13 @@ def flat_type(t):
 
 
 local_types = {}
+local_writable_types = {}
+
+
+def resolve_basic_type_ref(type: BasicType):
+    if type.name not in local_types:
+        raise KeyError(f"Failed to resolve type reference for '{type.name}'")
+    return local_types[type.name]
 
 
 def list_types(t):
@@ -604,18 +617,18 @@ def list_types(t):
         return reduce(lambda a, b: a + b, [list_types(p) for p in t.template_parameters])
 
 
-def list_local_types(t):
-    return {l for l in list_types(t) if l in local_types}
+def list_local_writable_types(t):
+    return {l for l in list_types(t) if l in local_writable_types}
 
 
 def is_basic_type(t):
-    return isinstance(t, BasicType) and t.name not in local_types
+    return isinstance(t, BasicType) and t.name not in local_writable_types
 
 
-def is_local_type(t):
+def is_local_writable_type(t):
     if isinstance(t, str): # e.g. `t` is a local class name
-        return t in local_types
-    return t.name in local_types
+        return t in local_writable_types
+    return t.name in local_writable_types
 
 
 def get_template_name(lst):
@@ -645,10 +658,6 @@ def get_members(cls):
     return [p for p in cls.members if not isinstance(p, ClassDef) and not isinstance(p, EnumDef)]
 
 
-def is_final(cls):
-    return cls.final
-
-
 def get_variant_type(t):
     if is_variant(t):
         return "variant"
@@ -656,14 +665,13 @@ def get_variant_type(t):
 
 
 def variant_to_member(template_parameters):
-    return [DataClassMember(name=get_variant_type(x), type=x) for x in template_parameters if is_local_type(x) or is_variant(x)]
+    return [DataClassMember(name=get_variant_type(x), type=x) for x in template_parameters if is_local_writable_type(x) or is_variant(x)]
 
 
-def variant_info(info, template_parameters):
-    [cls, namespaces, parent_template_param] = info
+def variant_info(cls, template_parameters):
     variant_info_cls = copy(cls) # shallow copy of cls
     variant_info_cls.members = variant_to_member(template_parameters)
-    return [variant_info_cls, namespaces, parent_template_param]
+    return variant_info_cls
 
 
 stubs = set()
@@ -673,8 +681,7 @@ def is_stub(cls):
     return cls in stubs
 
 
-def handle_visitors_state(info, cout, classes=[]):
-    [cls, namespaces, parent_template_param] = info
+def handle_visitors_state(cls, cout, classes=[]):
     name = "__".join(classes) if classes else cls.name
     frame = "empty_frame" if cls.final else "frame"
     fprintln(cout, f"""
@@ -690,15 +697,15 @@ struct state_of_{name} {{
     members = get_members(cls)
     member_class = classes if classes else [cls.name]
     for m in members:
-        if is_local_type(m.type):
-            handle_visitors_state(local_types[param_type(m.type)], cout, member_class + [m.name])
+        if is_local_writable_type(m.type):
+            handle_visitors_state(local_writable_types[param_type(m.type)], cout, member_class + [m.name])
         if is_variant(m.type):
-            handle_visitors_state(variant_info(info, m.type.template_parameters), cout, member_class + [m.name])
+            handle_visitors_state(variant_info(cls, m.type.template_parameters), cout, member_class + [m.name])
 
 
 def get_dependency(cls):
     members = get_members(cls)
-    return reduce(lambda a, b: a | b, [list_local_types(m.type) for m in members], set())
+    return reduce(lambda a, b: a | b, [list_local_writable_types(m.type) for m in members], set())
 
 
 def optional_add_methods(typ):
@@ -708,7 +715,7 @@ def optional_add_methods(typ):
     }""")
     if is_basic_type(typ):
         added_type = typ
-    elif is_local_type(typ):
+    elif is_local_writable_type(typ):
         added_type = param_type(typ) + "_view"
     else:
         print("non supported optional type ", typ)
@@ -718,7 +725,7 @@ def optional_add_methods(typ):
         serialize(_out, true);
         serialize(_out, obj);
     }}""")
-    if is_local_type(typ):
+    if is_local_writable_type(typ):
         res = res + reindent(4, f"""
     writer_of_{param_type(typ)}<Output> write() {{
         serialize(_out, true);
@@ -813,7 +820,7 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
             return {{ _out, {state} }};
         }}
     """).format(**locals())
-    if not is_stub(typ.name) and is_local_type(typ):
+    if not is_stub(typ.name) and is_local_writable_type(typ):
         ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
     if is_stub(typ.name):
         typename = typ.name
@@ -844,7 +851,7 @@ def add_param_write(current, base_state, vector=False, root_node=False):
     }}""")
         if is_basic_type(typ.template_parameters[0]):
             res = res + add_param_writer_basic_type(name, base_state, typ.template_parameters[0], "", "true")
-        elif is_local_type(typ.template_parameters[0]):
+        elif is_local_writable_type(typ.template_parameters[0]):
             res = res + add_param_writer_object(name, base_state[0][1], typ, "", "true")
         else:
             print("non supported optional type ", typ.template_parameters[0])
@@ -861,7 +868,7 @@ def add_param_write(current, base_state, vector=False, root_node=False):
         return {{ _out, std::move(_state) }};
     }}
 """
-    elif is_local_type(typ):
+    elif is_local_writable_type(typ):
         res = res + add_param_writer_object(name, base_state, typ)
     elif is_variant(typ):
         for idx, p in enumerate(typ.template_parameters):
@@ -869,7 +876,7 @@ def add_param_write(current, base_state, vector=False, root_node=False):
                 res = res + add_param_writer_basic_type(name, base_state, p, "_" + param_type(p), idx, root_node)
             elif is_variant(p):
                 res = res + add_param_writer_object(name, base_state, p, '_' + "variant", idx, root_node)
-            elif is_local_type(p):
+            elif is_local_writable_type(p):
                 res = res + add_param_writer_object(name, base_state, p, '_' + param_type(p), idx, root_node)
     else:
         print("something is wrong with type", typ)
@@ -984,8 +991,8 @@ struct writer_of_{full_type} {{
 def add_variant_nodes(cout, member, param, base_state, parents, classes):
     par = base_state + "__" + member.name
     for typ in param.template_parameters:
-        if is_local_type(typ):
-            handle_visitors_nodes(local_types[param_type(typ)], cout, True, classes + [member.name, local_types[param_type(typ)][0].name])
+        if is_local_writable_type(typ):
+            handle_visitors_nodes(local_writable_types[param_type(typ)], cout, True, classes + [member.name, local_writable_types[param_type(typ)].name])
         if is_variant(typ):
             name = base_state + "__" + member.name + "__variant"
             new_member = copy(member) # shallow copy
@@ -1011,18 +1018,17 @@ def add_template_writer_node(cout, typ):
         add_optional_node(cout, typ)
 
 
-def add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes):
+def add_nodes_when_needed(cout, member, base_state_name, parents, member_classes):
     if is_vector(member.type):
         add_vector_node(cout, member, base_state_name, base_state_name)
     elif is_variant(member.type):
         add_variant_nodes(cout, member, member.type, base_state_name, parents, member_classes)
-    elif is_local_type(member.type):
-        handle_visitors_nodes(local_types[member.type.name], cout, False, member_classes + [member.name])
+    elif is_local_writable_type(member.type):
+        handle_visitors_nodes(local_writable_types[member.type.name], cout, False, member_classes + [member.name])
 
 
-def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
+def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
     global writers
-    [cls, namespaces, parent_template_param] = info
     # for root node, only generate once
     if not classes:
         if cls.name in writers:
@@ -1044,29 +1050,34 @@ def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
     member_classes = classes if classes else [current_name]
     prefix = "" if classes else "writer_of_"
     if not members:
-        add_node(cout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, is_final(cls))
+        add_node(cout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, cls.final)
         return
     add_node(cout, base_state_name + "__" + get_member_name(members[-1].name), members[-1].type, base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, classes))
     # Create writer and reader for include class
     if not variant_node:
         for member in get_dependency(cls):
-            handle_visitors_nodes(local_types[member], cout)
+            handle_visitors_nodes(local_writable_types[member], cout)
     for ind in reversed(range(1, len(members))):
         member = members[ind]
-        add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes)
+        add_nodes_when_needed(cout, member, base_state_name, parents, member_classes)
         variant_state = base_state_name + "__" + get_member_name(member.name) if is_variant(member.type) else base_state_name
         add_node(cout, base_state_name + "__" + get_member_name(members[ind - 1].name), member.type, variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
     member = members[0]
-    add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes)
-    add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
+    add_nodes_when_needed(cout, member, base_state_name, parents, member_classes)
+    add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, cls.final)
 
 
-def add_to_types(cls, namespaces, parent_template_param):
+def register_local_type(cls):
     global local_types
+    local_types[cls.name] = cls
+
+
+def register_writable_local_type(cls):
+    global local_writable_types
     global stubs
     if not cls.attribute or cls.attribute.name != 'writable':
         return
-    local_types[cls.name] = [cls, namespaces, parent_template_param]
+    local_writable_types[cls.name] = cls
     if cls.stub:
         stubs.add(cls.name)
 
@@ -1074,8 +1085,8 @@ def add_to_types(cls, namespaces, parent_template_param):
 def sort_dependencies():
     dep_tree = {}
     res = []
-    for k in local_types:
-        [cls, namespaces, parent_template_param] = local_types[k]
+    for k in local_writable_types:
+        cls = local_writable_types[k]
         dep_tree[k] = get_dependency(cls)
     while (len(dep_tree) > 0):
         found = sorted(k for k in dep_tree if not dep_tree[k])
@@ -1094,7 +1105,7 @@ def join_template_view(lst, more_types=[]):
 
 
 def to_view(val):
-    if val in local_types:
+    if val in local_writable_types:
         return val + "_view"
     return val
 
@@ -1149,8 +1160,7 @@ template<typename Input>
     fprintln(hout, f'    return {t}(deserialize(v, boost::type<unknown_variant_type>()));\n  }});\n}}')
 
 
-def add_view(cout, info):
-    [cls, namespaces, parent_template_param] = info
+def add_view(cout, cls):
     members = get_members(cls)
     for m in members:
         add_variant_read_size(cout, m.type)
@@ -1159,7 +1169,7 @@ def add_view(cout, info):
     utils::input_stream v;
     """)
 
-    if not is_stub(cls.name) and is_local_type(cls.name):
+    if not is_stub(cls.name) and is_local_writable_type(cls.name):
         fprintln(cout, reindent(4, f"""
             operator {cls.name}() const {{
                auto in = v;
@@ -1167,7 +1177,7 @@ def add_view(cout, info):
             }}
         """))
 
-    skip = "" if is_final(cls) else "ser::skip(in, boost::type<size_type>());"
+    skip = "" if cls.final else "ser::skip(in, boost::type<size_type>());"
     local_names = {}
     for m in members:
         name = get_member_name(m.name)
@@ -1194,7 +1204,7 @@ def add_view(cout, info):
         skip = skip + f"\n       ser::skip(in, boost::type<{full_type}>());"
 
     fprintln(cout, "};")
-    skip_impl = "auto& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
+    skip_impl = "auto& in = v;\n       " + skip if cls.final else "v.skip(read_frame_size(v));"
     if skip == "":
         skip_impl = ""
 
@@ -1226,68 +1236,112 @@ struct serializer<{cls.name}_view> {{
 
 def add_views(cout):
     for k in sort_dependencies():
-        add_view(cout, local_types[k])
+        add_view(cout, local_writable_types[k])
 
 
 def add_visitors(cout):
-    if not local_types:
+    if not local_writable_types:
         return
     add_views(cout)
     fprintln(cout, "\n////// State holders")
-    for k in local_types:
-        handle_visitors_state(local_types[k], cout)
+    for k in local_writable_types:
+        handle_visitors_state(local_writable_types[k], cout)
     fprintln(cout, "\n////// Nodes")
     for k in sort_dependencies():
-        handle_visitors_nodes(local_types[k], cout)
+        handle_visitors_nodes(local_writable_types[k], cout)
 
 
-def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
-    add_to_types(cls, namespaces, parent_template_param)
+def handle_class(cls, hout, cout):
+    '''Generate serializer class declarations and definitions for a class
+    defined in IDL.
+    '''
     if cls.stub:
         return
     is_tpl = cls.template_params is not None
     template_param_list = cls.template_params if is_tpl else []
-    template_params = template_params_str(template_param_list + parent_template_param)
-    template_decl = "template <" + template_params + ">" if is_tpl else ""
+    template_params = template_params_str(template_param_list + cls.parent_template_params)
     template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
 
-    name = ns_qualified_name(cls.name, namespaces)
+    name = cls.ns_qualified_name()
     full_name = name + template_class_param
     # Handle sub-types: can be either enum or class
     for member in cls.members:
         if isinstance(member, ClassDef):
-            handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
+            handle_class(member, hout, cout)
         elif isinstance(member, EnumDef):
-            handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
+            handle_enum(member, hout, cout)
     declare_methods(hout, full_name, template_params)
 
-    cls.serializer_write_impl(cout, template_decl, template_class_param, namespaces)
-    cls.serializer_read_impl(cout, template_decl, template_class_param, namespaces)
-    cls.serializer_skip_impl(cout, template_decl, template_class_param, namespaces)
+    cls.serializer_write_impl(cout)
+    cls.serializer_read_impl(cout)
+    cls.serializer_skip_impl(cout)
 
 
-def handle_objects(tree, hout, cout, namespaces=[]):
+def handle_objects(tree, hout, cout):
+    '''Main generation procedure: traverse AST and generate serializers for
+    classes/enums defined in the current IDL.
+    '''
     for obj in tree:
         if isinstance(obj, ClassDef):
-            handle_class(obj, hout, cout, namespaces)
+            handle_class(obj, hout, cout)
         elif isinstance(obj, EnumDef):
-            handle_enum(obj, hout, cout, namespaces)
+            handle_enum(obj, hout, cout)
         elif isinstance(obj, NamespaceDef):
-            handle_objects(obj.members, hout, cout, namespaces + [obj.name])
+            handle_objects(obj.members, hout, cout)
         else:
             print(f"Unknown type: {obj}")
 
 
-def handle_types(tree, namespaces=[]):
+def handle_types(tree):
+    '''Traverse AST and record all locally defined types, i.e. defined in
+    the currently processed IDL file.
+    '''
     for obj in tree:
         if isinstance(obj, ClassDef):
-            add_to_types(obj, namespaces, [])
+            register_local_type(obj)
+            register_writable_local_type(obj)
         elif isinstance(obj, EnumDef):
             pass
         elif isinstance(obj, NamespaceDef):
-            handle_types(obj.members, namespaces + [obj.name])
+            handle_types(obj.members)
         else:
             print(f"Unknown object type: {obj}")
+
+
+def setup_additional_metadata(tree, ns_context = [], parent_template_params=[]):
+    '''Cache additional metadata for each type declaration directly in the AST node.
+
+    This currenty includes namespace info and template parameters for the
+    parent scope (applicable only to enums and classes).'''
+    for obj in tree:
+        if isinstance(obj, NamespaceDef):
+            setup_additional_metadata(obj.members, ns_context + [obj.name])
+        elif isinstance(obj, EnumDef):
+            obj.ns_context = ns_context
+
+            obj.parent_template_params = parent_template_params
+
+            obj.template_declaration = "template <" + template_params_str(parent_template_params) + ">" \
+                if parent_template_params else ""
+        elif isinstance(obj, ClassDef):
+            obj.ns_context = ns_context
+            # need to account for nested types
+            current_scope = obj.name
+            if obj.template_params:
+                # current scope name should consider template classes as well
+                current_scope += "<" + ",".join(tp.name for tp in obj.template_params) + ">"
+
+            obj.template_param_names_str = "<" + ",".join(map(lambda a: a.name, obj.template_params)) + ">" \
+                if obj.template_params else ""
+
+            obj.parent_template_params = parent_template_params
+
+            obj.template_declaration = "template <" + template_params_str(obj.template_params + obj.parent_template_params) + ">" \
+                if obj.template_params else ""
+
+            nested_template_params = parent_template_params + obj.template_params if obj.template_params else []
+
+            setup_additional_metadata(obj.members, ns_context + [current_scope], nested_template_params)
 
 
 def load_file(name):
@@ -1311,6 +1365,7 @@ def load_file(name):
         fprintln(cout, f"namespace {config.ns} {{")
     data = parse_file(name)
     if data:
+        setup_additional_metadata(data)
         handle_types(data)
         handle_objects(data, hout, cout)
     add_visitors(cout)
@@ -1322,6 +1377,7 @@ def load_file(name):
 
 
 def general_include(files):
+    '''Write serialization-related header includes in the generated files'''
     name = config.o if config.o else "serializer.dist.hh"
     # Header file containing implementation of serializers and other supporting classes 
     cout = open(name.replace('.hh', '.impl.hh'), "w+")
