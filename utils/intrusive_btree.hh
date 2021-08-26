@@ -2146,7 +2146,7 @@ private:
             while (ni != 0) {
                 destroy(*n->_kids[--ni]);
             }
-            n->drop();
+            destroy(*n);
             throw;
         }
 
