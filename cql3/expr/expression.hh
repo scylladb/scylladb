@@ -208,6 +208,11 @@ struct bind_variable {
     // FIXME: infer shape from expression rather than from grammar
     shape_type shape;
     int32_t bind_index;
+
+    // Type of the bound value.
+    // Before preparing can be nullptr.
+    // After preparing always holds a valid type.
+    data_type value_type;
 };
 
 // A constant which does not yet have a date type. It is partially typed

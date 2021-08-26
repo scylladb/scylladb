@@ -71,11 +71,19 @@ cql3::raw_value tuples::in_value::get(const query_options& options) {
 }
 
 expr::expression tuples::marker::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::tuple,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 expr::expression tuples::in_marker::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::tuple_in,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)

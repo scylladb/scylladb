@@ -190,7 +190,11 @@ maps::marker::bind(const query_options& options) {
 }
 
 expr::expression maps::marker::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::scalar,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 void
