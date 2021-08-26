@@ -159,7 +159,18 @@ lists::delayed_value::bind_ignore_null(const query_options& options) {
 }
 
 expr::expression lists::delayed_value::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    std::vector<expr::expression> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (shared_ptr<term>& e : _elements) {
+        new_elements.emplace_back(expr::to_expression(e));
+    }
+
+    return expr::collection_constructor {
+        .style = expr::collection_constructor::style_type::list,
+        .elements = std::move(new_elements),
+        .type = _my_type
+    };
 }
 
 ::shared_ptr<terminal>

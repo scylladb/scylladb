@@ -48,6 +48,7 @@
 #include "cql3/cql3_type.hh"
 #include "constants.hh"
 #include "types/map.hh"
+#include "cql3/tuples.hh"
 
 namespace cql3 {
 
@@ -164,7 +165,23 @@ maps::delayed_value::bind(const query_options& options) {
 }
 
 expr::expression maps::delayed_value::to_expression() {
-    throw std::runtime_error(fmt::format("to_expression not implemented! {}:{}", __FILE__, __LINE__));
+    std::vector<expr::expression> new_elements;
+    new_elements.reserve(_elements.size());
+
+    const map_type_impl& mtype = dynamic_cast<const map_type_impl&>(_my_type->without_reversed());
+    data_type ttype = tuple_type_impl::get_instance({mtype.get_keys_type(), mtype.get_values_type()});
+
+    for (auto&& [key, value] : _elements) {
+        expr::expression key_expr = expr::to_expression(key);
+        expr::expression value_expr = expr::to_expression(value);
+        new_elements.emplace_back(expr::tuple_constructor{{std::move(key_expr), std::move(value_expr)}, std::move(ttype)});
+    }
+
+    return expr::collection_constructor {
+        .style = expr::collection_constructor::style_type::map,
+        .elements = std::move(new_elements),
+        .type = _my_type
+    };
 }
 
 ::shared_ptr<terminal>
