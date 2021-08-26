@@ -108,7 +108,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
                 auto it = std::prev(_range_tombstones.end());
-                push_mutation_fragment(*_schema, _permit, _range_tombstones.pop_as<range_tombstone>(it));
+                push_mutation_fragment(*_schema, _permit, _range_tombstones.pop(it));
             };
             position_in_partition::less_compare cmp(*_schema);
             while (!_mutation_fragments.empty() && !is_buffer_full()) {

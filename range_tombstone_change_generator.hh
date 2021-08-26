@@ -68,7 +68,7 @@ public:
         }
 
         while (!_range_tombstones.empty() && !less(lower_bound, _range_tombstones.begin()->end_position())) {
-            _range_tombstones.pop_as<range_tombstone>(_range_tombstones.begin());
+            _range_tombstones.pop(_range_tombstones.begin());
         }
 
         if (!_range_tombstones.empty() && less(_range_tombstones.begin()->position(), _lower_bound)) {
@@ -88,7 +88,7 @@ public:
         std::optional<range_tombstone> prev;
 
         while (!_range_tombstones.empty() && less(_range_tombstones.begin()->end_position(), upper_bound)) {
-            auto rt = _range_tombstones.pop_as<range_tombstone>(_range_tombstones.begin());
+            auto rt = _range_tombstones.pop(_range_tombstones.begin());
 
             if (prev && less(prev->end_position(), rt.position())) { // [1]
                 // previous range tombstone not adjacent, emit gap.

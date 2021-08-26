@@ -201,13 +201,10 @@ public:
         _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
     }
 
-    template <typename T>
-    requires std::constructible_from<T, range_tombstone>
-    auto pop_as(iterator it) {
-        range_tombstone& rt = *it;
-        _tombstones.erase(it);
-        auto rt_deleter = seastar::defer([&rt] () noexcept { current_deleter<range_tombstone>()(&rt); });
-        return T(std::move(rt));
+    range_tombstone pop(iterator it) {
+        range_tombstone rt(std::move(*it), range_tombstone::without_link{});
+        _tombstones.erase_and_dispose(it, current_deleter<range_tombstone>());
+        return rt;
     }
 
     // Removes elements of this list in batches.
