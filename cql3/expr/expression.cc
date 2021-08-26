@@ -1304,7 +1304,9 @@ constant evaluate(term* term_ptr, const query_options& options) {
         return constant::make_null();
     }
 
-    if (dynamic_cast<abstract_marker*>(term_ptr) != nullptr) {
+    if (dynamic_cast<abstract_marker*>(term_ptr) != nullptr
+     || dynamic_cast<tuples::value*>(term_ptr) != nullptr
+     || dynamic_cast<tuples::delayed_value*>(term_ptr) != nullptr) {
         return evaluate(term_ptr->to_expression(), options);
     }
 
@@ -1565,7 +1567,27 @@ constant evaluate(const bind_variable& bind_var, const query_options& options) {
 }
 
 constant evaluate(const tuple_constructor& tuple, const query_options& options) {
-    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+    if (tuple.type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(tuple_constructor) called with nullptr type, should be prepared first");
+    }
+
+    std::vector<managed_bytes_opt> tuple_elements;
+    tuple_elements.reserve(tuple.elements.size());
+
+    for (size_t i = 0; i < tuple.elements.size(); i++) {
+        constant elem_val = evaluate(tuple.elements[i], options);
+        if (elem_val.is_unset_value()) {
+            throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
+        }
+
+        tuple_elements.emplace_back(std::move(elem_val.value).to_managed_bytes_opt());
+    }
+
+    cql3::raw_value raw_val =
+        cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(std::move(tuple_elements)));
+
+    return constant(std::move(raw_val), tuple.type);
 }
 
 constant evaluate(const collection_constructor& collection, const query_options& options) {
