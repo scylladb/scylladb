@@ -115,7 +115,7 @@ html_theme_options = {
     ('Scylla University', 'https://university.scylladb.com/'),
     ('ScyllaDB Home', 'https://www.scylladb.com/')],
     'github_issues_repository': 'scylladb/scylla',
-    'hide_version_dropdown': ['master']
+    'hide_version_dropdown': ['master'],
     'default_branch': 'stable',
     'show_sidebar_index': True,
 }
