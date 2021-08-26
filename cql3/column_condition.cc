@@ -315,29 +315,29 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
             throw exceptions::invalid_request_exception(
                     format("Unsupported collection type {} in a condition with element access", ctype->cql3_type_name()));
         }
-        collection_element_term = _collection_element->prepare(db, keyspace, element_spec);
+        collection_element_term = prepare_term(*_collection_element, db, keyspace, element_spec);
     }
 
     if (is_compare(_op)) {
         validate_operation_on_durations(*receiver.type, _op);
         return column_condition::condition(receiver, collection_element_term,
-                _value->prepare(db, keyspace, value_spec), nullptr, _op);
+                prepare_term(*_value, db, keyspace, value_spec), nullptr, _op);
     }
 
     if (_op == expr::oper_t::LIKE) {
-        auto literal_term = dynamic_pointer_cast<constants::literal>(_value);
+        auto literal_term = std::get_if<expr::untyped_constant>(&*_value);
         if (literal_term) {
             // Pass matcher object
-            const sstring& pattern = literal_term->get_raw_text();
+            const sstring& pattern = literal_term->raw_text;
             return column_condition::condition(receiver, collection_element_term,
-                    _value->prepare(db, keyspace, value_spec),
+                    prepare_term(*_value, db, keyspace, value_spec),
                     std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size())),
                     _op);
         } else {
             // Pass through rhs value, matcher object built on execution
             // TODO: caller should validate parametrized LIKE pattern
             return column_condition::condition(receiver, collection_element_term,
-                    _value->prepare(db, keyspace, value_spec), nullptr, _op);
+                    prepare_term(*_value, db, keyspace, value_spec), nullptr, _op);
         }
     }
 
@@ -347,14 +347,14 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
 
     if (_in_marker) {
         assert(_in_values.empty());
-        shared_ptr<term> multi_item_term = _in_marker->prepare(db, keyspace, value_spec);
+        shared_ptr<term> multi_item_term = prepare_term(*_in_marker, db, keyspace, value_spec);
         return column_condition::in_condition(receiver, collection_element_term, multi_item_term, {});
     }
     // Both _in_values and in _in_marker can be missing in case of empty IN list: "a IN ()"
     std::vector<::shared_ptr<term>> terms;
     terms.reserve(_in_values.size());
     for (auto&& value : _in_values) {
-        terms.push_back(value->prepare(db, keyspace, value_spec));
+        terms.push_back(prepare_term(value, db, keyspace, value_spec));
     }
     return column_condition::in_condition(receiver, collection_element_term, {}, std::move(terms));
 }

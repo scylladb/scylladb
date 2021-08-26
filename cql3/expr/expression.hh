@@ -30,6 +30,7 @@
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
 #include "cql3/term.hh"
+#include "cql3/column_identifier.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
 #include "database_fwd.hh"
@@ -80,11 +81,18 @@ class column_mutation_attribute;
 class function_call;
 class cast;
 class field_selection;
+struct null;
+struct bind_variable;
+struct untyped_constant;
+struct tuple_constructor;
+struct collection_constructor;
+struct usertype_constructor;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection>;
+                                field_selection, null, bind_variable, untyped_constant,
+                                tuple_constructor, collection_constructor, usertype_constructor>;
 
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
@@ -183,12 +191,48 @@ struct function_call {
 
 struct cast {
     nested_expression arg;
-    cql3_type type;
+    std::variant<cql3_type, shared_ptr<cql3_type::raw>> type;
 };
 
 struct field_selection {
     nested_expression structure;
     shared_ptr<column_identifier_raw> field;
+};
+
+struct null {
+};
+
+struct bind_variable {
+    enum class shape_type { scalar, scalar_in, tuple, tuple_in };
+    // FIXME: infer shape from expression rather than from grammar
+    shape_type shape;
+    int32_t bind_index;
+};
+
+// A constant which does not yet have a date type. It is partially typed
+// (we know if it's floating or int) but not sized.
+struct untyped_constant {
+    enum type_class { integer, floating_point, string, boolean, duration, uuid, hex };
+    type_class partial_type;
+    sstring raw_text;
+};
+
+// Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
+struct tuple_constructor {
+    std::vector<expression> elements;
+};
+
+// Constructs a collection of same-typed elements
+struct collection_constructor {
+    enum class style_type { list, set, map };
+    style_type style;
+    std::vector<expression> elements;
+};
+
+// Constructs an object of a user-defined type
+struct usertype_constructor {
+    using elements_map_type = std::unordered_map<column_identifier, nested_expression>;
+    elements_map_type elements;
 };
 
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
@@ -282,6 +326,39 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             [&] (const field_selection& fs) -> const binary_operator* {
                 return find_atom(*fs.structure, f);
             },
+            [&] (const null&) -> const binary_operator* {
+                return nullptr;
+            },
+            [&] (const bind_variable&) -> const binary_operator* {
+                return nullptr;
+            },
+            [&] (const untyped_constant&) -> const binary_operator* {
+                return nullptr;
+            },
+            [&] (const tuple_constructor& t) -> const binary_operator* {
+                for (auto& e : t.elements) {
+                    if (auto found = find_atom(e, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
+            [&] (const collection_constructor& c) -> const binary_operator* {
+                for (auto& e : c.elements) {
+                    if (auto found = find_atom(e, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
+            [&] (const usertype_constructor& c) -> const binary_operator* {
+                for (auto& [k, v] : c.elements) {
+                    if (auto found = find_atom(*v, f)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            },
         }, e);
 }
 
@@ -309,6 +386,27 @@ size_t count_if(const expression& e, Fn f) {
                 return count_if(*c.arg, f); },
             [&] (const field_selection& fs) -> size_t {
                 return count_if(*fs.structure, f);
+            },
+            [&] (const null&) -> size_t {
+                return 0;
+            },
+            [&] (const bind_variable&) -> size_t {
+                return 0;
+            },
+            [&] (const untyped_constant&) -> size_t {
+                return 0;
+            },
+            [&] (const tuple_constructor& t) -> size_t {
+                return std::accumulate(t.elements.cbegin(), t.elements.cend(), size_t{0},
+                                       [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
+            },
+            [&] (const collection_constructor& c) -> size_t {
+                return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
+                                       [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
+            },
+            [&] (const usertype_constructor& c) -> size_t {
+                return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
+                                       [&] (size_t acc, const usertype_constructor::elements_map_type::value_type& e) { return acc + count_if(*e.second, f); });
             },
         }, e);
 }
@@ -378,6 +476,28 @@ extern expression replace_column_def(const expression&, const column_definition*
 // Replaces all occurences of token(p1, p2) on the left hand side with the given colum.
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
 extern expression replace_token(const expression&, const column_definition*);
+
+
+extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+extern ::shared_ptr<term> prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
+
+
+/**
+ * @return whether this object can be assigned to the provided receiver. We distinguish
+ * between 3 values: 
+ *   - EXACT_MATCH if this object is exactly of the type expected by the receiver
+ *   - WEAKLY_ASSIGNABLE if this object is not exactly the expected type but is assignable nonetheless
+ *   - NOT_ASSIGNABLE if it's not assignable
+ * Most caller should just call the is_assignable() method on the result, though functions have a use for
+ * testing "strong" equality to decide the most precise overload to pick when multiple could match.
+ */
+extern assignment_testable::test_result test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver);
+
+// Test all elements of exprs for assignment. If all are exact match, return exact match. If any is not assignable,
+// return not assignable. Otherwise, return weakly assignable.
+extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, database& db, const sstring& keyspace, const column_specification& receiver);
+
+extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
 
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?

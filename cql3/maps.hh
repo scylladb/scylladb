@@ -59,21 +59,6 @@ public:
     static lw_shared_ptr<column_specification> key_spec_of(const column_specification& column);
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
-    class literal : public term::raw {
-    public:
-        const std::vector<std::pair<::shared_ptr<term::raw>, ::shared_ptr<term::raw>>> entries;
-
-        literal(const std::vector<std::pair<::shared_ptr<term::raw>, ::shared_ptr<term::raw>>>& entries_)
-            : entries{entries_}
-        { }
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
-    private:
-        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
-    public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
-        virtual sstring to_string() const override;
-    };
-
     class value : public terminal, collection_terminal {
     public:
         std::map<managed_bytes, managed_bytes, serialized_compare> map;

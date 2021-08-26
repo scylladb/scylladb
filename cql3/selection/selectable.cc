@@ -195,13 +195,36 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             }, fc.func);
         },
         [&] (const expr::cast& c) -> shared_ptr<selectable> {
-            return ::make_shared<selectable::with_cast>(prepare_selectable(s, *c.arg), c.type);
+            auto t = std::get_if<cql3_type>(&c.type);
+            if (!t) {
+                // FIXME: adjust prepare_seletable() signature so we can prepare the type too
+                on_internal_error(slogger, "unprepared type in selector type cast");
+            }
+            return ::make_shared<selectable::with_cast>(prepare_selectable(s, *c.arg), *t);
         },
         [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
             return make_shared<selectable::with_field_selection>(prepare_selectable(s, *fs.structure),
                     static_pointer_cast<column_identifier>(fs.field->prepare(s)));
+        },
+        [&] (const expr::null&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "null found its way to selector context");
+        },
+        [&] (const expr::bind_variable&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "bind_variable found its way to selector context");
+        },
+        [&] (const expr::untyped_constant&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "untyped_constant found its way to selector context");
+        },
+        [&] (const expr::tuple_constructor&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "tuple_constructor found its way to selector context");
+        },
+        [&] (const expr::collection_constructor&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "collection_constructor found its way to selector context");
+        },
+        [&] (const expr::usertype_constructor&) -> shared_ptr<selectable> {
+            on_internal_error(slogger, "usertype_constructor found its way to selector context");
         },
     }, raw_selectable);
 }
@@ -245,6 +268,24 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
         },
         [&] (const expr::field_selection& fs) -> bool {
             return true;
+        },
+        [&] (const expr::null&) -> bool {
+            on_internal_error(slogger, "null found its way to selector context");
+        },
+        [&] (const expr::bind_variable&) -> bool {
+            on_internal_error(slogger, "bind_variable found its way to selector context");
+        },
+        [&] (const expr::untyped_constant&) -> bool {
+            on_internal_error(slogger, "untyped_constant found its way to selector context");
+        },
+        [&] (const expr::tuple_constructor&) -> bool {
+            on_internal_error(slogger, "tuple_constructor found its way to selector context");
+        },
+        [&] (const expr::collection_constructor&) -> bool {
+            on_internal_error(slogger, "collection_constructor found its way to selector context");
+        },
+        [&] (const expr::usertype_constructor&) -> bool {
+            on_internal_error(slogger, "collection_constructor found its way to selector context");
         },
     }, raw_selectable);
 };

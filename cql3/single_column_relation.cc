@@ -56,13 +56,13 @@ namespace cql3 {
 
 ::shared_ptr<term>
 single_column_relation::to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                const term::raw& raw,
+                                const expr::expression& raw,
                                 database& db,
                                 const sstring& keyspace,
                                 prepare_context& ctx) const {
     // TODO: optimize vector away, accept single column_specification
     assert(receivers.size() == 1);
-    auto term = raw.prepare(db, keyspace, receivers[0]);
+    auto term = prepare_term(raw, db, keyspace, receivers[0]);
     term->fill_prepare_context(ctx);
     return term;
 }

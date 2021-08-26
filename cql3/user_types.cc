@@ -45,106 +45,10 @@
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/range/algorithm/count.hpp>
 
 #include "types/user.hh"
 
 namespace cql3 {
-
-lw_shared_ptr<column_specification> user_types::field_spec_of(const column_specification& column, size_t field) {
-    auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
-    auto&& name = ut->field_name(field);
-    auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
-    return make_lw_shared<column_specification>(
-                                   column.ks_name,
-                                   column.cf_name,
-                                   ::make_shared<column_identifier>(column.name->to_string() + "." + sname, true),
-                                   ut->field_type(field));
-}
-
-user_types::literal::literal(elements_map_type entries)
-        : _entries(std::move(entries)) {
-}
-
-shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, *receiver);
-    auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
-    bool all_terminal = true;
-    std::vector<shared_ptr<term>> values;
-    values.reserve(_entries.size());
-    size_t found_values = 0;
-    for (size_t i = 0; i < ut->size(); ++i) {
-        auto&& field = column_identifier(to_bytes(ut->field_name(i)), utf8_type);
-        auto iraw = _entries.find(field);
-        shared_ptr<term::raw> raw;
-        if (iraw == _entries.end()) {
-            raw = cql3::constants::NULL_LITERAL;
-        } else {
-            raw = iraw->second;
-            ++found_values;
-        }
-        auto&& value = raw->prepare(db, keyspace, field_spec_of(*receiver, i));
-
-        if (dynamic_cast<non_terminal*>(value.get())) {
-            all_terminal = false;
-        }
-
-        values.push_back(std::move(value));
-    }
-    if (found_values != _entries.size()) {
-        // We had some field that are not part of the type
-        for (auto&& id_val : _entries) {
-            auto&& id = id_val.first;
-            if (!boost::range::count(ut->field_names(), id.bytes_)) {
-                throw exceptions::invalid_request_exception(format("Unknown field '{}' in value of user defined type {}", id, ut->get_name_as_string()));
-            }
-        }
-    }
-
-    delayed_value value(ut, values);
-    if (all_terminal) {
-        return value.bind(query_options::DEFAULT);
-    } else {
-        return make_shared<delayed_value>(std::move(value));
-    }
-}
-
-void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
-    if (!receiver.type->is_user_type()) {
-        throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
-    }
-
-    auto ut = static_pointer_cast<const user_type_impl>(receiver.type);
-    for (size_t i = 0; i < ut->size(); i++) {
-        column_identifier field(to_bytes(ut->field_name(i)), utf8_type);
-        if (!_entries.contains(field)) {
-            continue;
-        }
-        const shared_ptr<term::raw>& value = _entries.at(field);
-        auto&& field_spec = field_spec_of(receiver, i);
-        if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *field_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
-        }
-    }
-}
-
-assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
-    try {
-        validate_assignable_to(db, keyspace, receiver);
-        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-    } catch (exceptions::invalid_request_exception& e) {
-        return assignment_testable::test_result::NOT_ASSIGNABLE;
-    }
-}
-
-sstring user_types::literal::assignment_testable_source_context() const {
-    return to_string();
-}
-
-sstring user_types::literal::to_string() const {
-    auto kv_to_str = [] (auto&& kv) { return format("{}:{}", kv.first, kv.second); };
-    return format("{{{}}}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
-}
 
 user_types::value::value(std::vector<managed_bytes_opt> elements)
         : _elements(std::move(elements)) {

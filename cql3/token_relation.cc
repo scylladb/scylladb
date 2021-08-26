@@ -83,7 +83,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         database& db, schema_ptr schema,
         prepare_context& ctx) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
+    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
             schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
@@ -105,7 +105,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         statements::bound bound,
         bool inclusive) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
+    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
             schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
@@ -132,9 +132,9 @@ sstring cql3::token_relation::to_string() const {
 
 ::shared_ptr<cql3::term> cql3::token_relation::to_term(
         const std::vector<lw_shared_ptr<column_specification>>& receivers,
-        const term::raw& raw, database& db, const sstring& keyspace,
+        const expr::expression& raw, database& db, const sstring& keyspace,
         prepare_context& ctx) const {
-    auto term = raw.prepare(db, keyspace, receivers.front());
+    auto term = expr::prepare_term(raw, db, keyspace, receivers.front());
     term->fill_prepare_context(ctx);
     return term;
 }

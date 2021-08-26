@@ -225,6 +225,30 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const field_selection&) {
             on_internal_error(rlogger, "extract_partition_range(field_selection)");
         }
+
+        void operator()(const null&) {
+            on_internal_error(rlogger, "extract_partition_range(null)");
+        }
+
+        void operator()(const bind_variable&) {
+            on_internal_error(rlogger, "extract_partition_range(bind_variable)");
+        }
+
+        void operator()(const untyped_constant&) {
+            on_internal_error(rlogger, "extract_partition_range(untyped_constant)");
+        }
+
+        void operator()(const tuple_constructor&) {
+            on_internal_error(rlogger, "extract_partition_range(tuple_constructor)");
+        }
+
+        void operator()(const collection_constructor&) {
+            on_internal_error(rlogger, "extract_partition_range(collection_constructor)");
+        }
+
+        void operator()(const usertype_constructor&) {
+            on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
+        }
     } v;
     std::visit(v, where_clause);
     if (v.tokens) {
@@ -310,6 +334,30 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         void operator()(const field_selection&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(field_selection)");
         }
+
+        void operator()(const null&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(null)");
+        }
+
+        void operator()(const bind_variable&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(bind_variable)");
+        }
+
+        void operator()(const untyped_constant&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(untyped_constant)");
+        }
+
+        void operator()(const tuple_constructor&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(tuple_constructor)");
+        }
+
+        void operator()(const collection_constructor&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(collection_constructor)");
+        }
+
+        void operator()(const usertype_constructor&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
+        }
     } v;
     std::visit(v, where_clause);
 
@@ -358,7 +406,7 @@ statement_restrictions::statement_restrictions(database& db,
                 }
                 // currently, the grammar only allows the NULL argument to be
                 // "IS NOT", so this assertion should not be able to fail
-                assert(r->get_value() == cql3::constants::NULL_LITERAL);
+                assert(std::holds_alternative<expr::null>(*r->get_value()));
 
                 auto col_id = r->get_entity()->prepare_column_identifier(*schema);
                 const auto *cd = get_column_definition(*schema, *col_id);
@@ -1001,6 +1049,30 @@ struct multi_column_range_accumulator {
 
     void operator()(const field_selection&) {
         on_internal_error(rlogger, "field selection encountered outside binary operator");
+    }
+
+    void operator()(const null&) {
+        on_internal_error(rlogger, "null encountered outside binary operator");
+    }
+
+    void operator()(const bind_variable&) {
+        on_internal_error(rlogger, "bind variable encountered outside binary operator");
+    }
+
+    void operator()(const untyped_constant&) {
+        on_internal_error(rlogger, "untyped constant encountered outside binary operator");
+    }
+
+    void operator()(const tuple_constructor&) {
+        on_internal_error(rlogger, "tuple constructor encountered outside binary operator");
+    }
+
+    void operator()(const collection_constructor&) {
+        on_internal_error(rlogger, "collection constructor encountered outside binary operator");
+    }
+
+    void operator()(const usertype_constructor&) {
+        on_internal_error(rlogger, "collection constructor encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

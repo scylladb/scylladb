@@ -149,9 +149,9 @@ void attributes::fill_prepare_context(prepare_context& ctx) const {
 }
 
 std::unique_ptr<attributes> attributes::raw::prepare(database& db, const sstring& ks_name, const sstring& cf_name) const {
-    auto ts = !timestamp ? ::shared_ptr<term>{} : timestamp->prepare(db, ks_name, timestamp_receiver(ks_name, cf_name));
-    auto ttl = !time_to_live ? ::shared_ptr<term>{} : time_to_live->prepare(db, ks_name, time_to_live_receiver(ks_name, cf_name));
-    auto to = !timeout ? ::shared_ptr<term>{} : timeout->prepare(db, ks_name, timeout_receiver(ks_name, cf_name));
+    auto ts = !timestamp ? ::shared_ptr<term>{} : prepare_term(*timestamp, db, ks_name, timestamp_receiver(ks_name, cf_name));
+    auto ttl = !time_to_live ? ::shared_ptr<term>{} : prepare_term(*time_to_live, db, ks_name, time_to_live_receiver(ks_name, cf_name));
+    auto to = !timeout ? ::shared_ptr<term>{} : prepare_term(*timeout, db, ks_name, timeout_receiver(ks_name, cf_name));
     return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to)}};
 }
 

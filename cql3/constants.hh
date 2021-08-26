@@ -60,10 +60,6 @@ public:
     private static final Logger logger = LoggerFactory.getLogger(Constants.class);
 #endif
 public:
-    enum class type {
-        STRING, INTEGER, UUID, FLOAT, BOOLEAN, HEX, DURATION
-    };
-
     /**
     * A constant value, i.e. a ByteBuffer.
     */
@@ -78,96 +74,14 @@ public:
 
     static thread_local const ::shared_ptr<value> UNSET_VALUE;
 
-    class null_literal final : public term::raw {
-    private:
-        class null_value final : public value {
-        public:
-            null_value() : value(cql3::raw_value::make_null()) {}
-            virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
-            virtual sstring to_string() const override { return "null"; }
-        };
+    class null_value final : public value {
     public:
-        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-            if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
-                throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
-            }
-            return NULL_VALUE;
-        }
-
-        virtual assignment_testable::test_result test_assignment(database& db,
-            const sstring& keyspace,
-            const column_specification& receiver) const override {
-                return receiver.type->is_counter()
-                    ? assignment_testable::test_result::NOT_ASSIGNABLE
-                    : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-        }
-
-        virtual sstring to_string() const override {
-            return "null";
-        }
+        null_value() : value(cql3::raw_value::make_null()) {}
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
+        virtual sstring to_string() const override { return "null"; }
     };
 
-    static thread_local const ::shared_ptr<term::raw> NULL_LITERAL;
-
-    class literal : public term::raw {
-    private:
-        const type _type;
-        const sstring _text;
-    public:
-        literal(type type_, sstring text)
-            : _type{type_}
-            , _text{text}
-        { }
-
-        static ::shared_ptr<literal> string(sstring text) {
-            // This is a workaround for antlr3 not distinguishing between
-            // calling in lexer setText() with an empty string and not calling
-            // setText() at all.
-            if (text.size() == 1 && text[0] == '\xFF') {
-                text = {};
-            }
-            return ::make_shared<literal>(type::STRING, text);
-        }
-
-        static ::shared_ptr<literal> integer(sstring text) {
-            return ::make_shared<literal>(type::INTEGER, text);
-        }
-
-        static ::shared_ptr<literal> floating_point(sstring text) {
-            return ::make_shared<literal>(type::FLOAT, text);
-        }
-
-        static ::shared_ptr<literal> uuid(sstring text) {
-            return ::make_shared<literal>(type::UUID, text);
-        }
-
-        static ::shared_ptr<literal> bool_(sstring text) {
-            return ::make_shared<literal>(type::BOOLEAN, text);
-        }
-
-        static ::shared_ptr<literal> hex(sstring text) {
-            return ::make_shared<literal>(type::HEX, text);
-        }
-
-        static ::shared_ptr<literal> duration(sstring text) {
-            return ::make_shared<literal>(type::DURATION, text);
-        }
-
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
-    private:
-        bytes parsed_value(data_type validator) const;
-    public:
-        const sstring& get_raw_text() {
-            return _text;
-        }
-
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const;
-
-        virtual sstring to_string() const override {
-            return _type == type::STRING ? sstring(format("'{}'", _text)) : _text;
-        }
-    };
+    static thread_local const ::shared_ptr<terminal> NULL_VALUE;
 
     class marker : public abstract_marker {
     public:
@@ -262,7 +176,5 @@ public:
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 };
-
-std::ostream& operator<<(std::ostream&out, constants::type t);
 
 }

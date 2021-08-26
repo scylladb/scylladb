@@ -52,9 +52,9 @@ namespace cql3 {
 
 class operation::set_value : public raw_update {
 protected:
-    ::shared_ptr<term::raw> _value;
+    expr::expression _value;
 public:
-    set_value(::shared_ptr<term::raw> value) : _value(std::move(value)) {}
+    set_value(expr::expression value) : _value(std::move(value)) {}
 
     virtual ::shared_ptr <operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) const override;
 

@@ -38,6 +38,7 @@
 #include "as_json_function.hh"
 #include "cql3/prepare_context.hh"
 #include "user_aggregate.hh"
+#include "cql3/expr/expression.hh"
 #include <boost/range/adaptors.hpp>
 
 #include "error_injection_fcts.hh"
@@ -64,6 +65,10 @@ bool abstract_function::requires_thread() const { return false; }
 bool as_json_function::requires_thread() const { return false; }
 
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
+
+static bytes_opt execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params);
+static bytes_opt execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters);
+static shared_ptr<terminal> make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf);
 
 void functions::clear_functions() noexcept {
     functions::_declared = init();
@@ -496,8 +501,9 @@ function_call::bind_and_get(const query_options& options) {
     return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(result));
 }
 
+static
 bytes_opt
-function_call::execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {
+execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {
     bytes_opt result = fun.execute(sf, params);
     try {
         // Check the method didn't lied on it's declared return type
@@ -523,8 +529,9 @@ function_call::contains_bind_marker() const {
     return false;
 }
 
+static
 shared_ptr<terminal>
-function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf)  {
+make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf)  {
     return visit(*fun->return_type(), make_visitor(
     [&] (const list_type_impl& ltype) -> shared_ptr<terminal> {
         return make_shared<lists::value>(lists::value::from_serialized(result.to_view(), ltype, sf));
@@ -549,17 +556,20 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
 }
 
 ::shared_ptr<term>
-function_call::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
-    std::vector<shared_ptr<assignment_testable>> args;
-    args.reserve(_terms.size());
-    std::transform(_terms.begin(), _terms.end(), std::back_inserter(args),
-            [] (auto&& x) -> shared_ptr<assignment_testable> {
-        return x;
-    });
-    auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name, receiver.get());
-    if (!fun) {
-        throw exceptions::invalid_request_exception(format("Unknown function {} called", _name));
-    }
+prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    auto&& fun = std::visit(overloaded_functor{
+        [] (const shared_ptr<function>& func) {
+            return func;
+        },
+        [&] (const function_name& name) {
+            auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
+            auto fun = functions::functions::get(db, keyspace, name, args, receiver->ks_name, receiver->cf_name, receiver.get());
+            if (!fun) {
+                throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
+            }
+            return fun;
+        },
+    }, fc.func);
     if (fun->is_aggregate()) {
         throw exceptions::invalid_request_exception("Aggregation function are not supported in the where clause");
     }
@@ -575,16 +585,16 @@ function_call::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr
                                                     receiver->name, receiver->type->as_cql3_type()));
     }
 
-    if (scalar_fun->arg_types().size() != _terms.size()) {
+    if (scalar_fun->arg_types().size() != fc.args.size()) {
         throw exceptions::invalid_request_exception(format("Incorrect number of arguments specified for function {} (expected {:d}, found {:d})",
-                                                    fun->name(), fun->arg_types().size(), _terms.size()));
+                                                    fun->name(), fun->arg_types().size(), fc.args.size()));
     }
 
     std::vector<shared_ptr<term>> parameters;
-    parameters.reserve(_terms.size());
+    parameters.reserve(fc.args.size());
     bool all_terminal = true;
-    for (size_t i = 0; i < _terms.size(); ++i) {
-        auto&& t = _terms[i]->prepare(db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+    for (size_t i = 0; i < fc.args.size(); ++i) {
+        auto&& t = prepare_term(fc.args[i], db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
         if (dynamic_cast<non_terminal*>(t.get())) {
             all_terminal = false;
         }
@@ -600,8 +610,9 @@ function_call::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr
     }
 }
 
+static
 bytes_opt
-function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters) {
+execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters) {
     std::vector<bytes_opt> buffers;
     buffers.reserve(parameters.size());
     for (auto&& t : parameters) {
@@ -614,13 +625,21 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
 }
 
 assignment_testable::test_result
-function_call::raw::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+test_assignment_function_call(const cql3::expr::function_call& fc, database& db, const sstring& keyspace, const column_specification& receiver) {
     // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
     // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
     // later with a more helpful error message that if we were to return false here.
     try {
-        auto&& fun = functions::get(db, keyspace, _name, _terms, receiver.ks_name, receiver.cf_name, &receiver);
+        auto&& fun = std::visit(overloaded_functor{
+            [&] (const function_name& name) {
+                auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
+                return functions::get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
+            },
+            [] (const shared_ptr<function>& func) {
+                return func;
+            },
+        }, fc.func);
         if (fun && receiver.type == fun->return_type()) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())) {
@@ -632,12 +651,6 @@ function_call::raw::test_assignment(database& db, const sstring& keyspace, const
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
 }
-
-sstring
-function_call::raw::to_string() const {
-    return format("{}({})", _name, join(", ", _terms));
-}
-
 
 }
 }

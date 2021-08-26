@@ -47,6 +47,12 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/functions/function_name.hh"
 
+namespace cql3::expr {
+
+struct function_call;
+
+}
+
 namespace cql3 {
 namespace functions {
 
@@ -71,29 +77,13 @@ public:
     }
     virtual shared_ptr<terminal> bind(const query_options& options) override;
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
-private:
-    static bytes_opt execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params);
 public:
     virtual bool contains_bind_marker() const override;
-private:
-    static shared_ptr<terminal> make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf);
-public:
-    class raw : public term::raw {
-        function_name _name;
-        std::vector<shared_ptr<term::raw>> _terms;
-    public:
-        raw(function_name name, std::vector<shared_ptr<term::raw>> terms)
-            : _name(std::move(name)), _terms(std::move(terms)) {
-        }
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
-    private:
-        // All parameters must be terminal
-        static bytes_opt execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters);
-    public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
-        virtual sstring to_string() const override;
-    };
 };
+
+::shared_ptr<term> prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+
+assignment_testable::test_result test_assignment_function_call(const cql3::expr::function_call& fc, database& db, const sstring& keyspace, const column_specification& receiver);
 
 }
 }

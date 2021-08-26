@@ -47,6 +47,7 @@
 #include "term.hh"
 #include "update_parameters.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/expr/expression.hh"
 
 #include <optional>
 
@@ -187,13 +188,13 @@ public:
     class set_counter_value_from_tuple_list;
 
     class set_element : public raw_update {
-        const shared_ptr<term::raw> _selector;
-        const shared_ptr<term::raw> _value;
+        const expr::expression _selector;
+        const expr::expression _value;
         const bool _by_uuid;
     private:
         sstring to_string(const column_definition& receiver) const;
     public:
-        set_element(shared_ptr<term::raw> selector, shared_ptr<term::raw> value, bool by_uuid = false)
+        set_element(expr::expression selector, expr::expression value, bool by_uuid = false)
             : _selector(std::move(selector)), _value(std::move(value)), _by_uuid(by_uuid) {
         }
 
@@ -205,11 +206,11 @@ public:
     // Set a single field inside a user-defined type.
     class set_field : public raw_update {
         const shared_ptr<column_identifier> _field;
-        const shared_ptr<term::raw> _value;
+        const expr::expression _value;
     private:
         sstring to_string(const column_definition& receiver) const;
     public:
-        set_field(shared_ptr<column_identifier> field, shared_ptr<term::raw> value)
+        set_field(shared_ptr<column_identifier> field, expr::expression value)
             : _field(std::move(field)), _value(std::move(value)) {
         }
 
@@ -234,12 +235,12 @@ public:
     };
 
     class addition : public raw_update {
-        const shared_ptr<term::raw> _value;
+        const expr::expression _value;
     private:
         sstring to_string(const column_definition& receiver) const;
     public:
-        addition(shared_ptr<term::raw> value)
-                : _value(value) {
+        addition(expr::expression value)
+                : _value(std::move(value)) {
         }
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) const override;
@@ -248,12 +249,12 @@ public:
     };
 
     class subtraction : public raw_update {
-        const shared_ptr<term::raw> _value;
+        const expr::expression _value;
     private:
         sstring to_string(const column_definition& receiver) const;
     public:
-        subtraction(shared_ptr<term::raw> value)
-                : _value(value) {
+        subtraction(expr::expression value)
+                : _value(std::move(value)) {
         }
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) const override;
@@ -262,11 +263,11 @@ public:
     };
 
     class prepend : public raw_update {
-        shared_ptr<term::raw> _value;
+        expr::expression _value;
     private:
         sstring to_string(const column_definition& receiver) const;
     public:
-        prepend(shared_ptr<term::raw> value)
+        prepend(expr::expression value)
                 : _value(std::move(value)) {
         }
 
@@ -279,9 +280,9 @@ public:
 
     class element_deletion : public raw_deletion {
         shared_ptr<column_identifier::raw> _id;
-        shared_ptr<term::raw> _element;
+        expr::expression _element;
     public:
-        element_deletion(shared_ptr<column_identifier::raw> id, shared_ptr<term::raw> element)
+        element_deletion(shared_ptr<column_identifier::raw> id, expr::expression element)
                 : _id(std::move(id)), _element(std::move(element)) {
         }
         virtual const column_identifier::raw& affected_column() const override;
