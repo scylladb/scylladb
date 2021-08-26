@@ -2144,6 +2144,7 @@ private:
                 node::dispose_key(n->_base.keys[--ki], deleter);
             }
             while (ni != 0) {
+                n->_kids[ni - 1]->clear([&deleter] (member_hook* h) { node::dispose_key(h, deleter); });
                 destroy(*n->_kids[--ni]);
             }
             destroy(*n);
