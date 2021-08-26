@@ -564,7 +564,11 @@ private:
 
         node_head_ptr& operator=(node_head* v) noexcept {
             _v = v;
-            if (_v != nullptr) {
+            // Checking (_v != &nil_root) is not needed for correctness, since
+            // nil_root's _backref is never read anyway. But we do this check for
+            // performance reasons: since nil_root is shared between shards,
+            // writing to it would cause serious cache contention.
+            if (_v != nullptr && _v != &nil_root) {
                 _v->_backref = this;
             }
             return *this;
