@@ -41,7 +41,7 @@ public:
     using test_tree = tree<test_key, &test_key::b_hook, tri_compare, 4, 5, key_search::both, with_debug::yes>;
     test_key(int nr, int cookie) noexcept : tree_test_key_base(nr, cookie) {}
     test_key(int nr) noexcept : tree_test_key_base(nr) {}
-    test_key(const test_key& o) noexcept : tree_test_key_base(o, tree_test_key_base::force_copy_tag{}) {}
+    test_key(const test_key& o) : tree_test_key_base(o, tree_test_key_base::force_copy_tag{}) {}
     test_key(test_key&&) = delete;
 };
 
