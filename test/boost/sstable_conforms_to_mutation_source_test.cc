@@ -95,10 +95,8 @@ void test_cache_population_with_range_tombstone_adjacent_to_population_range(pop
             .produces_end_of_stream();
 }
 
-SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
-    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-        for (auto version : writable_sstable_versions) {
-            for (auto index_block_size : {1, 128, 64*1024}) {
+static future<> test_sstable_conforms_to_mutation_source(sstable_version_types version, int index_block_size) {
+    return sstables::test_env::do_with_async([version, index_block_size] (sstables::test_env& env) {
                 sstable_writer_config cfg = env.manager().configure_writer();
                 cfg.promoted_index_block_size = index_block_size;
 
@@ -115,7 +113,36 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
                     // The tests below are not sensitive to index bock size so run once.
                     test_cache_population_with_range_tombstone_adjacent_to_population_range(populate);
                 }
-            }
-        }
     });
 }
+
+static constexpr std::array<int, 3> block_sizes = { 1, 128, 64 * 1024 };
+
+// Split for better parallelizm
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mc_tiny) {
+    return test_sstable_conforms_to_mutation_source(writable_sstable_versions[0], block_sizes[0]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mc_medium) {
+    return test_sstable_conforms_to_mutation_source(writable_sstable_versions[0], block_sizes[1]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mc_large) {
+    return test_sstable_conforms_to_mutation_source(writable_sstable_versions[0], block_sizes[2]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_md_tiny) {
+    return test_sstable_conforms_to_mutation_source(writable_sstable_versions[1], block_sizes[0]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_md_medium) {
+    return test_sstable_conforms_to_mutation_source(writable_sstable_versions[1], block_sizes[1]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_md_large) {
+    return test_sstable_conforms_to_mutation_source(writable_sstable_versions[1], block_sizes[2]);
+}
+
+// This assert makes sure we don't miss writable vertions
+static_assert(writable_sstable_versions.size() == 2);
