@@ -148,11 +148,6 @@ storage_service::storage_service(abort_source& abort_source,
     (void) _raft_gr;
 }
 
-void storage_service::enable_all_features() {
-    auto features = _feature_service.known_feature_set();
-    _feature_service.enable(features);
-}
-
 enum class node_external_status {
     UNKNOWN        = 0,
     STARTING       = 1,

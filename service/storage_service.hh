@@ -343,8 +343,6 @@ private:
     std::optional<cdc::generation_id> _cdc_gen_id;
 
 public:
-    void enable_all_features();
-
     // should only be called via JMX
     future<> stop_gossiping();
 

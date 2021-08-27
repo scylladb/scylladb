@@ -612,8 +612,8 @@ public:
                 gms::get_gossiper().stop().get();
             });
 
-            ss.invoke_on_all([] (auto&& ss) {
-                ss.enable_all_features();
+            feature_service.invoke_on_all([] (auto& fs) {
+                fs.enable(fs.known_feature_set());
             }).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
