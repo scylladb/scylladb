@@ -765,7 +765,9 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
 }
 
 future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* cf) {
-    return run_custom_job(cf, sstables::compaction_type::Scrub, [this, &cf = *cf, sstables = get_candidates(*cf)] () mutable -> future<> {
+    // All sstables must be included, even the ones being compacted, such that everything in table is validated.
+    auto all_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*cf->get_sstables());
+    return run_custom_job(cf, sstables::compaction_type::Scrub, [this, &cf = *cf, sstables = std::move(all_sstables)] () mutable -> future<> {
         class pending_tasks {
             compaction_manager::stats& _stats;
             size_t _n;
