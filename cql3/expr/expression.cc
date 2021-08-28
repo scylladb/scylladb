@@ -1155,71 +1155,13 @@ expression replace_column_def(const expression& expr, const column_definition* n
 }
 
 expression replace_token(const expression& expr, const column_definition* new_cdef) {
-    return std::visit(overloaded_functor{
-            [] (bool b) { return expression(b); },
-            [&] (const conjunction& conj) {
-                const auto applied = conj.children | transformed(
-                        std::bind(replace_token, std::placeholders::_1, new_cdef));
-                return expression(conjunction{std::vector(applied.begin(), applied.end())});
-            },
-            [&] (const binary_operator& oper) {
-                return expression(binary_operator(replace_token(*oper.lhs, new_cdef), oper.op, oper.rhs));
-            },
-            [&] (const column_value&) {
-                return expr;
-            },
-            [&] (const column_value_tuple&) -> expression {
-                throw std::logic_error(format("replace_token invalid with column tuple: {}", to_string(expr)));
-            },
-            [&] (const token&) -> expression { return column_value{new_cdef}; },
-            [&] (const unresolved_identifier&) -> expression {
-                throw std::logic_error(format("replace_token invalid with unresolved identifier: {}", to_string(expr)));
-            },
-            [&] (const column_mutation_attribute&) -> expression {
-                return expr;
-            },
-            [&] (const function_call&) -> expression {
-                // A token function could be one of the arguments, but it doesn't help the caller to replace it
-                // since we can't index function of the token function.
-                return expr;
-            },
-            [&] (const cast&) -> expression {
-                // A token function could be what's being casted, but it doesn't help the caller to replace it
-                // since we can't index function of the token function.
-                return expr;
-            },
-            [&] (const field_selection&) -> expression {
-                return expr;
-            },
-            [&] (const null&) -> expression {
-                return expr;
-            },
-            [&] (const bind_variable&) -> expression {
-                return expr;
-            },
-            [&] (const untyped_constant&) -> expression {
-                return expr;
-            },
-            [&] (const tuple_constructor& tc) -> expression {
-                return tuple_constructor{boost::copy_range<std::vector<expression>>(
-                    tc.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef))
-                )};
-            },
-            [&] (const collection_constructor& c) -> expression {
-                return collection_constructor{
-                    c.style,
-                    boost::copy_range<std::vector<expression>>(
-                        c.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef)))
-                };
-            },
-            [&] (const usertype_constructor& uc) -> expression {
-                usertype_constructor::elements_map_type m;
-                for (auto& [k, v] : uc.elements) {
-                    m.emplace(k, replace_token(*v, new_cdef));
-                }
-                return usertype_constructor{std::move(m)};
-            },
-        }, expr);
+    return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
+        if (std::holds_alternative<token>(expr)) {
+            return column_value{new_cdef};
+        } else {
+            return std::nullopt;
+        }
+    });
 }
 
 expression search_and_replace(const expression& e,
