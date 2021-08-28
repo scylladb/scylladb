@@ -1265,6 +1265,73 @@ expression replace_token(const expression& expr, const column_definition* new_cd
         }, expr);
 }
 
+expression search_and_replace(const expression& e,
+        const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate) {
+    auto recurse = [&] (const expression& e) -> expression {
+        return search_and_replace(e, replace_candidate);
+    };
+    auto replace_result = replace_candidate(e);
+    if (replace_result) {
+        return std::move(*replace_result);
+    } else {
+        return std::visit(
+            overloaded_functor{
+                [&] (const conjunction& conj) -> expression {
+                    return conjunction{
+                        boost::copy_range<std::vector<expression>>(
+                            conj.children | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const binary_operator& oper) -> expression {
+                    return binary_operator(recurse(*oper.lhs), oper.op, oper.rhs);
+                },
+                [&] (const column_mutation_attribute& cma) -> expression {
+                    return column_mutation_attribute{cma.kind, recurse(*cma.column)};
+                },
+                [&] (const tuple_constructor& tc) -> expression {
+                    return tuple_constructor{
+                        boost::copy_range<std::vector<expression>>(
+                            tc.elements | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const collection_constructor& c) -> expression {
+                    return collection_constructor{
+                        c.style,
+                        boost::copy_range<std::vector<expression>>(
+                            c.elements | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const usertype_constructor& uc) -> expression {
+                    usertype_constructor::elements_map_type m;
+                    for (auto& [k, v] : uc.elements) {
+                        m.emplace(k, recurse(*v));
+                    }
+                    return usertype_constructor{std::move(m)};
+                },
+                [&] (const function_call& fc) -> expression {
+                    return function_call{
+                        fc.func,
+                        boost::copy_range<std::vector<expression>>(
+                            fc.args | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const cast& c) -> expression {
+                    return cast{recurse(*c.arg), c.type};
+                },
+                [&] (const field_selection& fs) -> expression {
+                    return field_selection{recurse(*fs.structure), fs.field};
+                },
+                [&] (LeafExpression auto const& e) -> expression {
+                    return e;
+                },
+            }, e);
+    }
+}
+
 std::ostream& operator<<(std::ostream& s, oper_t op) {
     switch (op) {
     case oper_t::EQ:

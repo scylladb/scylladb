@@ -97,6 +97,19 @@ using expression = std::variant<bool, conjunction, binary_operator, column_value
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
 
+// An expression that doesn't contain subexpressions
+template <typename E>
+concept LeafExpression
+        = std::same_as<bool, E>
+        || std::same_as<column_value, E> 
+        || std::same_as<column_value_tuple, E> 
+        || std::same_as<token, E> 
+        || std::same_as<unresolved_identifier, E> 
+        || std::same_as<null, E> 
+        || std::same_as<bind_variable, E> 
+        || std::same_as<untyped_constant, E> 
+        ;
+
 // An expression variant element can't contain an expression by value, since the size of the variant
 // will be infinite. `nested_expression` contains an expression indirectly, but has value semantics and
 // is copyable.
@@ -477,6 +490,13 @@ extern expression replace_column_def(const expression&, const column_definition*
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
 extern expression replace_token(const expression&, const column_definition*);
 
+// Recursively copies e and returns it. Calls replace_candidate() on all nodes. If it returns nullopt,
+// continue with the copying. If it returns an expression, that expression replaces the current node.
+//
+// Note only binary_operator's LHS is searched. The RHS is not an expression, but a term, so it is left
+// unmodified.
+extern expression search_and_replace(const expression& e,
+        const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
 extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
 extern ::shared_ptr<term> prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
