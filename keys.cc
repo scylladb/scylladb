@@ -28,9 +28,7 @@
 #include <boost/any.hpp>
 
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
-    return pk.representation().with_linearized([&] (bytes_view v) {
-        return std::ref(out << "pk{" << to_hex(v) << "}");
-    });
+    return out << "pk{" << to_hex(managed_bytes_view(pk.representation())) << "}";
 }
 
 template<typename T>
@@ -64,9 +62,7 @@ std::ostream& operator<<(std::ostream& out, const partition_key_view& pk) {
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
-    return ckp.representation().with_linearized([&] (bytes_view v) {
-        return std::ref(out << "ckp{" << to_hex(v) << "}");
-    });
+    return out << "ckp{" << to_hex(managed_bytes_view(ckp.representation())) << "}";
 }
 
 const legacy_compound_view<partition_key_view::c_type>
