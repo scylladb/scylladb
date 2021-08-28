@@ -728,6 +728,8 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
             };
 
             return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &cf, descriptor = std::move(descriptor)] () mutable {
+              // Take write lock for cf to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
+              return with_lock(_compaction_locks[&cf].for_write(), [this, task, &cf, descriptor = std::move(descriptor)] () mutable {
                 _stats.pending_tasks--;
                 _stats.active_tasks++;
                 task->compaction_running = true;
@@ -737,6 +739,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                         return cf.compact_sstables(std::move(descriptor));
                     });
                 });
+              });
             }).then_wrapped([this, task, compacting] (future<> f) mutable {
                 task->compaction_running = false;
                 _stats.active_tasks--;
