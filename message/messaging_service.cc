@@ -781,13 +781,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
     }
 
-    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != utils::fb_utilities::get_broadcast_address();
-    auto laddr = socket_address(listen_to_bc ? utils::fb_utilities::get_broadcast_address() : _cfg.ip, 0);
+    auto baddr = socket_address(utils::fb_utilities::get_broadcast_address(), 0);
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
-                                    remote_addr, laddr, _credentials) :
+                                    remote_addr, baddr, _credentials) :
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
-                                    remote_addr, laddr);
+                                    remote_addr, baddr);
 
     auto res = _clients[idx].emplace(id, shard_info(std::move(client)));
     assert(res.second);
