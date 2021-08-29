@@ -777,13 +777,6 @@ int main(int ac, char** av) {
                 mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
             }
 
-            if (clauth && (mscfg.encrypt == netw::messaging_service::encrypt_what::dc || mscfg.encrypt == netw::messaging_service::encrypt_what::dc)) {
-                startlog.warn("Setting require_client_auth is incompatible with 'rack' and 'dc' internode_encryption values."
-                    " To ensure that mutual TLS authentication is enforced, please set internode_encryption to 'all'. Continuing with"
-                    " potentially insecure configuration."
-                );
-            }
-
             sstring compress_what = cfg->internode_compression();
             if (compress_what == "all") {
                 mscfg.compress = netw::messaging_service::compress_what::all;
