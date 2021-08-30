@@ -32,8 +32,13 @@ if(target_arch)
     set(target_arch_flag "-march=${target_arch}")
 endif()
 
+set(cxx_coro_flag)
+if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
+    set(cxx_coro_flag -fcoroutines)
+endif()
+
 # Configure Seastar compile options to align with Scylla
-set(Seastar_CXX_FLAGS -fcoroutines ${target_arch_flag} CACHE INTERNAL "" FORCE)
+set(Seastar_CXX_FLAGS ${cxx_coro_flag} ${target_arch_flag} CACHE INTERNAL "" FORCE)
 set(Seastar_CXX_DIALECT gnu++20 CACHE INTERNAL "" FORCE)
 
 add_subdirectory(seastar)
@@ -723,7 +728,7 @@ target_link_libraries(scylla PRIVATE
 
 target_compile_options(scylla PRIVATE
     -std=gnu++20
-    -fcoroutines # TODO: Clang does not have this flag, adjust to both variants
+    ${cxx_coro_flag}
     ${target_arch_flag})
 # Hacks needed to expose internal APIs for xxhash dependencies
 target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
@@ -743,7 +748,7 @@ target_link_libraries(crc_combine_table PRIVATE seastar)
 target_include_directories(crc_combine_table PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(crc_combine_table PRIVATE
     -std=gnu++20
-    -fcoroutines
+    ${cxx_coro_flag}
     ${target_arch_flag})
 add_dependencies(scylla crc_combine_table)
 
