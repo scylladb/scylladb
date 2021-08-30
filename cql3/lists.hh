@@ -61,10 +61,9 @@ public:
     class value : public multi_item_terminal, collection_terminal {
     public:
         utils::chunked_vector<managed_bytes_opt> _elements;
-        data_type _my_type;
     public:
         explicit value(utils::chunked_vector<managed_bytes_opt> elements, data_type my_type)
-            : _elements(std::move(elements)), _my_type(std::move(my_type)) {
+            : multi_item_terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& v, const list_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
@@ -74,7 +73,6 @@ public:
         virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const override;
         friend class lists;
-        data_type get_value_type() const override;
     };
     /**
      * Basically similar to a Value, but with some non-pure function (that need

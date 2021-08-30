@@ -66,12 +66,10 @@ public:
     class value : public terminal {
     public:
         cql3::raw_value _bytes;
-        data_type _my_type;
-        value(cql3::raw_value bytes_, data_type my_type) : _bytes(std::move(bytes_)), _my_type(std::move(my_type)) {}
+        value(cql3::raw_value bytes_, data_type my_type) : terminal(std::move(my_type)), _bytes(std::move(bytes_)) {}
         virtual cql3::raw_value get(const query_options& options) override { return _bytes; }
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override { return _bytes.to_view(); }
         virtual sstring to_string() const override { return _bytes.to_view().with_value([] (const FragmentedView auto& v) { return to_hex(v); }); }
-        data_type get_value_type() const override;
     };
 
     static thread_local const ::shared_ptr<value> UNSET_VALUE;
