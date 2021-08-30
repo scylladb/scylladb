@@ -59,7 +59,6 @@ public:
 
     class value : public multi_item_terminal {
         std::vector<managed_bytes_opt> _elements;
-        data_type _my_type;
     public:
         explicit value(std::vector<managed_bytes_opt>, data_type my_type);
 
@@ -69,7 +68,6 @@ public:
         const std::vector<managed_bytes_opt>& get_elements() const;
         virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const override;
-        data_type get_value_type() const override;
     };
 
     // Same purpose than Lists.DelayedValue, except we do handle bind marker in that case

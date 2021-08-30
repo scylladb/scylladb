@@ -51,7 +51,7 @@
 namespace cql3 {
 
 user_types::value::value(std::vector<managed_bytes_opt> elements, data_type my_type)
-        : _elements(std::move(elements)), _my_type(std::move(my_type)) {
+        : multi_item_terminal(std::move(my_type)), _elements(std::move(elements)) {
 }
 
 user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
@@ -80,10 +80,6 @@ std::vector<managed_bytes_opt> user_types::value::copy_elements() const {
 
 sstring user_types::value::to_string() const {
     return format("({})", join(", ", _elements));
-}
-
-data_type user_types::value::get_value_type() const {
-    return _my_type;
 }
 
 user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)

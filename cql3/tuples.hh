@@ -61,10 +61,9 @@ public:
     class value : public multi_item_terminal {
     public:
         std::vector<managed_bytes_opt> _elements;
-        data_type _my_type;
     public:
         value(std::vector<managed_bytes_opt> elements, data_type my_type)
-                : _elements(std::move(elements)), _my_type(my_type) {
+                : multi_item_terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
           return buffer.with_value([&] (const FragmentedView auto& view) {
@@ -87,7 +86,6 @@ public:
         virtual sstring to_string() const override {
             return format("({})", join(", ", _elements));
         }
-        data_type get_value_type() const override;
     };
 
     /**
@@ -153,10 +151,9 @@ public:
     class in_value : public terminal {
     private:
         utils::chunked_vector<std::vector<managed_bytes_opt>> _elements;
-        data_type _my_type;
     public:
         in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items, data_type my_type)
-            : _elements(std::move(items)), _my_type(std::move(my_type)) { }
+            : terminal(std::move(my_type)), _elements(std::move(items)) { }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
@@ -173,8 +170,6 @@ public:
             std::transform(_elements.begin(), _elements.end(), tuples.begin(), &tuples::tuple_to_string<managed_bytes_opt>);
             return tuple_to_string(tuples);
         }
-
-        data_type get_value_type() const override;
     };
 
     /**

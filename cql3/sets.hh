@@ -61,17 +61,15 @@ public:
     class value : public terminal, collection_terminal {
     public:
         std::set<managed_bytes, serialized_compare> _elements;
-        data_type _my_type;
     public:
         value(std::set<managed_bytes, serialized_compare> elements, data_type my_type)
-                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
+                : terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& v, const set_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const set_type_impl& st, const value& v);
         virtual sstring to_string() const override;
-        data_type get_value_type() const override;
     };
 
     // See Lists.DelayedValue

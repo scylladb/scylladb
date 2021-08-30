@@ -125,7 +125,12 @@ public:
  * consumer can (and should) assume so.
  */
 class terminal : public term {
+    data_type _my_type;
+
 public:
+    terminal(data_type my_type) : _my_type(std::move(my_type)) {
+    }
+
     virtual void fill_prepare_context(prepare_context& ctx) const {
     }
 
@@ -150,11 +155,16 @@ public:
 
     virtual sstring to_string() const = 0;
 
-    virtual data_type get_value_type() const = 0;
+    data_type get_value_type() const {
+        return _my_type;
+    }
 };
 
 class multi_item_terminal : public terminal {
 public:
+    multi_item_terminal(data_type my_type) : terminal(std::move(my_type)) {
+    }
+
     virtual std::vector<managed_bytes_opt> copy_elements() const = 0;
 };
 

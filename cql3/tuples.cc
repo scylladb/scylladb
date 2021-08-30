@@ -26,10 +26,6 @@
 
 namespace cql3 {
 
-data_type tuples::value::get_value_type() const {
-    return _my_type;
-}
-
 tuples::in_value
 tuples::in_value::from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options) {
     try {
@@ -49,10 +45,6 @@ tuples::in_value::from_serialized(const raw_value_view& value_view, const list_t
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-}
-
-data_type tuples::in_value::get_value_type() const {
-    return _my_type;
 }
 
 tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
