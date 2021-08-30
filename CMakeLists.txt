@@ -101,7 +101,7 @@ endfunction()
 scylla_generate_thrift(
     TARGET scylla_thrift_gen_cassandra
     VAR scylla_thrift_gen_cassandra_files
-    IN_FILE interface/cassandra.thrift
+    IN_FILE "${CMAKE_SOURCE_DIR}/interface/cassandra.thrift"
     OUT_DIR ${scylla_gen_build_dir}
     SERVICE Cassandra)
 
@@ -158,7 +158,7 @@ foreach(f ${antlr3_grammar_files})
     scylla_generate_antlr3(
         TARGET scylla_antlr3_gen_${grammar_file_name}
         VAR scylla_antlr3_gen_${grammar_file_name}_files
-        IN_FILE ${f}
+        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
         OUT_DIR ${scylla_gen_build_dir}/${f_dir})
     list(APPEND antlr3_gen_files "${scylla_antlr3_gen_${grammar_file_name}_files}")
 endforeach()
@@ -167,7 +167,7 @@ endforeach()
 seastar_generate_ragel(
     TARGET scylla_ragel_gen_protocol_parser
     VAR scylla_ragel_gen_protocol_parser_file
-    IN_FILE redis/protocol_parser.rl
+    IN_FILE "${CMAKE_SOURCE_DIR}/redis/protocol_parser.rl"
     OUT_FILE ${scylla_gen_build_dir}/redis/protocol_parser.hh)
 
 # Generate C++ sources from Swagger definitions
@@ -199,7 +199,7 @@ foreach(f ${swagger_files})
     seastar_generate_swagger(
         TARGET scylla_swagger_gen_${fname}
         VAR scylla_swagger_gen_${fname}_files
-        IN_FILE "${f}"
+        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
         OUT_DIR "${scylla_gen_build_dir}/${dir}")
     list(APPEND swagger_gen_files "${scylla_swagger_gen_${fname}_files}")
 endforeach()
@@ -267,7 +267,7 @@ foreach(f ${idl_serializers})
     scylla_generate_idl_serializer(
         TARGET scylla_idl_gen_${idl_target}
         VAR scylla_idl_gen_${idl_target}_files
-        IN_FILE ${f}
+        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
         OUT_FILE ${scylla_gen_build_dir}/${idl_dir}/${idl_out_hdr_name})
     list(APPEND idl_gen_files "${scylla_idl_gen_${idl_target}_files}")
 endforeach()
@@ -494,6 +494,7 @@ set(scylla_sources
     keys.cc
     lister.cc
     locator/abstract_replication_strategy.cc
+    locator/azure_snitch.cc
     locator/ec2_multi_region_snitch.cc
     locator/ec2_snitch.cc
     locator/everywhere_replication_strategy.cc
@@ -761,15 +762,15 @@ target_sources(scylla PRIVATE "${scylla_gen_build_dir}/utils/gz/crc_combine_tabl
 ###
 ### Generate version file and supply appropriate compile definitions for release.cc
 ###
-execute_process(COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN RESULT_VARIABLE scylla_version_gen_res)
+execute_process(COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN --output-dir "${CMAKE_BINARY_DIR}/gen" RESULT_VARIABLE scylla_version_gen_res)
 if(scylla_version_gen_res)
     message(SEND_ERROR "Version file generation failed. Return code: ${scylla_version_gen_res}")
 endif()
 
-file(READ build/SCYLLA-VERSION-FILE scylla_version)
+file(READ "${CMAKE_BINARY_DIR}/gen/SCYLLA-VERSION-FILE" scylla_version)
 string(STRIP "${scylla_version}" scylla_version)
 
-file(READ build/SCYLLA-RELEASE-FILE scylla_release)
+file(READ "${CMAKE_BINARY_DIR}/gen/SCYLLA-RELEASE-FILE" scylla_release)
 string(STRIP "${scylla_release}" scylla_release)
 
 get_property(release_cdefs SOURCE "${CMAKE_SOURCE_DIR}/release.cc" PROPERTY COMPILE_DEFINITIONS)
@@ -781,7 +782,7 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/release.cc" PROPERTIES COMPILE_
 ###
 set(libdeflate_lib "${scylla_build_dir}/libdeflate/libdeflate.a")
 add_custom_command(OUTPUT "${libdeflate_lib}"
-    COMMAND make -C libdeflate
+    COMMAND make -C "${CMAKE_SOURCE_DIR}/libdeflate"
         BUILD_DIR=../build/${BUILD_TYPE}/libdeflate/
         CC=${CMAKE_C_COMPILER}
         "CFLAGS=${target_arch_flag}"
