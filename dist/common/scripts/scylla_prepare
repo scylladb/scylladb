@@ -45,6 +45,8 @@ def get_tune_mode(nic):
     mq_cpuset = get_mode_cpuset(nic, 'mq')
     sq_cpuset = get_mode_cpuset(nic, 'sq')
     sq_split_cpuset = get_mode_cpuset(nic, 'sq_split')
+    dq_cpuset = get_mode_cpuset(nic, 'dq')
+    dq_split_cpuset = get_mode_cpuset(nic, 'dq_split')
 
     if cur_cpuset == mq_cpuset:
         return 'mq'
@@ -52,6 +54,10 @@ def get_tune_mode(nic):
         return 'sq'
     elif cur_cpuset == sq_split_cpuset:
         return 'sq_split'
+    elif cur_cpuset == dq_cpuset:
+        return 'dq'
+    elif cur_cpuset == dq_split_cpuset:
+        return 'dq_split'    
     else:
         raise Exception('tune mode not found')
 
