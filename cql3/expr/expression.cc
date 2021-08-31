@@ -180,7 +180,7 @@ bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag)
 }
 
 /// True iff columns' values equal t.
-bool equal(term& t, const column_value_tuple& columns_tuple, const column_value_eval_bag& bag) {
+bool equal(term& t, const tuple_constructor& columns_tuple, const column_value_eval_bag& bag) {
     const auto tup = get_tuple(t, bag.options);
     if (!tup) {
         throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
@@ -191,7 +191,8 @@ bool equal(term& t, const column_value_tuple& columns_tuple, const column_value_
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
                        columns_tuple.elements.size(), rhs.size()));
     }
-    return boost::equal(rhs, columns_tuple.elements, [&] (const managed_bytes_opt& b, const column_value& lhs) {
+    auto as_column_value = [] (const expression& e) { return std::get<column_value>(e); };
+    return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_value), [&] (const managed_bytes_opt& b, const column_value& lhs) {
         return equal(b, lhs, bag);
     });
 }
@@ -231,7 +232,7 @@ bool limits(const column_value& col, oper_t op, term& rhs, const column_value_ev
 }
 
 /// True iff the column values are limited by t in the manner prescribed by op.
-bool limits(const column_value_tuple& columns_tuple, const oper_t op, term& t,
+bool limits(const tuple_constructor& columns_tuple, const oper_t op, term& t,
             const column_value_eval_bag& bag) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
@@ -248,9 +249,10 @@ bool limits(const column_value_tuple& columns_tuple, const oper_t op, term& t,
                        columns_tuple.elements.size(), rhs.size()));
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
-        const auto cmp = get_value_comparator(columns_tuple.elements[i])->compare(
-                // CQL dictates that columns[i] is a clustering column and non-null.
-                *get_value(columns_tuple.elements[i], bag),
+        auto& cv = std::get<column_value>(columns_tuple.elements[i]);
+        const auto cmp = get_value_comparator(cv)->compare(
+                // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null.
+                *get_value(cv, bag),
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
         if (cmp < 0) {
@@ -422,7 +424,7 @@ bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& 
 }
 
 /// True iff the tuple of column values is in the set defined by rhs.
-bool is_one_of(const column_value_tuple& tuple, term& rhs, const column_value_eval_bag& bag) {
+bool is_one_of(const tuple_constructor& tuple, term& rhs, const column_value_eval_bag& bag) {
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
         // This is `(a,b) IN ((1,1),(2,2),(3,3))`.  RHS elements are themselves terms.
@@ -433,8 +435,8 @@ bool is_one_of(const column_value_tuple& tuple, term& rhs, const column_value_ev
         // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<managed_bytes_opt>.
         const auto marker_value = static_pointer_cast<tuples::in_value>(mkr->bind(bag.options));
         return boost::algorithm::any_of(marker_value->get_split_values(), [&] (const std::vector<managed_bytes_opt>& el) {
-                return boost::equal(tuple.elements, el, [&] (const column_value& c, const managed_bytes_opt& b) {
-                    return equal(b, c, bag);
+                return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
+                    return equal(b, std::get<column_value>(c), bag);
                 });
             });
     }
@@ -493,7 +495,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
-            [&] (const column_value_tuple& cvs) {
+            [&] (const tuple_constructor& cvs) {
                 if (opr.op == oper_t::EQ) {
                     return equal(*opr.rhs, cvs, bag);
                 } else if (is_slice(opr.op)) {
@@ -543,9 +545,6 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const untyped_constant&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: untyped_constant cannot serve as the LHS of a binary expression");
             },
-            [] (const tuple_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisified_by: tuple_constructor cannot serve as the LHS of a binary expression (yet!)");
-            },
             [] (const collection_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: collection_constructor cannot serve as the LHS of a binary expression");
             },
@@ -566,9 +565,6 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
             [&] (const binary_operator& opr) { return is_satisfied_by(opr, bag); },
             [] (const column_value&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: a column cannot serve as a restriction by itself");
-            },
-            [] (const column_value_tuple&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a column tuple cannot serve as a restriction by itself");
             },
             [] (const token&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
@@ -749,12 +745,12 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
-                        [&] (const column_value_tuple& tuple) -> value_set {
+                        [&] (const tuple_constructor& tuple) -> value_set {
                             if (!cdef) {
                                 return unbounded_value_set;
                             }
                             const auto found = boost::find_if(
-                                    tuple.elements, [&] (const column_value& c) { return c.col == cdef; });
+                                    tuple.elements, [&] (const expression& c) { return std::get<column_value>(c).col == cdef; });
                             if (found == tuple.elements.end()) {
                                 return unbounded_value_set;
                             }
@@ -839,9 +835,6 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const untyped_constant&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: untyped constants are not supported as the LHS of a binary expression");
                         },
-                        [] (const tuple_constructor&) -> value_set {
-                            on_internal_error(expr_logger, "possible_lhs_values: tuple constructors are not supported as the LHS of a binary expression yet");
-                        },
                         [] (const collection_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: collection constructors are not supported as the LHS of a binary expression");
                         },
@@ -852,9 +845,6 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             },
             [] (const column_value&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a column cannot serve as a restriction by itself");
-            },
-            [] (const column_value_tuple&) -> value_set {
-                on_internal_error(expr_logger, "possible_lhs_values: a column tuple cannot serve as a restriction by itself");
             },
             [] (const token&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
@@ -918,9 +908,11 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (const column_value& col) {
                             return idx.supports_expression(*col.col, oper.op);
                         },
-                        [&] (const column_value_tuple& tuple) {
+                        [&] (const tuple_constructor& tuple) {
                             if (tuple.elements.size() == 1) {
-                                return idx.supports_expression(*tuple.elements[0].col, oper.op);
+                                if (auto column = std::get_if<column_value>(&tuple.elements[0])) {
+                                    return idx.supports_expression(*column->col, oper.op);
+                                }
                             }
                             // We don't use index table for multi-column restrictions, as it cannot avoid filtering.
                             return false;
@@ -958,9 +950,6 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const untyped_constant&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: untyped constants are not supported as the LHS of a binary expression");
-                        },
-                        [&] (const tuple_constructor&) -> bool {
-                            on_internal_error(expr_logger, "is_supported_by: tuple constructors are not supported as the LHS of a binary expression yet");
                         },
                         [&] (const collection_constructor&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: collection constructors are not supported as the LHS of a binary expression");
@@ -1004,9 +993,6 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const token& t) { os << "TOKEN"; },
             [&] (const column_value& col) {
                 fmt::print(os, "{}", col);
-            },
-            [&] (const column_value_tuple& tuple) {
-                fmt::print(os, "({})", fmt::join(tuple.elements, ","));
             },
             [&] (const unresolved_identifier& ui) {
                 fmt::print(os, "unresolved({})", *ui.ident);
@@ -1108,8 +1094,8 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = std::get_if<column_value_tuple>(&*b.lhs)) {
-        return boost::algorithm::any_of(tuple->elements, [] (const column_value& v) { return v.sub; });
+    if (auto tuple = std::get_if<tuple_constructor>(&*b.lhs)) {
+        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return std::get<column_value>(v).sub; });
     }
     return false;
 }
@@ -1118,7 +1104,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
         if (std::holds_alternative<column_value>(expr)) {
             return column_value{new_cdef};
-        } else if (std::holds_alternative<column_value_tuple>(expr)) {
+        } else if (std::holds_alternative<tuple_constructor>(expr)) {
             throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
         } else {
             return std::nullopt;
@@ -1263,7 +1249,6 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
         }
 
-        void operator()(const column_value_tuple&) {}
         void operator()(const token&) {}
         void operator()(const unresolved_identifier&) {}
         void operator()(const column_mutation_attribute&) {}

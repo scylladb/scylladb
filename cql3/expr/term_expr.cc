@@ -799,9 +799,6 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_s
         [&] (const column_value&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "column_values are not yet reachable via term_raw_expr::prepare()");
         },
-        [&] (const column_value_tuple&) -> ::shared_ptr<term> {
-            on_internal_error(expr_logger, "column_value_tuples are not yet reachable via term_raw_expr::prepare()");
-        },
         [&] (const token&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "tokens are not yet reachable via term_raw_expr::prepare()");
         },
@@ -888,9 +885,6 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
         },
         [&] (const column_value&) -> test_result {
             on_internal_error(expr_logger, "column_values are not yet reachable via term_raw_expr::test_assignment()");
-        },
-        [&] (const column_value_tuple&) -> test_result {
-            on_internal_error(expr_logger, "column_value_tuples are not yet reachable via term_raw_expr::test_assignment()");
         },
         [&] (const token&) -> test_result {
             on_internal_error(expr_logger, "tokens are not yet reachable via term_raw_expr::test_assignment()");

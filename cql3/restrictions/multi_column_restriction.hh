@@ -54,6 +54,17 @@ namespace cql3 {
 
 namespace restrictions {
 
+inline
+expr::tuple_constructor
+column_definitions_as_tuple_constructor(const std::vector<const column_definition*>& defs) {
+    std::vector<expr::expression> columns;
+    columns.reserve(defs.size());
+    for (auto& def : defs) {
+        columns.push_back(expr::column_value{def});
+    }
+    return expr::tuple_constructor{std::move(columns)};
+}
+
 class multi_column_restriction : public clustering_key_restrictions {
 private:
     bool _has_only_asc_columns;
@@ -189,7 +200,7 @@ public:
     {
         using namespace expr;
         expression = binary_operator{
-            column_value_tuple(_column_defs), oper_t::EQ, _value};
+            column_definitions_as_tuple_constructor(_column_defs), oper_t::EQ, _value};
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -302,7 +313,7 @@ public:
     {
         using namespace expr;
         expression = binary_operator{
-            column_value_tuple(_column_defs),
+            column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
             ::make_shared<lists::delayed_value>(_values)};
     }
@@ -321,7 +332,7 @@ public:
         : IN(schema, std::move(defs)), _marker(marker) {
         using namespace expr;
         expression = binary_operator{
-            column_value_tuple(_column_defs),
+            column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
             std::move(marker)};
     }
@@ -343,7 +354,7 @@ public:
         : slice(schema, defs, term_slice::new_instance(bound, inclusive, term), m)
     {
         expression = expr::binary_operator{
-            expr::column_value_tuple(defs),
+            column_definitions_as_tuple_constructor(defs),
             expr::pick_operator(bound, inclusive),
             std::move(term),
             m};
