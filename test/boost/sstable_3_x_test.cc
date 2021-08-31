@@ -211,8 +211,8 @@ static schema_ptr make_uncompressed_filtering_and_forwarding_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA =
         make_uncompressed_filtering_and_forwarding_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA,
                            UNCOMPRESSED_FILTERING_AND_FORWARDING_PATH);
     sst.load();
@@ -375,7 +375,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
             .produces_row(to_ck(110), to_expected(1010))
             .produces_end_of_stream();
     }
-  }).get();
+  });
 }
 
 /*
@@ -464,8 +464,8 @@ static schema_ptr make_uncompressed_skip_using_index_rows_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA =
         make_uncompressed_skip_using_index_rows_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA,
                            UNCOMPRESSED_SKIP_USING_INDEX_ROWS_PATH);
     sst.load();
@@ -641,7 +641,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         r.produces_end_of_stream();
         BOOST_REQUIRE(aio_reads_tracker() < max_reads);
     }
-  }).get();
+  });
 }
 
 /*
@@ -713,8 +713,8 @@ static schema_ptr make_uncompressed_filtering_and_forwarding_range_tombstones_sc
 static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_SCHEMA =
         make_uncompressed_filtering_and_forwarding_range_tombstones_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_SCHEMA,
                            UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_PATH);
     sst.load();
@@ -977,7 +977,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
         }
         r.produces_end_of_stream();
     }
-  }).get();
+  });
 }
 
 /*
@@ -1043,8 +1043,8 @@ static schema_ptr make_uncompressed_slicing_interleaved_rows_and_rts_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA =
         make_uncompressed_slicing_interleaved_rows_and_rts_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA,
                            UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_PATH);
     sst.load();
@@ -1218,7 +1218,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
         }
         r.produces_end_of_stream();
     }
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/static_row
@@ -1251,8 +1251,8 @@ static schema_ptr make_uncompressed_static_row_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_STATIC_ROW_SCHEMA =
         make_uncompressed_static_row_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_static_row_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_STATIC_ROW_SCHEMA,
                            UNCOMPRESSED_STATIC_ROW_PATH);
     sst.load();
@@ -1299,7 +1299,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
                       {{val_cdef, int32_type->decompose(int32_t(1003))}})
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/random_partitioner
@@ -1318,8 +1318,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
 
 using exception_predicate::message_equals;
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_random_partitioner) {
+  return test_env::do_with_async([] (test_env& env) {
     const sstring uncompressed_random_partitioner_path =
             "test/resource/sstables/3.x/uncompressed/random_partitioner";
     const schema_ptr uncompressed_random_partitioner_schema =
@@ -1337,7 +1337,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
         message_equals("SSTable test/resource/sstables/3.x/uncompressed/random_partitioner/mc-1-big-Data.db uses "
                        "org.apache.cassandra.dht.RandomPartitioner partitioner which is different than "
                        "org.apache.cassandra.dht.Murmur3Partitioner partitioner used by the database"s));
-  }).get();
+  });
 }
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/compound_static_row
 // They were created using following CQL statements:
@@ -1382,8 +1382,8 @@ static schema_ptr make_uncompressed_compound_static_row_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA =
         make_uncompressed_compound_static_row_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_compound_static_row_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA,
                            UNCOMPRESSED_COMPOUND_STATIC_ROW_PATH);
     sst.load();
@@ -1444,7 +1444,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
                       {{val_cdef, int32_type->decompose(int32_t(1003))}})
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/partition_key_only
@@ -1474,15 +1474,15 @@ static schema_ptr make_uncompressed_partition_key_only_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA =
         make_uncompressed_partition_key_only_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_load) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_load) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
     sst.load();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
     sst.load();
     auto to_key = [] (int key) {
@@ -1507,7 +1507,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_read) {
         .produces_row_with_key(clustering_key_prefix::make_empty())
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/partition_key_with_value
@@ -1538,8 +1538,8 @@ static schema_ptr make_uncompressed_partition_key_with_value_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA =
         make_uncompressed_partition_key_with_value_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA,
                            UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_PATH);
     sst.load();
@@ -1569,7 +1569,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
         .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(103))}})
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/counters
@@ -1604,8 +1604,8 @@ static thread_local const schema_ptr UNCOMPRESSED_COUNTERS_SCHEMA =
 
 static thread_local const counter_id HOST_ID = counter_id(utils::UUID("59b82720-99b0-4033-885c-e94d62106a35"));
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_counters_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_COUNTERS_SCHEMA,
                            UNCOMPRESSED_COUNTERS_PATH);
     sst.load();
@@ -1649,7 +1649,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
     .produces_row(clustering_key_prefix::make_empty(), {cdef->id}, generate(1528799885105152, 6, 1528799885107000))
     .produces_partition_end()
     .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/{uncompressed,lz4,snappy,deflate,zstd}/partition_key_with_value_of_different_types
@@ -1882,8 +1882,8 @@ static schema_ptr make_zstd_multiple_chunks_schema() {
 static thread_local const schema_ptr ZSTD_MULTIPLE_CHUNKS_SCHEMA =
         make_zstd_multiple_chunks_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_zstd_compression) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_zstd_compression) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, ZSTD_MULTIPLE_CHUNKS_SCHEMA, ZSTD_MULTIPLE_CHUNKS_PATH);
     sst.load();
 
@@ -1899,7 +1899,7 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_compression) {
         assertions.produces_row_with_key(clustering_key::from_exploded(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, {int32_type->decompose(i)}));
     }
     assertions.produces_partition_end().produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/subset_of_columns
@@ -1959,8 +1959,8 @@ static schema_ptr make_uncompressed_subset_of_columns_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA =
         make_uncompressed_subset_of_columns_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_subset_of_columns_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA,
                            UNCOMPRESSED_SUBSET_OF_COLUMNS_PATH);
     sst.load();
@@ -2067,7 +2067,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
                                "variable length text 3"))
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/large_subset_of_columns_sparse
@@ -2191,8 +2191,8 @@ static schema_ptr make_uncompressed_large_subset_of_columns_sparse_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA =
         make_uncompressed_large_subset_of_columns_sparse_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA,
                            UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_PATH);
     sst.load();
@@ -2246,7 +2246,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) 
                       generate({{32, 33}, {33, 333}}))
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/large_subset_of_columns_dense
@@ -2409,8 +2409,8 @@ static schema_ptr make_uncompressed_large_subset_of_columns_dense_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA =
         make_uncompressed_large_subset_of_columns_dense_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA,
                            UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_PATH);
     sst.load();
@@ -2485,7 +2485,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
                                 {58, 58}, {59, 59}, {60, 60}, {61, 61}, {62, 62}, {63, 63}}))
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/deleted_cells
@@ -2518,8 +2518,8 @@ static schema_ptr make_uncompressed_deleted_cells_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_DELETED_CELLS_SCHEMA =
         make_uncompressed_deleted_cells_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_deleted_cells_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_DELETED_CELLS_SCHEMA, UNCOMPRESSED_DELETED_CELLS_PATH);
     sst.load();
     auto to_key = [] (int key) {
@@ -2567,7 +2567,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
                   {{int_cdef, int32_type->decompose(1005)}})
     .produces_partition_end()
     .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/range_tombstones_simple
@@ -2606,8 +2606,8 @@ static schema_ptr make_uncompressed_range_tombstones_simple_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA =
         make_uncompressed_range_tombstones_simple_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA,
                            UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_PATH);
     sst.load();
@@ -2654,7 +2654,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
                                                         gc_clock::time_point(gc_clock::duration(1529519643)))))
     .produces_partition_end()
     .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/range_tombstones_partial
@@ -2683,8 +2683,8 @@ static  schema_ptr make_uncompressed_range_tombstones_partial_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA =
         make_uncompressed_range_tombstones_partial_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA,
                            UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_PATH);
     sst.load();
@@ -2731,7 +2731,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
                               gc_clock::time_point(gc_clock::duration(1530543761)))))
     .produces_partition_end()
     .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/simple
@@ -2762,8 +2762,8 @@ static schema_ptr make_uncompressed_simple_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_SIMPLE_SCHEMA =
         make_uncompressed_simple_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_toc) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_toc) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     sst.read_toc();
     using ct = component_type;
@@ -2775,50 +2775,50 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_toc) {
                     ct::CRC,
                     ct::Filter,
                     ct::Statistics});
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_summary) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_summary) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     sst.read_toc();
     sst.read_summary();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_filter) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_filter) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     sst.read_toc();
     sst.read_filter();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_statistics) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_statistics) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     sst.read_toc();
     sst.read_statistics();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_load) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_load) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     sst.load();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_index) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_index) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     auto vec = sst.read_index().get0();
     BOOST_REQUIRE_EQUAL(5, vec.size());
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_simple_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA,
                            UNCOMPRESSED_SIMPLE_PATH);
     sst.load();
@@ -2860,7 +2860,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
                       {{int_cdef, int32_type->decompose(1003)}})
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/compound_ck
@@ -2905,8 +2905,8 @@ static schema_ptr make_uncompressed_compound_ck_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_CK_SCHEMA =
         make_uncompressed_compound_ck_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_compound_ck_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_COMPOUND_CK_SCHEMA,
                            UNCOMPRESSED_COMPOUND_CK_PATH);
     sst.load();
@@ -2968,7 +2968,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
                       {{int_cdef, int32_type->decompose(1003)}})
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 // Following tests run on files in test/resource/sstables/3.x/uncompressed/collections
@@ -3006,8 +3006,8 @@ static schema_ptr make_uncompressed_collections_schema() {
 static thread_local const schema_ptr UNCOMPRESSED_COLLECTIONS_SCHEMA =
         make_uncompressed_collections_schema();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
+  return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_COLLECTIONS_SCHEMA, UNCOMPRESSED_COLLECTIONS_PATH);
     sst.load();
     auto to_key = [] (int key) {
@@ -3113,7 +3113,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
             generate({7, 8, 9}, {"Text 7", "Text 8", "Text 9"}, {{7,"Text 7"}, {8,"Text 8"}, {9,"Text 9"}}))
     .produces_partition_end()
     .produces_end_of_stream();
-  }).get();
+  });
 }
 
 static sstables::shared_sstable open_sstable(test_env& env, schema_ptr schema, sstring dir, unsigned long generation) {
@@ -3153,8 +3153,8 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     return compacted_sst->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
-SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(compact_deleted_row) {
+  return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
     sstring table_name = "compact_deleted_row";
     // CREATE TABLE test_deleted_row (pk text, ck text, rc1 text, rc2 text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
@@ -3221,11 +3221,11 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
     auto& rc2 = *s->get_column_definition("rc2");
     BOOST_REQUIRE(cells.find_cell(rc1.id) == nullptr);
     BOOST_REQUIRE(cells.find_cell(rc2.id) != nullptr);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(compact_deleted_cell) {
+  return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
     sstring table_name = "compact_deleted_cell";
     //  CREATE TABLE compact_deleted_cell (pk text, ck text, rc text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
@@ -3290,7 +3290,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
     BOOST_REQUIRE(row.is_live(*s));
     auto& cells = row.cells();
     BOOST_REQUIRE(cells.size() == 1);
-  }).get();
+  });
 }
 
 static void compare_files(sstring filename1, sstring filename2) {
@@ -3514,8 +3514,8 @@ static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& t
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_static_row) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "static_row";
     // CREATE TABLE static_row (pk text, ck int, st1 int static, st2 text static, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3533,11 +3533,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     mut.set_static_cell("st2", data_value{"hello"}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_composite_partition_key) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "composite_partition_key";
     // CREATE TABLE composite_partition_key (a int , b text, c boolean, d int, e text, f int, g text, PRIMARY KEY ((a, b, c), d, e)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3560,11 +3560,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
     mut.set_cell(ckey, "g", data_value{"world"}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_composite_clustering_key) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "composite_clustering_key";
     // CREATE TABLE composite_clustering_key (a int , b text, c int, d text, e int, f text, PRIMARY KEY (a, b, c, d)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3586,11 +3586,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
     mut.set_cell(ckey, "f", data_value{"world"}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_wide_partitions) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "wide_partitions";
     // CREATE TABLE wide_partitions (pk text, ck text, st text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3629,11 +3629,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
     }
 
     write_mut_and_validate(env, s, table_name, {mut1, mut2});
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_ttled_row) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "ttled_row";
     // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3660,11 +3660,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     mut.set_clustered_cell(ckey, *column_def, std::move(cell));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_ttled_column) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "ttled_column";
     // CREATE TABLE ttled_column (pk text, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3688,11 +3688,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
     mut.set_clustered_cell(clustering_key::make_empty(), *column_def, std::move(cell));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_deleted_column) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "deleted_column";
     // CREATE TABLE deleted_column (pk int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3712,11 +3712,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
     mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, tp));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_deleted_row) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "deleted_row";
     // CREATE TABLE deleted_row (pk int, ck int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3733,11 +3733,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
     mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, tp});
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_collection_wide_update) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "collection_wide_update";
     auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
     // CREATE TABLE collection_wide_update (pk int, col set<int>, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
@@ -3761,11 +3761,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize(*set_of_ints_type));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_collection_incremental_update) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "collection_incremental_update";
     auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
     // CREATE TABLE collection_incremental_update (pk int, col set<int>, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
@@ -3785,11 +3785,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize(*set_of_ints_type));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_multiple_partitions) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "multiple_partitions";
     // CREATE TABLE multiple_partitions (pk int, rc1 int, rc2 int, rc3 int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3816,7 +3816,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     }
 
     write_mut_and_validate(env, s, table_name, muts);
-  }).get();
+  });
 }
 
 static void test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
@@ -3894,8 +3894,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_zstd) {
             })});
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_multiple_rows) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "multiple_rows";
     // CREATE TABLE multiple_rows (pk int, ck int, rc1 int, rc2 int, rc3 int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3922,13 +3922,13 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
     }
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
 // Information on missing columns is serialized differently when the number of columns is > 64.
 // This test checks that this information is encoded correctly.
-SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "missing_columns_large_set";
     // CREATE TABLE missing_columns_large_set (pk int, ck int, rc1 int, ..., rc64 int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3965,11 +3965,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     }
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_empty_counter) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_empty_counter) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "empty_counter";
     // CREATE TABLE empty_counter (pk text, ck text, val counter, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -3989,11 +3989,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_counter) {
     mut.set_clustered_cell(ckey, cdef, b.build(write_timestamp));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_counter_table) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "counter_table";
     // CREATE TABLE counter_table (pk text, ck text, rc1 counter, rc2 counter, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4035,11 +4035,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
     mut.set_clustered_cell(ckey2, cdef1, atomic_cell::make_dead(write_timestamp, write_time_point));
 
     write_mut_and_validate(env, s, table_name, mut, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_different_types) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "different_types";
     // CREATE TABLE different_types (pk text, asciival ascii, bigintval bigint,
     // blobval blob, boolval boolean, dateval date, decimalval decimal,
@@ -4104,11 +4104,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     mut.set_cell(ckey, "durationval", duration_type->deserialize(duration_type->from_string("1h4m48s20ms")), write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_empty_clustering_values) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "empty_clustering_values";
     // CREATE TABLE empty_clustering_values (pk int, ck1 text, ck2 int, ck3 text, rc int, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4129,11 +4129,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     mut.set_cell(ckey, "rc", data_value{2}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_large_clustering_key) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "large_clustering_key";
     // CREATE TABLE large_clustering_key (pk int, ck1 text, ck2 text, ..., ck35 text, rc int, PRIMARY KEY (pk, ck1, ck2, ..., ck35)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4161,11 +4161,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
     mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_compact_table) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "compact_table";
     // CREATE TABLE compact_table (pk int, ck1 int, ck2 int, rc int, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''} AND COMPACT STORAGE;
     schema_builder builder("sst3", table_name);
@@ -4184,11 +4184,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_user_defined_type_table) {
+  return test_env::do_with_async([] (test_env& env) {
     // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
     auto ut = user_type_impl::get_instance("sst3", to_bytes("ut"),
             {to_bytes("my_int"), to_bytes("my_boolean"), to_bytes("my_text")},
@@ -4212,11 +4212,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     mut.set_cell(ckey, "rc", ut_val, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_simple_range_tombstone) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "simple_range_tombstone";
     // CREATE TABLE simple_range_tombstone (pk int, ck1 text, ck2 text, rc text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4236,12 +4236,12 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     mut.partition().apply_delete(*s, std::move(rt));
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
 // Test the case when for RTs their adjacent bounds are written as boundary RT markers.
-SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_adjacent_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "adjacent_range_tombstones";
     // CREATE TABLE adjacent_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4276,13 +4276,13 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, {"aaa"}, {"aaa"});
-  }).get();
+  });
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
 // so cannot be merged into a single boundary RT marker.
-SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_non_adjacent_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "non_adjacent_range_tombstones";
     // CREATE TABLE non_adjacent_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4317,11 +4317,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     }
 
     write_mut_and_validate(env, s, table_name, mut);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "mixed_rows_and_range_tombstones";
     // CREATE TABLE mixed_rows_and_range_tombstones (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4386,11 +4386,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, {"aaa"}, {"ddd"});
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_many_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "many_range_tombstones";
     // CREATE TABLE many_range_tombstones (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4416,11 +4416,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "adjacent_range_tombstones_with_rows";
     // CREATE TABLE adjacent_range_tombstones_with_rows (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4469,11 +4469,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, {"aaa"}, {"aaa"});
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "range_tombstone_same_start_with_row";
     // CREATE TABLE range_tombstone_same_start_with_row (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4504,11 +4504,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, {"aaa", "bbb"}, {"aaa"});
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "range_tombstone_same_end_with_row";
     // CREATE TABLE range_tombstone_same_end_with_row (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4539,11 +4539,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, {"aaa"}, {"aaa", "bbb"});
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_overlapped_start_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "overlapped_start_range_tombstones";
     // CREATE TABLE overlapped_start_range_tombstones (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4588,11 +4588,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
     }
 
     write_muts_and_compare_sstables(env, s, mut1, mut2, table_name);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "two_non_adjacent_range_tombstones";
     // CREATE TABLE two_non_adjacent_range_tombstones (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4630,13 +4630,13 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
     }
 
     write_mut_and_validate(env, s, table_name, mut, {"aaa"}, {"aaa"});
-  }).get();
+  });
 }
 
 // The resulting files are supposed to be identical to the files
 // from test_write_adjacent_range_tombstones
-SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_overlapped_range_tombstones) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "overlapped_range_tombstones";
     // CREATE TABLE overlapped_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4673,7 +4673,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
     }
 
     write_muts_and_compare_sstables(env, s, mut1, mut2, table_name);
-  }).get();
+  });
 }
 
 static sstring get_read_index_test_path(sstring table_name) {
@@ -4696,8 +4696,8 @@ shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring
  *  INSERT INTO empty_index (pk) VALUES ('привет');
 */
 
-SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_read_empty_index) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "empty_index";
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", utf8_type, column_kind::partition_key);
@@ -4706,14 +4706,14 @@ SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
 
     auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst, env.make_reader_permit())).is_empty(*s);
-  }).get();
+  });
 }
 
 /*
  * Test files taken from write_wide_partitions test
  */
-SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_read_rows_only_index) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "rows_only_index";
     // CREATE TABLE rows_only_index (pk text, ck text, st text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4726,14 +4726,14 @@ SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
 
     auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
-  }).get();
+  });
 }
 
 /*
  * Test files taken from write_many_range_tombstones test
  */
-SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_read_range_tombstones_only_index) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "range_tombstones_only_index";
     // CREATE TABLE range_tombstones_only_index (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4745,7 +4745,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
 
     auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
-  }).get();
+  });
 }
 
 /*
@@ -4759,8 +4759,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
         session.execute(query, dict(a="%s%d" % ('a' * 1024, i), b="%s%d" %('a' * 1024, i + 1), ts=(1525385507816568 + i)))
 
  */
-SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_read_range_tombstone_boundaries_index) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "range_tombstone_boundaries_index";
     // CREATE TABLE range_tombstone_boundaries_index (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -4772,11 +4772,11 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
 
     auto sst = make_test_sstable(env, s, table_name);
     assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_read_table_empty_clustering_key) {
+  return test_env::do_with_async([] (test_env& env) {
     // CREATE TABLE empty_clustering_key (pk int, v int, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
     schema_builder builder("sst3", "empty_clustering_key");
     builder.with_column("pk", int32_type, column_kind::partition_key);
@@ -4796,15 +4796,15 @@ SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
     std::sort(keys.begin(), keys.end(), cmp);
 
     assert_that(sst.make_reader()).produces(keys);
-  }).get();
+  });
 }
 
 /*
  * Test for a bug discovered with Scylla's compaction_history tables
  * containing complex columns with zero subcolumns.
  */
-SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_complex_column_zero_subcolumns_read) {
+  return test_env::do_with_async([] (test_env& env) {
     using utils::UUID;
     const sstring path =
         "test/resource/sstables/3.x/uncompressed/complex_column_zero_subcolumns";
@@ -4848,11 +4848,11 @@ SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
         .produces_partition_end();
     }
     r.produces_end_of_stream();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
+  return test_env::do_with_async([] (test_env& env) {
     // Following tests run on files in test/resource/sstables/3.x/uncompressed/read_two_rows_fast_forwarding
     // They were created using following CQL statements:
     //
@@ -4907,11 +4907,11 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
     r.produces_row(to_ckey(7), to_expected(7))
         .produces_row(to_ckey(8), to_expected(8))
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_dead_row_marker) {
+  return test_env::do_with_async([] (test_env& env) {
     api::timestamp_type ts = 1543494402386839;
     gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543494402};
     sstring table_name = "dead_row_marker";
@@ -4935,11 +4935,11 @@ SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
     mut.set_cell(ckey, "rc", data_value{7777}, ts);
 
     write_mut_and_compare_sstables(env, s, mut, table_name);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_shadowable_deletion) {
+  return test_env::do_with_async([] (test_env& env) {
     /* The created SSTables content should match that of
      * an MV filled with the following queries:
      *
@@ -4972,11 +4972,11 @@ SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
     }
 
     write_mut_and_validate(env, s, table_name, {mut1, mut2}, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_regular_and_shadowable_deletion) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_regular_and_shadowable_deletion) {
+  return test_env::do_with_async([] (test_env& env) {
     /* The created SSTables content should match that of
      * an MV filled with the following queries:
      *
@@ -5021,11 +5021,11 @@ SEASTAR_THREAD_TEST_CASE(test_regular_and_shadowable_deletion) {
     }
 
     write_mut_and_validate(env, s, table_name, {mut1, mut2}, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_static_row_with_missing_columns) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "static_row_with_missing_columns";
     // CREATE TABLE static_row (pk int, ck int, st1 int static, st2 int static, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -5046,11 +5046,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
     mut.set_cell(ckey, "rc", data_value{3}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "interleaved_atomic_and_collection_columns";
     // CREATE TABLE interleaved_atomic_and_collection_columns ( pk int, ck int, rc1 int, rc2 set<int>, rc3 int, rc4 set<int>,
     //     rc5 int, rc6 set<int>, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
@@ -5084,11 +5084,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     mut.set_cell(ckey, "rc5", data_value{5}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_columns) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_static_interleaved_atomic_and_collection_columns) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "static_interleaved_atomic_and_collection_columns";
     // CREATE TABLE static_interleaved_atomic_and_collection_columns ( pk int, ck int, st1 int static,
     //     st2 set<int> static, st3 int static, st4 set<int> static, st5 int static, st6 set<int> static,
@@ -5123,11 +5123,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     mut.set_static_cell("st5", data_value{5}, write_timestamp);
 
     write_mut_and_validate(env, s, table_name, mut, validate_stats_metadata::no);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_write_empty_static_row) {
+  return test_env::do_with_async([] (test_env& env) {
     sstring table_name = "empty_static_row";
     // CREATE TABLE empty_static_row (pk int, ck int, st int static, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
@@ -5164,11 +5164,11 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
         tmpdir tmp = write_and_compare_sstables(env, s, mt, table_name, version);
         validate_read(env, s, tmp.path(), {mut2, mut1}, version); // Mutations are re-ordered according to decorated_key order
     }
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_read_missing_summary) {
+  return test_env::do_with_async([] (test_env& env) {
     const sstring path = "test/resource/sstables/3.x/uncompressed/read_missing_summary";
     const schema_ptr s =
         schema_builder("test_ks", "test_table")
@@ -5180,11 +5180,11 @@ SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
 
     sstable_assertions sst(env, s, path);
     sst.load();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
- test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
+ return test_env::do_with_async([] (test_env& env) {
     api::timestamp_type write_timestamp = 1525385507816568;
     auto get_builder = [&] (bool has_missing_column) {
         auto builder = schema_builder("ks", "cf")
@@ -5239,7 +5239,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
             exception_predicate::message_contains("Column val1 missing in current schema"));
     }
   }
- }).get();
+ });
 }
 
 namespace {
@@ -5420,8 +5420,8 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
 static const sstring LEGACY_UDT_IN_COLLECTION_PATH =
     "test/resource/sstables/3.x/uncompressed/legacy_udt_in_collection";
 
-SEASTAR_THREAD_TEST_CASE(test_legacy_udt_in_collection_table) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
+  return test_env::do_with_async([] (test_env& env) {
     auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
             {to_bytes("a"), to_bytes("b")},
             {int32_type, int32_type}, false);
@@ -5513,5 +5513,5 @@ SEASTAR_THREAD_TEST_CASE(test_legacy_udt_in_collection_table) {
     sstable_assertions sst(env, s, LEGACY_UDT_IN_COLLECTION_PATH);
     sst.load();
     assert_that(sst.make_reader()).produces(mut).produces_end_of_stream();
-  }).get();
+  });
 }

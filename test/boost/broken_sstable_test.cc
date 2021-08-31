@@ -66,8 +66,8 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg, std::
     return broken_sst(dir, generation, s, msg, sst_name);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_empty_index) {
-  sstables::test_env::do_with_async([&] (sstables::test_env& env) {
+SEASTAR_TEST_CASE(test_empty_index) {
+  return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     auto s = schema_builder("test_ks", "test_table")
                  .with_column("pk", int32_type, column_kind::partition_key)
                  .with_column("ck", int32_type, column_kind::clustering_key)
@@ -78,7 +78,7 @@ SEASTAR_THREAD_TEST_CASE(test_empty_index) {
     auto fut = sstables::test(sstp).read_indexes(env.make_reader_permit());
     BOOST_REQUIRE_EXCEPTION(fut.get(), malformed_sstable_exception, exception_predicate::message_equals(
         "missing index entry in sstable test/resource/sstables/empty_index/mc-36-big-Index.db"));
-  }).get();
+  });
 }
 
 SEASTAR_THREAD_TEST_CASE(missing_column_in_schema) {
