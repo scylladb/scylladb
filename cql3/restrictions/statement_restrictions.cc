@@ -200,7 +200,7 @@ static std::vector<expr::expression> extract_partition_range(
             });
         }
 
-        void operator()(const column_value_tuple& s) {
+        void operator()(const tuple_constructor& s) {
             // Partition key columns are not legal in tuples, so ignore tuples.
         }
 
@@ -236,10 +236,6 @@ static std::vector<expr::expression> extract_partition_range(
 
         void operator()(const untyped_constant&) {
             on_internal_error(rlogger, "extract_partition_range(untyped_constant)");
-        }
-
-        void operator()(const tuple_constructor&) {
-            on_internal_error(rlogger, "extract_partition_range(tuple_constructor)");
         }
 
         void operator()(const collection_constructor&) {
@@ -289,7 +285,12 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             current_binary_operator = nullptr;
         }
 
-        void operator()(const column_value_tuple&) {
+        void operator()(const tuple_constructor& tc) {
+            for (auto& e : tc.elements) {
+                if (!std::holds_alternative<column_value>(e)) {
+                    on_internal_error(rlogger, fmt::format("extract_clustering_prefix_restrictions: tuple of non-column_value: {}", tc));
+                }
+            }
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 multi.push_back(b);
             });
@@ -345,10 +346,6 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const untyped_constant&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(untyped_constant)");
-        }
-
-        void operator()(const tuple_constructor&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(tuple_constructor)");
         }
 
         void operator()(const collection_constructor&) {
@@ -980,12 +977,13 @@ struct multi_column_range_accumulator {
     void operator()(const binary_operator& binop) {
         if (is_compare(binop.op)) {
             auto opt_values = dynamic_pointer_cast<tuples::value>(binop.rhs->bind(options))->get_elements();
-            auto& lhs = std::get<column_value_tuple>(*binop.lhs);
+            auto& lhs = std::get<tuple_constructor>(*binop.lhs);
             std::vector<managed_bytes> values(lhs.elements.size());
             for (size_t i = 0; i < lhs.elements.size(); ++i) {
+                auto& col = std::get<column_value>(lhs.elements.at(i));
                 values[i] = *statements::request_validations::check_not_null(
                         opt_values[i],
-                        "Invalid null value in condition for column %s", lhs.elements.at(i).col->name_as_text());
+                        "Invalid null value in condition for column %s", col.col->name_as_text());
             }
             intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
@@ -1021,10 +1019,6 @@ struct multi_column_range_accumulator {
 
     void operator()(const column_value&) {
         on_internal_error(rlogger, "Column encountered outside binary operator");
-    }
-
-    void operator()(const column_value_tuple&) {
-        on_internal_error(rlogger, "Column tuple encountered outside binary operator");
     }
 
     void operator()(const token&) {
@@ -1445,7 +1439,8 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
             if (is_clustering_order(binop)) {
                 return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
             }
-            for (auto& cv : std::get<column_value_tuple>(*binop.lhs).elements) {
+            for (auto& element : std::get<tuple_constructor>(*binop.lhs).elements) {
+                auto& cv = std::get<column_value>(element);
                 if (cv.col->type->is_reversed()) {
                     all_natural = false;
                 } else {

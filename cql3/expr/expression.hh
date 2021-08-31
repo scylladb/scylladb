@@ -74,7 +74,6 @@ using allow_local_index = bool_class<allow_local_index_tag>;
 class binary_operator;
 class conjunction;
 struct column_value;
-struct column_value_tuple;
 struct token;
 class unresolved_identifier;
 class column_mutation_attribute;
@@ -89,7 +88,7 @@ struct collection_constructor;
 struct usertype_constructor;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
-using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token,
+using expression = std::variant<bool, conjunction, binary_operator, column_value, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
                                 field_selection, null, bind_variable, untyped_constant,
                                 tuple_constructor, collection_constructor, usertype_constructor>;
@@ -102,7 +101,6 @@ template <typename E>
 concept LeafExpression
         = std::same_as<bool, E>
         || std::same_as<column_value, E> 
-        || std::same_as<column_value_tuple, E> 
         || std::same_as<token, E> 
         || std::same_as<unresolved_identifier, E> 
         || std::same_as<null, E> 
@@ -138,19 +136,6 @@ struct column_value {
     column_value(const column_definition* col) : col(col) {}
     /// The compiler doesn't auto-generate this due to the other constructor's existence.
     column_value(const column_definition* col, ::shared_ptr<term> sub) : col(col), sub(sub) {}
-};
-
-/// A tuple of column selectors. Usually used for range constraints on clustering keys.
-struct column_value_tuple {
-    std::vector<column_value> elements;
-    explicit column_value_tuple(std::vector<column_value>);
-    template <typename Range>
-            requires requires (Range r) {
-                { r.begin() } -> std::input_iterator;
-                { r.end() } -> std::input_iterator;
-                { *r.begin() } -> std::convertible_to<column_value>;
-            }
-    explicit column_value_tuple(Range r);
 };
 
 /// Represents token function on LHS of an operator relation.  No need to list column definitions
@@ -317,7 +302,6 @@ const binary_operator* find_atom(const expression& e, Fn f) {
                 return nullptr;
             },
             [] (const column_value&) -> const binary_operator* { return nullptr; },
-            [] (const column_value_tuple&) -> const binary_operator* { return nullptr; },
             [] (const token&) -> const binary_operator* { return nullptr; },
             [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
             [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
@@ -383,7 +367,6 @@ size_t count_if(const expression& e, Fn f) {
             },
             [] (bool) -> size_t { return 0; },
             [] (const column_value&) -> size_t { return 0; },
-            [] (const column_value_tuple&) -> size_t { return 0; },
             [] (const token&) -> size_t { return 0; },
             [] (const unresolved_identifier&) -> size_t { return 0; },
             [] (const column_mutation_attribute&) -> size_t { return 0; },
@@ -456,7 +439,7 @@ inline bool is_compare(oper_t op) {
 }
 
 inline bool is_multi_column(const binary_operator& op) {
-    return holds_alternative<column_value_tuple>(*op.lhs);
+    return holds_alternative<tuple_constructor>(*op.lhs);
 }
 
 inline bool has_token(const expression& e) {
@@ -519,21 +502,6 @@ inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :
             (inclusive ? oper_t::LTE : oper_t::LT);
-}
-
-inline
-column_value_tuple::column_value_tuple(std::vector<column_value> e)
-        : elements(std::move(e)) {
-}
-
-template <typename Range>
-        requires requires (Range r) {
-            { r.begin() } -> std::input_iterator;
-            { r.end() } -> std::input_iterator;
-            { *r.begin() } -> std::convertible_to<column_value>;
-        }
-column_value_tuple::column_value_tuple(Range r)
-        : column_value_tuple(std::vector<column_value>(r.begin(), r.end())) {
 }
 
 nested_expression::nested_expression(ExpressionElement auto e)

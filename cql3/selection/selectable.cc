@@ -156,9 +156,6 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             // so bridge them.
             return ::make_shared<column_identifier>(column.col->name(), column.col->name_as_text());
         },
-        [&] (const expr::column_value_tuple& conj) -> shared_ptr<selectable> {
-            on_internal_error(slogger, "no way to express 'SELECT (a, b, c)' in the grammar yet");
-        },
         [&] (const expr::token& tok) -> shared_ptr<selectable> {
             // expr::token implicitly the partition key as arguments, but
             // the selectable equivalent (with_function) needs explicit arguments,
@@ -245,9 +242,6 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
             // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
             // so bridge them.
             return false;
-        },
-        [&] (const expr::column_value_tuple& conj) -> bool {
-            on_internal_error(slogger, "no way to express 'SELECT (a, b, c)' in the grammar yet");
         },
         [&] (const expr::token&) -> bool {
             // Arguably, should return false, because it only processes the partition key.
