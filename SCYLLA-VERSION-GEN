@@ -1,5 +1,64 @@
 #!/bin/sh
 
+USAGE=$(cat <<-END
+Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] -- generate Scylla version and build information files.
+
+Options:
+  -h|--help show this help message.
+  -o|--output-dir PATH specify destination path at which the version files are to be created.
+
+By default, the script will attempt to parse 'version' file
+in the current directory, which should contain a string of
+'\$version-\$release' form.
+
+Otherwise, it will call 'git log' on the source tree (the
+directory, which contains the script) to obtain current
+commit hash and use it for building the version and release
+strings.
+
+The script assumes that it's called from the Scylla source
+tree.
+
+The files created are:
+  SCYLLA-VERSION-FILE
+  SCYLLA-RELEASE-FILE
+  SCYLLA-PRODUCT-FILE
+
+By default, these files are created in the 'build'
+subdirectory under the directory containing the script.
+The destination directory can be overriden by
+using '-o PATH' option.
+END
+)
+
+while [[ $# -gt 0 ]]; do
+	opt="$1"
+	case $opt in
+		-h|--help)
+			echo "$USAGE"
+			exit 0
+			;;
+		-o|--output-dir)
+			OUTPUT_DIR="$2"
+			shift
+			shift
+			;;
+		*)
+			echo "Unexpected argument found: $1"
+			echo
+			echo "$USAGE"
+			exit 1
+			;;
+	esac
+done
+
+SCRIPT_DIR="$(dirname "$0")"
+
+if [ -z "$OUTPUT_DIR" ]; then
+	OUTPUT_DIR="$SCRIPT_DIR/build"
+fi
+
+# Default scylla product/version tags
 PRODUCT=scylla
 VERSION=4.6.dev
 
@@ -9,7 +68,7 @@ then
 	SCYLLA_RELEASE=$(cat version | awk -F'-' '{print $2}')
 else
 	DATE=$(date +%Y%m%d)
-	GIT_COMMIT=$(git log --pretty=format:'%h' -n 1)
+	GIT_COMMIT=$(git -C "$SCRIPT_DIR" log --pretty=format:'%h' -n 1)
 	SCYLLA_VERSION=$VERSION
 	# For custom package builds, replace "0" with "counter.your_name",
 	# where counter starts at 1 and increments for successive versions.
@@ -19,16 +78,15 @@ else
 	SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
 fi
 
-if [ -f build/SCYLLA-RELEASE-FILE ]; then
-	RELEASE_FILE=$(cat build/SCYLLA-RELEASE-FILE)
-	GIT_COMMIT_FILE=$(cat build/SCYLLA-RELEASE-FILE |cut -d . -f 3)
+if [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
+	GIT_COMMIT_FILE=$(cat "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" |cut -d . -f 3)
 	if [ "$GIT_COMMIT" = "$GIT_COMMIT_FILE" ]; then
 		exit 0
 	fi
 fi
 
 echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
-mkdir -p build
-echo "$SCYLLA_VERSION" > build/SCYLLA-VERSION-FILE
-echo "$SCYLLA_RELEASE" > build/SCYLLA-RELEASE-FILE
-echo "$PRODUCT" > build/SCYLLA-PRODUCT-FILE
+mkdir -p "$OUTPUT_DIR"
+echo "$SCYLLA_VERSION" > "$OUTPUT_DIR/SCYLLA-VERSION-FILE"
+echo "$SCYLLA_RELEASE" > "$OUTPUT_DIR/SCYLLA-RELEASE-FILE"
+echo "$PRODUCT" > "$OUTPUT_DIR/SCYLLA-PRODUCT-FILE"
