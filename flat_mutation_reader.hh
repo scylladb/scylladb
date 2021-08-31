@@ -903,7 +903,9 @@ make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<
 /// Ordering of partitions themselves remains unchanged.
 /// For more details see docs/design-notes/reverse-reads.md.
 ///
-/// \param original the reader to be reversed
+/// The reader's schema (returned by `schema()`) is the reverse of `original`'s schema.
+///
+/// \param original the reader to be reversed.
 /// \param max_size the maximum amount of memory the reader is allowed to use
 ///     for reversing and conversely the maximum size of the results. The
 ///     reverse reader reads entire partitions into memory, before reversing
