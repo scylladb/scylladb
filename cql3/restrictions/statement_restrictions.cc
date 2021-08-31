@@ -1744,5 +1744,9 @@ std::vector<query::clustering_range> statement_restrictions::get_local_index_clu
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
 }
 
+sstring statement_restrictions::to_string() const {
+    return _where ? expr::to_string(*_where) : "";
+}
+
 } // namespace restrictions
 } // namespace cql3

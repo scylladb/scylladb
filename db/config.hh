@@ -339,6 +339,7 @@ public:
     named_value<uint32_t> schema_registry_grace_period;
     named_value<uint32_t> max_concurrent_requests_per_shard;
     named_value<bool> cdc_dont_rewrite_streams;
+    named_value<tri_mode_restriction> strict_allow_filtering;
 
     named_value<uint16_t> alternator_port;
     named_value<uint16_t> alternator_https_port;

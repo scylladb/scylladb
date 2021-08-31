@@ -401,9 +401,14 @@ private:
                 assert(bound_terms == prepared->bound_names.size());
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             }).then([&key, &id_getter, &client_state] (auto prep_ptr) {
-                return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
+                const auto& warnings = prep_ptr->warnings;
+                const auto msg =
                         ::make_shared<ResultMsgType>(id_getter(key), std::move(prep_ptr),
-                            client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK)));
+                            client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
+                for (const auto& w : warnings) {
+                    msg->add_warning(w);
+                }
+                return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(std::move(msg));
             }).handle_exception_type([&query_string] (typename prepared_statements_cache::statement_is_too_big&) {
                 return make_exception_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
                         prepared_statement_is_too_big(query_string));
