@@ -511,6 +511,7 @@ scylla_tests = set([
     'test/boost/sstable_set_test',
     'test/boost/reader_concurrency_semaphore_test',
     'test/boost/service_level_controller_test',
+    'test/boost/schema_loader_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
@@ -1262,6 +1263,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
 ]
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
+deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc'] + scylla_raft_dependencies
