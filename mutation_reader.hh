@@ -155,11 +155,14 @@ partition_presence_checker make_default_partition_presence_checker() {
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
 // independent mutation_reader.
+//
 // The reader returns mutations having all the same schema, the one passed
 // when invoking the source.
+//
 // When reading in reverse, a reverse schema has to be passed (compared to the
 // table's schema), and a half-reverse (legacy) slice.
 // See docs/design-notes/reverse-reads.md for more details.
+// Partition-range forwarding is not yet supported in reverse mode.
 class mutation_source {
     using partition_range = const dht::partition_range&;
     using io_priority = const io_priority_class&;
