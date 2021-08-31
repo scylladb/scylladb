@@ -1176,7 +1176,6 @@ pure_boost_tests = set([
     'test/boost/vint_serialization_test',
     'test/boost/bptree_test',
     'test/boost/utf8_test',
-    'test/boost/btree_test',
     'test/manual/streaming_histogram_test',
 ])
 
