@@ -570,6 +570,7 @@ apps = set([
     'test/tools/cql_repl',
     'tools/scylla-types',
     'tools/scylla-sstable-index',
+    'tools/scylla-sstable',
 ])
 
 tests = scylla_tests | perf_tests | raft_tests
@@ -1143,6 +1144,7 @@ deps = {
     #FIXME: we don't need all of scylla_core here, only the types module, need to modularize scylla_core.
     'tools/scylla-types': idls + ['tools/scylla-types.cc'] + scylla_core,
     'tools/scylla-sstable-index': idls + ['tools/scylla-sstable-index.cc'] + scylla_core,
+    'tools/scylla-sstable': idls + ['tools/scylla-sstable.cc', 'tools/schema_loader.cc'] + scylla_core,
 }
 
 pure_boost_tests = set([

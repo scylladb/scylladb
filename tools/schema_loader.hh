@@ -32,10 +32,6 @@ namespace tools {
 /// The schema string is expected to contain everything that is needed to
 /// create the table(s): keyspace, UDTs, etc. Definitions are expected to be
 /// separated by `;`. A keyspace will be automatically generated if missing.
-/// TODO:
-/// * dropped columns
-/// * dropped collections
-///
 /// Loading the schema(s) has no side-effect [1]. Nothing is written to disk,
 /// it is all in memory, kept alive by the returned `schema_ptr`.
 /// This is intended to be used by tools, which don't want to meddle with the
