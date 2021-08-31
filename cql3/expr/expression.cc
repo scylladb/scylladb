@@ -441,22 +441,6 @@ bool is_one_of(const column_value_tuple& tuple, term& rhs, const column_value_ev
     throw std::logic_error("unexpected term type in is_one_of(multi-column)");
 }
 
-/// True iff op means bnd type of bound.
-bool matches(oper_t op, statements::bound bnd) {
-    switch (op) {
-    case oper_t::GT:
-    case oper_t::GTE:
-        return is_start(bnd); // These set a lower bound.
-    case oper_t::LT:
-    case oper_t::LTE:
-        return is_end(bnd); // These set an upper bound.
-    case oper_t::EQ:
-        return true; // Bounds from both sides.
-    default:
-        return false;
-    }
-}
-
 const value_set empty_value_set = value_list{};
 const value_set unbounded_value_set = nonwrapping_range<managed_bytes>::make_open_ended_both_sides();
 
@@ -708,18 +692,6 @@ bool is_satisfied_by(
     const auto regulars = get_non_pk_values(selection, static_row, row);
     return is_satisfied_by(
             restr, {options, row_data_from_partition_slice{partition_key, clustering_key, regulars, selection}});
-}
-
-std::vector<managed_bytes_opt> first_multicolumn_bound(
-        const expression& restr, const query_options& options, statements::bound bnd) {
-    auto found = find_atom(restr, [bnd] (const binary_operator& oper) {
-        return matches(oper.op, bnd) && is_multi_column(oper);
-    });
-    if (found) {
-        return static_pointer_cast<tuples::value>(found->rhs->bind(options))->get_elements();
-    } else {
-        return std::vector<managed_bytes_opt>{};
-    }
 }
 
 template<typename T>

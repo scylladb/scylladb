@@ -406,17 +406,6 @@ public:
     }
 
 private:
-    std::vector<managed_bytes_opt> read_bound_components(const query_options& options, statements::bound b) const {
-        if (!_slice.has_bound(b)) {
-            return {};
-        }
-        auto vals = first_multicolumn_bound(expression, options, b);
-        for (unsigned i = 0; i < vals.size(); i++) {
-            statements::request_validations::check_not_null(vals[i], "Invalid null value in condition for column %s", _column_defs.at(i)->name_as_text());
-        }
-        return vals;
-    }
-
     /**
      * The function returns the first real inequality component.
      * The first real inequality is the index of the first component in the
@@ -503,79 +492,6 @@ private:
             }
             bool inclusive = (i == (num_of_restrictions-1)) && bound_inclusive;
             ret[i]->merge_with(make_single_column_restriction(bound, inclusive, neq_component_idx, bound_values[neq_component_idx]));
-        }
-        return ret;
-    }
-
-    /**
-     * Builds and returns a set of restrictions such that the union of their ranges (the restrictions OR-ed together)
-     * is logically identical to this restriction, with the additional property that it can execute
-     * correctly when the clustering columns are with "mixed order" - contains ASC and DESC orderings.
-     * for more information: https://github.com/scylladb/scylla/issues/2050
-     * @param options - the query options
-     * @return set of restrictions which their ranges union is logically identical to this restriction.
-     */
-    std::vector<::shared_ptr<clustering_key_restrictions>>
-    build_mixed_order_restriction_set(const query_options& options) const {
-        std::vector<restriction_shared_ptr> ret;
-        auto start_components = read_bound_components(options, statements::bound::START);
-        auto end_components = read_bound_components(options, statements::bound::END);
-        bool start_inclusive = _slice.is_inclusive(statements::bound::START);
-        bool end_inclusive = _slice.is_inclusive(statements::bound::END);
-        std::optional<std::size_t> first_neq_component = std::nullopt;
-
-        // find the first index of the first component that is not equal between the tuples.
-        if (start_components.empty() || end_components.empty()) {
-            first_neq_component = 0;
-        } else {
-            auto tuple_mismatch = std::mismatch(start_components.begin(), start_components.end(),
-                    end_components.begin(), end_components.end());
-            if ((tuple_mismatch.first != start_components.end()) ||
-                (tuple_mismatch.second != end_components.end())) {
-                first_neq_component = std::distance(start_components.begin(), tuple_mismatch.first);
-            }
-        }
-
-        // this is either a simple equality or a never fulfilled restriction
-        if (!first_neq_component && start_inclusive && end_inclusive) {
-            // This is a simple equality case
-            shared_ptr<cql3::term> term = ::make_shared<cql3::tuples::value>(start_components);
-            ret.emplace_back(::make_shared<cql3::restrictions::multi_column_restriction::EQ>(_schema, _column_defs, term));
-            return ret;
-        } else if (!first_neq_component) {
-            // This is a contradiction case
-            return {};
-        } else if ((*first_neq_component == end_components.size() && !end_inclusive ) ||
-                   (*first_neq_component == start_components.size() && !start_inclusive )) {
-            // This is a case where one bound is a prefix of the other. If this prefix bound
-            // is not inclusive the result will be an empty set.
-            return {};
-        }
-
-        bool start_components_exists = (start_components.size() - first_neq_component.value()) > 0;
-        bool end_components_exists = (end_components.size() - first_neq_component.value()) > 0;
-        bool both_components_exists = start_components_exists && end_components_exists;
-        if (start_components_exists) {
-            auto restrictions =
-                    make_single_bound_restrictions(statements::bound::START, start_inclusive, start_components, first_neq_component.value());
-            for (auto&& r : restrictions) {
-                ret.emplace_back(r);
-            }
-        }
-
-        if (end_components_exists) {
-            auto restrictions =
-                    make_single_bound_restrictions(statements::bound::END, end_inclusive,
-                            end_components, first_neq_component.value() + both_components_exists);
-            for (auto&& r : restrictions) {
-                ret.emplace_back(r);
-            }
-        }
-
-        if (both_components_exists) {
-            bool inclusive = end_inclusive && ((end_components.size() - first_neq_component.value()) == 1);
-            ret[0]->merge_with(make_single_column_restriction(statements::bound::END, inclusive, first_neq_component.value(),
-                    end_components[first_neq_component.value()]));
         }
         return ret;
     }

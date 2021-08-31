@@ -248,10 +248,6 @@ extern bool is_satisfied_by(
         const query::result_row_view& static_row, const query::result_row_view* row,
         const selection::selection&, const query_options&);
 
-/// Finds the first binary_operator in restr that represents a bound and returns its RHS as a tuple.  If no
-/// such binary_operator exists, returns an empty vector.  The search is depth first.
-extern std::vector<managed_bytes_opt> first_multicolumn_bound(const expression&, const query_options&, statements::bound);
-
 /// A set of discrete values.
 using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
 
