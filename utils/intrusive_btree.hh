@@ -638,6 +638,8 @@ public:
             _root->clear([&disp] (member_hook* h) { node::dispose_key(h, disp); });
             node::destroy(*_root);
             _root = nullptr;
+            // Both left and right leaves pointers are not touched as this
+            // initialization of inline node overwrites them anyway
             new (&_inline) node_base(node_base::inline_tag{});
         } else if (!_inline.empty()) {
             node::dispose_key(_inline.keys[0], disp);
@@ -2148,6 +2150,9 @@ private:
                 destroy(*n->_kids[--ni]);
             }
             destroy(*n);
+
+            // No need to "reset" left_leaf/right_leaf on exception as these
+            // pointers are only valid iff clone() returns successfully
             throw;
         }
 
