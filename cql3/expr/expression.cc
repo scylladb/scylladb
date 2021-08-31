@@ -1115,126 +1115,92 @@ bool is_on_collection(const binary_operator& b) {
 }
 
 expression replace_column_def(const expression& expr, const column_definition* new_cdef) {
-    return std::visit(overloaded_functor{
-            [] (bool b){ return expression(b); },
-            [&] (const conjunction& conj) {
-                const auto applied = conj.children | transformed(
-                        std::bind(replace_column_def, std::placeholders::_1, new_cdef));
-                return expression(conjunction{std::vector(applied.begin(), applied.end())});
-            },
-            [&] (const binary_operator& oper) {
-                return expression(binary_operator(replace_column_def(*oper.lhs, new_cdef), oper.op, oper.rhs));
-            },
-            [&] (const column_value& col) {
-                return expression(column_value{new_cdef});
-            },
-            [&] (const column_value_tuple& tuple) -> expression {
-                throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
-            },
-            [&] (const token&) { return expr; },
-            [&] (const unresolved_identifier&) { return expr; },
-            [&] (const column_mutation_attribute&) { return expr; },
-            [&] (const function_call&) { return expr; },
-            [&] (const cast&) { return expr; },
-            [&] (const field_selection&) { return expr; },
-            [&] (const null&) { return expr; },
-            [&] (const bind_variable&) { return expr; },
-            [&] (const untyped_constant&) { return expr; },
-            [&] (const tuple_constructor& tc) {
-                 return expression{
-                     tuple_constructor{
-                        boost::copy_range<std::vector<expression>>(
-                            tc.elements | boost::adaptors::transformed(std::bind(replace_column_def, std::placeholders::_1, new_cdef))
-                        )
-                     }
-                 };
-            },
-            [&] (const collection_constructor& c) {
-                return expression{
-                    collection_constructor{
-                        c.style,
-                        boost::copy_range<std::vector<expression>>(
-                            c.elements | boost::adaptors::transformed(std::bind(replace_column_def, std::placeholders::_1, new_cdef))
-                        )
-                    }
-                };
-            },
-            [&] (const usertype_constructor& uc) {
-                usertype_constructor::elements_map_type m;
-                for (auto& [k, v] : uc.elements) {
-                    m.emplace(k, replace_column_def(*v, new_cdef));
-                }
-                return expression{usertype_constructor{std::move(m)}};
-            },
-        }, expr);
+    return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
+        if (std::holds_alternative<column_value>(expr)) {
+            return column_value{new_cdef};
+        } else if (std::holds_alternative<column_value_tuple>(expr)) {
+            throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
+        } else {
+            return std::nullopt;
+        }
+    });
 }
 
 expression replace_token(const expression& expr, const column_definition* new_cdef) {
-    return std::visit(overloaded_functor{
-            [] (bool b) { return expression(b); },
-            [&] (const conjunction& conj) {
-                const auto applied = conj.children | transformed(
-                        std::bind(replace_token, std::placeholders::_1, new_cdef));
-                return expression(conjunction{std::vector(applied.begin(), applied.end())});
-            },
-            [&] (const binary_operator& oper) {
-                return expression(binary_operator(replace_token(*oper.lhs, new_cdef), oper.op, oper.rhs));
-            },
-            [&] (const column_value&) {
-                return expr;
-            },
-            [&] (const column_value_tuple&) -> expression {
-                throw std::logic_error(format("replace_token invalid with column tuple: {}", to_string(expr)));
-            },
-            [&] (const token&) -> expression { return column_value{new_cdef}; },
-            [&] (const unresolved_identifier&) -> expression {
-                throw std::logic_error(format("replace_token invalid with unresolved identifier: {}", to_string(expr)));
-            },
-            [&] (const column_mutation_attribute&) -> expression {
-                return expr;
-            },
-            [&] (const function_call&) -> expression {
-                // A token function could be one of the arguments, but it doesn't help the caller to replace it
-                // since we can't index function of the token function.
-                return expr;
-            },
-            [&] (const cast&) -> expression {
-                // A token function could be what's being casted, but it doesn't help the caller to replace it
-                // since we can't index function of the token function.
-                return expr;
-            },
-            [&] (const field_selection&) -> expression {
-                return expr;
-            },
-            [&] (const null&) -> expression {
-                return expr;
-            },
-            [&] (const bind_variable&) -> expression {
-                return expr;
-            },
-            [&] (const untyped_constant&) -> expression {
-                return expr;
-            },
-            [&] (const tuple_constructor& tc) -> expression {
-                return tuple_constructor{boost::copy_range<std::vector<expression>>(
-                    tc.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef))
-                )};
-            },
-            [&] (const collection_constructor& c) -> expression {
-                return collection_constructor{
-                    c.style,
-                    boost::copy_range<std::vector<expression>>(
-                        c.elements | boost::adaptors::transformed(std::bind(replace_token, std::placeholders::_1, new_cdef)))
-                };
-            },
-            [&] (const usertype_constructor& uc) -> expression {
-                usertype_constructor::elements_map_type m;
-                for (auto& [k, v] : uc.elements) {
-                    m.emplace(k, replace_token(*v, new_cdef));
-                }
-                return usertype_constructor{std::move(m)};
-            },
-        }, expr);
+    return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
+        if (std::holds_alternative<token>(expr)) {
+            return column_value{new_cdef};
+        } else {
+            return std::nullopt;
+        }
+    });
+}
+
+expression search_and_replace(const expression& e,
+        const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate) {
+    auto recurse = [&] (const expression& e) -> expression {
+        return search_and_replace(e, replace_candidate);
+    };
+    auto replace_result = replace_candidate(e);
+    if (replace_result) {
+        return std::move(*replace_result);
+    } else {
+        return std::visit(
+            overloaded_functor{
+                [&] (const conjunction& conj) -> expression {
+                    return conjunction{
+                        boost::copy_range<std::vector<expression>>(
+                            conj.children | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const binary_operator& oper) -> expression {
+                    return binary_operator(recurse(*oper.lhs), oper.op, oper.rhs);
+                },
+                [&] (const column_mutation_attribute& cma) -> expression {
+                    return column_mutation_attribute{cma.kind, recurse(*cma.column)};
+                },
+                [&] (const tuple_constructor& tc) -> expression {
+                    return tuple_constructor{
+                        boost::copy_range<std::vector<expression>>(
+                            tc.elements | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const collection_constructor& c) -> expression {
+                    return collection_constructor{
+                        c.style,
+                        boost::copy_range<std::vector<expression>>(
+                            c.elements | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const usertype_constructor& uc) -> expression {
+                    usertype_constructor::elements_map_type m;
+                    for (auto& [k, v] : uc.elements) {
+                        m.emplace(k, recurse(*v));
+                    }
+                    return usertype_constructor{std::move(m)};
+                },
+                [&] (const function_call& fc) -> expression {
+                    return function_call{
+                        fc.func,
+                        boost::copy_range<std::vector<expression>>(
+                            fc.args | boost::adaptors::transformed(recurse)
+                        )
+                    };
+                },
+                [&] (const cast& c) -> expression {
+                    return cast{recurse(*c.arg), c.type};
+                },
+                [&] (const field_selection& fs) -> expression {
+                    return field_selection{recurse(*fs.structure), fs.field};
+                },
+                [&] (LeafExpression auto const& e) -> expression {
+                    return e;
+                },
+            }, e);
+    }
 }
 
 std::ostream& operator<<(std::ostream& s, oper_t op) {
