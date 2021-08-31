@@ -1731,8 +1731,8 @@ static schema_builder make_partition_key_with_values_of_different_types_schema_b
 static thread_local const schema_builder PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA_BUILDER =
         make_partition_key_with_values_of_different_types_schema_builder();
 
-static void test_partition_key_with_values_of_different_types_read(const sstring& path, compression_parameters cp) {
-  test_env::do_with_async([path, cp] (test_env& env) {
+static future<> test_partition_key_with_values_of_different_types_read(const sstring& path, compression_parameters cp) {
+  return test_env::do_with_async([path, cp] (test_env& env) {
     auto s = schema_builder(PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA_BUILDER).set_compressor_params(cp).build();
 
     auto bool_cdef = s->get_column_definition(to_bytes("bool_val"));
@@ -1821,31 +1821,31 @@ static void test_partition_key_with_values_of_different_types_read(const sstring
                                "variable length text 3"))
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
-    test_partition_key_with_values_of_different_types_read(
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
+    return test_partition_key_with_values_of_different_types_read(
         UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compression_parameters::no_compression());
 }
 
-SEASTAR_THREAD_TEST_CASE(test_lz4_partition_key_with_values_of_different_types_read) {
-    test_partition_key_with_values_of_different_types_read(
+SEASTAR_TEST_CASE(test_lz4_partition_key_with_values_of_different_types_read) {
+    return test_partition_key_with_values_of_different_types_read(
         LZ4_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::lz4);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_snappy_partition_key_with_values_of_different_types_read) {
-    test_partition_key_with_values_of_different_types_read(
+SEASTAR_TEST_CASE(test_snappy_partition_key_with_values_of_different_types_read) {
+    return test_partition_key_with_values_of_different_types_read(
         SNAPPY_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::snappy);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_deflate_partition_key_with_values_of_different_types_read) {
-    test_partition_key_with_values_of_different_types_read(
+SEASTAR_TEST_CASE(test_deflate_partition_key_with_values_of_different_types_read) {
+    return test_partition_key_with_values_of_different_types_read(
         DEFLATE_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::deflate);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_read) {
-    test_partition_key_with_values_of_different_types_read(
+SEASTAR_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_read) {
+    return test_partition_key_with_values_of_different_types_read(
         ZSTD_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::create({
             {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"},
             {"compression_level", "1"}}));
@@ -3819,8 +3819,8 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
   });
 }
 
-static void test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
-  test_env::do_with_async([table_name, partition_tomb, cp] (test_env& env) {
+static future<> test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
+  return test_env::do_with_async([table_name, partition_tomb, cp] (test_env& env) {
     // CREATE TABLE <table_name> (pk int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
@@ -3847,46 +3847,46 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
         boost::sort(muts, mutation_decorated_key_less_comparator());
         validate_read(env, s, tmp.path(), muts, version);
     }
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_live_partitions) {
-    test_write_many_partitions(
+SEASTAR_TEST_CASE(test_write_many_live_partitions) {
+    return test_write_many_partitions(
             "many_live_partitions",
             tombstone{},
             compression_parameters::no_compression());
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_deleted_partitions) {
-    test_write_many_partitions(
+SEASTAR_TEST_CASE(test_write_many_deleted_partitions) {
+    return test_write_many_partitions(
             "many_deleted_partitions",
             tombstone{write_timestamp, write_time_point},
             compression_parameters::no_compression());
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_lz4) {
-    test_write_many_partitions(
+SEASTAR_TEST_CASE(test_write_many_partitions_lz4) {
+    return test_write_many_partitions(
             "many_partitions_lz4",
             tombstone{},
             compression_parameters{compressor::lz4});
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_snappy) {
-    test_write_many_partitions(
+SEASTAR_TEST_CASE(test_write_many_partitions_snappy) {
+    return test_write_many_partitions(
             "many_partitions_snappy",
             tombstone{},
             compression_parameters{compressor::snappy});
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_deflate) {
-    test_write_many_partitions(
+SEASTAR_TEST_CASE(test_write_many_partitions_deflate) {
+    return test_write_many_partitions(
             "many_partitions_deflate",
             tombstone{},
             compression_parameters{compressor::deflate});
 }
 
-SEASTAR_THREAD_TEST_CASE(test_write_many_partitions_zstd) {
-    test_write_many_partitions(
+SEASTAR_TEST_CASE(test_write_many_partitions_zstd) {
+    return test_write_many_partitions(
             "many_partitions_zstd",
             tombstone{},
             compression_parameters{compressor::create({
