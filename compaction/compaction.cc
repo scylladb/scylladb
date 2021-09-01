@@ -1461,7 +1461,8 @@ public:
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return make_flat_mutation_reader<reader>(regular_compaction::make_sstable_reader(), _options.operation_mode);
+        auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr);
+        return make_flat_mutation_reader<reader>(std::move(crawling_reader), _options.operation_mode);
     }
 
     reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
@@ -1719,8 +1720,7 @@ static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction
     clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
 
     auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "scrub:validate", db::no_timeout);
-    auto reader = sstables->make_local_shard_sstable_reader(schema, permit, query::full_partition_range, schema->full_slice(), descriptor.io_priority,
-            tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no, default_read_monitor_generator());
+    auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
 
     const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), *info);
 
