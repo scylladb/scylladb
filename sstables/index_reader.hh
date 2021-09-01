@@ -335,7 +335,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
             get_clustering_values_fixed_lengths(sst->get_serialization_header()));
     }
 
-    if (sst->get_version() >= sstable_version_types::mc && use_binary_search_in_promoted_index) {
+    if (sst->get_version() >= sstable_version_types::mc) {
         seastar::shared_ptr<cached_file> cached_file_ptr = caching
                 ? sst->_cached_index_file
                 : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),

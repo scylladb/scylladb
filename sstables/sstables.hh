@@ -104,8 +104,6 @@ class index_reader;
 class partition_index_cache;
 class sstables_manager;
 
-extern bool use_binary_search_in_promoted_index;
-
 extern size_t summary_byte_cost(double summary_ratio);
 
 struct sstable_writer_config {
