@@ -1591,32 +1591,26 @@ future<raft::read_barrier_reply> messaging_service::send_raft_execute_read_barri
 }
 
 void init_messaging_service(sharded<messaging_service>& ms,
-                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
-                sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {
+                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg, const db::config& db_config) {
     using encrypt_what = messaging_service::encrypt_what;
     using namespace seastar::tls;
+
+    const auto& ssl_opts = db_config.server_encryption_options();
+    auto encrypt = utils::get_or_default(ssl_opts, "internode_encryption", "none");
+
+    if (encrypt == "all") {
+        mscfg.encrypt = encrypt_what::all;
+    } else if (encrypt == "dc") {
+        mscfg.encrypt = encrypt_what::dc;
+    } else if (encrypt == "rack") {
+        mscfg.encrypt = encrypt_what::rack;
+    }
 
     std::shared_ptr<credentials_builder> creds;
 
     if (mscfg.encrypt != encrypt_what::none) {
         creds = std::make_shared<credentials_builder>();
-        creds->set_dh_level(dh_params::level::MEDIUM);
-
-        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
-        if (ms_trust_store.empty()) {
-            creds->set_system_trust().get();
-        } else {
-            creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
-        }
-
-        creds->set_priority_string(db::config::default_tls_priority);
-
-        if (!ms_tls_prio.empty()) {
-            creds->set_priority_string(ms_tls_prio);
-        }
-        if (ms_client_auth) {
-            creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
-        }
+        utils::configure_tls_creds_builder(*creds, std::move(ssl_opts)).get();
     }
 
     // Init messaging_service

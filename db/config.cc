@@ -28,8 +28,10 @@
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/print.hh>
 #include <seastar/util/log.hh>
+#include <seastar/net/tls.hh>
 
 #include "cdc/cdc_extension.hh"
 #include "config.hh"
@@ -1037,6 +1039,26 @@ sstring config_value_as_json(const std::unordered_map<sstring, log_level>& v) {
     // We don't support converting this to json yet; and because the log_level config items
     // aren't part of config_file::value(), it won't be listed
     throw std::runtime_error("config_value_as_json(const std::unordered_map<sstring, log_level>& v) is not implemented");
+}
+
+future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options) {
+    creds.set_dh_level(seastar::tls::dh_params::level::MEDIUM);
+    creds.set_priority_string(db::config::default_tls_priority);
+
+    if (options.contains("priority_string")) {
+        creds.set_priority_string(options.at("priority_string"));
+    }
+    if (is_true(get_or_default(options, "require_client_auth", "false"))) {
+        creds.set_client_auth(seastar::tls::client_auth::REQUIRE);
+    }
+
+    auto cert = get_or_default(options, "certificate", db::config::get_conf_sub("scylla.crt").string());
+    auto key = get_or_default(options, "keyfile", db::config::get_conf_sub("scylla.key").string());
+    co_await creds.set_x509_key_file(cert, key, seastar::tls::x509_crt_format::PEM);
+
+    if (options.contains("truststore")) {
+        co_await creds.set_x509_trust_file(options.at("truststore"), seastar::tls::x509_crt_format::PEM);
+    }
 }
 
 }

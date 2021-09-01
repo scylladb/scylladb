@@ -144,15 +144,6 @@ public:
     sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
 };
 
-template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
-V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
-    const auto iter = ss.find(key);
-    if (iter != ss.end()) {
-        return iter->second;
-    }
-    return def;
-}
-
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
@@ -697,27 +688,6 @@ int main(int ac, char** av) {
                 utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address, family, preferred).get0());
             }
 
-            // TODO: lib.
-            auto is_true = [](sstring val) {
-                std::transform(val.begin(), val.end(), val.begin(), ::tolower);
-                return val == "true" || val == "1";
-            };
-
-            // The start_native_transport method is invoked by API as well, and uses the config object
-            // (through db) directly. Lets fixup default valued right here instead then, so it in turn can be
-            // kept simple
-            // TODO: make intrinsic part of config defaults instead
-            auto ceo = cfg->client_encryption_options();
-            if (is_true(get_or_default(ceo, "enabled", "false"))) {
-                ceo["enabled"] = "true";
-                ceo["certificate"] = get_or_default(ceo, "certificate", db::config::get_conf_sub("scylla.crt").string());
-                ceo["keyfile"] = get_or_default(ceo, "keyfile", db::config::get_conf_sub("scylla.key").string());
-                ceo["require_client_auth"] = is_true(get_or_default(ceo, "require_client_auth", "false")) ? "true" : "false";
-            } else {
-                ceo["enabled"] = "false";
-            }
-            cfg->client_encryption_options(std::move(ceo), cfg->client_encryption_options.source());
-
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
             // to all reactors
@@ -798,14 +768,6 @@ int main(int ac, char** av) {
             dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
-            const auto& ssl_opts = cfg->server_encryption_options();
-            auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
-            auto trust_store = get_or_default(ssl_opts, "truststore");
-            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
-            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
-            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
-
             netw::messaging_service::config mscfg;
 
             mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
@@ -814,19 +776,15 @@ int main(int ac, char** av) {
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
             mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
 
-            if (encrypt_what == "all") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
-            } else if (encrypt_what == "dc") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
-            } else if (encrypt_what == "rack") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
-            }
-
-            if (clauth && (mscfg.encrypt == netw::messaging_service::encrypt_what::dc || mscfg.encrypt == netw::messaging_service::encrypt_what::rack)) {
-                startlog.warn("Setting require_client_auth is incompatible with 'rack' and 'dc' internode_encryption values."
-                    " To ensure that mutual TLS authentication is enforced, please set internode_encryption to 'all'. Continuing with"
-                    " potentially insecure configuration."
-                );
+            const auto& seo = cfg->server_encryption_options();
+            if (utils::is_true(utils::get_or_default(seo, "require_client_auth", "false"))) {
+                auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
+                if (encrypt == "dc" || encrypt == "rack") {
+                    startlog.warn("Setting require_client_auth is incompatible with 'rack' and 'dc' internode_encryption values."
+                        " To ensure that mutual TLS authentication is enforced, please set internode_encryption to 'all'. Continuing with"
+                        " potentially insecure configuration."
+                    );
+                }
             }
 
             sstring compress_what = cfg->internode_compression();
@@ -861,7 +819,7 @@ int main(int ac, char** av) {
             scfg.gossip = dbcfg.gossip_scheduling_group;
 
             debug::the_messaging_service = &messaging;
-            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
+            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), *cfg);
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 netw::uninit_messaging_service(messaging).get();
             });

@@ -35,7 +35,13 @@
 #include "utils/enum_option.hh"
 #include "db/hints/host_filter.hh"
 
-namespace seastar { class file; struct logging_settings; }
+namespace seastar {
+class file;
+struct logging_settings;
+namespace tls {
+class credentials_builder;
+}
+}
 
 namespace db {
 
@@ -394,5 +400,25 @@ private:
 
     std::shared_ptr<db::extensions> _extensions;
 };
+
+}
+
+namespace utils {
+
+template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
+V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
+    const auto iter = ss.find(key);
+    if (iter != ss.end()) {
+        return iter->second;
+    }
+    return def;
+}
+
+inline bool is_true(sstring val) {
+    std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+    return val == "true" || val == "1";
+}
+
+future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options);
 
 }
