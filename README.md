@@ -43,7 +43,7 @@ For further information, please see:
 
 [developer documentation]: HACKING.md
 [build documentation]: docs/guides/building.md
-[docker image build documentation]: dist/docker/redhat/README.md
+[docker image build documentation]: dist/docker/debian/README.md
 
 ## Running Scylla
 
