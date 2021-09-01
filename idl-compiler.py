@@ -27,6 +27,7 @@ import textwrap
 from numbers import Number
 from pprint import pformat
 from copy import copy
+from typing import List
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -88,7 +89,7 @@ def print_cw(f):
 ###
 class ASTBase:
     name: str
-    ns_context: list[str]
+    ns_context: List[str]
 
     def __init__(self, name):
         self.name = name
