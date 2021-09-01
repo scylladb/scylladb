@@ -1283,8 +1283,11 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::k
 
     if (__builtin_expect(!valid, false)) {
         if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
-            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: previous {}:{}, current {}:{}",
-                    static_cast<void*>(this), _name, _validator.previous_mutation_fragment_kind(), _validator.previous_position(), kind, pos));
+            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: partition key {}: previous {}:{}, current {}:{}",
+                    static_cast<void*>(this), _name, _validator.previous_partition_key(), _validator.previous_mutation_fragment_kind(), _validator.previous_position(), kind, pos));
+        } else if (_validation_level >= mutation_fragment_stream_validation_level::partition_key) {
+            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: partition key {}: previous {}, current {}",
+                    static_cast<void*>(this), _name, _validator.previous_partition_key(), _validator.previous_mutation_fragment_kind(), kind));
         } else {
             on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: previous {}, current {}",
                     static_cast<void*>(this), _name, _validator.previous_mutation_fragment_kind(), kind));
