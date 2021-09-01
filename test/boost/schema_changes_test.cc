@@ -53,10 +53,8 @@ SEASTAR_TEST_CASE(test_schema_changes) {
                 for (auto& m : base_mutations) {
                     mt->apply(m);
                 }
-                created_with_base_schema = env.make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
-                created_with_base_schema->write_components(mt->make_flat_reader(base, env.make_reader_permit()), base_mutations.size(), base,
-                        env.manager().configure_writer(), mt->get_encoding_stats()).get();
-                created_with_base_schema->load().get();
+
+                created_with_base_schema = make_sstable_easy(env, dir.path(), mt, env.manager().configure_writer(), gen, version, base_mutations.size());
 
                 created_with_changed_schema = env.make_sstable(changed, dir.path().string(), gen, version, sstables::sstable::format_types::big);
                 created_with_changed_schema->load().get();
