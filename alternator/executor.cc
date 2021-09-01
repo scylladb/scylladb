@@ -3321,7 +3321,16 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
 
     dht::partition_range_vector partition_ranges;
     if (segment) {
-        partition_ranges.push_back(get_range_for_segment(*segment, *total_segments));
+        auto range = get_range_for_segment(*segment, *total_segments);
+        if (exclusive_start_key) {
+            auto ring_pos = dht::ring_position{dht::decorate_key(*schema, pk_from_json(*exclusive_start_key, schema))};
+            if (!range.contains(ring_pos, dht::ring_position_comparator(*schema))) {
+                return make_ready_future<request_return_type>(api_error::validation(
+                    format("The provided starting key is invalid: Invalid ExclusiveStartKey. Please use ExclusiveStartKey "
+                           "with correct Segment. TotalSegments: {} Segment: {}", *total_segments, *segment)));
+            }
+        }
+        partition_ranges.push_back(range);
     } else {
         partition_ranges.push_back(dht::partition_range::make_open_ended_both_sides());
     }
