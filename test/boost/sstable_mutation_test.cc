@@ -933,16 +933,6 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
                                           tracing::trace_state_ptr(), use_caching::yes);
 }
 
-static shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_ptr<memtable> mt, sstable_writer_config cfg,
-        unsigned long gen = 1, const sstable::version_types v = get_highest_sstable_version(), int estimated_partitions = 1) {
-    schema_ptr s = mt->schema();
-    auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big);
-    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
-    sst->write_components(std::move(mr), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
-    sst->load().get();
-    return sst;
-}
-
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();

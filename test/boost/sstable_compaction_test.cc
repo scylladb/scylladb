@@ -1768,16 +1768,6 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
     });
 }
 
-// Must be run in a seastar thread
-static
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg, int64_t generation = 1) {
-    auto s = rd.schema();
-    auto sst = env.make_sstable(s, path.string(), generation);
-    sst->write_components(std::move(rd), 1, s, cfg, encoding_stats{}).get();
-    sst->load().get();
-    return sst;
-}
-
 SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
   return test_env::do_with([] (test_env& env) {
     column_family_for_tests cf(env.manager());

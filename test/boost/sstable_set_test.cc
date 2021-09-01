@@ -31,14 +31,6 @@ static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<s
     return sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(all), use_level_metadata), schema);
 }
 
-static shared_sstable make_sstable_easy(test_env& env, const fs::path& dir, flat_mutation_reader mr, sstable_writer_config cfg, unsigned long gen) {
-    schema_ptr s = mr.schema();
-    auto sst = env.make_sstable(s, dir.string(), gen);
-    sst->write_components(std::move(mr), 1, s, cfg, encoding_stats{}).get();
-    sst->load().get();
-    return sst;
-}
-
 SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         simple_schema ss;

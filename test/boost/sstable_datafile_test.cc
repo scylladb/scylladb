@@ -1904,17 +1904,6 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
     });
 }
 
-// Must be run in a seastar thread
-static
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg,
-        int64_t generation = 1, const sstables::sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1) {
-    auto s = rd.schema();
-    auto sst = env.make_sstable(s, path.string(), generation, version, big);
-    sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
-    sst->load().get();
-    return sst;
-}
-
 SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
     return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {

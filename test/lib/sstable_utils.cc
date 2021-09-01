@@ -133,6 +133,25 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
     return sst;
 }
 
+shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg,
+        int64_t generation, const sstables::sstable::version_types version, int expected_partition) {
+    auto s = rd.schema();
+    auto sst = env.make_sstable(s, path.string(), generation, version, sstable_format_types::big);
+    sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
+    sst->load().get();
+    return sst;
+}
+
+shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_ptr<memtable> mt, sstable_writer_config cfg,
+        unsigned long gen, const sstable::version_types v, int estimated_partitions) {
+    schema_ptr s = mt->schema();
+    auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big);
+    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
+    sst->write_components(std::move(mr), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
+    sst->load().get();
+    return sst;
+}
+
 std::vector<std::pair<sstring, dht::token>>
 token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
         unsigned ignore_msb, unsigned smp_count) {
