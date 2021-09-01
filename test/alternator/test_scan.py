@@ -265,6 +265,12 @@ def test_scan_parallel_incorrect(filled_test_table):
         with pytest.raises(ClientError, match='ValidationException.*Segment'):
             full_scan(test_table, TotalSegments=5, Segment=segment)
 
+# ExclusiveStartKey must lie within the segment when using Segment/TotalSegment.
+def test_scan_parallel_with_exclusive_start_key(filled_test_table):
+    test_table, items = filled_test_table
+    with pytest.raises(ClientError, match='ValidationException.*Exclusive'):
+        full_scan(test_table, TotalSegments=1000000, Segment=0, ExclusiveStartKey={'p': '0', 'c': '0'})
+
 # We used to have a bug with formatting of LastEvaluatedKey in the response
 # of Query and Scan with bytes keys (issue #7768). In test_query_paging_byte()
 # (test_query.py) we tested the case of bytes *sort* keys. In the following
