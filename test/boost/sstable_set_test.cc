@@ -34,7 +34,7 @@ static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<s
 static shared_sstable make_sstable_easy(test_env& env, const fs::path& dir, flat_mutation_reader mr, sstable_writer_config cfg, unsigned long gen) {
     schema_ptr s = mr.schema();
     auto sst = env.make_sstable(s, dir.string(), gen);
-    sst->write_components(std::move(mr), 0, s, cfg, encoding_stats{}).get();
+    sst->write_components(std::move(mr), 1, s, cfg, encoding_stats{}).get();
     sst->load().get();
     return sst;
 }
