@@ -1470,5 +1470,69 @@ flat_mutation_reader make_reader(
         std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
+class crawling_sstable_mutation_reader : public mp_row_consumer_reader_k_l {
+    using DataConsumeRowsContext = kl::data_consume_rows_context;
+    using Consumer = mp_row_consumer_k_l;
+    static_assert(RowConsumer<Consumer>);
+    Consumer _consumer;
+    std::unique_ptr<DataConsumeRowsContext> _context;
+    read_monitor& _monitor;
+public:
+    crawling_sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
+             reader_permit permit,
+             const io_priority_class &pc,
+             tracing::trace_state_ptr trace_state,
+             read_monitor& mon)
+        : mp_row_consumer_reader_k_l(std::move(schema), permit, std::move(sst))
+        , _consumer(this, _schema, std::move(permit), _schema->full_slice(), pc, std::move(trace_state), streamed_mutation::forwarding::no, _sst)
+        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer))
+        , _monitor(mon) {
+        _monitor.on_read_started(_context->reader_position());
+    }
+public:
+    void on_out_of_clustering_range() override {
+        push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end()));
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        on_internal_error(sstlog, "crawling_sstable_mutation_reader: doesn't support fast_forward_to(const dht::partition_range&)");
+    }
+    virtual future<> fast_forward_to(position_range cr) override {
+        on_internal_error(sstlog, "crawling_sstable_mutation_reader: doesn't support fast_forward_to(position_range)");
+    }
+    virtual future<> next_partition() override {
+        on_internal_error(sstlog, "crawling_sstable_mutation_reader: doesn't support next_partition()");
+    }
+    virtual future<> fill_buffer() override {
+        if (_end_of_stream) {
+            return make_ready_future<>();
+        }
+        if (_context->eof()) {
+            _end_of_stream = true;
+            return make_ready_future<>();
+        }
+        return _context->consume_input();
+    }
+    virtual future<> close() noexcept override {
+        if (!_context) {
+            return make_ready_future<>();
+        }
+        _monitor.on_read_completed();
+        return _context->close().handle_exception([_ = std::move(_context)] (std::exception_ptr ep) {
+            sstlog.warn("Failed closing of crawling_sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
+        });
+    }
+};
+
+flat_mutation_reader make_crawling_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        read_monitor& monitor) {
+    return make_flat_mutation_reader<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), pc,
+            std::move(trace_state), monitor);
+}
+
 } // namespace kl
 } // namespace sstables
