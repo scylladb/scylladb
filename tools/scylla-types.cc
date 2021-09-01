@@ -25,6 +25,7 @@
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "log.hh"
+#include "tools/utils.hh"
 
 using namespace seastar;
 
@@ -222,25 +223,7 @@ $ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
 
     //FIXME: this exposes all core options, which we are not interested in.
     return app.run(argc, argv, [&app] {
-        const action_handler& handler = [&app] () -> const action_handler& {
-            std::vector<const action_handler*> found_handlers;
-            for (const auto& ah : action_handlers) {
-                if (app.configuration().contains(ah.name())) {
-                    found_handlers.push_back(&ah);
-                }
-            }
-            if (found_handlers.size() == 1) {
-                return *found_handlers.front();
-            }
-
-            const auto all_handler_names = boost::algorithm::join(action_handlers | boost::adaptors::transformed(
-                    [] (const action_handler& ah) { return format("--{}", ah.name()); } ), ", ");
-
-            if (found_handlers.empty()) {
-                throw std::invalid_argument(fmt::format("error: missing action, exactly one of {} should be specified", all_handler_names));
-            }
-            throw std::invalid_argument(fmt::format("error: need exactly one action, cannot specify more then one of {}", all_handler_names));
-        }();
+        const action_handler& handler = tools::utils::get_selected_operation(app.configuration(), action_handlers, "action");
 
         if (!app.configuration().contains("type")) {
             throw std::invalid_argument("error: missing required option '--type'");
