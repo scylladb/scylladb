@@ -817,6 +817,10 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 
 future<>
 database::init_commitlog() {
+    if (_commitlog) {
+        return make_ready_future<>();
+    }
+
     return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
