@@ -2050,18 +2050,6 @@ future<> database::close_tables(table_kind kind_to_close) {
     });
 }
 
-future<> stop_database(sharded<database>& sdb) {
-    return sdb.invoke_on_all([](database& db) -> future<> {
-        co_await db.get_compaction_manager().stop();
-        co_await db._stop_barrier.arrive_and_wait();
-        // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
-        // system.large_partitions after the regular tables.
-        co_await db.close_tables(database::table_kind::user);
-        co_await db.close_tables(database::table_kind::system);
-        co_await db.stop_large_data_handler();
-    });
-}
-
 future<> database::stop_large_data_handler() {
     return _large_data_handler->stop();
 }
@@ -2080,7 +2068,13 @@ future<> database::start() {
 
 future<>
 database::stop() {
-    assert(!_large_data_handler->running());
+    co_await _compaction_manager->stop();
+    co_await _stop_barrier.arrive_and_wait();
+    // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
+    // system.large_partitions after the regular tables.
+    co_await close_tables(database::table_kind::user);
+    co_await close_tables(database::table_kind::system);
+    co_await _large_data_handler->stop();
 
     // try to ensure that CL has done disk flushing
     if (_commitlog) {

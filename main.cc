@@ -891,11 +891,7 @@ int main(int ac, char** av) {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.
-                stop_database(db).then([&db] {
-                    return db.invoke_on_all([](auto& db) {
-                        return db.stop();
-                    });
-                }).get();
+                db.invoke_on_all(&database::stop).get();
             });
 
             // We need to init commitlog on shard0 before it is inited on other shards

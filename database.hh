@@ -1345,7 +1345,6 @@ private:
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
     std::unique_ptr<wasm::engine> _wasm_engine;
-    friend future<> stop_database(sharded<database>&); // temporary
     utils::cross_shard_barrier _stop_barrier;
 
 public:
@@ -1622,7 +1621,6 @@ public:
 };
 
 future<> start_large_data_handler(sharded<database>& db);
-future<> stop_database(sharded<database>& db);
 
 // Creates a streaming reader that reads from all shards.
 //
