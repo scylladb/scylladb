@@ -1345,6 +1345,7 @@ private:
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
     std::unique_ptr<wasm::engine> _wasm_engine;
+    friend future<> stop_database(sharded<database>&); // temporary
     utils::cross_shard_barrier _stop_barrier;
 
 public:

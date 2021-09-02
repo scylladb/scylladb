@@ -2045,26 +2045,20 @@ future<> database::close_tables(table_kind kind_to_close) {
         } else {
             return make_ready_future<>();
         }
+    }).then([this] {
+        return _stop_barrier.arrive_and_wait();
     });
 }
 
 future<> stop_database(sharded<database>& sdb) {
-    return sdb.invoke_on_all([](database& db) {
-        return db.get_compaction_manager().stop();
-    }).then([&sdb] {
+    return sdb.invoke_on_all([](database& db) -> future<> {
+        co_await db.get_compaction_manager().stop();
+        co_await db._stop_barrier.arrive_and_wait();
         // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
         // system.large_partitions after the regular tables.
-        return sdb.invoke_on_all([](database& db) {
-            return db.close_tables(database::table_kind::user);
-        });
-    }).then([&sdb] {
-        return sdb.invoke_on_all([](database& db) {
-            return db.close_tables(database::table_kind::system);
-        });
-    }).then([&sdb] {
-        return sdb.invoke_on_all([](database& db) {
-            return db.stop_large_data_handler();
-        });
+        co_await db.close_tables(database::table_kind::user);
+        co_await db.close_tables(database::table_kind::system);
+        co_await db.stop_large_data_handler();
     });
 }
 
