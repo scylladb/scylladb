@@ -571,6 +571,7 @@ int main(int ac, char** av) {
 
             adjust_and_verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
+            verify_seastar_io_scheduler(opts, cfg->developer_mode());
             if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
                 if (cfg->enable_deprecated_partitioners()) {
                     startlog.warn("The partitioner {} is deprecated and will be removed in a future version."
@@ -881,7 +882,6 @@ int main(int ac, char** av) {
                 }).get();
             });
             api::set_server_config(ctx).get();
-            verify_seastar_io_scheduler(opts, cfg->developer_mode());
 
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
