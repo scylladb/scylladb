@@ -1207,12 +1207,11 @@ future<repair_status> repair_await_completion(seastar::sharded<database>& db, in
     });
 }
 
-future<> repair_shutdown(seastar::sharded<database>& db) {
-    return db.invoke_on(0, [] (database& localdb) {
-        return repair_tracker().shutdown().then([] {
-            return shutdown_all_row_level_repair();
-        });
-    });
+future<> repair_service::shutdown() {
+    if (this_shard_id() == 0) {
+        co_await repair_tracker().shutdown();
+        co_await shutdown_all_row_level_repair();
+    }
 }
 
 future<> repair_abort_all(seastar::sharded<database>& db) {

@@ -70,6 +70,13 @@ public:
     future<> start();
     future<> stop();
 
+    // shutdown() stops all ongoing repairs started on this node (and
+    // prevents any further repairs from being started). It returns a future
+    // saying when all repairs have stopped, and attempts to stop them as
+    // quickly as possible (we do not wait for repairs to finish but rather
+    // stop them abruptly).
+    future<> shutdown();
+
     int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.

@@ -1402,8 +1402,8 @@ int main(int ac, char** av) {
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
 
-            auto stop_repair = defer_verbose_shutdown("repair", [&db] {
-                repair_shutdown(db).get();
+            auto stop_repair = defer_verbose_shutdown("repair", [&repair] {
+                repair.invoke_on_all(&repair_service::shutdown).get();
             });
 
             auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&lifecycle_notifier] {
