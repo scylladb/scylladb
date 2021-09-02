@@ -1121,7 +1121,7 @@ int main(int ac, char** av) {
             // it calls repair.local() before this place it'll crash (now it doesn't do
             // both)
             supervisor::notify("starting messaging service");
-            auto max_memory_repair = db.local().get_available_memory() * 0.1;
+            auto max_memory_repair = memory::stats().total_memory() * 0.1;
             repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
