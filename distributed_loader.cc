@@ -463,7 +463,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<database>& db, sstr
             sstables_on_shards[this_shard_id()] = d.get_unsorted_sstables();
         }).get();
 
-        return std::make_tuple(table_id, sstables_on_shards);
+        return std::make_tuple(table_id, std::move(sstables_on_shards));
     });
 }
 
