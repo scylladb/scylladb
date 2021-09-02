@@ -20,9 +20,6 @@
 # The more tokens, relative to other nodes, the larger the proportion of data
 # that this node will store. You probably want all nodes to have the same number
 # of tokens assuming they have equal hardware capability.
-#
-# If you already have a cluster with 1 token per node, and wish to migrate to 
-# multiple tokens per node, see http://cassandra.apache.org/doc/latest/operating
 num_tokens: 256
 
 # Directory where Scylla should store all its files, which are commitlog,
