@@ -995,7 +995,7 @@ int main(int ac, char** av) {
             api::set_server_compaction_manager(ctx).get();
 
             supervisor::notify("loading non-system sstables");
-            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db)).get();

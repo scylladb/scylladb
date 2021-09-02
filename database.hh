@@ -88,7 +88,6 @@ namespace service {
 class storage_proxy;
 class storage_service;
 class migration_notifier;
-class migration_manager;
 }
 
 namespace netw {
@@ -1386,7 +1385,7 @@ public:
 
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
-    future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
+    future<> parse_system_tables(distributed<service::storage_proxy>&);
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, abort_source& as, sharded<semaphore>& sst_dir_sem);
     database(database&&) = delete;
     ~database();

@@ -669,10 +669,10 @@ future<> distributed_loader::ensure_system_table_directories(distributed<databas
 }
 
 future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db,
-        distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
-    return seastar::async([&db, &proxy, &mm] {
-        db.invoke_on_all([&proxy, &mm] (database& db) {
-            return db.parse_system_tables(proxy, mm);
+        distributed<service::storage_proxy>& proxy) {
+    return seastar::async([&db, &proxy] {
+        db.invoke_on_all([&proxy] (database& db) {
+            return db.parse_system_tables(proxy);
         }).get();
 
         const auto& cfg = db.local().get_config();

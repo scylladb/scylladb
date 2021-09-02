@@ -662,7 +662,7 @@ public:
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
             db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
