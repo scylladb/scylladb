@@ -1412,21 +1412,26 @@ cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& o
     return cql3::raw_value_view::make_temporary(std::move(value.value));
 }
 
-utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
+static void ensure_can_get_value_elements(const constant& val,
+                                          abstract_type::kind expected_type_kind,
+                                          const char* caller_name) {
     const abstract_type& val_type = val.type->without_reversed();
 
-    if (!val_type.is_list()) {
-        on_internal_error(expr_logger,
-            fmt::format("expr::get_list_elements called on a type that is not a list: {}", val_type.name()));
+    if (val_type.get_kind() != expected_type_kind) {
+        on_internal_error(expr_logger, fmt::format("{} called with wrong type: {}", caller_name, val_type.name()));
     }
 
-    if (val.is_null_or_unset()) {
-        on_internal_error(expr_logger, "expr::get_list_elements called on value that is null or unset");
+    if (val.is_null()) {
+        on_internal_error(expr_logger, fmt::format("{} called with null value", caller_name));
     }
 
-    if (val.has_empty_value_bytes()) {
-        on_internal_error(expr_logger, "expr::get_list_elements called on a 0 byte value");
+    if (val.is_unset_value()) {
+        on_internal_error(expr_logger, fmt::format("{} called with unset value", caller_name));
     }
+}
+
+utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
+    ensure_can_get_value_elements(val, abstract_type::kind::list, "expr::get_list_elements");
 
     return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
@@ -1434,20 +1439,7 @@ utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
 }
 
 utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
-    const abstract_type& val_type = val.type->without_reversed();
-
-    if (!val_type.is_set()) {
-        on_internal_error(expr_logger,
-            fmt::format("expr::get_set_elements called on a type that is not a set: {}", val_type.name()));
-    }
-
-    if (val.is_null_or_unset()) {
-        on_internal_error(expr_logger, "expr::get_set_elements called on value that is null or unset");
-    }
-
-    if (val.has_empty_value_bytes()) {
-        on_internal_error(expr_logger, "expr::get_set_elements called on a 0 byte value");
-    }
+    ensure_can_get_value_elements(val, abstract_type::kind::set, "expr::get_set_elements");
 
     return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
@@ -1455,20 +1447,7 @@ utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
 }
 
 std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant& val) {
-    const abstract_type& val_type = val.type->without_reversed();
-
-    if (!val_type.is_map()) {
-        on_internal_error(expr_logger,
-            fmt::format("expr::get_map_elements called on a type that is not a map: {}", val_type.name()));
-    }
-
-    if (val.is_null_or_unset()) {
-        on_internal_error(expr_logger, "expr::get_map_elements called on value that is null or unset");
-    }
-
-    if (val.has_empty_value_bytes()) {
-        on_internal_error(expr_logger, "expr::get_map_elements called on a 0 byte value");
-    }
+    ensure_can_get_value_elements(val, abstract_type::kind::map, "expr::get_map_elements");
 
     return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
@@ -1476,37 +1455,19 @@ std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cons
 }
 
 std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
-    const abstract_type& val_type = val.type->without_reversed();
-
-    if (!val_type.is_tuple()) {
-        on_internal_error(expr_logger,
-            fmt::format("expr::get_tuple_elements called on a type that is not a tuple: {}", val_type.name()));
-    }
-
-    if (val.is_null_or_unset()) {
-        on_internal_error(expr_logger, "expr::get_tuple_elements called on value that is null or unset");
-    }
+    ensure_can_get_value_elements(val, abstract_type::kind::tuple, "expr::get_tuple_elements");
 
     return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
-        const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val_type);
+        const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val.type->without_reversed());
         return ttype.split_fragmented(value_bytes);
     });
 }
 
 std::vector<managed_bytes_opt> get_user_type_elements(const constant& val) {
-    const abstract_type& val_type = val.type->without_reversed();
-
-    if (!val_type.is_user_type()) {
-        on_internal_error(expr_logger,
-            fmt::format("expr::get_user_type_elements called on a type that is not a user_type: {}", val_type.name()));
-    }
-
-    if (val.is_null_or_unset()) {
-        on_internal_error(expr_logger, "expr::get_user_type_elements called on value that is null or unset");
-    }
+    ensure_can_get_value_elements(val, abstract_type::kind::user, "expr::get_user_type_elements");
 
     return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
-        const user_type_impl& utype = dynamic_cast<const user_type_impl&>(val_type);
+        const user_type_impl& utype = static_cast<const user_type_impl&>(val.type->without_reversed());
         return utype.split_fragmented(value_bytes);
     });
 }
