@@ -886,7 +886,6 @@ int main(int ac, char** av) {
 
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
-            start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
@@ -898,17 +897,10 @@ int main(int ac, char** av) {
                 }).get();
             });
 
-            // We need the compaction manager ready early so we can reshard.
-            db.invoke_on_all([&proxy, &stop_signal] (database& db) {
-                db.get_compaction_manager().enable();
-            }).get();
-
             // We need to init commitlog on shard0 before it is inited on other shards
             // because it obtains the list of pre-existing segments for replay, which must
             // not include reserve segments created by active commitlogs.
             db.local().init_commitlog().get();
-            db.invoke_on_all(&database::init_commitlog).get();
-
             db.invoke_on_all(&database::start).get();
 
             // Initialization of a keyspace is done by shard 0 only. For system

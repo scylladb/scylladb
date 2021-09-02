@@ -657,8 +657,6 @@ public:
                 view_update_generator.stop().get();
             });
 
-            db.invoke_on_all(&database::init_commitlog).get();
-
             distributed_loader::init_system_keyspace(db, ss).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
@@ -676,11 +674,6 @@ public:
             }).get();
 
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
-            start_large_data_handler(db).get();
-
-            db.invoke_on_all([] (database& db) {
-                db.get_compaction_manager().enable();
-            }).get();
 
             auto stop_database_d = defer([&db] {
                 stop_database(db).get();

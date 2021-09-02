@@ -2046,12 +2046,6 @@ future<> database::close_tables(table_kind kind_to_close) {
     });
 }
 
-future<> start_large_data_handler(sharded<database>& db) {
-    return db.invoke_on_all([](database& db) {
-        db.get_large_data_handler()->start();
-    });
-}
-
 future<> stop_database(sharded<database>& sdb) {
     return sdb.invoke_on_all([](database& db) {
         return db.get_compaction_manager().stop();
@@ -2082,7 +2076,10 @@ void database::revert_initial_system_read_concurrency_boost() {
 }
 
 future<> database::start() {
-    return make_ready_future<>();
+    _large_data_handler->start();
+    // We need the compaction manager ready early so we can reshard.
+    _compaction_manager->enable();
+    co_await init_commitlog();
 }
 
 future<>
