@@ -27,3 +27,4 @@ test/*/*.reject
 .vscode
 docs/_build
 docs/poetry.lock
+compile_commands.json
