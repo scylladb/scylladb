@@ -464,9 +464,9 @@ public:
             abort_sources.start().get();
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<database> db;
-            debug::db = &db;
+            debug::the_database = &db;
             auto reset_db_ptr = defer([] {
-                debug::db = nullptr;
+                debug::the_database = nullptr;
             });
             auto cfg = cfg_in.db_config;
             tmpdir data_dir;
@@ -827,6 +827,6 @@ cql_test_config raft_cql_test_config() {
 
 namespace debug {
 
-seastar::sharded<database>* db;
+seastar::sharded<database>* the_database;
 
 }

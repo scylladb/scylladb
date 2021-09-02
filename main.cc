@@ -409,6 +409,7 @@ sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
+sharded<database>* the_database;
 }
 
 int main(int ac, char** av) {
@@ -485,7 +486,6 @@ int main(int ac, char** av) {
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
-    debug::db = &db;
     auto& proxy = service::get_storage_proxy();
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
@@ -867,6 +867,7 @@ int main(int ac, char** av) {
                 // service_memory_limiter.stop().get();
             });
 
+            debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
@@ -1455,10 +1456,4 @@ int main(int ac, char** av) {
       fprint(std::cerr, "FATAL: Exception during startup, aborting: %s\n", std::current_exception());
       return 7; // 1 has a special meaning for upstart
   }
-}
-
-namespace debug {
-
-seastar::sharded<database>* db;
-
 }

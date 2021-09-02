@@ -983,7 +983,12 @@ class sharded:
 
 
 def find_db(shard=None):
-    return sharded(gdb.parse_and_eval('::debug::db')).instance(shard)
+    try:
+        db = gdb.parse_and_eval('::debug::the_database')
+    except Exception as e:
+        db = gdb.parse_and_eval('::debug::db')
+
+    return sharded(db).instance(shard)
 
 
 def find_dbs():
