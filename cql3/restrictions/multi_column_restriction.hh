@@ -226,8 +226,8 @@ public:
 #endif
 
     clustering_key_prefix composite_value(const query_options& options) const {
-        auto t = static_pointer_cast<tuples::value>(_value->bind(options));
-        auto values = t->get_elements();
+        expr::constant t = expr::evaluate(_value, options);
+        auto values = expr::get_tuple_elements(t);
         std::vector<managed_bytes> components;
         for (unsigned i = 0; i < values.size(); i++) {
             auto component = statements::request_validations::check_not_null(values[i],

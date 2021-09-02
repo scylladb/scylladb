@@ -258,11 +258,11 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     std::vector<bytes_opt> in_values;
 
     if (_value) {
-        auto&& lval = dynamic_pointer_cast<multi_item_terminal>(_value->bind(options));
-        if (!lval) {
+        expr::constant lval = expr::evaluate(_value, options);
+        if (lval.is_null()) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
-        for (const managed_bytes_opt& v : lval->copy_elements()) {
+        for (const managed_bytes_opt& v : expr::get_elements(lval)) {
             if (v) {
                 in_values.push_back(to_bytes(*v));
             } else {
