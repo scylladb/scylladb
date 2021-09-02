@@ -155,14 +155,6 @@ const abstract_type* get_value_comparator(const column_value& cv) {
             : get_value_comparator(cv.col);
 }
 
-/// If t represents a tuple value, returns that value.  Otherwise, null.
-///
-/// Useful for checking binary_operator::rhs, which packs multiple values into a single term when lhs is itself
-/// a tuple.  NOT useful for the IN operator, whose rhs is either a list or tuples::in_value.
-::shared_ptr<tuples::value> get_tuple(term& t, const query_options& opts) {
-    return dynamic_pointer_cast<tuples::value>(t.bind(opts));
-}
-
 /// True iff lhs's value equals rhs.
 bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
     if (!rhs) {
@@ -182,11 +174,11 @@ bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag)
 
 /// True iff columns' values equal t.
 bool equal(term& t, const tuple_constructor& columns_tuple, const column_value_eval_bag& bag) {
-    const auto tup = get_tuple(t, bag.options);
-    if (!tup) {
+    const constant tup = evaluate(t, bag.options);
+    if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
     }
-    const auto& rhs = tup->get_elements();
+    const auto& rhs = get_tuple_elements(tup);
     if (rhs.size() != columns_tuple.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
@@ -238,12 +230,12 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, term& t,
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    const auto tup = get_tuple(t, bag.options);
-    if (!tup) {
+    const constant tup = evaluate(t, bag.options);
+    if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception(
                 "multi-column comparison has right-hand side that isn't a tuple");
     }
-    const auto& rhs = tup->get_elements();
+    const auto& rhs = get_tuple_elements(tup);
     if (rhs.size() != columns_tuple.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
@@ -406,42 +398,29 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 
 /// True iff the column value is in the set defined by rhs.
 bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& bag) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
-        // This is `a IN (1,2,3)`.  RHS elements are themselves terms.
-        return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
-                return equal(*t, col, bag);
-            });
-    } else if (auto mkr = dynamic_cast<lists::marker*>(&rhs)) {
-        // This is `a IN ?`.  RHS elements are values representable as bytes_opt.
-        const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
-        statements::request_validations::check_not_null(
-                values, "Invalid null value for column %s", col.col->name_as_text());
-        return boost::algorithm::any_of(values->get_elements(), [&] (const managed_bytes_opt& b) {
-            return equal(b, col, bag);
-        });
+    const constant in_list = evaluate_IN_list(rhs, bag.options);
+    statements::request_validations::check_false(
+            in_list.is_null(), "Invalid null value for column %s", col.col->name_as_text());
+
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error("unexpected term type in is_one_of(single column)");
     }
-    throw std::logic_error("unexpected term type in is_one_of(single column)");
+    return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
+        return equal(b, col, bag);
+    });
 }
 
 /// True iff the tuple of column values is in the set defined by rhs.
 bool is_one_of(const tuple_constructor& tuple, term& rhs, const column_value_eval_bag& bag) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
-        // This is `(a,b) IN ((1,1),(2,2),(3,3))`.  RHS elements are themselves terms.
-        return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
-                return equal(*t, tuple, bag);
-            });
-    } else if (auto mkr = dynamic_cast<tuples::in_marker*>(&rhs)) {
-        // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<managed_bytes_opt>.
-        const auto marker_value = static_pointer_cast<tuples::in_value>(mkr->bind(bag.options));
-        return boost::algorithm::any_of(marker_value->get_split_values(), [&] (const std::vector<managed_bytes_opt>& el) {
-                return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-                    return equal(b, std::get<column_value>(c), bag);
-                });
-            });
+    constant in_list = evaluate_IN_list(rhs, bag.options);
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error("unexpected term type in is_one_of(multi-column)");
     }
-    throw std::logic_error("unexpected term type in is_one_of(multi-column)");
+    return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
+        return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
+            return equal(b, std::get<column_value>(c), bag);
+        });
+    });
 }
 
 const value_set empty_value_set = value_list{};
@@ -614,16 +593,6 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
         }, restr);
 }
 
-/// If t is a tuple, binds and gets its k-th element.  Otherwise, binds and gets t's whole value.
-managed_bytes_opt get_kth(size_t k, const query_options& options, const ::shared_ptr<term>& t) {
-    auto bound = t->bind(options);
-    if (auto tup = dynamic_pointer_cast<tuples::value>(bound)) {
-        return tup->get_elements()[k];
-    } else {
-        throw std::logic_error("non-tuple RHS for multi-column IN");
-    }
-}
-
 template<typename Range>
 value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
     BOOST_CONCEPT_ASSERT((boost::ForwardRangeConcept<Range>));
@@ -640,43 +609,29 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 value_list get_IN_values(
         const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator,
         sstring_view column_name) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
-        // Case `a IN (1,2,3)`.
-        const auto result_range = dv->get_elements()
-                | boost::adaptors::transformed([&] (const ::shared_ptr<term>& t) { return to_managed_bytes_opt(evaluate_to_raw_view(t, options)); })
-                | non_null | deref;
-        return to_sorted_vector(std::move(result_range), comparator);
-    } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
-        // Case `a IN ?`.  Collect all list-element values.
-        const auto val = mkr->bind(options);
-        if (val == constants::UNSET_VALUE) {
-            throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
-        }
-        statements::request_validations::check_not_null(val, "Invalid null value for column %s", column_name);
-        return to_sorted_vector(static_pointer_cast<lists::value>(val)->get_elements() | non_null | deref, comparator);
+    const constant in_list = evaluate_IN_list(t, options);
+    if (in_list.is_unset_value()) {
+        throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
-    throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
+    statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column %s", column_name);
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error(format("get_IN_values(single-column) on invalid term {}", *t));
+    }
+    utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
+    return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
 
 /// Returns possible values for k-th column from t, which must be RHS of IN.
 value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
-        // Case `(a,b) in ((1,1),(2,2),(3,3))`.  Get kth value from each term element.
-        const auto result_range = dv->get_elements()
-                | boost::adaptors::transformed(std::bind_front(get_kth, k, options)) | non_null | deref;
-        return to_sorted_vector(std::move(result_range), comparator);
-    } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(t)) {
-        // Case `(a,b) IN ?`.  Get kth value from each vector<bytes> element.
-        const auto val = static_pointer_cast<tuples::in_value>(mkr->bind(options));
-        const auto split_values = val->get_split_values(); // Need lvalue from which to make std::view.
-        const auto result_range = split_values
-                | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
-        return to_sorted_vector(std::move(result_range), comparator);
+        const constant in_list = evaluate_IN_list(t, options);
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
     }
-    throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
+    const auto split_values = get_list_of_tuples_elements(in_list); // Need lvalue from which to make std::view.
+    const auto result_range = split_values
+            | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
+    return to_sorted_vector(std::move(result_range), comparator);
 }
 
 static constexpr bool inclusive = true, exclusive = false;
@@ -772,7 +727,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             const auto column_index_on_lhs = std::distance(tuple.elements.begin(), found);
                             if (is_compare(oper.op)) {
                                 // RHS must be a tuple due to upstream checks.
-                                managed_bytes_opt val = get_tuple(*oper.rhs, options)->get_elements()[column_index_on_lhs];
+                                managed_bytes_opt val = get_tuple_elements(evaluate(*oper.rhs, options)).at(column_index_on_lhs);
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }

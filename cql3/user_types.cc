@@ -138,12 +138,12 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    auto value = _t->bind(params._options);
-    execute(m, row_key, params, column, std::move(value));
+    const expr::constant value = expr::evaluate(_t, params._options);
+    execute(m, row_key, params, column, value);
 }
 
-void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value) {
-    if (value == constants::UNSET_VALUE) {
+void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& ut_value) {
+    if (ut_value.is_unset_value()) {
         return;
     }
 
@@ -166,10 +166,8 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         // perhaps the user intended to leave b.a unchanged.
         mut.tomb = params.make_tombstone_just_before();
 
-        if (value) {
-            auto ut_value = static_pointer_cast<user_types::value>(value);
-
-            const auto& elems = ut_value->get_elements();
+        if (!ut_value.is_null()) {
+            const auto& elems = expr::get_user_type_elements(ut_value);
             // There might be fewer elements given than fields in the type
             // (e.g. when the user uses a short tuple literal), but never more.
             assert(elems.size() <= type.size());
@@ -187,8 +185,8 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 
         m.set_cell(row_key, column, mut.serialize(type));
     } else {
-        if (value) {
-            m.set_cell(row_key, column, params.make_cell(type, value->get(params._options).to_view()));
+        if (!ut_value.is_null()) {
+            m.set_cell(row_key, column, params.make_cell(type, ut_value.value.to_view()));
         } else {
             m.set_cell(row_key, column, params.make_dead_cell());
         }

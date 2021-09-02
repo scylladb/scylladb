@@ -119,7 +119,7 @@ public:
                 : operation(column, std::move(t)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
+        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const expr::constant& value);
     };
 
     class setter_by_index : public operation {
@@ -149,7 +149,7 @@ public:
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
-    static void do_append(shared_ptr<term> value,
+    static void do_append(const expr::constant& list_value,
             mutation& m,
             const clustering_key_prefix& prefix,
             const column_definition& column,
