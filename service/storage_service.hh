@@ -474,8 +474,6 @@ public:
 
     std::vector<token> get_tokens_in_local_dc() const;
 
-    bool is_local_dc(const inet_address& targetHost) const;
-
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace,
             const std::vector<token>& sorted_tokens) const;
 
