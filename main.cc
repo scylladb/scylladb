@@ -909,6 +909,8 @@ int main(int ac, char** av) {
             db.local().init_commitlog().get();
             db.invoke_on_all(&database::init_commitlog).get();
 
+            db.invoke_on_all(&database::start).get();
+
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
             // families, and in each of them, it will load the sstables for all

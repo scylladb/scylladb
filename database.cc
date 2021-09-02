@@ -2081,6 +2081,10 @@ void database::revert_initial_system_read_concurrency_boost() {
     dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
+future<> database::start() {
+    return make_ready_future<>();
+}
+
 future<>
 database::stop() {
     assert(!_large_data_handler->running());

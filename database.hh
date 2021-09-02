@@ -1460,6 +1460,7 @@ public:
     /// reads, to speed up startup. After startup this should be reverted to
     /// the normal concurrency.
     void revert_initial_system_read_concurrency_boost();
+    future<> start();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);
 

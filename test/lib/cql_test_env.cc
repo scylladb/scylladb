@@ -610,6 +610,8 @@ public:
                 db.set_format_by_config();
             }).get();
 
+            db.invoke_on_all(&database::start).get();
+
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();
             });
