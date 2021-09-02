@@ -69,11 +69,11 @@ public:
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
     future<raft::log_entries> load_log() override;
-    future<raft::snapshot> load_snapshot() override;
+    future<raft::snapshot_descriptor> load_snapshot_descriptor() override;
 
     // Store a snapshot `snap` and preserve the most recent `preserve_log_entries` log entries,
     // i.e. truncate all entries with `idx <= (snap.idx - preserve_log_entries)`
-    future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) override;
+    future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override;
     // Pre-checks that no log truncation is in process before dispatching to the actual implementation
     future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override;
     future<> truncate_log(raft::index_t idx) override;

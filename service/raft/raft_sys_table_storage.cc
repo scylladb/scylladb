@@ -99,11 +99,11 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
     co_return log;
 }
 
-future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
+future<raft::snapshot_descriptor> raft_sys_table_storage::load_snapshot_descriptor() {
     static const auto load_id_cql = format("SELECT snapshot_id FROM system.{} WHERE group_id = ? LIMIT 1", db::system_keyspace::RAFT);
     ::shared_ptr<cql3::untyped_result_set> id_rs = co_await _qp.execute_internal(load_id_cql, {_group_id.id});
     if (id_rs->empty() || !id_rs->one().has("snapshot_id")) {
-        co_return raft::snapshot();
+        co_return raft::snapshot_descriptor();
     }
     const auto& id_row = id_rs->one(); // should be only one row since snapshot_id column is static
     utils::UUID snapshot_id = id_row.get_as<utils::UUID>("snapshot_id");
@@ -115,7 +115,7 @@ future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
     auto snp_cfg = snp_row.get_blob("config");
     auto in = ser::as_input_stream(snp_cfg);
 
-    raft::snapshot s{
+    raft::snapshot_descriptor s{
         .idx = raft::index_t(snp_row.get_as<int64_t>("idx")),
         .term = raft::term_t(snp_row.get_as<int64_t>("term")),
         .config = ser::deserialize(in, boost::type<raft::configuration>()),
@@ -123,7 +123,7 @@ future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
     co_return s;
 }
 
-future<> raft_sys_table_storage::store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
+future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
     // TODO: check that snap.idx refers to an already persisted entry
     return execute_with_linearization_point([this, &snap, preserve_log_entries] () -> future<> {
         static const auto store_snp_cql = format("INSERT INTO system.{} (group_id, id, idx, term, config) VALUES (?, ?, ?, ?, ?)",

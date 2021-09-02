@@ -258,7 +258,7 @@ inline bool is_transient_error(const std::exception& e) {
            dynamic_cast<const stopped_error*>(&e);
 }
 
-struct snapshot {
+struct snapshot_descriptor {
     // Index and term of last entry in the snapshot
     index_t idx = index_t(0);
     term_t term = term_t(0);
@@ -334,7 +334,7 @@ struct install_snapshot {
     // Current term on a leader
     term_t current_term;
     // A snapshot to install
-    snapshot snp;
+    snapshot_descriptor snp;
 };
 
 struct snapshot_reply {
@@ -570,14 +570,14 @@ public:
     // calls to this function. Can be called in parallel with
     // store_log_entries() but snap.index should belong to an already
     // persisted entry.
-    virtual future<> store_snapshot(const snapshot& snap, size_t preserve_log_entries) = 0;
+    virtual future<> store_snapshot_descriptor(const snapshot_descriptor& snap, size_t preserve_log_entries) = 0;
 
     // Load a saved snapshot.
     // This only loads it into memory, but does not apply yet. To
     // apply call 'state_machine::load_snapshot(snapshot::id)'
     // Called during Raft server initialization only, should not
     // run in parallel with store.
-    virtual future<snapshot> load_snapshot() = 0;
+    virtual future<snapshot_descriptor> load_snapshot_descriptor() = 0;
 
     // Persist given log entries.
     // Can be called without waiting for previous call to resolve,

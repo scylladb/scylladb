@@ -63,7 +63,7 @@ template <typename T> void add_entry(raft::log& log, T cmd) {
     log.emplace_back(make_lw_shared<raft::log_entry>(raft::log_entry{log.last_term(), log.next_idx(), cmd}));
 }
 
-raft::snapshot log_snapshot(raft::log& log, raft::index_t idx);
+raft::snapshot_descriptor log_snapshot(raft::log& log, raft::index_t idx);
 
 template <typename T>
 raft::command create_command(T val) {

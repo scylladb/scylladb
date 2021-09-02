@@ -108,7 +108,7 @@ struct initial_state {
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
-    raft::snapshot snapshot;
+    raft::snapshot_descriptor snapshot;
     snapshot_value snp_value;
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
 };
@@ -239,7 +239,7 @@ struct initial_log {
 };
 
 struct initial_snapshot {
-    raft::snapshot snap;
+    raft::snapshot_descriptor snap;
 };
 
 struct test_case {
@@ -259,8 +259,8 @@ std::mt19937 random_generator() noexcept;
 int rand() noexcept;
 
 // Lets assume one snapshot per server
-using snapshots = std::unordered_map<raft::server_id, snapshot_value>;
-using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>>;
+using snapshots = std::unordered_map<raft::server_id, std::unordered_map<raft::snapshot_id, snapshot_value>>;
+using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot_descriptor, snapshot_value>>;
 
 extern seastar::semaphore snapshot_sync;
 // application of a snaphot with that id will be delayed until snapshot_sync is signaled
@@ -388,22 +388,23 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
-        (*_snapshots)[_id].hasher = *hasher;
-        tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
-        (*_snapshots)[_id].idx = raft::index_t{_seen};
-        return make_ready_future<raft::snapshot_id>(raft::snapshot_id::create_random_id());
+        auto snp_id = raft::snapshot_id::create_random_id();
+        (*_snapshots)[_id][snp_id].hasher = *hasher;
+        tlogger.debug("sm[{}] takes snapshot id {} {} seen {}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), snp_id, _seen);
+        (*_snapshots)[_id][snp_id].idx = raft::index_t{_seen};
+        return make_ready_future<raft::snapshot_id>(snp_id);
     }
-    void drop_snapshot(raft::snapshot_id id) override {
-        (*_snapshots).erase(_id);
+    void drop_snapshot(raft::snapshot_id snp_id) override {
+        (*_snapshots)[_id].erase(snp_id);
     }
-    future<> load_snapshot(raft::snapshot_id id) override {
-        hasher = make_lw_shared<hasher_int>((*_snapshots)[_id].hasher);
-        tlogger.debug("sm[{}] loads snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
-        _seen = (*_snapshots)[_id].idx;
+    future<> load_snapshot(raft::snapshot_id snp_id) override {
+        hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
+        tlogger.debug("sm[{}] loads snapshot {} idx={}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), (*_snapshots)[_id][snp_id].idx);
+        _seen = (*_snapshots)[_id][snp_id].idx;
         if (_seen >= _apply_entries) {
             _done.set_value();
         }
-        if (id == delay_apply_snapshot) {
+        if (snp_id == delay_apply_snapshot) {
             snapshot_sync.signal();
             co_await snapshot_sync.wait();
         }
@@ -433,13 +434,13 @@ public:
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
-        (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id]);
-        tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
+    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
+        (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id][snap.id]);
+        tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id][snap.id].hasher.finalize_uint64());
         return make_ready_future<>();
     }
-    future<raft::snapshot> load_snapshot() override {
-        return make_ready_future<raft::snapshot>(_conf.snapshot);
+    future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
+        return make_ready_future<raft::snapshot_descriptor>(_conf.snapshot);
     }
     virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { return seastar::sleep(1us); };
     virtual future<raft::log_entries> load_log() {
@@ -573,8 +574,8 @@ public:
         if (!(*_connected)(id, _id)) {
             throw std::runtime_error("cannot send snapshot since nodes are disconnected");
         }
-        (*_snapshots)[id] = (*_snapshots)[_id];
         auto s = snap; // snap is not always held alive by a caller
+        (*_snapshots)[id][s.snp.id] = (*_snapshots)[_id][s.snp.id];
         if (s.snp.id == delay_send_snapshot) {
             co_await snapshot_sync.wait();
             snapshot_sync.signal();
@@ -795,7 +796,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = states[i].address;
         states[i].snapshot.config = config;
-        (*_snapshots)[s.id] = states[i].snp_value;
+        (*_snapshots)[s.id][states[i].snapshot.id] = states[i].snp_value;
         _servers.emplace_back(create_server(i, states[i]));
     }
 }
@@ -813,7 +814,10 @@ template <typename Clock>
 future<> raft_cluster<Clock>::stop_server(size_t id) {
     cancel_ticker(id);
     co_await _servers[id].server->abort();
-    _snapshots->erase(to_raft_id(id));
+    if (_snapshots->contains(to_raft_id(id))) {
+        BOOST_CHECK((*_snapshots)[to_raft_id(id)].size() <= 2);
+        _snapshots->erase(to_raft_id(id));
+    }
     _persisted_snapshots->erase(to_raft_id(id));
 }
 

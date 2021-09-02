@@ -53,8 +53,8 @@ void make_candidate(raft::fsm& fsm) {
     }
 }
 
-raft::snapshot log_snapshot(raft::log& log, raft::index_t idx) {
-    return raft::snapshot{.idx = idx, .term = log.last_term(), .config = log.get_snapshot().config};
+raft::snapshot_descriptor log_snapshot(raft::log& log, raft::index_t idx) {
+    return raft::snapshot_descriptor{.idx = idx, .term = log.last_term(), .config = log.get_snapshot().config};
 }
 
 // NOTE: it doesn't compare data contents, just the data type

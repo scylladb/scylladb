@@ -123,7 +123,7 @@ template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
 void fsm::advance_commit_idx(index_t leader_commit_idx) {
 
-    auto new_commit_idx = std::min(leader_commit_idx, _log.stable_idx());
+    auto new_commit_idx = std::min(leader_commit_idx, _log.last_idx());
 
     logger.trace("advance_commit_idx[{}]: leader_commit_idx={}, new_commit_idx={}",
         _my_id, leader_commit_idx, new_commit_idx);
@@ -169,7 +169,6 @@ void fsm::become_leader() {
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
     logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
-    replicate();
 }
 
 void fsm::become_follower(server_id leader) {
@@ -286,7 +285,7 @@ future<fsm_output> fsm::poll_output() {
         auto diff = _log.last_idx() - _log.stable_idx();
 
         if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum ||
-                (is_leader() && leader_state().last_read_id_changed)) {
+                (is_leader() && leader_state().last_read_id_changed) || _output.snp) {
             break;
         }
         co_await _sm_events.wait();
@@ -302,6 +301,10 @@ fsm_output fsm::get_output() {
         if (leader_state().last_read_id_changed) {
             broadcast_read_quorum(leader_state().last_read_id);
             leader_state().last_read_id_changed = false;
+        }
+        // replicate accumulated entries
+        if (diff) {
+            replicate();
         }
     }
 
@@ -321,11 +324,6 @@ fsm_output fsm::get_output() {
 
     if (_observed._current_term != _current_term || _observed._voted_for != _voted_for) {
         output.term_and_vote = {_current_term, _voted_for};
-    }
-
-    // see if there was a new snapshot that has to be handled
-    if (_observed._snapshot.id != _log.get_snapshot().id) {
-        output.snp = _log.get_snapshot();
     }
 
     // Return committed entries.
@@ -388,7 +386,6 @@ void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
     logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
-        replicate();
         auto leader_progress = leader_state().tracker.find(_my_id);
         if (leader_progress) {
             // If this server is leader and is part of the current
@@ -517,10 +514,10 @@ void fsm::tick_leader() {
             case follower_progress::state::SNAPSHOT:
                 continue;
             }
-            if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
-                logger.trace("tick[{}]: replicate to {} because match={} < stable={} || "
+            if (progress.match_idx < _log.last_idx() || progress.commit_idx < _commit_idx) {
+                logger.trace("tick[{}]: replicate to {} because match={} < last_idx={} || "
                     "follower commit_idx={} < commit_idx={}",
-                    _my_id, progress.id, progress.match_idx, _log.stable_idx(),
+                    _my_id, progress.id, progress.match_idx, _log.last_idx(),
                     progress.commit_idx, _commit_idx);
 
                 replicate_to(progress, true);
@@ -835,10 +832,10 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
     while (progress.can_send_to()) {
         index_t next_idx = progress.next_idx;
-        if (progress.next_idx > _log.stable_idx()) {
+        if (progress.next_idx > _log.last_idx()) {
             next_idx = index_t(0);
-            logger.trace("replicate_to[{}->{}]: next past stable next={} stable={}, empty={}",
-                    _my_id, progress.id, progress.next_idx, _log.stable_idx(), allow_empty);
+            logger.trace("replicate_to[{}->{}]: next past last next={} stable={}, empty={}",
+                    _my_id, progress.id, progress.next_idx, _log.last_idx(), allow_empty);
             if (!allow_empty) {
                 // Send out only persisted entries.
                 return;
@@ -862,7 +859,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         index_t prev_idx = progress.next_idx - index_t{1};
         std::optional<term_t> prev_term = _log.term_for(prev_idx);
         if (!prev_term) {
-            const snapshot& snapshot = _log.get_snapshot();
+            const snapshot_descriptor& snapshot = _log.get_snapshot();
             // We need to transfer the snapshot before we can
             // continue syncing the log.
             progress.become_snapshot(snapshot.idx);
@@ -882,7 +879,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         if (next_idx) {
             size_t size = 0;
-            while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
+            while (next_idx <= _log.last_idx() && size < _config.append_request_threshold) {
                 const auto& entry = _log[next_idx];
                 req.entries.push_back(entry);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
@@ -946,7 +943,7 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-bool fsm::apply_snapshot(snapshot snp, size_t trailing, bool local) {
+bool fsm::apply_snapshot(snapshot_descriptor snp, size_t trailing, bool local) {
     logger.trace("apply_snapshot[{}]: current term: {}, term: {}, idx: {}, id: {}, local: {}",
             _my_id, _current_term, snp.term, snp.idx, snp.id, local);
     // If the snapshot is locally generated, all entries up to its index must have been locally applied,
@@ -965,8 +962,9 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing, bool local) {
         return false;
     }
     // If the snapshot is local, _commit_idx is larger than snp.idx.
-    // Otherwise snp.idx becomes the new commit nidex.
+    // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
+    _output.snp.emplace(fsm_output::applied_snapshot{snp, local, current_snp.id});
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);

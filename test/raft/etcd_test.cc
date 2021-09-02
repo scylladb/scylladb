@@ -48,7 +48,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
 
     raft::configuration cfg({id1, id2});                 // 2 nodes
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
     fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
@@ -63,26 +63,29 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     // Dummy entry local
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(output.messages.size() == 1);
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    // accept dummy entry
+    auto msg = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = msg.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     const raft::follower_progress& fprogress = fsm.get_progress(id1);
 
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 1; i < 6; ++i) {
         // NOTE: in etcd leader's own progress seems to be PIPELINE
         BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
-        BOOST_CHECK(fprogress.match_idx == i + 1);
-        BOOST_CHECK(fprogress.next_idx == i + 2);
+        BOOST_CHECK(fprogress.match_idx == i);
+        BOOST_CHECK(fprogress.next_idx == i + 1);
 
-        raft::command cmd = create_command(i + 1);
+        raft::command cmd = create_command(i);
         raft::log_entry le = fsm.add_entry(std::move(cmd));
 
-        do {
-            output = fsm.get_output();
-        } while (output.messages.size() == 0);  // Should only loop twice
+        output = fsm.get_output();
 
-        auto msg = std::get<raft::append_request>(output.messages.back().second);
-        auto idx = msg.entries.back()->idx;
-        BOOST_CHECK(idx == i + 1);
+        msg = std::get<raft::append_request>(output.messages.back().second);
+        idx = msg.entries.back()->idx;
+        BOOST_CHECK_EQUAL(idx, i + 1);
         fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     }
 }
@@ -96,7 +99,7 @@ BOOST_AUTO_TEST_CASE(test_progress_resume_by_append_resp) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
 
     raft::configuration cfg({id1, id2});                 // 2 nodes
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
     fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
@@ -110,14 +113,24 @@ BOOST_AUTO_TEST_CASE(test_progress_resume_by_append_resp) {
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
     const raft::follower_progress& fprogress2 = fsm.get_progress(id2);
-    BOOST_CHECK(!fprogress2.probe_sent);
+    // get dummy entry
+    output = fsm.get_output();
+    BOOST_CHECK(fprogress2.probe_sent); // dummy entry
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    auto dummy = std::get<raft::append_request>(output.messages.back().second);
+
     raft::command cmd = create_command(1);
     raft::log_entry le = fsm.add_entry(std::move(cmd));
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.empty());
 
-    BOOST_CHECK(fprogress2.probe_sent);
+    // ack dummy entry
+    fsm.step(id2, raft::append_reply{dummy.current_term, dummy.entries[0]->idx, raft::append_reply::accepted{dummy.entries[0]->idx}});
+
+    // After the ack mode becomes pipeline and ssending resumes
+    BOOST_CHECK(fprogress.state == raft::follower_progress::state::PIPELINE);
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
 }
 
 // TestProgressPaused
@@ -125,7 +138,7 @@ BOOST_AUTO_TEST_CASE(test_progress_paused) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
     raft::configuration cfg({id1, id2});                 // 2 nodes
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
     fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
@@ -136,16 +149,11 @@ BOOST_AUTO_TEST_CASE(test_progress_paused) {
     fsm.step(id2, raft::vote_reply{current_term, true});
     BOOST_CHECK(fsm.is_leader());
 
-    fsm.step(id2, raft::vote_reply{current_term, true});
-
     fsm.add_entry(create_command(1));
     fsm.add_entry(create_command(2));
     fsm.add_entry(create_command(3));
-    fsm.tick();
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
-    BOOST_CHECK(output.messages.size() == 1);
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
 }
 
 // TestProgressFlowControl
@@ -153,7 +161,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
     raft::configuration cfg({id1, id2});                 // 2 nodes
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
     // Fit 2 x 1000 sized blobs
     raft::fsm_config fsm_cfg_8{.append_request_threshold = 2048};   // Threshold 2k
@@ -167,8 +175,6 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(fsm.is_leader());
 
     fsm.step(id2, raft::vote_reply{current_term, true});
-    // Throw away all the messages relating to the initial election.
-    output = fsm.get_output();
     const raft::follower_progress& fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
@@ -178,9 +184,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     for (auto i = 0; i < 10; ++i) {
         fsm.add_entry(cmd_blob);
     }
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
+    output = fsm.get_output();
 
     BOOST_CHECK(output.messages.size() == 1);
 
@@ -200,9 +204,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     const raft::follower_progress& fprogress2 = fsm.get_progress(id2);
     BOOST_CHECK(fprogress2.state == raft::follower_progress::state::PIPELINE);
 
-    do {
-        output = fsm.get_output();
-    } while (output.messages.size() == 0);
+    output = fsm.get_output();
     // 10 entries: first in 1 msg, then 10 remaining 2 per msg = 5
     BOOST_CHECK(output.messages.size() == 5);
 
@@ -258,19 +260,19 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     // node 4:    log entries  (at term 2 voted for 3)
     // node 5:    log entries  (at term 2 voted for 3)
     raft::log_entry_ptr lep1 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
-    raft::log log1{raft::snapshot{.config = cfg}, raft::log_entries{lep1}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}, raft::log_entries{lep1}};
     fsm_debug fsm1(id1, term_t{1}, server_id{}, std::move(log1), fd, fsm_cfg);
     raft::log_entry_ptr lep2 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
-    raft::log log2{raft::snapshot{.config = cfg}, raft::log_entries{lep2}};
+    raft::log log2{raft::snapshot_descriptor{.config = cfg}, raft::log_entries{lep2}};
     fsm_debug fsm2(id2, term_t{1}, server_id{}, std::move(log2), fd, fsm_cfg);
 
     raft::log_entry_ptr lep3 = seastar::make_lw_shared<log_entry>(log_entry{term_t{2}, index_t{1}, raft::log_entry::dummy{}});
-    raft::log log3{raft::snapshot{.config = cfg}, raft::log_entries{lep3}};
+    raft::log log3{raft::snapshot_descriptor{.config = cfg}, raft::log_entries{lep3}};
     fsm_debug fsm3(id3, term_t{2}, server_id{id3}, std::move(log3), fd, fsm_cfg);
 
-    raft::log log4{raft::snapshot{.config = cfg}};
+    raft::log log4{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm4(id4, term_t{2}, server_id{id3}, std::move(log4), fd, fsm_cfg);
-    raft::log log5{raft::snapshot{.config = cfg}};
+    raft::log log5{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm5(id5, term_t{2}, server_id{id3}, std::move(log5), fd, fsm_cfg);
 
     fsm2.become_follower(id1);
@@ -308,7 +310,7 @@ BOOST_AUTO_TEST_CASE(test_vote_from_any_state) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     // Follower
@@ -370,7 +372,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     election_timeout(fsm);
@@ -385,7 +387,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     BOOST_CHECK(output.log_entries.size() == 1);
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     BOOST_CHECK(output.committed.size() == 0);
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     index_t dummy_idx{1};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
@@ -408,7 +409,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     fsm.add_entry(std::move(cmd));
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     index_t entry_idx{2};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
@@ -437,7 +437,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     election_timeout(fsm);
@@ -446,7 +446,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     current_term = output.term_and_vote->first;
     fsm.step(id2, raft::vote_reply{current_term, true});
     BOOST_CHECK(fsm.is_leader());
-    output = fsm.get_output();
     output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     index_t dummy_idx{1};     // Nothing before it
@@ -462,7 +461,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     fsm.add_entry(std::move(cmd));
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     // ACK 1st entry
     fsm.step(id2, raft::append_reply{current_term, index_t{2}, raft::append_reply::accepted{index_t{2}}});
@@ -479,7 +477,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     fsm.add_entry(std::move(cmd));
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
-    output = fsm.get_output();
     BOOST_CHECK(output.messages.size() == 2);
     // ACK 2nd entry
     index_t second_idx{3};
@@ -505,7 +502,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
 
     server_id id1{utils::UUID(0, 1)};
     raft::configuration cfg({id1});
-    raft::log log{raft::snapshot{.config = cfg}};
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     make_candidate(fsm);
@@ -543,15 +540,15 @@ BOOST_AUTO_TEST_CASE(test_cannot_commit_without_new_term_entry) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)},
               id4{utils::UUID(0, 4)}, id5{utils::UUID(0, 5)};
     raft::configuration cfg({id1, id2, id3, id4, id5});
-    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg);
-    raft::log log2{raft::snapshot{.config = cfg}};
+    raft::log log2{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm2(id2, term_t{}, server_id{}, std::move(log2), fd, fsm_cfg);
-    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::log log3{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm3(id3, term_t{}, server_id{}, std::move(log3), fd, fsm_cfg);
-    raft::log log4{raft::snapshot{.config = cfg}};
+    raft::log log4{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm4(id4, term_t{}, server_id{}, std::move(log4), fd, fsm_cfg);
-    raft::log log5{raft::snapshot{.config = cfg}};
+    raft::log log5{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm5(id5, term_t{}, server_id{}, std::move(log5), fd, fsm_cfg);
 
     make_candidate(fsm1);
@@ -599,11 +596,11 @@ BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg);
-    raft::log log2{raft::snapshot{.config = cfg}};
+    raft::log log2{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
-    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::log log3{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg);
 
     // fsm1 and fsm3 don't see each other
@@ -642,11 +639,11 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
-    raft::log log2{raft::snapshot{.config = cfg}};
+    raft::log log2{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg_pre);
-    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::log log3{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg_pre);
 
     // fsm1 and fsm3 don't see each other
@@ -688,7 +685,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
 
     server_id id1{utils::UUID(0, 1)};
     raft::configuration cfg({id1});
-    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
 
     make_candidate(fsm1);
@@ -701,11 +698,11 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     discrete_failure_detector fd;
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg({id1, id2, id3});
-    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg);
-    raft::log log2{raft::snapshot{.config = cfg}};
+    raft::log log2{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm2(id2, term_t{}, server_id{}, std::move(log2), fd, fsm_cfg);
-    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::log log3{raft::snapshot_descriptor{.config = cfg}};
     fsm_debug fsm3(id3, term_t{}, server_id{}, std::move(log3), fd, fsm_cfg);
 
     make_candidate(fsm1);
@@ -765,7 +762,7 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     }
 
     raft::configuration cfg(ids);
-    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::log log1{raft::snapshot_descriptor{.config = cfg}};
     raft::fsm fsm1(raft::server_id{utils::UUID(0, 1)}, term_t{}, server_id{}, std::move(log1),
             trivial_failure_detector, fsm_cfg);
 
@@ -781,7 +778,6 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     lep = output1.log_entries.back();
     BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
-    output1 = fsm1.get_output();
 
     // fsm1 dummy, send, gets specified number of replies (would commit if quorum)
     BOOST_CHECK(output1.messages.size() == nodes - 1);
@@ -806,8 +802,6 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     BOOST_CHECK(output1.log_entries.size() == 1);
 
-    // entry propagates
-    output1 = fsm1.get_output();
     // Send append to nodes who accepted dummy
     BOOST_CHECK(output1.messages.size() == accepting.size());
     for (auto& [id, msg] : output1.messages) {
@@ -860,7 +854,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_ignore_proposal) {
     /// new append requests.
 
     raft::server_id A_id = id(), B_id = id();
-    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
         .config = raft::configuration({A_id, B_id})});
     auto A = create_follower(A_id, log);
     auto B = create_follower(B_id, log);
@@ -888,7 +882,7 @@ BOOST_AUTO_TEST_CASE(test_transfer_non_member) {
     /// the follower state without promoting to the candidate.
 
     raft::server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
-    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
         .config = raft::configuration({B_id, C_id, D_id})});
     auto A = create_follower(A_id, log);
 
@@ -903,7 +897,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_timeout) {
     discrete_failure_detector fd;
     raft::server_id A_id = id(), B_id = id(), C_id = id();
 
-    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
         .config = raft::configuration{A_id, B_id, C_id}});
     auto A = create_follower(A_id, log, fd);
     auto B = create_follower(B_id, log, fd);
@@ -939,7 +933,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_one_node_cluster) {
     discrete_failure_detector fd;
     raft::server_id A_id = id();
 
-    raft::log log(raft::snapshot{.idx = raft::index_t{0}, .config = raft::configuration{A_id}});
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0}, .config = raft::configuration{A_id}});
     auto A = create_follower(A_id, log, fd);
     // Elect A leader.
     election_timeout(A);
@@ -956,7 +950,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_one_voter) {
     raft::configuration cfg(set);
 
 
-    raft::log log(raft::snapshot{.idx = raft::index_t{0}, .config = cfg});
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log, fd);
     auto B = create_follower(B_id, log, fd);
     // Elect A leader.
