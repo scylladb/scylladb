@@ -110,6 +110,12 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
 template <typename... Args>
 static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
         std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) {
+    // FIXME  This check is for test/cql-test-env that stop qctx (it does so because
+    // it stops query processor and doesn't want us to access its freed instantes)
+    if (!db::qctx) {
+        return make_ready_future<>();
+    }
+
     sstring extra_fields_str;
     sstring extra_values;
     for (std::string_view field : extra_fields) {
