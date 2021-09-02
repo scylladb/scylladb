@@ -1104,6 +1104,19 @@ sstable_set::make_local_shard_sstable_reader(
             fwd_mr);
 }
 
+flat_mutation_reader sstable_set::make_crawling_reader(
+        schema_ptr schema,
+        reader_permit permit,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_ptr,
+        read_monitor_generator& monitor_generator) const {
+    std::vector<flat_mutation_reader> readers;
+    for (auto ssts = _impl->all(); auto& sst : *ssts) {
+        readers.emplace_back(sst->make_crawling_reader_v1(schema, permit, pc, trace_ptr, monitor_generator(sst)));
+    }
+    return make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+}
+
 unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vector<shared_sstable>& sstables) {
     unsigned overlapping_sstables = 0;
     auto prev_last = dht::ring_position::min();

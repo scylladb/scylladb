@@ -228,6 +228,22 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor());
 
+    // A reader which doesn't use the index at all. It reads everything from the
+    // sstable and it doesn't support skipping.
+    flat_mutation_reader_v2 make_crawling_reader(
+            schema_ptr schema,
+            reader_permit permit,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = {},
+            read_monitor& monitor = default_read_monitor());
+
+    flat_mutation_reader make_crawling_reader_v1(
+            schema_ptr schema,
+            reader_permit permit,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = {},
+            read_monitor& monitor = default_read_monitor());
+
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();

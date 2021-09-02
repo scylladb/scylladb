@@ -2146,6 +2146,32 @@ sstable::make_reader_v1(
     return kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
+flat_mutation_reader_v2
+sstable::make_crawling_reader(
+        schema_ptr schema,
+        reader_permit permit,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        read_monitor& monitor) {
+    if (_version >= version_types::mc) {
+        return mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor);
+    }
+    return upgrade_to_v2(kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor));
+}
+
+flat_mutation_reader
+sstable::make_crawling_reader_v1(
+        schema_ptr schema,
+        reader_permit permit,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        read_monitor& monitor) {
+    if (_version >= version_types::mc) {
+        return downgrade_to_v1(mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor));
+    }
+    return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor);
+}
+
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
     static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
