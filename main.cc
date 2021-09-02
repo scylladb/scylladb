@@ -902,6 +902,19 @@ int main(int ac, char** av) {
                 db.get_compaction_manager().enable();
             }).get();
 
+            // We need to init commitlog on shard0 before it is inited on other shards
+            // because it obtains the list of pre-existing segments for replay, which must
+            // not include reserve segments created by active commitlogs.
+            db.invoke_on(0, [] (database& db) {
+                return db.init_commitlog();
+            }).get();
+            db.invoke_on_all([] (database& db) {
+                if (this_shard_id() == 0) {
+                    return make_ready_future<>();
+                }
+                return db.init_commitlog();
+            }).get();
+
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
             // families, and in each of them, it will load the sstables for all

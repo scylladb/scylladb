@@ -655,6 +655,19 @@ public:
                 view_update_generator.stop().get();
             });
 
+            // We need to init commitlog on shard0 before it is inited on other shards
+            // because it obtains the list of pre-existing segments for replay, which must
+            // not include reserve segments created by active commitlogs.
+            db.invoke_on(0, [] (database& db) {
+                return db.init_commitlog();
+            }).get();
+            db.invoke_on_all([] (database& db) {
+                if (this_shard_id() == 0) {
+                    return make_ready_future<>();
+                }
+                return db.init_commitlog();
+            }).get();
+
             distributed_loader::init_system_keyspace(db, ss).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);

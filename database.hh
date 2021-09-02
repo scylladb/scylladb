@@ -1345,8 +1345,8 @@ private:
 
     std::unique_ptr<wasm::engine> _wasm_engine;
 
-    future<> init_commitlog();
 public:
+    future<> init_commitlog();
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
@@ -1590,8 +1590,6 @@ public:
     db::view::update_backlog get_view_update_backlog() const {
         return {max_memory_pending_view_updates() - _view_update_concurrency_sem.current(), max_memory_pending_view_updates()};
     }
-
-    friend class distributed_loader;
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
