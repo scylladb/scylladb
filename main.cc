@@ -870,20 +870,6 @@ int main(int ac, char** av) {
                 // service_memory_limiter.stop().get();
             });
 
-            debug::the_database = &db;
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
-            start_large_data_handler(db).get();
-            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
-                // #293 - do not stop anything - not even db (for real)
-                //return db.stop();
-                // call stop on each db instance, but leave the shareded<database> pointers alive.
-                stop_database(db).then([&db] {
-                    return db.invoke_on_all([](auto& db) {
-                        return db.stop();
-                    });
-                }).get();
-            });
-
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
             dir_set.add(cfg->data_file_directories());
@@ -897,6 +883,20 @@ int main(int ac, char** av) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
             view_hints_dir_initializer.ensure_created_and_verified().get();
+
+            debug::the_database = &db;
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
+            start_large_data_handler(db).get();
+            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
+                // #293 - do not stop anything - not even db (for real)
+                //return db.stop();
+                // call stop on each db instance, but leave the shareded<database> pointers alive.
+                stop_database(db).then([&db] {
+                    return db.invoke_on_all([](auto& db) {
+                        return db.stop();
+                    });
+                }).get();
+            });
 
             // We need the compaction manager ready early so we can reshard.
             db.invoke_on_all([&proxy, &stop_signal] (database& db) {
