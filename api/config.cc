@@ -22,7 +22,6 @@
 #include "api/config.hh"
 #include "api/api-doc/config.json.hh"
 #include "db/config.hh"
-#include "database.hh"
 #include <sstream>
 #include <boost/algorithm/string/replace.hpp>
 
@@ -89,11 +88,11 @@ future<> get_config_swagger_entry(std::string_view name, const std::string& desc
 
 namespace cs = httpd::config_json;
 
-void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r) {
-    rb->register_function(r, [&ctx] (output_stream<char>& os) {
-        return do_with(true, [&os, &ctx] (bool& first) {
+void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r, const db::config& cfg) {
+    rb->register_function(r, [&cfg] (output_stream<char>& os) {
+        return do_with(true, [&os, &cfg] (bool& first) {
             auto f = make_ready_future();
-            for (auto&& cfg_ref : ctx.db.local().get_config().values()) {
+            for (auto&& cfg_ref : cfg.values()) {
                 auto&& cfg = cfg_ref.get();
                 f = f.then([&os, &first, &cfg] {
                     return get_config_swagger_entry(cfg.name(), std::string(cfg.desc()), cfg.type_name(), first, os);
@@ -103,9 +102,9 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         });
     });
 
-    cs::find_config_id.set(r, [&ctx] (const_req r) {
+    cs::find_config_id.set(r, [&cfg] (const_req r) {
         auto id = r.param["id"];
-        for (auto&& cfg_ref : ctx.db.local().get_config().values()) {
+        for (auto&& cfg_ref : cfg.values()) {
             auto&& cfg = cfg_ref.get();
             if (id == cfg.name()) {
                 return cfg.value_as_json();

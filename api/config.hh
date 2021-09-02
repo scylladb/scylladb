@@ -26,5 +26,5 @@
 
 namespace api {
 
-void set_config(std::shared_ptr<api_registry_builder20> rb, http_context& ctx, routes& r);
+void set_config(std::shared_ptr<api_registry_builder20> rb, http_context& ctx, routes& r, const db::config& cfg);
 }

@@ -758,6 +758,8 @@ int main(int ac, char** av) {
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
 
+            api::set_server_config(ctx, *cfg).get();
+
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
             dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
@@ -881,7 +883,6 @@ int main(int ac, char** av) {
                     });
                 }).get();
             });
-            api::set_server_config(ctx).get();
 
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;

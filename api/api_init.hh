@@ -43,7 +43,10 @@ class shared_token_metadata;
 
 namespace cql_transport { class controller; }
 class thrift_controller;
-namespace db { class snapshot_ctl; }
+namespace db {
+class snapshot_ctl;
+class config;
+}
 namespace netw { class messaging_service; }
 class repair_service;
 
@@ -74,7 +77,7 @@ struct http_context {
 };
 
 future<> set_server_init(http_context& ctx);
-future<> set_server_config(http_context& ctx);
+future<> set_server_config(http_context& ctx, const db::config& cfg);
 future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
