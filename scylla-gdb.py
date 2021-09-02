@@ -1729,7 +1729,7 @@ class scylla_memory(gdb.Command):
 
     @staticmethod
     def print_replica_stats():
-        db = sharded(gdb.parse_and_eval('::debug::db')).local()
+        db = find_db()
 
         try:
             mem_stats = dict()
