@@ -1844,6 +1844,10 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 }
 
 void storage_proxy::connection_dropped(gms::inet_address addr) {
+    slogger.debug("Drop hit rate info for {} because of disconnect", addr);
+    for (auto&& cf : _db.local().get_non_system_column_families()) {
+        cf->drop_hit_rate(addr);
+    }
 }
 
 future<>

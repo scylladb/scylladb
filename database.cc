@@ -1536,12 +1536,6 @@ bool database::is_replacing() {
 }
 
 void database::register_connection_drop_notifier(netw::messaging_service& ms) {
-    ms.register_connection_drop_notifier([this] (gms::inet_address ep) {
-        dblog.debug("Drop hit rate info for {} because of disconnect", ep);
-        for (auto&& cf : get_non_system_column_families()) {
-            cf->drop_hit_rate(ep);
-        }
-    });
 }
 
 namespace {
