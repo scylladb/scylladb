@@ -1229,6 +1229,7 @@ struct database_config {
     seastar::scheduling_group streaming_scheduling_group;
     seastar::scheduling_group gossip_scheduling_group;
     size_t available_memory;
+    std::optional<sstables::sstable_version_types> sstables_format;
 };
 
 struct string_pair_eq {
