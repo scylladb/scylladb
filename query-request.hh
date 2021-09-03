@@ -110,6 +110,9 @@ public:
     const clustering_row_ranges& ranges() const {
         return _ranges;
     }
+    clustering_row_ranges& ranges() {
+        return _ranges;
+    }
 private:
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& r);
 
