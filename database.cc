@@ -48,7 +48,6 @@
 #include "frozen_mutation.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_listener.hh"
-#include "message/messaging_service.hh"
 #include "cell_locking.hh"
 #include "view_info.hh"
 #include "db/schema_tables.hh"
@@ -1533,9 +1532,6 @@ bool database::is_replacing() {
         return false;
     }
     return bool(get_replace_address());
-}
-
-void database::register_connection_drop_notifier(netw::messaging_service& ms) {
 }
 
 namespace {

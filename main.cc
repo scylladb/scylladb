@@ -1010,10 +1010,6 @@ int main(int ac, char** av) {
                 }
             }).get();
 
-            // register connection drop notification to update cf's cache hit rate data
-            db.invoke_on_all([&messaging] (database& db) {
-                db.register_connection_drop_notifier(messaging.local());
-            }).get();
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp, feature_service, messaging).get();
             supervisor::notify("starting commit log");

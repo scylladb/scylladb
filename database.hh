@@ -91,10 +91,6 @@ class storage_service;
 class migration_notifier;
 }
 
-namespace netw {
-class messaging_service;
-}
-
 namespace gms {
 class feature_service;
 }
@@ -1565,7 +1561,6 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
-    void register_connection_drop_notifier(netw::messaging_service& ms);
 
     db_stats& get_stats() {
         return *_stats;
