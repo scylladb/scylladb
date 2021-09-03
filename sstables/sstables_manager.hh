@@ -92,8 +92,8 @@ public:
     const db::config& config() const { return _db_config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
 
-    void set_format(sstable_version_types format) { _format = format; }
-    sstables::sstable::version_types get_highest_supported_format() const { return _format; }
+    void set_format(sstable_version_types format) noexcept { _format = format; }
+    sstables::sstable::version_types get_highest_supported_format() const noexcept { return _format; }
 
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:

@@ -1524,12 +1524,12 @@ public:
     }
     const db::extensions& extensions() const;
 
-    sstables::sstables_manager& get_user_sstables_manager() const {
+    sstables::sstables_manager& get_user_sstables_manager() const noexcept {
         assert(_user_sstables_manager);
         return *_user_sstables_manager;
     }
 
-    sstables::sstables_manager& get_system_sstables_manager() const {
+    sstables::sstables_manager& get_system_sstables_manager() const noexcept {
         assert(_system_sstables_manager);
         return *_system_sstables_manager;
     }
@@ -1538,7 +1538,7 @@ public:
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
     dht::token_range_vector get_keyspace_local_ranges(sstring ks);
 
-    void set_format(sstables::sstable_version_types format);
+    void set_format(sstables::sstable_version_types format) noexcept;
     void set_format_by_config();
 
     future<> flush_all_memtables();

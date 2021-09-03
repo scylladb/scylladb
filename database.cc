@@ -713,7 +713,7 @@ database::setup_metrics() {
     }
 }
 
-void database::set_format(sstables::sstable_version_types format) {
+void database::set_format(sstables::sstable_version_types format) noexcept {
     get_user_sstables_manager().set_format(format);
     get_system_sstables_manager().set_format(format);
 }
