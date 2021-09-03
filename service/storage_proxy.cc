@@ -1807,6 +1807,8 @@ storage_proxy::storage_proxy(distributed<database>& db, gms::gossiper& gossiper,
     , _messaging(ms)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
+    , _connection_dropped([this] (gms::inet_address addr) { connection_dropped(std::move(addr)); })
+    , _condrop_registration(_messaging.when_connection_drops(_connection_dropped))
     , _max_view_update_backlog(max_view_update_backlog)
     , _view_update_handlers_list(std::make_unique<view_update_handlers_list>()) {
     namespace sm = seastar::metrics;
@@ -1839,6 +1841,9 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
     auto r = id;
     id = 0;
     return r;
+}
+
+void storage_proxy::connection_dropped(gms::inet_address addr) {
 }
 
 future<>

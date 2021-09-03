@@ -42,6 +42,7 @@
 #pragma once
 
 #include "database_fwd.hh"
+#include "message/messaging_service_fwd.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-set.hh"
@@ -290,6 +291,8 @@ private:
             service_permit,
             bool,
             lw_shared_ptr<cdc::operation_result_tracker>> _mutate_stage;
+    netw::connection_drop_slot_t _connection_dropped;
+    netw::connection_drop_registration_t _condrop_registration;
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
 
@@ -442,6 +445,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+    void connection_dropped(gms::inet_address);
 public:
     storage_proxy(distributed<database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
