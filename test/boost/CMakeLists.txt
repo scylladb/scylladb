@@ -125,6 +125,9 @@ add_scylla_test(hashers_test
   KIND SEASTAR)
 add_scylla_test(hint_test
   KIND SEASTAR)
+add_scylla_test(hwlb_test
+  KIND BOOST
+  LIBRARIES db)
 add_scylla_test(idl_test
   KIND BOOST
   LIBRARIES idl)
