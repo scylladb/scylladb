@@ -97,10 +97,10 @@ public:
     // Range tombstone covers all rows with positions p such that: position() <= p < end_position()
     position_in_partition_view position() const;
     position_in_partition_view end_position() const;
-    bool empty() const {
+    bool empty() const noexcept {
         return !bool(tomb);
     }
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return bool(tomb);
     }
     bool equal(const schema& s, const range_tombstone& other) const {
@@ -113,7 +113,7 @@ public:
             return _c(rt1.start_bound(), rt2.start_bound());
         }
     };
-    friend void swap(range_tombstone& rt1, range_tombstone& rt2) {
+    friend void swap(range_tombstone& rt1, range_tombstone& rt2) noexcept {
         range_tombstone tmp(std::move(rt2), without_link());
         rt2.move_assign(std::move(rt1));
         rt1.move_assign(std::move(tmp));
@@ -215,14 +215,14 @@ public:
         return sizeof(range_tombstone) + minimal_external_memory_usage(s);
     }
 private:
-    void move_assign(range_tombstone&& rt) {
+    void move_assign(range_tombstone&& rt) noexcept {
         start = std::move(rt.start);
         start_kind = rt.start_kind;
         end = std::move(rt.end);
         end_kind = rt.end_kind;
         tomb = std::move(rt.tomb);
     }
-    void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) {
+    void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) noexcept {
         if (other_link.is_linked()) {
             // Move the link in case we're being relocated by LSA.
             container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());

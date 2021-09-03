@@ -198,7 +198,7 @@ public:
             }
         }
     }
-    void clear() {
+    void clear() noexcept {
         _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
     }
 
