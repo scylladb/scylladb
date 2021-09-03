@@ -997,18 +997,6 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db)).get();
-            supervisor::notify("discovering staging sstables");
-            db.invoke_on_all([] (database& db) {
-                for (auto& x : db.get_column_families()) {
-                    table& t = *(x.second);
-                    for (auto sstables = t.get_sstables(); sstables::shared_sstable sst : *sstables) {
-                        if (sst->requires_view_building()) {
-                            // FIXME: discarded future.
-                            (void)view_update_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
-                        }
-                    }
-                }
-            }).get();
 
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp, feature_service, messaging).get();

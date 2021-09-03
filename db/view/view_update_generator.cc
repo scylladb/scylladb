@@ -25,6 +25,7 @@
 #include "service/priority_manager.hh"
 #include "utils/error_injection.hh"
 #include "db/view/view_updating_consumer.hh"
+#include "sstables/sstables.hh"
 
 static logging::logger vug_logger("view_update_generator");
 
@@ -179,6 +180,20 @@ void view_update_generator::setup_metrics() {
                 sm::description("Number of sets of sstables which are already processed and wait to be moved from their staging directory"),
                 [this] { return _sstables_to_move.size(); })
     });
+}
+
+void view_update_generator::discover_staging_sstables() {
+    for (auto& x : _db.get_column_families()) {
+        table& t = *(x.second);
+        for (auto sstables = t.get_sstables(); sstables::shared_sstable sst : *sstables) {
+            if (sst->requires_view_building()) {
+                _sstables_with_tables[t.shared_from_this()].push_back(std::move(sst));
+                // we're at early stage here, no need to kick _pending_sstables (the
+                // bulding fiber is not running), neither we can wait on the semaphore
+                _registration_sem.consume(1);
+            }
+        }
+    }
 }
 
 }
