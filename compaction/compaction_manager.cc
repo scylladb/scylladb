@@ -686,7 +686,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
     return false;
 }
 
-future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func get_func) {
+future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     task->type = options.type();
@@ -704,7 +704,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     auto sstables_ptr = sstables.get();
     _stats.pending_tasks += sstables->size();
 
-    task->compaction_done = do_until([sstables_ptr] { return sstables_ptr->empty(); }, [this, task, options, sstables_ptr, compacting] () mutable {
+    task->compaction_done = do_until([sstables_ptr] { return sstables_ptr->empty(); }, [this, task, options, sstables_ptr, compacting, can_purge] () mutable {
 
         // FIXME: lock cf here
         if (!can_proceed(task)) {
@@ -714,11 +714,12 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
         auto sst = sstables_ptr->back();
         sstables_ptr->pop_back();
 
-        return repeat([this, task, options, sst = std::move(sst), compacting] () mutable {
+        return repeat([this, task, options, sst = std::move(sst), compacting, can_purge] () mutable {
             column_family& cf = *task->compacting_cf;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
-            auto descriptor = sstables::compaction_descriptor({ sst }, cf.get_sstable_set(), _maintenance_sg.io,
+            auto sstable_set_snapshot = can_purge ? std::make_optional(cf.get_sstable_set()) : std::nullopt;
+            auto descriptor = sstables::compaction_descriptor({ sst }, std::move(sstable_set_snapshot), _maintenance_sg.io,
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
@@ -898,7 +899,7 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
     }
     return rewrite_sstables(cf, sstables::compaction_options::make_scrub(scrub_mode), [this] (const table& cf) {
         return get_candidates(cf);
-    });
+    }, can_purge_tombstones::no);
 }
 
 future<> compaction_manager::remove(column_family* cf) {
