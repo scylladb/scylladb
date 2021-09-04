@@ -48,20 +48,19 @@ def test_insert_missing_key(cql, table1):
 
 # A null key, like a missing one, is also not allowed.
 # This reproduces issue #7852.
-@pytest.mark.xfail(reason="issue #7852")
 def test_insert_null_key(cql, table1):
     s = random_string()
-    with pytest.raises(InvalidRequest, match='null value'):
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|clustering)')):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{s}', null)")
-    with pytest.raises(InvalidRequest, match='null value'):
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|partition)')):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES (null, '{s}')")
     # Try the same thing with prepared statement, where a "None" stands for
     # a null. Note that this is completely different from UNSET_VALUE - only
     # with the latter should the insertion be ignored.
     stmt = cql.prepare(f"INSERT INTO {table1} (p,c) VALUES (?, ?)")
-    with pytest.raises(InvalidRequest, match='null value'):
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|clustering)')):
         cql.execute(stmt, [s, None])
-    with pytest.raises(InvalidRequest, match='null value'):
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|partition)')):
         cql.execute(stmt, [None, s])
 
 def test_primary_key_in_null(cql, table1):
@@ -80,6 +79,21 @@ def test_regular_column_in_null(scylla_only, cql, table1):
     cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('p', 'c')")
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(cql.prepare(f"SELECT v FROM {table1} WHERE v IN ? ALLOW FILTERING"), [None])
+
+# Though nonsensical, this operation is allowed by Cassandra.  Ensure we allow it, too.
+def test_delete_impossible_clustering_range(cql, table1):
+    cql.execute(f"DELETE FROM {table1} WHERE p='p' and c<'a' and c>'a'")
+
+@pytest.mark.xfail(reason="Unimplemented for clustering key")
+def test_delete_null_key(cql, table1):
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|partition)')):
+        cql.execute(f"DELETE FROM {table1} WHERE p=null")
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|partition)')):
+        cql.execute(cql.prepare(f"DELETE FROM {table1} WHERE p=?"), [None])
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|clustering)')):
+        cql.execute(f"DELETE FROM {table1} WHERE p='p' AND c=null")
+    with pytest.raises(InvalidRequest, match=re.compile('Invalid (null|clustering)')):
+        cql.execute(cql.prepare(f"DELETE FROM {table1} WHERE p='p' AND c=?"), [None])
 
 # Test what SELECT does with the restriction "WHERE v=NULL".
 # In SQL, "WHERE v=NULL" doesn't match anything - because nothing is equal
