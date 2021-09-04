@@ -86,15 +86,12 @@ def do_test_partition_key_usage(cql, test_keyspace, typ, v1, v2, v3, v4):
                    [v2, 0],
                    [v4, 0])
 
-@pytest.mark.xfail(reason="fails just because of null key, issue #7852")
 def test_partition_key_usage_set(cql, test_keyspace):
     do_test_partition_key_usage(cql, test_keyspace, "set<int>", set(), {1, 2, 3}, {4, 5, 6}, {7, 8, 9})
 
-@pytest.mark.xfail(reason="fails just because of null key, issue #7852")
 def test_partition_key_usage_list(cql, test_keyspace):
     do_test_partition_key_usage(cql, test_keyspace, "list<int>", [], [1, 2, 3], [4, 5, 6], [7, 8, 9])
 
-@pytest.mark.xfail(reason="fails just because of null key, issue #7852")
 def test_partition_key_usage_map(cql, test_keyspace):
     do_test_partition_key_usage(cql, test_keyspace, "map<int, int>", {}, {1: 10, 2: 20, 3: 30}, {4: 40, 5: 50, 6: 60}, {7: 70, 8: 80, 9: 90})
 

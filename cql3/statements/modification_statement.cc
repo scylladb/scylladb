@@ -141,7 +141,13 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
     auto cl = options.get_consistency();
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = build_partition_keys(options, json_cache);
+    if (keys.empty()) {
+        throw exceptions::invalid_request_exception("Invalid partition key in a modification statement");
+    }
     auto ranges = create_clustering_ranges(options, json_cache);
+    if (ranges.empty() && !type.is_delete() /* DELETE is allowed on empty ranges (TODO: but not on WHERE ck=NULL).*/) {
+        throw exceptions::invalid_request_exception("Invalid clustering key in a modification statement");
+    }
     auto f = make_ready_future<update_parameters::prefetch_data>(s);
 
     if (is_counter()) {
