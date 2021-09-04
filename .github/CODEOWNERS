@@ -19,7 +19,7 @@ db/batch* @elcallio
 service/storage_proxy* @gleb-cloudius
 
 # COMPACTION
-sstables/compaction* @raphaelsc @nyh
+compaction/* @raphaelsc @nyh
 
 # CQL TRANSPORT LAYER
 transport/* @penberg
