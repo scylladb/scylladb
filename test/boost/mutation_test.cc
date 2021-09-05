@@ -2738,8 +2738,9 @@ partition_summary summarize_mutation(const mutation& m) {
         clustering_fragments.emplace(clustering_row_summary(entry.key(), r.marker(), r.deleted_at(),
                 summarize_row(schema, column_kind::regular_column, r.cells())));
     }
-    const auto& rts = m.partition().row_tombstones();
-    clustering_fragments.insert(rts.begin(), rts.end());
+    for (auto& rt : m.partition().row_tombstones()) {
+        clustering_fragments.insert(rt.tombstone());
+    }
     return partition_summary(
             m.decorated_key(),
             m.partition().partition_tombstone(),

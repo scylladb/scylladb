@@ -358,7 +358,7 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& 
 
 mutation_fragment_opt range_tombstone_stream::do_get_next()
 {
-    return mutation_fragment(_schema, _permit, _list.pop_as<range_tombstone>(_list.begin()));
+    return mutation_fragment(_schema, _permit, _list.pop(_list.begin()));
 }
 
 mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)
@@ -395,7 +395,7 @@ mutation_fragment_opt range_tombstone_stream::get_next()
 
 const range_tombstone& range_tombstone_stream::peek_next() const
 {
-    return *_list.begin();
+    return _list.begin()->tombstone();
 }
 
 void range_tombstone_stream::forward_to(position_in_partition_view pos) {

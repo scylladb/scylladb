@@ -259,7 +259,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
-                            BOOST_REQUIRE(rt.tomb == tomb);
+                            BOOST_REQUIRE(rt.tombstone().tomb == tomb);
                         }
                     }).finally([rd] {
                         return rd->close().finally([rd] {});
@@ -297,7 +297,7 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
-                            BOOST_REQUIRE(rt.tomb == tomb);
+                            BOOST_REQUIRE(rt.tombstone().tomb == tomb);
                         }
                     }).finally([rd] {
                         return rd->close().finally([rd] {});

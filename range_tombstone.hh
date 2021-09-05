@@ -35,7 +35,6 @@ namespace bi = boost::intrusive;
  * Represents a ranged deletion operation. Can be empty.
  */
 class range_tombstone final {
-    bi::set_member_hook<bi::link_mode<bi::auto_unlink>> _link;
 public:
     clustering_key_prefix start;
     bound_kind start_kind;
@@ -66,18 +65,16 @@ public:
     { }
     range_tombstone(range_tombstone&& rt) noexcept
             : range_tombstone(std::move(rt.start), rt.start_kind, std::move(rt.end), rt.end_kind, std::move(rt.tomb)) {
-        update_node(rt._link);
-    }
-    struct without_link { };
-    range_tombstone(range_tombstone&& rt, without_link) noexcept
-            : range_tombstone(std::move(rt.start), rt.start_kind, std::move(rt.end), rt.end_kind, std::move(rt.tomb)) {
     }
     range_tombstone(const range_tombstone& rt)
             : range_tombstone(rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb)
     { }
     range_tombstone& operator=(range_tombstone&& rt) noexcept {
-        update_node(rt._link);
-        move_assign(std::move(rt));
+        start = std::move(rt.start);
+        start_kind = rt.start_kind;
+        end = std::move(rt.end);
+        end_kind = rt.end_kind;
+        tomb = std::move(rt.tomb);
         return *this;
     }
     range_tombstone& operator=(const range_tombstone& rt) {
@@ -97,10 +94,10 @@ public:
     // Range tombstone covers all rows with positions p such that: position() <= p < end_position()
     position_in_partition_view position() const;
     position_in_partition_view end_position() const;
-    bool empty() const {
+    bool empty() const noexcept {
         return !bool(tomb);
     }
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return bool(tomb);
     }
     bool equal(const schema& s, const range_tombstone& other) const {
@@ -113,16 +110,12 @@ public:
             return _c(rt1.start_bound(), rt2.start_bound());
         }
     };
-    friend void swap(range_tombstone& rt1, range_tombstone& rt2) {
-        range_tombstone tmp(std::move(rt2), without_link());
-        rt2.move_assign(std::move(rt1));
-        rt1.move_assign(std::move(tmp));
+    friend void swap(range_tombstone& rt1, range_tombstone& rt2) noexcept {
+        range_tombstone tmp = std::move(rt2);
+        rt2 = std::move(rt1);
+        rt1 = std::move(tmp);
     }
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone& rt);
-    using container_type = bi::set<range_tombstone,
-            bi::member_hook<range_tombstone, bi::set_member_hook<bi::link_mode<bi::auto_unlink>>, &range_tombstone::_link>,
-            bi::compare<range_tombstone::compare>,
-            bi::constant_time_size<false>>;
 
     static bool is_single_clustering_row_tombstone(const schema& s, const clustering_key_prefix& start,
         bound_kind start_kind, const clustering_key_prefix& end, bound_kind end_kind)
@@ -213,21 +206,6 @@ public:
 
     size_t minimal_memory_usage(const schema& s) const noexcept {
         return sizeof(range_tombstone) + minimal_external_memory_usage(s);
-    }
-private:
-    void move_assign(range_tombstone&& rt) {
-        start = std::move(rt.start);
-        start_kind = rt.start_kind;
-        end = std::move(rt.end);
-        end_kind = rt.end_kind;
-        tomb = std::move(rt.tomb);
-    }
-    void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) {
-        if (other_link.is_linked()) {
-            // Move the link in case we're being relocated by LSA.
-            container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());
-            container_type::node_algorithms::init(other_link.this_ptr());
-        }
     }
 };
 

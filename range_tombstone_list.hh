@@ -30,27 +30,89 @@
 
 class position_in_partition_view;
 
+class range_tombstone_entry {
+    range_tombstone _tombstone;
+    bi::set_member_hook<bi::link_mode<bi::auto_unlink>> _link;
+
+public:
+    struct compare {
+        range_tombstone::compare _c;
+        compare(const schema& s) : _c(s) {}
+        bool operator()(const range_tombstone_entry& rt1, const range_tombstone_entry& rt2) const {
+            return _c(rt1._tombstone, rt2._tombstone);
+        }
+    };
+
+    using container_type = bi::set<range_tombstone_entry,
+            bi::member_hook<range_tombstone_entry, bi::set_member_hook<bi::link_mode<bi::auto_unlink>>, &range_tombstone_entry::_link>,
+            bi::compare<range_tombstone_entry::compare>,
+            bi::constant_time_size<false>>;
+
+    range_tombstone_entry(const range_tombstone_entry& rt)
+        : _tombstone(rt._tombstone)
+    {
+    }
+
+    range_tombstone_entry(range_tombstone_entry&& rt) noexcept
+            : _tombstone(std::move(rt._tombstone))
+    {
+        update_node(rt._link);
+    }
+    range_tombstone_entry(range_tombstone&& rt) noexcept
+        : _tombstone(std::move(rt))
+    { }
+
+    range_tombstone_entry& operator=(range_tombstone_entry&& rt) noexcept {
+        update_node(rt._link);
+        _tombstone = std::move(rt._tombstone);
+        return *this;
+    }
+
+    range_tombstone& tombstone() noexcept { return _tombstone; }
+    const range_tombstone& tombstone() const noexcept { return _tombstone; }
+
+    const bound_view start_bound() const { return _tombstone.start_bound(); }
+    const bound_view end_bound() const { return _tombstone.end_bound(); }
+    position_in_partition_view position() const { return _tombstone.position(); }
+    position_in_partition_view end_position() const { return _tombstone.end_position(); }
+
+    size_t memory_usage(const schema& s) const noexcept {
+        return sizeof(range_tombstone_entry) + _tombstone.external_memory_usage(s);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& rt);
+
+private:
+    void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) noexcept {
+        if (other_link.is_linked()) {
+            // Move the link in case we're being relocated by LSA.
+            container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());
+            container_type::node_algorithms::init(other_link.this_ptr());
+        }
+    }
+};
+
 class range_tombstone_list final {
-    using range_tombstones_type = range_tombstone::container_type;
+    using range_tombstones_type = range_tombstone_entry::container_type;
     class insert_undo_op {
-        const range_tombstone& _new_rt;
+        const range_tombstone_entry& _new_rt;
     public:
-        insert_undo_op(const range_tombstone& new_rt)
+        insert_undo_op(const range_tombstone_entry& new_rt)
                 : _new_rt(new_rt) { }
         void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
     };
     class erase_undo_op {
-        alloc_strategy_unique_ptr<range_tombstone> _rt;
+        alloc_strategy_unique_ptr<range_tombstone_entry> _rt;
     public:
-        erase_undo_op(range_tombstone& rt)
+        erase_undo_op(range_tombstone_entry& rt)
                 : _rt(&rt) { }
         void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
     };
     class update_undo_op {
         range_tombstone _old_rt;
-        const range_tombstone& _new_rt;
+        const range_tombstone_entry& _new_rt;
     public:
-        update_undo_op(range_tombstone&& old_rt, const range_tombstone& new_rt)
+        update_undo_op(range_tombstone&& old_rt, const range_tombstone_entry& new_rt)
                 : _old_rt(std::move(old_rt)), _new_rt(new_rt) { }
         void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
     };
@@ -72,7 +134,7 @@ class range_tombstone_list final {
         reverter& operator=(reverter&&) = default;
         reverter(const reverter&) = delete;
         reverter& operator=(reverter&) = delete;
-        virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt);
+        virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone_entry& new_rt);
         virtual range_tombstones_type::iterator erase(range_tombstones_type::iterator it);
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt);
         void revert() noexcept;
@@ -84,7 +146,7 @@ class range_tombstone_list final {
     public:
         nop_reverter(const schema& s, range_tombstone_list& rt_list)
                 : reverter(s, rt_list) { }
-        virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt) override;
+        virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone_entry& new_rt) override;
         virtual range_tombstones_type::iterator erase(range_tombstones_type::iterator it) override;
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt) override;
     };
@@ -93,11 +155,12 @@ private:
 public:
     // ForwardIterator<range_tombstone>
     using iterator = range_tombstones_type::iterator;
+    using reverse_iterator = range_tombstones_type::reverse_iterator;
     using const_iterator = range_tombstones_type::const_iterator;
 
     struct copy_comparator_only { };
     range_tombstone_list(const schema& s)
-        : _tombstones(range_tombstone::compare(s))
+        : _tombstones(range_tombstone_entry::compare(s))
     { }
     range_tombstone_list(const range_tombstone_list& x, copy_comparator_only)
         : _tombstones(x._tombstones.key_comp())
@@ -175,8 +238,12 @@ public:
     iterator erase(const_iterator, const_iterator);
 
     // Pops the first element and bans (in theory) further additions
-    range_tombstone* pop_front_and_lock() {
-        return _tombstones.unlink_leftmost_without_rebalance();
+    // The list is assumed not to be empty
+    range_tombstone pop_front_and_lock() {
+        range_tombstone_entry* rt = _tombstones.unlink_leftmost_without_rebalance();
+        assert(rt != nullptr);
+        auto _ = seastar::defer([rt] () noexcept { current_deleter<range_tombstone_entry>()(rt); });
+        return std::move(rt->tombstone());
     }
 
     // Ensures that every range tombstone is strictly contained within given clustering ranges.
@@ -185,29 +252,25 @@ public:
     range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>
+    requires std::is_invocable_r_v<bool, Pred, const range_tombstone&>
     void erase_where(Pred filter) {
-        static_assert(std::is_same<bool, std::result_of_t<Pred(const range_tombstone&)>>::value,
-                      "bad Pred signature");
         auto it = begin();
         while (it != end()) {
-            if (filter(*it)) {
-                it = _tombstones.erase_and_dispose(it, current_deleter<range_tombstone>());
+            if (filter(it->tombstone())) {
+                it = _tombstones.erase_and_dispose(it, current_deleter<range_tombstone_entry>());
             } else {
                 ++it;
             }
         }
     }
-    void clear() {
-        _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
+    void clear() noexcept {
+        _tombstones.clear_and_dispose(current_deleter<range_tombstone_entry>());
     }
 
-    template <typename T>
-    requires std::constructible_from<T, range_tombstone>
-    auto pop_as(iterator it) {
-        range_tombstone& rt = *it;
-        _tombstones.erase(it);
-        auto rt_deleter = seastar::defer([&rt] () noexcept { current_deleter<range_tombstone>()(&rt); });
-        return T(std::move(rt));
+    range_tombstone pop(iterator it) {
+        range_tombstone rt(std::move(it->tombstone()));
+        _tombstones.erase_and_dispose(it, current_deleter<range_tombstone_entry>());
+        return rt;
     }
 
     // Removes elements of this list in batches.
@@ -222,7 +285,7 @@ public:
     size_t external_memory_usage(const schema& s) const noexcept {
         size_t result = 0;
         for (auto& rtb : _tombstones) {
-            result += rtb.memory_usage(s);
+            result += rtb.tombstone().memory_usage(s);
         }
         return result;
     }
@@ -231,5 +294,5 @@ private:
                           clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);
     void insert_from(const schema& s, range_tombstones_type::iterator it, clustering_key_prefix start,
                      bound_kind start_kind, clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);
-    range_tombstones_type::iterator find(const schema& s, const range_tombstone& rt);
+    range_tombstones_type::iterator find(const schema& s, const range_tombstone_entry& rt);
 };

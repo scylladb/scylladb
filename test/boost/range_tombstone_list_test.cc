@@ -55,6 +55,10 @@ static void assert_rt(const range_tombstone& expected, const range_tombstone& ac
     }
 }
 
+static void assert_rt(const range_tombstone& expected, const range_tombstone_entry& actual) {
+    assert_rt(expected, actual.tombstone());
+}
+
 static range_tombstone rt(int32_t start, int32_t end, api::timestamp_type timestamp) {
     return range_tombstone(key({start}), key({end}), {timestamp, gc_now});
 }
@@ -166,8 +170,8 @@ BOOST_AUTO_TEST_CASE(test_adjacent_ranges_with_differing_timestamps_are_not_merg
 
 static bool no_overlap(const range_tombstone_list& l) {
     bound_view::tri_compare cmp(*s);
-    std::optional<range_tombstone> prev;
-    for (const range_tombstone& r : l) {
+    std::optional<range_tombstone_entry> prev;
+    for (const auto& r : l) {
         if (prev) {
             if (cmp(prev->end_bound(), r.start_bound()) >= 0) {
                 return false;

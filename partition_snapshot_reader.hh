@@ -136,7 +136,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         const range_tombstone& pop_range_tombstone() {
             boost::range::pop_heap(_range_tombstones, _heap_cmp);
             auto& current = _range_tombstones.back();
-            const range_tombstone& rt = *current.begin();
+            const range_tombstone& rt = current.begin()->tombstone();
             current.advance_begin(1);
             if (current.begin() == current.end()) {
                 _range_tombstones.pop_back();
@@ -155,7 +155,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         }
 
         const range_tombstone& peek_range_tombstone() const {
-            return *_range_tombstones.front().begin();
+            return _range_tombstones.front().begin()->tombstone();
         }
         bool has_more_range_tombstones() const {
             return !_range_tombstones.empty();

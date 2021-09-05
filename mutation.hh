@@ -154,7 +154,7 @@ template<consume_in_reverse reverse, FlattenedConsumer Consumer>
 stop_iteration consume_clustering_fragments(const schema& s, mutation_partition& partition, Consumer& consumer) {
     using crs_type = mutation_partition::rows_type;
     using crs_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, crs_type::reverse_iterator, crs_type::iterator>;
-    using rts_type = range_tombstone::container_type;
+    using rts_type = range_tombstone_list;
     using rts_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, rts_type::reverse_iterator, rts_type::iterator>;
 
     crs_iterator_type crs_it, crs_end;
@@ -188,7 +188,7 @@ stop_iteration consume_clustering_fragments(const schema& s, mutation_partition&
             emit_rt = rts_it != rts_end;
         }
         if (emit_rt) {
-            stop = consumer.consume(range_tombstone(std::move(*rts_it), range_tombstone::without_link{}));
+            stop = consumer.consume(std::move(rts_it->tombstone()));
             ++rts_it;
         } else {
             stop = consumer.consume(clustering_row(std::move(*crs_it)));
