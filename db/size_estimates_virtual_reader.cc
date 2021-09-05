@@ -140,6 +140,9 @@ static std::vector<sstring> get_keyspaces(const schema& s, const database& db, d
         bool operator()(const dht::ring_position& rp, const sstring& ks) {
             return rp.less_compare(_s, as_ring_position(ks));
         }
+        bool operator()(const dht::ring_position& rp1, const dht::ring_position& rp2) {
+            return rp1.less_compare(_s, rp2);
+        }
     };
     auto keyspaces = db.get_non_system_keyspaces();
     auto cmp = keyspace_less_comparator(s);

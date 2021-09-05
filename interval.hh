@@ -30,6 +30,16 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <compare>
 
+template <typename Comparator, typename T>
+concept IntervalComparatorFor = requires (T a, T b, Comparator& cmp) {
+    { cmp(a, b) } -> std::same_as<std::strong_ordering>;
+};
+
+template <typename LessComparator, typename T>
+concept IntervalLessComparatorFor = requires (T a, T b, LessComparator& cmp) {
+    { cmp(a, b) } -> std::same_as<bool>;
+};
+
 inline
 bool
 require_ordering_and_on_equal_return(
@@ -60,8 +70,7 @@ public:
     bool operator==(const interval_bound& other) const {
         return (_value == other._value) && (_inclusive == other._inclusive);
     }
-    template<typename Comparator>
-    bool equal(const interval_bound& other, Comparator&& cmp) const {
+    bool equal(const interval_bound& other, IntervalComparatorFor<T> auto&& cmp) const {
         return _inclusive == other._inclusive && cmp(_value, other._value) == 0;
     }
 };
@@ -109,37 +118,32 @@ private:
     start_bound_ref start_bound() const { return { start() }; }
     end_bound_ref end_bound() const { return { end() }; }
 
-    template<typename Comparator>
-    static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
+    static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, IntervalComparatorFor<T> auto&& cmp) {
         return !end.b || !start.b || require_ordering_and_on_equal_return(
                 cmp(end.b->value(), start.b->value()),
                 std::strong_ordering::greater,
                 end.b->is_inclusive() && start.b->is_inclusive());
     }
 
-    template<typename Comparator>
-    static bool less_than(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
+    static bool less_than(end_bound_ref end, start_bound_ref start, IntervalComparatorFor<T> auto&& cmp) {
         return !greater_than_or_equal(end, start, cmp);
     }
 
-    template<typename Comparator>
-    static bool less_than_or_equal(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
+    static bool less_than_or_equal(start_bound_ref first, start_bound_ref second, IntervalComparatorFor<T> auto&& cmp) {
         return !first.b || (second.b && require_ordering_and_on_equal_return(
                 cmp(first.b->value(), second.b->value()),
                 std::strong_ordering::less,
                 first.b->is_inclusive() || !second.b->is_inclusive()));
     }
 
-    template<typename Comparator>
-    static bool less_than(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
+    static bool less_than(start_bound_ref first, start_bound_ref second, IntervalComparatorFor<T> auto&& cmp) {
         return second.b && (!first.b || require_ordering_and_on_equal_return(
                 cmp(first.b->value(), second.b->value()),
                 std::strong_ordering::less,
                 first.b->is_inclusive() && !second.b->is_inclusive()));
     }
 
-    template<typename Comparator>
-    static bool greater_than_or_equal(end_bound_ref first, end_bound_ref second, Comparator&& cmp) {
+    static bool greater_than_or_equal(end_bound_ref first, end_bound_ref second, IntervalComparatorFor<T> auto&& cmp) {
         return !first.b || (second.b && require_ordering_and_on_equal_return(
                 cmp(first.b->value(), second.b->value()),
                 std::strong_ordering::greater,
@@ -148,8 +152,7 @@ private:
 public:
     // the point is before the interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool before(const T& point, Comparator&& cmp) const {
+    bool before(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         assert(!is_wrap_around(cmp));
         if (!start()) {
             return false; //open start, no points before
@@ -165,8 +168,7 @@ public:
     }
     // the point is after the interval (works only for non wrapped intervals)
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool after(const T& point, Comparator&& cmp) const {
+    bool after(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         assert(!is_wrap_around(cmp));
         if (!end()) {
             return false; //open end, no points after
@@ -182,8 +184,7 @@ public:
     }
     // check if two intervals overlap.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool overlaps(const wrapping_interval& other, Comparator&& cmp) const {
+    bool overlaps(const wrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         bool this_wraps = is_wrap_around(cmp);
         bool other_wraps = other.is_wrap_around(cmp);
 
@@ -244,8 +245,7 @@ public:
     // Range is a wrap around if end value is smaller than the start value
     // or they're equal and at least one bound is not inclusive.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool is_wrap_around(Comparator&& cmp) const {
+    bool is_wrap_around(IntervalComparatorFor<T> auto&& cmp) const {
         if (_end && _start) {
             auto r = cmp(end()->value(), start()->value());
             return r < 0
@@ -265,8 +265,7 @@ public:
     }
     // the point is inside the interval
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool contains(const T& point, Comparator&& cmp) const {
+    bool contains(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         if (is_wrap_around(cmp)) {
             auto unwrapped = unwrap();
             return unwrapped.first.contains(point, cmp)
@@ -277,8 +276,7 @@ public:
     }
     // Returns true iff all values contained by other are also contained by this.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool contains(const wrapping_interval& other, Comparator&& cmp) const {
+    bool contains(const wrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         bool this_wraps = is_wrap_around(cmp);
         bool other_wraps = other.is_wrap_around(cmp);
 
@@ -315,8 +313,7 @@ public:
     // Returns intervals which cover all values covered by this interval but not covered by the other interval.
     // Ranges are not overlapping and ordered.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    std::vector<wrapping_interval> subtract(const wrapping_interval& other, Comparator&& cmp) const {
+    std::vector<wrapping_interval> subtract(const wrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         std::vector<wrapping_interval> result;
         std::list<wrapping_interval> left;
         std::list<wrapping_interval> right;
@@ -367,9 +364,8 @@ public:
     // split interval in two around a split_point. split_point has to be inside the interval
     // split_point will belong to first interval
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    std::pair<wrapping_interval<T>, wrapping_interval<T>> split(const T& split_point, Comparator&& cmp) const {
-        assert(contains(split_point, std::forward<Comparator>(cmp)));
+    std::pair<wrapping_interval<T>, wrapping_interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
+        assert(contains(split_point, std::forward<decltype(cmp)>(cmp)));
         wrapping_interval left(start(), bound(split_point));
         wrapping_interval right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
@@ -377,9 +373,8 @@ public:
     // Create a sub-interval including values greater than the split_point. Returns std::nullopt if
     // split_point is after the end (but not included in the interval, in case of wraparound intervals)
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    std::optional<wrapping_interval<T>> split_after(const T& split_point, Comparator&& cmp) const {
-        if (contains(split_point, std::forward<Comparator>(cmp))
+    std::optional<wrapping_interval<T>> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
+        if (contains(split_point, std::forward<decltype(cmp)>(cmp))
                 && (!end() || cmp(split_point, end()->value()) != 0)) {
             return wrapping_interval(bound(split_point, false), end());
         } else if (end() && cmp(split_point, end()->value()) >= 0) {
@@ -408,8 +403,7 @@ public:
     wrapping_interval<U> transform(Transformer&& transformer) const & {
         return wrapping_interval<U>(transform_bound(_start, transformer), transform_bound(_end, transformer), _singular);
     }
-    template<typename Comparator>
-    bool equal(const wrapping_interval& other, Comparator&& cmp) const {
+    bool equal(const wrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         return bool(_start) == bool(other._start)
                && bool(_end) == bool(other._end)
                && (!_start || _start->equal(*other._start, cmp))
@@ -496,20 +490,17 @@ public:
 
     // the point is before the interval.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool before(const T& point, Comparator&& cmp) const {
-        return _interval.before(point, std::forward<Comparator>(cmp));
+    bool before(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
+        return _interval.before(point, std::forward<decltype(cmp)>(cmp));
     }
     // the point is after the interval.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool after(const T& point, Comparator&& cmp) const {
-        return _interval.after(point, std::forward<Comparator>(cmp));
+    bool after(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
+        return _interval.after(point, std::forward<decltype(cmp)>(cmp));
     }
     // check if two intervals overlap.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool overlaps(const nonwrapping_interval& other, Comparator&& cmp) const {
+    bool overlaps(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         // if both this and other have an open start, the two intervals will overlap.
         if (!start() && !other.start()) {
             return true;
@@ -547,23 +538,20 @@ public:
     }
     // the point is inside the interval
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool contains(const T& point, Comparator&& cmp) const {
+    bool contains(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         return !before(point, cmp) && !after(point, cmp);
     }
     // Returns true iff all values contained by other are also contained by this.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool contains(const nonwrapping_interval& other, Comparator&& cmp) const {
+    bool contains(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         return wrapping_interval<T>::less_than_or_equal(_interval.start_bound(), other._interval.start_bound(), cmp)
                 && wrapping_interval<T>::greater_than_or_equal(_interval.end_bound(), other._interval.end_bound(), cmp);
     }
     // Returns intervals which cover all values covered by this interval but not covered by the other interval.
     // Ranges are not overlapping and ordered.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    std::vector<nonwrapping_interval> subtract(const nonwrapping_interval& other, Comparator&& cmp) const {
-        auto subtracted = _interval.subtract(other._interval, std::forward<Comparator>(cmp));
+    std::vector<nonwrapping_interval> subtract(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+        auto subtracted = _interval.subtract(other._interval, std::forward<decltype(cmp)>(cmp));
         return boost::copy_range<std::vector<nonwrapping_interval>>(subtracted | boost::adaptors::transformed([](auto&& r) {
             return nonwrapping_interval(std::move(r));
         }));
@@ -571,17 +559,15 @@ public:
     // split interval in two around a split_point. split_point has to be inside the interval
     // split_point will belong to first interval
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    std::pair<nonwrapping_interval<T>, nonwrapping_interval<T>> split(const T& split_point, Comparator&& cmp) const {
-        assert(contains(split_point, std::forward<Comparator>(cmp)));
+    std::pair<nonwrapping_interval<T>, nonwrapping_interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
+        assert(contains(split_point, std::forward<decltype(cmp)>(cmp)));
         nonwrapping_interval left(start(), bound(split_point));
         nonwrapping_interval right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
     // Create a sub-interval including values greater than the split_point. If split_point is after
     // the end, returns std::nullopt.
-    template<typename Comparator>
-    std::optional<nonwrapping_interval> split_after(const T& split_point, Comparator&& cmp) const {
+    std::optional<nonwrapping_interval> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         if (end() && cmp(split_point, end()->value()) >= 0) {
             return std::nullopt;
         } else if (start() && cmp(split_point, start()->value()) < 0) {
@@ -592,8 +578,7 @@ public:
     }
     // Creates a new sub-interval which is the intersection of this interval and an interval starting with "start".
     // If there is no overlap, returns std::nullopt.
-    template<typename Comparator>
-    std::optional<nonwrapping_interval> trim_front(std::optional<bound>&& start, Comparator&& cmp) const {
+    std::optional<nonwrapping_interval> trim_front(std::optional<bound>&& start, IntervalComparatorFor<T> auto&& cmp) const {
         return intersection(nonwrapping_interval(std::move(start), {}), cmp);
     }
     // Transforms this interval into a new interval of a different value type
@@ -606,16 +591,15 @@ public:
     nonwrapping_interval<U> transform(Transformer&& transformer) const & {
         return nonwrapping_interval<U>(_interval.transform(std::forward<Transformer>(transformer)));
     }
-    template<typename Comparator>
-    bool equal(const nonwrapping_interval& other, Comparator&& cmp) const {
-        return _interval.equal(other._interval, std::forward<Comparator>(cmp));
+    bool equal(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
+        return _interval.equal(other._interval, std::forward<decltype(cmp)>(cmp));
     }
     bool operator==(const nonwrapping_interval& other) const {
         return _interval == other._interval;
     }
     // Takes a vector of possibly overlapping intervals and returns a vector containing
     // a set of non-overlapping intervals covering the same values.
-    template<typename Comparator, typename IntervalVec>
+    template<IntervalComparatorFor<T> Comparator, typename IntervalVec>
     requires requires (IntervalVec vec) {
         { vec.begin() } -> std::random_access_iterator;
         { vec.end() } -> std::random_access_iterator;
@@ -662,30 +646,30 @@ private:
     struct std_ {};
     struct built_in_ : std_ {};
 
-    template<typename Range, typename LessComparator,
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator,
              typename = decltype(std::declval<Range>().lower_bound(std::declval<T>(), std::declval<LessComparator>()))>
     typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
         return r.lower_bound(value, std::forward<LessComparator>(cmp));
     }
 
-    template<typename Range, typename LessComparator,
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator,
              typename = decltype(std::declval<Range>().upper_bound(std::declval<T>(), std::declval<LessComparator>()))>
     typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
         return r.upper_bound(value, std::forward<LessComparator>(cmp));
     }
 
-    template<typename Range, typename LessComparator>
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
         return std::lower_bound(r.begin(), r.end(), value, std::forward<LessComparator>(cmp));
     }
 
-    template<typename Range, typename LessComparator>
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
         return std::upper_bound(r.begin(), r.end(), value, std::forward<LessComparator>(cmp));
     }
 public:
     // Return the lower bound of the specified sequence according to these bounds.
-    template<typename Range, typename LessComparator>
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     typename std::remove_reference<Range>::type::const_iterator lower_bound(Range&& r, LessComparator&& cmp) const {
         return start()
             ? (start()->is_inclusive()
@@ -694,7 +678,7 @@ public:
             : std::cbegin(r);
     }
     // Return the upper bound of the specified sequence according to these bounds.
-    template<typename Range, typename LessComparator>
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     typename std::remove_reference<Range>::type::const_iterator upper_bound(Range&& r, LessComparator&& cmp) const {
         return end()
              ? (end()->is_inclusive()
@@ -705,15 +689,14 @@ public:
                 : std::cend(r));
     }
     // Returns a subset of the range that is within these bounds.
-    template<typename Range, typename LessComparator>
+    template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     boost::iterator_range<typename std::remove_reference<Range>::type::const_iterator>
     slice(Range&& range, LessComparator&& cmp) const {
         return boost::make_iterator_range(lower_bound(range, cmp), upper_bound(range, cmp));
     }
 
     // Returns the intersection between this interval and other.
-    template<typename Comparator>
-    std::optional<nonwrapping_interval> intersection(const nonwrapping_interval& other, Comparator&& cmp) const {
+    std::optional<nonwrapping_interval> intersection(const nonwrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         auto p = std::minmax(_interval, other._interval, [&cmp] (auto&& a, auto&& b) {
             return wrapping_interval<T>::less_than(a.start_bound(), b.start_bound(), cmp);
         });
