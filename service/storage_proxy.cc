@@ -2838,7 +2838,7 @@ class digest_read_resolver : public abstract_read_resolver {
     promise<digest_read_result> _cl_promise; // cl is reached
     bool _cl_reported = false;
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
-    std::vector<query::result_digest> _digest_results;
+    utils::small_vector<query::result_digest, 3> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
 
