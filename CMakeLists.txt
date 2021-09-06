@@ -32,8 +32,13 @@ if(target_arch)
     set(target_arch_flag "-march=${target_arch}")
 endif()
 
+set(cxx_coro_flag)
+if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
+    set(cxx_coro_flag -fcoroutines)
+endif()
+
 # Configure Seastar compile options to align with Scylla
-set(Seastar_CXX_FLAGS -fcoroutines ${target_arch_flag} CACHE INTERNAL "" FORCE)
+set(Seastar_CXX_FLAGS ${cxx_coro_flag} ${target_arch_flag} CACHE INTERNAL "" FORCE)
 set(Seastar_CXX_DIALECT gnu++20 CACHE INTERNAL "" FORCE)
 
 add_subdirectory(seastar)
@@ -96,7 +101,7 @@ endfunction()
 scylla_generate_thrift(
     TARGET scylla_thrift_gen_cassandra
     VAR scylla_thrift_gen_cassandra_files
-    IN_FILE interface/cassandra.thrift
+    IN_FILE "${CMAKE_SOURCE_DIR}/interface/cassandra.thrift"
     OUT_DIR ${scylla_gen_build_dir}
     SERVICE Cassandra)
 
@@ -153,7 +158,7 @@ foreach(f ${antlr3_grammar_files})
     scylla_generate_antlr3(
         TARGET scylla_antlr3_gen_${grammar_file_name}
         VAR scylla_antlr3_gen_${grammar_file_name}_files
-        IN_FILE ${f}
+        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
         OUT_DIR ${scylla_gen_build_dir}/${f_dir})
     list(APPEND antlr3_gen_files "${scylla_antlr3_gen_${grammar_file_name}_files}")
 endforeach()
@@ -162,7 +167,7 @@ endforeach()
 seastar_generate_ragel(
     TARGET scylla_ragel_gen_protocol_parser
     VAR scylla_ragel_gen_protocol_parser_file
-    IN_FILE redis/protocol_parser.rl
+    IN_FILE "${CMAKE_SOURCE_DIR}/redis/protocol_parser.rl"
     OUT_FILE ${scylla_gen_build_dir}/redis/protocol_parser.hh)
 
 # Generate C++ sources from Swagger definitions
@@ -194,7 +199,7 @@ foreach(f ${swagger_files})
     seastar_generate_swagger(
         TARGET scylla_swagger_gen_${fname}
         VAR scylla_swagger_gen_${fname}_files
-        IN_FILE "${f}"
+        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
         OUT_DIR "${scylla_gen_build_dir}/${dir}")
     list(APPEND swagger_gen_files "${scylla_swagger_gen_${fname}_files}")
 endforeach()
@@ -229,6 +234,7 @@ set(idl_serializers
     idl/frozen_mutation.idl.hh
     idl/frozen_schema.idl.hh
     idl/gossip_digest.idl.hh
+    idl/hinted_handoff.idl.hh
     idl/idl_test.idl.hh
     idl/keys.idl.hh
     idl/messaging_service.idl.hh
@@ -237,6 +243,7 @@ set(idl_serializers
     idl/partition_checksum.idl.hh
     idl/paxos.idl.hh
     idl/query.idl.hh
+    idl/raft.idl.hh
     idl/range.idl.hh
     idl/read_command.idl.hh
     idl/reconcilable_result.idl.hh
@@ -260,7 +267,7 @@ foreach(f ${idl_serializers})
     scylla_generate_idl_serializer(
         TARGET scylla_idl_gen_${idl_target}
         VAR scylla_idl_gen_${idl_target}_files
-        IN_FILE ${f}
+        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
         OUT_FILE ${scylla_gen_build_dir}/${idl_dir}/${idl_out_hdr_name})
     list(APPEND idl_gen_files "${scylla_idl_gen_${idl_target}_files}")
 endforeach()
@@ -269,6 +276,7 @@ set(scylla_sources
     absl-flat_hash_map.cc
     alternator/auth.cc
     alternator/conditions.cc
+    alternator/controller.cc
     alternator/executor.cc
     alternator/expressions.cc
     alternator/serialization.cc
@@ -341,6 +349,7 @@ set(scylla_sources
     cql3/constants.cc
     cql3/cql3_type.cc
     cql3/expr/expression.cc
+    cql3/expr/term_expr.cc
     cql3/functions/aggregate_fcts.cc
     cql3/functions/castas_fcts.cc
     cql3/functions/error_injection_fcts.cc
@@ -351,6 +360,7 @@ set(scylla_sources
     cql3/lists.cc
     cql3/maps.cc
     cql3/operation.cc
+    cql3/prepare_context.cc
     cql3/query_options.cc
     cql3/query_processor.cc
     cql3/relation.cc
@@ -366,25 +376,32 @@ set(scylla_sources
     cql3/sets.cc
     cql3/single_column_relation.cc
     cql3/statements/alter_keyspace_statement.cc
+    cql3/statements/alter_service_level_statement.cc
     cql3/statements/alter_table_statement.cc
     cql3/statements/alter_type_statement.cc
     cql3/statements/alter_view_statement.cc
+    cql3/statements/attach_service_level_statement.cc
     cql3/statements/authentication_statement.cc
     cql3/statements/authorization_statement.cc
     cql3/statements/batch_statement.cc
     cql3/statements/cas_request.cc
     cql3/statements/cf_prop_defs.cc
     cql3/statements/cf_statement.cc
+    cql3/statements/create_aggregate_statement.cc
     cql3/statements/create_function_statement.cc
     cql3/statements/create_index_statement.cc
     cql3/statements/create_keyspace_statement.cc
+    cql3/statements/create_service_level_statement.cc
     cql3/statements/create_table_statement.cc
     cql3/statements/create_type_statement.cc
     cql3/statements/create_view_statement.cc
     cql3/statements/delete_statement.cc
+    cql3/statements/detach_service_level_statement.cc
+    cql3/statements/drop_aggregate_statement.cc
     cql3/statements/drop_function_statement.cc
     cql3/statements/drop_index_statement.cc
     cql3/statements/drop_keyspace_statement.cc
+    cql3/statements/drop_service_level_statement.cc
     cql3/statements/drop_table_statement.cc
     cql3/statements/drop_type_statement.cc
     cql3/statements/drop_view_statement.cc
@@ -394,6 +411,8 @@ set(scylla_sources
     cql3/statements/index_target.cc
     cql3/statements/ks_prop_defs.cc
     cql3/statements/list_permissions_statement.cc
+    cql3/statements/list_service_level_attachments_statement.cc
+    cql3/statements/list_service_level_statement.cc
     cql3/statements/list_users_statement.cc
     cql3/statements/modification_statement.cc
     cql3/statements/permission_altering_statement.cc
@@ -403,6 +422,8 @@ set(scylla_sources
     cql3/statements/role-management-statements.cc
     cql3/statements/schema_altering_statement.cc
     cql3/statements/select_statement.cc
+    cql3/statements/service_level_statement.cc
+    cql3/statements/sl_prop_defs.cc
     cql3/statements/truncate_statement.cc
     cql3/statements/update_statement.cc
     cql3/statements/use_statement.cc
@@ -412,11 +433,9 @@ set(scylla_sources
     cql3/untyped_result_set.cc
     cql3/update_parameters.cc
     cql3/user_types.cc
-    cql3/ut_name.cc
     cql3/util.cc
+    cql3/ut_name.cc
     cql3/values.cc
-    cql3/prepare_context.cc
-    data/cell.cc
     database.cc
     db/batchlog_manager.cc
     db/commitlog/commitlog.cc
@@ -428,8 +447,10 @@ set(scylla_sources
     db/data_listeners.cc
     db/extensions.cc
     db/heat_load_balance.cc
+    db/hints/host_filter.cc
     db/hints/manager.cc
     db/hints/resource_manager.cc
+    db/hints/sync_point.cc
     db/large_data_handler.cc
     db/legacy_schema_migrator.cc
     db/marshal/type_parser.cc
@@ -439,10 +460,10 @@ set(scylla_sources
     db/sstables-format-selector.cc
     db/system_distributed_keyspace.cc
     db/system_keyspace.cc
-    db/virtual_table.cc
     db/view/row_locking.cc
     db/view/view.cc
     db/view/view_update_generator.cc
+    db/virtual_table.cc
     dht/boot_strapper.cc
     dht/i_partitioner.cc
     dht/murmur3_partitioner.cc
@@ -454,17 +475,18 @@ set(scylla_sources
     flat_mutation_reader.cc
     frozen_mutation.cc
     frozen_schema.cc
+    generic_server.cc
     gms/application_state.cc
     gms/endpoint_state.cc
     gms/failure_detector.cc
     gms/feature_service.cc
-    gms/gossip_digest_ack.cc
     gms/gossip_digest_ack2.cc
+    gms/gossip_digest_ack.cc
     gms/gossip_digest_syn.cc
     gms/gossiper.cc
     gms/inet_address.cc
-    gms/version_generator.cc
     gms/versioned_value.cc
+    gms/version_generator.cc
     hashers.cc
     index/secondary_index.cc
     index/secondary_index_manager.cc
@@ -472,6 +494,7 @@ set(scylla_sources
     keys.cc
     lister.cc
     locator/abstract_replication_strategy.cc
+    locator/azure_snitch.cc
     locator/ec2_multi_region_snitch.cc
     locator/ec2_snitch.cc
     locator/everywhere_replication_strategy.cc
@@ -491,26 +514,27 @@ set(scylla_sources
     message/messaging_service.cc
     multishard_mutation_query.cc
     mutation.cc
-    raft/fsm.cc
-    raft/log.cc
-    raft/progress.cc
-    raft/raft.cc
-    raft/server.cc
     mutation_fragment.cc
     mutation_partition.cc
     mutation_partition_serializer.cc
     mutation_partition_view.cc
     mutation_query.cc
     mutation_reader.cc
+    mutation_writer/feed_writers.cc
     mutation_writer/multishard_writer.cc
+    mutation_writer/partition_based_splitting_writer.cc
     mutation_writer/shard_based_splitting_writer.cc
     mutation_writer/timestamp_based_splitting_writer.cc
-    mutation_writer/feed_writers.cc
     partition_slice_builder.cc
     partition_version.cc
     querier.cc
-    query-result-set.cc
     query.cc
+    query-result-set.cc
+    raft/fsm.cc
+    raft/log.cc
+    raft/raft.cc
+    raft/server.cc
+    raft/tracker.cc
     range_tombstone.cc
     range_tombstone_list.cc
     reader_concurrency_semaphore.cc
@@ -526,15 +550,16 @@ set(scylla_sources
     redis/server.cc
     redis/service.cc
     redis/stats.cc
+    release.cc
     repair/repair.cc
     repair/row_level.cc
     row_cache.cc
     schema.cc
     schema_mutations.cc
     schema_registry.cc
+    serializer.cc
     service/client_state.cc
     service/migration_manager.cc
-    service/migration_task.cc
     service/misc_services.cc
     service/pager/paging_state.cc
     service/pager/query_pagers.cc
@@ -543,23 +568,33 @@ set(scylla_sources
     service/paxos/prepare_summary.cc
     service/paxos/proposal.cc
     service/priority_manager.cc
+    service/qos/qos_common.cc
+    service/qos/service_level_controller.cc
+    service/qos/standard_service_level_distributed_data_accessor.cc
+    service/raft/raft_gossip_failure_detector.cc
+    service/raft/raft_group_registry.cc
+    service/raft/raft_rpc.cc
+    service/raft/raft_sys_table_storage.cc
+    service/raft/schema_raft_state_machine.cc
     service/storage_proxy.cc
     service/storage_service.cc
     sstables/compress.cc
     sstables/integrity_checked_file_impl.cc
-    sstables/kl/writer.cc
-    sstables/m_format_read_helpers.cc
+    sstables/kl/reader.cc
     sstables/metadata_collector.cc
-    sstables/mp_row_consumer.cc
+    sstables/m_format_read_helpers.cc
+    sstables/mx/reader.cc
     sstables/mx/writer.cc
-    sstables/partition.cc
     sstables/prepended_input_stream.cc
     sstables/random_access_reader.cc
     sstables/sstable_directory.cc
-    sstables/sstable_version.cc
+    sstables/sstable_mutation_reader.cc
     sstables/sstables.cc
+    sstables/sstable_set.cc
     sstables/sstables_manager.cc
+    sstables/sstable_version.cc
     sstables/writer.cc
+    streaming/consumer.cc
     streaming/progress_info.cc
     streaming/session_info.cc
     streaming/stream_coordinator.cc
@@ -581,11 +616,13 @@ set(scylla_sources
     thrift/server.cc
     thrift/thrift_validation.cc
     timeout_config.cc
+    tools/scylla-sstable-index.cc
+    tools/scylla-types.cc
+    tracing/traced_file.cc
     tracing/trace_keyspace_helper.cc
     tracing/trace_state.cc
-    tracing/traced_file.cc
-    tracing/tracing.cc
     tracing/tracing_backend_registry.cc
+    tracing/tracing.cc
     transport/controller.cc
     transport/cql_protocol_extension.cc
     transport/event.cc
@@ -594,7 +631,6 @@ set(scylla_sources
     transport/server.cc
     types.cc
     unimplemented.cc
-    utils/UUID_gen.cc
     utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
     utils/array-search.cc
     utils/ascii.cc
@@ -613,6 +649,7 @@ set(scylla_sources
     utils/file_lock.cc
     utils/generation-number.cc
     utils/gz/crc_combine.cc
+    utils/gz/gen_crc_combine_table.cc
     utils/human_readable.cc
     utils/i_filter.cc
     utils/large_bitset.cc
@@ -628,10 +665,10 @@ set(scylla_sources
     utils/updateable_value.cc
     utils/utf8.cc
     utils/uuid.cc
+    utils/UUID_gen.cc
     validation.cc
     vint-serialization.cc
-    zstd.cc
-    release.cc)
+    zstd.cc)
 
 set(scylla_gen_sources
     "${scylla_thrift_gen_cassandra_files}"
@@ -692,7 +729,7 @@ target_link_libraries(scylla PRIVATE
 
 target_compile_options(scylla PRIVATE
     -std=gnu++20
-    -fcoroutines # TODO: Clang does not have this flag, adjust to both variants
+    ${cxx_coro_flag}
     ${target_arch_flag})
 # Hacks needed to expose internal APIs for xxhash dependencies
 target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
@@ -712,7 +749,7 @@ target_link_libraries(crc_combine_table PRIVATE seastar)
 target_include_directories(crc_combine_table PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(crc_combine_table PRIVATE
     -std=gnu++20
-    -fcoroutines
+    ${cxx_coro_flag}
     ${target_arch_flag})
 add_dependencies(scylla crc_combine_table)
 
@@ -725,15 +762,15 @@ target_sources(scylla PRIVATE "${scylla_gen_build_dir}/utils/gz/crc_combine_tabl
 ###
 ### Generate version file and supply appropriate compile definitions for release.cc
 ###
-execute_process(COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN RESULT_VARIABLE scylla_version_gen_res)
+execute_process(COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN --output-dir "${CMAKE_BINARY_DIR}/gen" RESULT_VARIABLE scylla_version_gen_res)
 if(scylla_version_gen_res)
     message(SEND_ERROR "Version file generation failed. Return code: ${scylla_version_gen_res}")
 endif()
 
-file(READ build/SCYLLA-VERSION-FILE scylla_version)
+file(READ "${CMAKE_BINARY_DIR}/gen/SCYLLA-VERSION-FILE" scylla_version)
 string(STRIP "${scylla_version}" scylla_version)
 
-file(READ build/SCYLLA-RELEASE-FILE scylla_release)
+file(READ "${CMAKE_BINARY_DIR}/gen/SCYLLA-RELEASE-FILE" scylla_release)
 string(STRIP "${scylla_release}" scylla_release)
 
 get_property(release_cdefs SOURCE "${CMAKE_SOURCE_DIR}/release.cc" PROPERTY COMPILE_DEFINITIONS)
@@ -745,7 +782,7 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/release.cc" PROPERTIES COMPILE_
 ###
 set(libdeflate_lib "${scylla_build_dir}/libdeflate/libdeflate.a")
 add_custom_command(OUTPUT "${libdeflate_lib}"
-    COMMAND make -C libdeflate
+    COMMAND make -C "${CMAKE_SOURCE_DIR}/libdeflate"
         BUILD_DIR=../build/${BUILD_TYPE}/libdeflate/
         CC=${CMAKE_C_COMPILER}
         "CFLAGS=${target_arch_flag}"
