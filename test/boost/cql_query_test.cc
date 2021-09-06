@@ -3611,6 +3611,13 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             }
         };
 
+        // 'replication_factor' option should be translated to datacenter name for NetworkTopologyStrategy
+        e.execute_cql(format("CREATE KEYSPACE rf_expand_0 WITH replication = {{'class': '{}', 'replication_factor': 3}}", network_topology)).get();
+        assert_replication_contains("rf_expand_0", {
+            {"class", network_topology},
+            {"datacenter1", "3"}
+        });
+
         e.execute_cql("CREATE KEYSPACE rf_expand_1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}").get();
         assert_replication_contains("rf_expand_1", {
             {"class", network_topology},

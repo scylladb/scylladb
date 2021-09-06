@@ -55,7 +55,7 @@ static std::map<sstring, sstring> prepare_options(
         const std::map<sstring, sstring>& old_options = {}) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
-    if (strategy_class != "NetworkTopologyStrategy") {
+    if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
         return options;
     }
 
