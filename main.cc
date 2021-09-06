@@ -884,6 +884,7 @@ int main(int ac, char** av) {
             }
             view_hints_dir_initializer.ensure_created_and_verified().get();
 
+            supervisor::notify("starting database");
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
