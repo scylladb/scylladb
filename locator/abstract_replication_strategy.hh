@@ -60,7 +60,6 @@ private:
     std::unordered_map<token, inet_address_vector_replica_set>&
     get_cached_endpoints(const token_metadata& tm);
 protected:
-    sstring _ks_name;
     // TODO: Do we need this member at all?
     //keyspace* _keyspace = nullptr;
     std::map<sstring, sstring> _config_options;
@@ -85,7 +84,6 @@ protected:
 
 public:
     abstract_replication_strategy(
-        const sstring& keyspace_name,
         const shared_token_metadata& stm,
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
@@ -99,7 +97,7 @@ public:
     virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
 
     virtual ~abstract_replication_strategy() {}
-    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
+    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
                                               const shared_token_metadata& stm,

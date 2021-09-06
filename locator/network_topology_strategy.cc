@@ -58,12 +58,10 @@ bool operator==(const endpoint_dc_rack& d1, const endpoint_dc_rack& d2) {
 }
 
 network_topology_strategy::network_topology_strategy(
-    const sstring& keyspace_name,
     const shared_token_metadata& token_metadata,
     snitch_ptr& snitch,
     const std::map<sstring, sstring>& config_options) :
-        abstract_replication_strategy(keyspace_name,
-                                      token_metadata,
+        abstract_replication_strategy(token_metadata,
                                       snitch,
                                       config_options,
                                       replication_strategy_type::network_topology) {
@@ -281,7 +279,7 @@ std::optional<std::set<sstring>> network_topology_strategy::recognized_options()
     return datacenters;
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const sstring&, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

@@ -1044,7 +1044,7 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
 
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
-                _metadata->name(), _metadata->strategy_name(), stm, options);
+                _metadata->strategy_name(), stm, options);
 }
 
 locator::abstract_replication_strategy&
@@ -1178,7 +1178,6 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    const sstring&,
     const locator::shared_token_metadata&,
     locator::snitch_ptr&,
     const std::map<sstring, sstring>&>;

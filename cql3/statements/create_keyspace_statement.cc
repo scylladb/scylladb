@@ -150,7 +150,6 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    const sstring&,
     const locator::shared_token_metadata&,
     locator::snitch_ptr&,
     const std::map<sstring, sstring>&>;
