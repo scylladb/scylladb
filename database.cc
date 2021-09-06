@@ -1058,11 +1058,6 @@ keyspace::get_replication_strategy() const {
     return *_replication_strategy;
 }
 
-void
-keyspace::set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy) {
-    _replication_strategy = std::move(replication_strategy);
-}
-
 void keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
     _metadata = std::move(ksm);
    create_replication_strategy(stm, _metadata->strategy_options());

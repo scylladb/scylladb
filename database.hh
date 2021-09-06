@@ -1187,9 +1187,6 @@ public:
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
 
-    // FIXME to allow simple registration at boostrap
-    void set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy);
-
     const bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
     }
