@@ -60,8 +60,6 @@ private:
     std::unordered_map<token, inet_address_vector_replica_set>&
     get_cached_endpoints(const token_metadata& tm);
 protected:
-    // TODO: Do we need this member at all?
-    //keyspace* _keyspace = nullptr;
     std::map<sstring, sstring> _config_options;
     const shared_token_metadata& _shared_token_metadata;
     snitch_ptr& _snitch;
