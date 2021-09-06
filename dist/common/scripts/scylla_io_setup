@@ -217,7 +217,7 @@ if __name__ == "__main__":
                     disk_properties["read_bandwidth"] = 330301440
                     disk_properties["write_iops"] = 33177
                     disk_properties["write_bandwidth"] = 165675008
-                elif idata.instance() in ("i3.xlarge", "i3en.2xlarge"):
+                elif idata.instance() in ("i3en.xlarge", "i3en.2xlarge"):
                     disk_properties["read_iops"] = 84480 * nr_disks
                     disk_properties["read_bandwidth"] = 666894336 * nr_disks
                     disk_properties["write_iops"] = 66969 * nr_disks
