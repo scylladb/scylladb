@@ -108,7 +108,7 @@ make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_sou
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
-                                std::map<sstring, sstring> options,
+                                locator::replication_strategy_config_options options,
                                 bool durables_writes,
                                 std::vector<schema_ptr> cf_defs)
 {
@@ -1042,7 +1042,7 @@ bool database::column_family_exists(const utils::UUID& uuid) const {
 }
 
 void
-keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const std::map<sstring, sstring>& options) {
+keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options) {
     using namespace locator;
 
     _replication_strategy =
@@ -1184,11 +1184,11 @@ using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
     const locator::shared_token_metadata&,
     locator::snitch_ptr&,
-    const std::map<sstring, sstring>&>;
+    const locator::replication_strategy_config_options&>;
 
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
-             std::map<sstring, sstring> strategy_options,
+             locator::replication_strategy_config_options strategy_options,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs)
     : keyspace_metadata(name,
@@ -1200,7 +1200,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
 
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
-             std::map<sstring, sstring> strategy_options,
+             locator::replication_strategy_config_options strategy_options,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types)

@@ -49,6 +49,8 @@ enum class replication_strategy_type {
 
 using can_yield = utils::can_yield;
 
+using replication_strategy_config_options = std::map<sstring, sstring>;
+
 class abstract_replication_strategy {
 private:
     long _last_invalidated_ring_version = 0;
@@ -60,7 +62,7 @@ private:
     std::unordered_map<token, inet_address_vector_replica_set>&
     get_cached_endpoints(const token_metadata& tm);
 protected:
-    std::map<sstring, sstring> _config_options;
+    replication_strategy_config_options _config_options;
     const shared_token_metadata& _shared_token_metadata;
     snitch_ptr& _snitch;
     replication_strategy_type _my_type;
@@ -84,7 +86,7 @@ public:
     abstract_replication_strategy(
         const shared_token_metadata& stm,
         snitch_ptr& snitch,
-        const std::map<sstring, sstring>& config_options,
+        const replication_strategy_config_options& config_options,
         replication_strategy_type my_type);
 
     // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
@@ -95,11 +97,11 @@ public:
     virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
 
     virtual ~abstract_replication_strategy() {}
-    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
+    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
                                               const shared_token_metadata& stm,
-                                              const std::map<sstring, sstring>& config_options);
+                                              const replication_strategy_config_options& config_options);
     static void validate_replication_factor(sstring rf);
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token, can_yield = can_yield::no);
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);

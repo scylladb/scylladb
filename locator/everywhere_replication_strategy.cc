@@ -44,7 +44,7 @@
 
 namespace locator {
 
-everywhere_replication_strategy::everywhere_replication_strategy(const shared_token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
+everywhere_replication_strategy::everywhere_replication_strategy(const shared_token_metadata& token_metadata, snitch_ptr& snitch, const replication_strategy_config_options& config_options) :
         abstract_replication_strategy(token_metadata, snitch, config_options, replication_strategy_type::everywhere_topology) {}
 
 inet_address_vector_replica_set everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) const {
@@ -62,7 +62,7 @@ size_t everywhere_replication_strategy::get_replication_factor() const {
     return _shared_token_metadata.get()->count_normal_token_owners();
 }
 
-using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
+using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, const shared_token_metadata&, snitch_ptr&, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.EverywhereStrategy");
 static registry registrator_short_name("EverywhereStrategy");
 }

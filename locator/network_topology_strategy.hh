@@ -50,7 +50,7 @@ public:
     network_topology_strategy(
         const shared_token_metadata& token_metadata,
         snitch_ptr& snitch,
-        const std::map<sstring,sstring>& config_options);
+        const replication_strategy_config_options& config_options);
 
     virtual size_t get_replication_factor() const override {
         return _rep_factor;

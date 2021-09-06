@@ -127,6 +127,8 @@ future<> system_keyspace_make(database& db, service::storage_service& ss);
 
 namespace locator {
 
+using replication_strategy_config_options = std::map<sstring, sstring>;
+
 class abstract_replication_strategy;
 
 } // namespace locator
@@ -1077,26 +1079,26 @@ class user_types_metadata;
 class keyspace_metadata final {
     sstring _name;
     sstring _strategy_name;
-    std::map<sstring, sstring> _strategy_options;
+    locator::replication_strategy_config_options _strategy_options;
     std::unordered_map<sstring, schema_ptr> _cf_meta_data;
     bool _durable_writes;
     user_types_metadata _user_types;
 public:
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
-                 std::map<sstring, sstring> strategy_options,
+                 locator::replication_strategy_config_options strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
-                 std::map<sstring, sstring> strategy_options,
+                 locator::replication_strategy_config_options strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
                  user_types_metadata user_types);
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
-                 std::map<sstring, sstring> options,
+                 locator::replication_strategy_config_options options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
     void validate(const locator::shared_token_metadata& stm) const;
@@ -1106,7 +1108,7 @@ public:
     const sstring& strategy_name() const {
         return _strategy_name;
     }
-    const std::map<sstring, sstring>& strategy_options() const {
+    const locator::replication_strategy_config_options& strategy_options() const {
         return _strategy_options;
     }
     const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
@@ -1175,7 +1177,7 @@ public:
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    void create_replication_strategy(const locator::shared_token_metadata& stm, const std::map<sstring, sstring>& options);
+    void create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options);
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.

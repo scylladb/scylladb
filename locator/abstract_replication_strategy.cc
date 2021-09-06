@@ -32,20 +32,20 @@ logging::logger abstract_replication_strategy::logger("replication_strategy");
 abstract_replication_strategy::abstract_replication_strategy(
     const shared_token_metadata& stm,
     snitch_ptr& snitch,
-    const std::map<sstring, sstring>& config_options,
+    const replication_strategy_config_options& config_options,
     replication_strategy_type my_type)
         : _config_options(config_options)
         , _shared_token_metadata(stm)
         , _snitch(snitch)
         , _my_type(my_type) {}
 
-std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options) {
+std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
     try {
         return create_object<abstract_replication_strategy,
                              const shared_token_metadata&,
                              snitch_ptr&,
-                             const std::map<sstring, sstring>&>
+                             const replication_strategy_config_options&>
             (strategy_name, stm,
              locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
     } catch (const no_such_class& e) {
@@ -56,7 +56,7 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
                                                                   const shared_token_metadata& stm,
-                                                                  const std::map<sstring, sstring>& config_options)
+                                                                  const replication_strategy_config_options& config_options)
 {
     auto strategy = create_replication_strategy(strategy_name, stm, config_options);
     strategy->validate_options();
