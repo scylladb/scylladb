@@ -196,22 +196,24 @@ protected:
 
 class local_nodelist_handler : public gated_handler {
     service::storage_proxy& _proxy;
+    gms::gossiper& _gossiper;
 public:
-    local_nodelist_handler(seastar::gate& pending_requests, service::storage_proxy& proxy)
+    local_nodelist_handler(seastar::gate& pending_requests, service::storage_proxy& proxy, gms::gossiper& gossiper)
         : gated_handler(pending_requests)
-        , _proxy(proxy) {}
+        , _proxy(proxy)
+        , _gossiper(gossiper) {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rjson::value results = rjson::empty_array();
         // It's very easy to get a list of all live nodes on the cluster,
-        // using gms::get_local_gossiper().get_live_members(). But getting
+        // using _gossiper().get_live_members(). But getting
         // just the list of live nodes in this DC needs more elaborate code:
         sstring local_dc = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
                 utils::fb_utilities::get_broadcast_address());
         std::unordered_set<gms::inet_address> local_dc_nodes =
                 _proxy.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
-            if (gms::get_local_gossiper().is_alive(ip)) {
+            if (_gossiper.is_alive(ip)) {
                 rjson::push_back(results, rjson::from_string(ip.to_sstring()));
             }
         }
@@ -432,19 +434,20 @@ void server::set_routes(routes& r) {
     // consider this to be a security risk, because an attacker can already
     // scan an entire subnet for nodes responding to the health request,
     // or even just scan for open ports.
-    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests, _proxy));
+    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests, _proxy, _gossiper));
     r.put(operation_type::OPTIONS, "/", new options_handler(_pending_requests));
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
-server::server(executor& exec, cql3::query_processor& qp, service::storage_proxy& proxy)
+server::server(executor& exec, cql3::query_processor& qp, service::storage_proxy& proxy, gms::gossiper& gossiper)
         : _http_server("http-alternator")
         , _https_server("https-alternator")
         , _executor(exec)
         , _qp(qp)
         , _proxy(proxy)
+        , _gossiper(gossiper)
         , _key_cache(1024, 1min, slogger)
         , _enforce_authorization(false)
         , _enabled_servers{}

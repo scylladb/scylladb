@@ -3895,10 +3895,10 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
-static std::map<sstring, sstring> get_network_topology_options(int rf) {
+static std::map<sstring, sstring> get_network_topology_options(gms::gossiper& gossiper, int rf) {
     std::map<sstring, sstring> options;
     sstring rf_str = std::to_string(rf);
-    for (const gms::inet_address& addr : gms::get_local_gossiper().get_live_members()) {
+    for (const gms::inet_address& addr : gossiper.get_live_members()) {
         options.emplace(locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(addr), rf_str);
     };
     return options;
@@ -3919,7 +3919,7 @@ future<> executor::create_keyspace(std::string_view keyspace_name) {
             elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
                     keyspace_name_str, rf, endpoint_count);
         }
-        auto opts = get_network_topology_options(rf);
+        auto opts = get_network_topology_options(_gossiper, rf);
         auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
         return _mm.announce_new_keyspace(ksm, api::new_timestamp());
     });
