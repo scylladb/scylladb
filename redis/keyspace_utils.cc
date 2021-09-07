@@ -195,8 +195,8 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_
     });
 }
 
-future<> maybe_create_keyspace(seastar::sharded<service::migration_manager>& mm, db::config& config) {
-    return gms::get_up_endpoint_count().then([&mm, &config] (auto live_endpoint_count) {
+future<> maybe_create_keyspace(seastar::sharded<service::migration_manager>& mm, db::config& config, sharded<gms::gossiper>& gossiper) {
+    return gms::get_up_endpoint_count(gossiper.local()).then([&mm, &config] (auto live_endpoint_count) {
         int replication_factor = 3;
         if (live_endpoint_count < replication_factor) {
             replication_factor = 1;

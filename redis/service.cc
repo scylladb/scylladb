@@ -101,12 +101,13 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
 }
 
 future<> redis_service::init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db,
-        seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg)
+        seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg,
+        seastar::sharded<gms::gossiper>& gossiper)
 {
     // 1. Create keyspace/tables used by redis API if not exists.
     // 2. Initialize the redis query processor.
     // 3. Listen on the redis transport port.
-    return redis::maybe_create_keyspace(mm, cfg).then([this, &proxy, &db] {
+    return redis::maybe_create_keyspace(mm, cfg, gossiper).then([this, &proxy, &db] {
         return _query_processor.start(std::ref(proxy), std::ref(db));
     }).then([this] {
         return _query_processor.invoke_on_all([] (auto& processor) {

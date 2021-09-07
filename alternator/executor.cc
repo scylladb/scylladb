@@ -3912,7 +3912,7 @@ static std::map<sstring, sstring> get_network_topology_options(int rf) {
 // manually create the keyspace to override this predefined behavior.
 future<> executor::create_keyspace(std::string_view keyspace_name) {
     sstring keyspace_name_str(keyspace_name);
-    return gms::get_all_endpoint_count().then([this, keyspace_name_str = std::move(keyspace_name_str)] (int endpoint_count) {
+    return gms::get_all_endpoint_count(_gossiper).then([this, keyspace_name_str = std::move(keyspace_name_str)] (int endpoint_count) {
         int rf = 3;
         if (endpoint_count < rf) {
             rf = 1;

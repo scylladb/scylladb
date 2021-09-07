@@ -37,6 +37,10 @@ namespace cql3 {
 class query_processor;
 }
 
+namespace gms {
+class gossiper;
+}
+
 // Test environment for alternator frontend.
 // The interface is minimal and does not cover alternator streams,
 // because this environment has limited use as well - microbenchmarks.
@@ -48,6 +52,7 @@ class query_processor;
 // Because of that, the helper class above should only be used
 // for benchmarks which need more low-level access to Seastar metrics.
 class alternator_test_env {
+    sharded<gms::gossiper>& _gossiper;
     sharded<service::storage_proxy>& _proxy;
     sharded<service::migration_manager>& _mm;
     sharded<cql3::query_processor>& _qp;
@@ -59,10 +64,13 @@ class alternator_test_env {
 
     sharded<alternator::executor> _executor;
 public:
-    alternator_test_env(sharded<service::storage_proxy>& proxy,
+    alternator_test_env(
+            sharded<gms::gossiper>& gossiper,
+            sharded<service::storage_proxy>& proxy,
             sharded<service::migration_manager>& mm,
             sharded<cql3::query_processor>& qp)
-        : _proxy(proxy)
+        : _gossiper(gossiper)
+        , _proxy(proxy)
         , _mm(mm)
         , _qp(qp)
     {}

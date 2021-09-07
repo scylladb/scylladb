@@ -1372,7 +1372,7 @@ int main(int ac, char** av) {
                 api::unset_rpc_controller(ctx).get();
             });
 
-            alternator::controller alternator_ctl(proxy, mm, sys_dist_ks, cdc_generation_service, qp, service_memory_limiter, *cfg);
+            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, qp, service_memory_limiter, *cfg);
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {
@@ -1386,8 +1386,8 @@ int main(int ac, char** av) {
 
             static redis_service redis;
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg] {
-                    return redis.init(proxy, db, auth_service, mm, *cfg);
+                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg, &gossiper] {
+                    return redis.init(proxy, db, auth_service, mm, *cfg, gossiper);
                 }).get();
             }
 
