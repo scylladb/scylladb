@@ -646,7 +646,7 @@ inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
 
-future<> stop_gossiping();
+future<> stop_gossiping(sharded<gossiper>& g);
 
 inline future<sstring> get_all_endpoint_states() {
     return smp::submit_to(0, [] {

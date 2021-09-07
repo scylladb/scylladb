@@ -733,7 +733,7 @@ public:
             }).get();
 
             auto deinit_storage_service_server = defer([&auth_service] {
-                gms::stop_gossiping().get();
+                gms::stop_gossiping(gms::get_gossiper()).get();
                 auth_service.stop().get();
             });
 

@@ -2201,10 +2201,10 @@ future<> gossiper::do_stop_gossiping() {
     });
 }
 
-future<> stop_gossiping() {
-    return smp::submit_to(0, [] {
-        if (get_gossiper().local_is_initialized()) {
-            return get_local_gossiper().do_stop_gossiping();
+future<> stop_gossiping(sharded<gossiper>& g) {
+    return smp::submit_to(0, [&g] {
+        if (g.local_is_initialized()) {
+            return g.local().do_stop_gossiping();
         }
         return make_ready_future<>();
     });

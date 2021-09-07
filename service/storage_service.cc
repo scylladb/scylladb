@@ -1341,7 +1341,7 @@ future<> storage_service::stop_transport() {
             shutdown_client_servers();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
-            gms::stop_gossiping().get();
+            gms::stop_gossiping(_gossiper.container()).get();
             slogger.info("Stop transport: stop_gossiping done");
 
             do_stop_ms().get();
@@ -1827,7 +1827,7 @@ future<> storage_service::stop_gossiping() {
     return run_with_api_lock(sstring("stop_gossiping"), [] (storage_service& ss) {
         if (ss._initialized) {
             slogger.warn("Stopping gossip by operator request");
-            return gms::stop_gossiping().then([&ss] {
+            return gms::stop_gossiping(ss._gossiper.container()).then([&ss] {
                 ss._initialized = false;
             });
         }
