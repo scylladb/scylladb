@@ -70,6 +70,15 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     }
 }
 
+using strategy_class_registry = class_registry<
+    locator::abstract_replication_strategy,
+    locator::snitch_ptr&,
+    const locator::replication_strategy_config_options&>;
+
+sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
+    return strategy_class_registry::to_qualified_class_name(strategy_class_name);
+}
+
 inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const {
     const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
     auto res = erm.get_replication_map().find(key_token);
