@@ -673,7 +673,7 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     if (endpoint == get_broadcast_address()) {
         return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
     }
-    return get_gossiper().invoke_on(0, [endpoint] (auto& gossiper) mutable {
+    return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
             gossiper.remove_endpoint(endpoint);
             gossiper.evict_from_membership(endpoint);
@@ -1245,7 +1245,7 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    return get_gossiper().invoke_on(0, [address] (auto&& gossiper) {
+    return container().invoke_on(0, [address] (auto&& gossiper) {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
             inet_address endpoint(address);
             auto permit = gossiper.lock_endpoint(endpoint).get0();
@@ -1301,13 +1301,13 @@ bool gossiper::is_known_endpoint(inet_address endpoint) const noexcept {
 }
 
 future<int> gossiper::get_current_generation_number(inet_address endpoint) {
-    return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
+    return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_generation();
     });
 }
 
 future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
-    return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
+    return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_heart_beat_version();
     });
 }
@@ -1859,7 +1859,7 @@ future<> gossiper::start_gossiping(int generation_number, bind_messaging_port do
 future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind, gms::advertise_myself advertise) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
-    return get_gossiper().invoke_on_all([do_bind, advertise] (gossiper& g) {
+    return container().invoke_on_all([do_bind, advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
@@ -1926,7 +1926,7 @@ future<> gossiper::advertise_myself() {
 
 future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
     return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
-        get_gossiper().invoke_on_all([do_bind] (gossiper& g) {
+        container().invoke_on_all([do_bind] (gossiper& g) {
             return g.init_messaging_service_handler(do_bind);
         }).get();
         nodes.erase(get_broadcast_address());
@@ -2152,7 +2152,7 @@ future<> gossiper::do_stop_gossiping() {
         // Verbs might have been registered by do_shadow_round(), but
         // gossiper itself was not enabled after it...
         if (_ms_registered) {
-            return get_gossiper().invoke_on_all(&gossiper::uninit_messaging_service_handler);
+            return container().invoke_on_all(&gossiper::uninit_messaging_service_handler);
         }
         return make_ready_future<>();
     }
@@ -2189,9 +2189,9 @@ future<> gossiper::do_stop_gossiping() {
         }).get();
         _scheduled_gossip_task.cancel();
         // Take the semaphore makes sure existing gossip loop is finished
-        seastar::with_semaphore(_callback_running, 1, [] {
+        seastar::with_semaphore(_callback_running, 1, [this] {
             logger.info("Disable and wait for gossip loop finished");
-            return get_gossiper().invoke_on_all([] (gossiper& g) {
+            return container().invoke_on_all([] (gossiper& g) {
                 g._features_condvar.broken();
                 return g.uninit_messaging_service_handler();
             });
