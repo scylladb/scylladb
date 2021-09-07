@@ -23,9 +23,15 @@
 
 #include "api.hh"
 
+namespace gms {
+
+class gossiper;
+
+}
+
 namespace api {
 
-void set_hinted_handoff(http_context& ctx, routes& r);
+void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g);
 void unset_hinted_handoff(http_context& ctx, routes& r);
 
 }

@@ -294,7 +294,7 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
             return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -476,9 +476,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
+    ss::get_current_generation_number.set(r, [&g](std::unique_ptr<request> req) {
         gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
-        return gms::get_local_gossiper().get_current_generation_number(ep).then([](int res) {
+        return g.get_current_generation_number(ep).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
@@ -941,12 +941,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
       });
 
-    ss::get_cluster_name.set(r, [](const_req req) {
-        return gms::get_local_gossiper().get_cluster_name();
+    ss::get_cluster_name.set(r, [&g](const_req req) {
+        return g.get_cluster_name();
     });
 
-    ss::get_partitioner_name.set(r, [](const_req req) {
-        return gms::get_local_gossiper().get_partitioner_name();
+    ss::get_partitioner_name.set(r, [&g](const_req req) {
+        return g.get_partitioner_name();
     });
 
     ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {

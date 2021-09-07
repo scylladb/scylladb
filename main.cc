@@ -1059,7 +1059,7 @@ int main(int ac, char** av) {
                     cf.trigger_compaction();
                 }
             }).get();
-            api::set_server_gossip(ctx).get();
+            api::set_server_gossip(ctx, gossiper).get();
             api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx, ss).get();
             api::set_server_load_sstable(ctx).get();
@@ -1163,7 +1163,7 @@ int main(int ac, char** av) {
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss).get();
+            api::set_server_storage_service(ctx, ss, gossiper).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
@@ -1292,14 +1292,14 @@ int main(int ac, char** av) {
             (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
-            api::set_server_gossip_settle(ctx).get();
+            api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 local_proxy.allow_replaying_hints();
             }).get();
 
-            api::set_hinted_handoff(ctx).get();
+            api::set_hinted_handoff(ctx, gossiper).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();
             });
