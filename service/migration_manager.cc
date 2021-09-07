@@ -982,7 +982,7 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
  * @param version The schema version to announce
  */
 future<> migration_manager::passive_announce(utils::UUID version) {
-    return gms::get_gossiper().invoke_on(0, [version] (auto&& gossiper) {
+    return _gossiper.container().invoke_on(0, [version] (auto&& gossiper) {
         mlogger.debug("Gossiping my schema version {}", version);
         return gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(version));
     });
