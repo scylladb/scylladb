@@ -90,7 +90,6 @@ def testStaticColumns(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s"), [0, 1, None, 1], [0, 2, None, 2])
 
 # Migrated from cql_tests.py:TestCQL.static_columns_with_2i_test()
-@pytest.mark.xfail(reason="issue #8869")
 def testStaticColumnsWithSecondaryIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, p int, s int static, v int, PRIMARY KEY (k, p))") as table:
         execute(cql, table, "CREATE INDEX ON %s (v)")
