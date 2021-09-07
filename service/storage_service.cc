@@ -401,7 +401,7 @@ void storage_service::prepare_to_join(
 
     // Wait for gossip to settle so that the fetures will be enabled
     if (do_bind) {
-        gms::get_local_gossiper().wait_for_gossip_to_settle().get();
+        _gossiper.wait_for_gossip_to_settle().get();
     }
 }
 
@@ -454,9 +454,8 @@ void storage_service::join_token_ring(int delay) {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
         set_mode(mode::JOINING, "waiting for ring information", true);
-        auto& gossiper = gms::get_gossiper().local();
         // first sleep the delay to make sure we see *at least* one other node
-        for (int i = 0; i < delay && gossiper.get_live_members().size() < 2; i += 1000) {
+        for (int i = 0; i < delay && _gossiper.get_live_members().size() < 2; i += 1000) {
             sleep_abortable(std::chrono::seconds(1), _abort_source).get();
         }
         // if our schema hasn't matched yet, keep sleeping until it does
