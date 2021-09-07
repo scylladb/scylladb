@@ -2090,9 +2090,9 @@ private:
     }
 public:
     explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
+            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
         // In case of errors, reproduce using the --random-seed command line option with the test_runner seed.
-        auto seed = tests::random::get_int<uint32_t>();
+        auto seed = seed_opt.value_or(tests::random::get_int<uint32_t>());
         std::cout << "random_mutation_generator seed: " << seed << "\n";
         _gen = std::mt19937(seed);
 
@@ -2353,8 +2353,8 @@ public:
 
 random_mutation_generator::~random_mutation_generator() {}
 
-random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc)
-    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc))
+random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc, std::optional<uint32_t> seed_opt)
+    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc, seed_opt))
 { }
 
 mutation random_mutation_generator::operator()() {
