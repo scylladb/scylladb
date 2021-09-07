@@ -569,7 +569,6 @@ apps = set([
     'scylla',
     'test/tools/cql_repl',
     'tools/scylla-types',
-    'tools/scylla-sstable-index',
     'tools/scylla-sstable',
 ])
 
@@ -1143,7 +1142,6 @@ deps = {
     'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
     #FIXME: we don't need all of scylla_core here, only the types module, need to modularize scylla_core.
     'tools/scylla-types': idls + ['tools/scylla-types.cc'] + scylla_core,
-    'tools/scylla-sstable-index': idls + ['tools/scylla-sstable-index.cc'] + scylla_core,
     'tools/scylla-sstable': idls + ['tools/scylla-sstable.cc', 'tools/schema_loader.cc'] + scylla_core,
 }
 
