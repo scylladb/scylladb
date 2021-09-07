@@ -155,6 +155,7 @@ public:
             const sstring& keyspace);
 
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
+    static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
     query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
 

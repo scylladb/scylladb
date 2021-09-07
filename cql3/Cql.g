@@ -334,6 +334,12 @@ struct uninitialized {
 
 /** STATEMENTS **/
 
+queries returns [std::vector<std::unique_ptr<raw::parsed_statement>> stmts]
+    : st=cqlStatement { $stmts.emplace_back(std::move(st)); }
+      (';' st=cqlStatement { $stmts.emplace_back(std::move(st)); })*
+      (';')* EOF
+    ;
+
 query returns [std::unique_ptr<raw::parsed_statement> stmnt]
     : st=cqlStatement (';')* EOF { $stmnt = std::move(st); }
     ;
