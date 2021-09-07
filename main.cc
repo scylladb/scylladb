@@ -1105,7 +1105,7 @@ int main(int ac, char** av) {
 
             proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) {
                 lifecycle_notifier.local().register_subscriber(&local_proxy);
-                return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this());
+                return local_proxy.start_hints_manager();
             }).get();
 
             auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {

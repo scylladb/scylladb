@@ -608,7 +608,7 @@ public:
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
     future<> stop();
-    future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr);
+    future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
     future<> drain_on_shutdown();
 

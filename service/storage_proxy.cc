@@ -5289,15 +5289,15 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
     co_return ret;
 }
 
-future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> storage_proxy::start_hints_manager() {
     future<> f = make_ready_future<>();
     if (!_hints_manager.is_disabled_for_all()) {
         f = _hints_resource_manager.register_manager(_hints_manager);
     }
     return f.then([this] {
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
-    }).then([this, gossiper_ptr] {
-        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr);
+    }).then([this] {
+        return _hints_resource_manager.start(shared_from_this(), _gossiper.shared_from_this());
     });
 }
 
