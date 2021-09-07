@@ -852,7 +852,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
     return _concurrency_limiter.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto local_units) mutable {
-    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr, local_units = std::move(local_units)] (auto global_units) mutable {
+      return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr, local_units = std::move(local_units)] (auto global_units) mutable {
         const size_t mutation_size = buf.size_bytes();
         ctx_ptr->mark_hint_as_in_progress(rp);
 
@@ -911,10 +911,10 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             }
             f.ignore_ready_future();
         });
-    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
-        manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
-        ctx_ptr->on_hint_send_failure(rp);
-    });
+      }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
+          manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
+          ctx_ptr->on_hint_send_failure(rp);
+      });
     });
 }
 
