@@ -188,6 +188,7 @@ public:
 
     future<semaphore_units<named_semaphore::exception_factory>> get_send_units_for(size_t buf_size);
     size_t sending_queue_length() const;
+    size_t get_max_send_in_flight_memory() const;
 
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop() noexcept;

@@ -28,6 +28,7 @@
 #include <chrono>
 #include <optional>
 #include <map>
+#include <random>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/timer.hh>
@@ -141,6 +142,33 @@ public:
                 db::replay_position get_replayed_bound() const noexcept;
             };
 
+            class concurrency_limiter {
+            private:
+                static const std::chrono::seconds update_interval;
+                static const std::chrono::seconds update_delay_after_timeout;
+
+            private:
+                const size_t _max_limit;
+                size_t _current_limit = 1;
+                seastar::semaphore _sem{1};
+
+                clock::time_point _next_update_time;
+                size_t _size_written_since_last_update = 0;
+                size_t _count_written_since_last_update = 0;
+                bool _need_increase = false;
+
+                std::uniform_int_distribution<uint64_t> _next_delay_distribution_s{1, 120};
+
+            public:
+                concurrency_limiter(size_t max_limit);
+
+                future<semaphore_units<>> get_send_units_for(size_t mutation_size);
+                clock::duration get_delay_before_next_send();
+
+                void account_successful_write(size_t size);
+                void account_failed_sending_operation();
+            };
+
         private:
             std::list<sstring> _segments_to_replay;
             // Segments to replay which were not created on this shard but were moved during rebalancing
@@ -161,6 +189,7 @@ public:
             seastar::scheduling_group _hints_cpu_sched_group;
             gms::gossiper& _gossiper;
             seastar::shared_mutex& _file_update_mutex;
+            concurrency_limiter _concurrency_limiter;
 
             std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
 

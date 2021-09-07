@@ -56,6 +56,11 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 
+const std::chrono::seconds manager::end_point_hints_manager::sender::concurrency_limiter::update_interval = std::chrono::seconds(1);
+const std::chrono::seconds manager::end_point_hints_manager::sender::concurrency_limiter::update_delay_after_timeout = std::chrono::seconds(10);
+
+static thread_local std::mt19937_64 rand_gen(std::random_device{}());
+
 manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
     , _host_filter(std::move(filter))
@@ -737,6 +742,7 @@ manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent
     , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _gossiper(local_gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
+    , _concurrency_limiter(_resource_manager.get_max_send_in_flight_memory())
 {}
 
 manager::end_point_hints_manager::sender::sender(const sender& other, end_point_hints_manager& parent) noexcept
@@ -750,6 +756,7 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _hints_cpu_sched_group(other._hints_cpu_sched_group)
     , _gossiper(other._gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
+    , _concurrency_limiter(_resource_manager.get_max_send_in_flight_memory())
 {}
 
 manager::end_point_hints_manager::sender::~sender() {
@@ -844,7 +851,9 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
-    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
+    return _concurrency_limiter.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto local_units) mutable {
+    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr, local_units = std::move(local_units)] (auto global_units) mutable {
+        const size_t mutation_size = buf.size_bytes();
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
@@ -884,12 +893,13 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
-        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr] (future<>&& f) {
+        }).then_wrapped([this, local_units = std::move(local_units), global_units = std::move(global_units), rp, ctx_ptr, mutation_size] (future<>&& f) {
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
                 ctx_ptr->on_hint_send_success(rp);
                 auto new_bound = ctx_ptr->get_replayed_bound();
+                _concurrency_limiter.account_successful_write(mutation_size);
                 // Segments from other shards are replayed first and are considered to be "before" replay position 0.
                 // Update the sent upper bound only if it is a local segment.
                 if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
@@ -904,6 +914,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
     }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
+    });
     });
 }
 
@@ -1004,6 +1015,73 @@ db::replay_position manager::end_point_hints_manager::sender::send_one_file_ctx:
     return rp;
 }
 
+manager::end_point_hints_manager::sender::concurrency_limiter::concurrency_limiter(size_t max_limit)
+        : _max_limit(max_limit)
+        , _next_update_time(clock::now())
+{}
+
+future<semaphore_units<>> manager::end_point_hints_manager::sender::concurrency_limiter::get_send_units_for(size_t mutation_size) {
+    // Limit the size of hints being concurrently sent so that it is lower than _current_limit.
+    // If a mutation larger than the limit is encountered, allow sending it
+    // but not concurrently with other hints.
+    auto f = get_units(_sem, std::min(_current_limit, mutation_size));
+
+    // If the semaphore has insufficient units, we mark a flag in order to increase
+    // the number of units later.
+    _need_increase |= (mutation_size > _current_limit) || (_sem.waiters() > 0);
+
+    return f;
+}
+
+manager::end_point_hints_manager::sender::clock::duration manager::end_point_hints_manager::sender::concurrency_limiter::get_delay_before_next_send() {
+    if (_current_limit > 1) {
+        return std::chrono::seconds(_next_delay_distribution_s.min());
+    } else {
+        return std::chrono::seconds(_next_delay_distribution_s(rand_gen));
+    }
+}
+
+void manager::end_point_hints_manager::sender::concurrency_limiter::account_successful_write(size_t size) {
+    _size_written_since_last_update += size;
+    _count_written_since_last_update++;
+
+    const clock::time_point now = clock::now();
+    if (!_need_increase || now < _next_update_time) {
+        return;
+    }
+
+    // Increase the concurrency semaphore by 10% of the mean mutation size
+    size_t increase = _size_written_since_last_update / (10 * _count_written_since_last_update);
+    increase = std::max(increase, size_t(1));
+
+    const size_t new_limit = std::min(_current_limit + increase, _max_limit);
+    _sem.signal(new_limit - _current_limit);
+    _current_limit = new_limit;
+
+    // Update the state
+    _need_increase = false;
+    _next_update_time = now + update_interval;
+    _size_written_since_last_update = 0;
+    _count_written_since_last_update = 0;
+}
+
+void manager::end_point_hints_manager::sender::concurrency_limiter::account_failed_sending_operation() {
+    // This function must not be called if there are any hints waiting to be sent!
+    // It will cause big hints (over the current limit) to get stuck because
+    // they need to take all current units - we are going to reduce this limit now
+    // and they will keep waiting for the old one
+    assert(_sem.waiters() == 0);
+
+    // Cut the number of units in half
+    const size_t new_limit = std::max(size_t(1), _current_limit / 2);
+    _sem.consume(_current_limit - new_limit);
+    _current_limit = new_limit;
+
+    // Update the state
+    _need_increase = false;
+    _next_update_time = clock::now() + update_delay_after_timeout;
+}
+
 void manager::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
@@ -1055,6 +1133,8 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // update the next iteration replay position if needed
     if (ctx_ptr->segment_replay_failed) {
+        _concurrency_limiter.account_failed_sending_operation();
+
         // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
         // If there was an error thrown by read_log_file function itself, we will retry sending from
         // the last hint that was successfully sent (last_succeeded_rp).
@@ -1124,8 +1204,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     }
 
     if (have_segments()) {
-        // TODO: come up with something more sophisticated here
-        _next_send_retry_tp = clock::now() + 1s;
+        _next_send_retry_tp = clock::now() + _concurrency_limiter.get_delay_before_next_send();
     } else {
         // if there are no segments to send we want to retry when we maybe have some (after flushing)
         _next_send_retry_tp = _next_flush_tp;
