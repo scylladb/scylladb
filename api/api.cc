@@ -109,9 +109,9 @@ future<> unset_rpc_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_rpc_controller(ctx, r); });
 }
 
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss) {
-    return register_api(ctx, "storage_service", "The storage service API", [&ss] (http_context& ctx, routes& r) {
-            set_storage_service(ctx, r, ss);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g) {
+    return register_api(ctx, "storage_service", "The storage service API", [&ss, &g] (http_context& ctx, routes& r) {
+            set_storage_service(ctx, r, ss, g.local());
         });
 }
 
@@ -135,9 +135,11 @@ future<> set_server_snitch(http_context& ctx) {
     return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", set_endpoint_snitch);
 }
 
-future<> set_server_gossip(http_context& ctx) {
+future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g) {
     return register_api(ctx, "gossiper",
-                "The gossiper API", set_gossiper);
+                "The gossiper API", [&g] (http_context& ctx, routes& r) {
+                    set_gossiper(ctx, r, g.local());
+                });
 }
 
 future<> set_server_load_sstable(http_context& ctx) {
@@ -172,10 +174,10 @@ future<> set_server_cache(http_context& ctx) {
             "The cache service API", set_cache_service);
 }
 
-future<> set_hinted_handoff(http_context& ctx) {
+future<> set_hinted_handoff(http_context& ctx, sharded<gms::gossiper>& g) {
     return register_api(ctx, "hinted_handoff",
-                "The hinted handoff API", [] (http_context& ctx, routes& r) {
-                    set_hinted_handoff(ctx, r);
+                "The hinted handoff API", [&g] (http_context& ctx, routes& r) {
+                    set_hinted_handoff(ctx, r, g.local());
                 });
 }
 
@@ -183,13 +185,13 @@ future<> unset_hinted_handoff(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_hinted_handoff(ctx, r); });
 }
 
-future<> set_server_gossip_settle(http_context& ctx) {
+future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+    return ctx.http_server.set_routes([rb, &ctx, &g](routes& r) {
         rb->register_function(r, "failure_detector",
                 "The failure detector API");
-        set_failure_detector(ctx,r);
+        set_failure_detector(ctx, r, g.local());
     });
 }
 

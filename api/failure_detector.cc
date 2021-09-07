@@ -28,10 +28,10 @@ namespace api {
 
 namespace fd = httpd::failure_detector_json;
 
-void set_failure_detector(http_context& ctx, routes& r) {
-    fd::get_all_endpoint_states.set(r, [](std::unique_ptr<request> req) {
+void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
+    fd::get_all_endpoint_states.set(r, [&g](std::unique_ptr<request> req) {
         std::vector<fd::endpoint_state> res;
-        for (auto i : gms::get_local_gossiper().endpoint_state_map) {
+        for (auto i : g.endpoint_state_map) {
             fd::endpoint_state val;
             val.addrs = boost::lexical_cast<std::string>(i.first);
             val.is_alive = i.second.is_alive();
@@ -52,14 +52,14 @@ void set_failure_detector(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
-    fd::get_up_endpoint_count.set(r, [](std::unique_ptr<request> req) {
-        return gms::get_up_endpoint_count().then([](int res) {
+    fd::get_up_endpoint_count.set(r, [&g](std::unique_ptr<request> req) {
+        return gms::get_up_endpoint_count(g).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
 
-    fd::get_down_endpoint_count.set(r, [](std::unique_ptr<request> req) {
-        return gms::get_down_endpoint_count().then([](int res) {
+    fd::get_down_endpoint_count.set(r, [&g](std::unique_ptr<request> req) {
+        return gms::get_down_endpoint_count(g).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
@@ -70,8 +70,8 @@ void set_failure_detector(http_context& ctx, routes& r) {
         });
     });
 
-    fd::get_simple_states.set(r, [] (std::unique_ptr<request> req) {
-        return gms::get_simple_states().then([](const std::map<sstring, sstring>& map) {
+    fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
+        return gms::get_simple_states(g).then([](const std::map<sstring, sstring>& map) {
             return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(map));
         });
     });
@@ -83,8 +83,8 @@ void set_failure_detector(http_context& ctx, routes& r) {
         });
     });
 
-    fd::get_endpoint_state.set(r, [](std::unique_ptr<request> req) {
-        return gms::get_endpoint_state(req->param["addr"]).then([](const sstring& state) {
+    fd::get_endpoint_state.set(r, [&g] (std::unique_ptr<request> req) {
+        return get_endpoint_state(g, req->param["addr"]).then([](const sstring& state) {
             return make_ready_future<json::json_return_type>(state);
         });
     });

@@ -33,7 +33,9 @@ future<> alternator_test_env::start(std::string_view isolation_level) {
 
     co_await _sdks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy));
     co_await _cdc_metadata.start();
-    co_await _executor.start(std::ref(_proxy),
+    co_await _executor.start(
+            std::ref(_gossiper),
+            std::ref(_proxy),
             std::ref(_mm),
             // parameters below are only touched by alternator streams;
             //  not really interesting for this use case

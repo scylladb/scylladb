@@ -646,41 +646,41 @@ inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
 
-future<> stop_gossiping();
+future<> stop_gossiping(sharded<gossiper>& g);
 
-inline future<sstring> get_all_endpoint_states() {
-    return smp::submit_to(0, [] {
-        return get_local_gossiper().get_all_endpoint_states();
+inline future<sstring> get_all_endpoint_states(gossiper& g) {
+    return g.container().invoke_on(0, [] (gossiper& g) {
+        return g.get_all_endpoint_states();
     });
 }
 
-inline future<sstring> get_endpoint_state(sstring address) {
-    return smp::submit_to(0, [address] {
-        return get_local_gossiper().get_endpoint_state(address);
+inline future<sstring> get_endpoint_state(gossiper& g, sstring address) {
+    return g.container().invoke_on(0, [address] (gossiper& g) {
+        return g.get_endpoint_state(address);
     });
 }
 
-inline future<std::map<sstring, sstring>> get_simple_states() {
-    return smp::submit_to(0, [] {
-        return get_local_gossiper().get_simple_states();
+inline future<std::map<sstring, sstring>> get_simple_states(gossiper& g) {
+    return g.container().invoke_on(0, [] (gossiper& g) {
+        return g.get_simple_states();
     });
 }
 
-inline future<int> get_down_endpoint_count() {
-    return smp::submit_to(0, [] {
-        return get_local_gossiper().get_down_endpoint_count();
+inline future<int> get_down_endpoint_count(gossiper& g) {
+    return g.container().invoke_on(0, [] (gossiper& g) {
+        return g.get_down_endpoint_count();
     });
 }
 
-inline future<int> get_up_endpoint_count() {
-    return smp::submit_to(0, [] {
-        return get_local_gossiper().get_up_endpoint_count();
+inline future<int> get_up_endpoint_count(gossiper& g) {
+    return g.container().invoke_on(0, [] (gossiper& g) {
+        return g.get_up_endpoint_count();
     });
 }
 
-inline future<int> get_all_endpoint_count() {
-    return smp::submit_to(0, [] {
-        return static_cast<int>(get_local_gossiper().get_endpoint_states().size());
+inline future<int> get_all_endpoint_count(gossiper& g) {
+    return g.container().invoke_on(0, [] (gossiper& g) {
+        return static_cast<int>(g.get_endpoint_states().size());
     });
 }
 

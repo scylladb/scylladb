@@ -34,17 +34,16 @@ namespace api {
 using namespace json;
 namespace hh = httpd::hinted_handoff_json;
 
-void set_hinted_handoff(http_context& ctx, routes& r) {
-    hh::create_hints_sync_point.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
-        auto parse_hosts_list = [] (sstring arg) {
+void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
+    hh::create_hints_sync_point.set(r, [&ctx, &g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto parse_hosts_list = [&g] (sstring arg) {
             std::vector<sstring> hosts_str = split(arg, ",");
             std::vector<gms::inet_address> hosts;
             hosts.reserve(hosts_str.size());
 
             if (hosts_str.empty()) {
                 // No target_hosts specified means that we should wait for hints for all nodes to be sent
-                // TODO: Get rid of the `get_local_gossiper` invocation
-                const auto members_set = gms::get_local_gossiper().get_live_members();
+                const auto members_set = g.get_live_members();
                 std::copy(members_set.begin(), members_set.end(), std::back_inserter(hosts));
             } else {
                 for (const auto& host_str : hosts_str) {

@@ -23,8 +23,14 @@
 
 #include "api.hh"
 
+namespace gms {
+
+class gossiper;
+
+}
+
 namespace api {
 
-void set_failure_detector(http_context& ctx, routes& r);
+void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g);
 
 }

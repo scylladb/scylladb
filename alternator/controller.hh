@@ -43,6 +43,12 @@ namespace cql3 {
 class query_processor;
 }
 
+namespace gms {
+
+class gossiper;
+
+}
+
 namespace alternator {
 
 using namespace seastar;
@@ -51,6 +57,7 @@ class executor;
 class server;
 
 class controller {
+    sharded<gms::gossiper>& _gossiper;
     sharded<service::storage_proxy>& _proxy;
     sharded<service::migration_manager>& _mm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -64,7 +71,9 @@ class controller {
     std::optional<smp_service_group> _ssg;
 
 public:
-    controller(sharded<service::storage_proxy>& proxy,
+    controller(
+        sharded<gms::gossiper>& gossiper,
+        sharded<service::storage_proxy>& proxy,
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,

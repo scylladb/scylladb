@@ -60,6 +60,12 @@ class frozen_mutation;
 namespace cql3 { namespace functions { class user_function; class user_aggregate; }}
 namespace netw { class messaging_service; }
 
+namespace gms {
+
+class gossiper;
+
+}
+
 namespace service {
 
 template<typename M>
@@ -76,9 +82,10 @@ private:
     static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
     netw::messaging_service& _messaging;
+    gms::gossiper& _gossiper;
     seastar::abort_source _as;
 public:
-    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms);
+    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, gms::gossiper& gossiper);
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
@@ -162,7 +169,7 @@ public:
     // Returns a future on the local application of the schema
     future<> announce(std::vector<mutation> schema);
 
-    static future<> passive_announce(utils::UUID version);
+    future<> passive_announce(utils::UUID version);
 
     future<> stop();
 

@@ -473,54 +473,52 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         return make_ready_future<>();
     }
     _ms_registered = true;
-    _messaging.register_gossip_digest_syn([] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
+    _messaging.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
-        (void)smp::submit_to(0, [from, syn_msg = std::move(syn_msg)] () mutable {
-            auto& gossiper = gms::get_local_gossiper();
+        (void)container().invoke_on(0, [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_DIGEST_SYN: {}", ep);
         });
         return messaging_service::no_wait();
     });
-    _messaging.register_gossip_digest_ack([] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
+    _messaging.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
         auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
-        (void)smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
-            auto& gossiper = gms::get_local_gossiper();
+        (void)container().invoke_on(0, [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack_msg(from, std::move(msg));
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
         });
         return messaging_service::no_wait();
     });
-    _messaging.register_gossip_digest_ack2([] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
+    _messaging.register_gossip_digest_ack2([this] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
         auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
-        (void)smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
-            return gms::get_local_gossiper().handle_ack2_msg(from, std::move(msg));
+        (void)container().invoke_on(0, [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
+            return gossiper.handle_ack2_msg(from, std::move(msg));
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_DIGEST_ACK2: {}", ep);
         });
         return messaging_service::no_wait();
     });
-    _messaging.register_gossip_echo([] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) {
+    _messaging.register_gossip_echo([this] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return gms::get_local_gossiper().handle_echo_msg(from, generation_number_opt);
+        return handle_echo_msg(from, generation_number_opt);
     });
-    _messaging.register_gossip_shutdown([] (inet_address from) {
+    _messaging.register_gossip_shutdown([this] (inet_address from) {
         // In a new fiber.
-        (void)smp::submit_to(0, [from] {
-            return gms::get_local_gossiper().handle_shutdown_msg(from);
+        (void)container().invoke_on(0, [from] (gms::gossiper& gossiper) {
+            return gossiper.handle_shutdown_msg(from);
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
         return messaging_service::no_wait();
     });
-    _messaging.register_gossip_get_endpoint_states([] (const rpc::client_info& cinfo, gossip_get_endpoint_states_request request) {
-        return smp::submit_to(0, [request = std::move(request)] () mutable {
-            return gms::get_local_gossiper().handle_get_endpoint_states_msg(std::move(request));
+    _messaging.register_gossip_get_endpoint_states([this] (const rpc::client_info& cinfo, gossip_get_endpoint_states_request request) {
+        return container().invoke_on(0, [request = std::move(request)] (gms::gossiper& gossiper) mutable {
+            return gossiper.handle_get_endpoint_states_msg(std::move(request));
         });
     });
 
@@ -673,7 +671,7 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     if (endpoint == get_broadcast_address()) {
         return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
     }
-    return get_gossiper().invoke_on(0, [endpoint] (auto& gossiper) mutable {
+    return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
             gossiper.remove_endpoint(endpoint);
             gossiper.evict_from_membership(endpoint);
@@ -1245,7 +1243,7 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    return get_gossiper().invoke_on(0, [address] (auto&& gossiper) {
+    return container().invoke_on(0, [address] (auto&& gossiper) {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
             inet_address endpoint(address);
             auto permit = gossiper.lock_endpoint(endpoint).get0();
@@ -1301,13 +1299,13 @@ bool gossiper::is_known_endpoint(inet_address endpoint) const noexcept {
 }
 
 future<int> gossiper::get_current_generation_number(inet_address endpoint) {
-    return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
+    return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_generation();
     });
 }
 
 future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
-    return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
+    return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_heart_beat_version();
     });
 }
@@ -1859,7 +1857,7 @@ future<> gossiper::start_gossiping(int generation_number, bind_messaging_port do
 future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind, gms::advertise_myself advertise) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
-    return get_gossiper().invoke_on_all([do_bind, advertise] (gossiper& g) {
+    return container().invoke_on_all([do_bind, advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
@@ -1926,7 +1924,7 @@ future<> gossiper::advertise_myself() {
 
 future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
     return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
-        get_gossiper().invoke_on_all([do_bind] (gossiper& g) {
+        container().invoke_on_all([do_bind] (gossiper& g) {
             return g.init_messaging_service_handler(do_bind);
         }).get();
         nodes.erase(get_broadcast_address());
@@ -2152,7 +2150,7 @@ future<> gossiper::do_stop_gossiping() {
         // Verbs might have been registered by do_shadow_round(), but
         // gossiper itself was not enabled after it...
         if (_ms_registered) {
-            return get_gossiper().invoke_on_all(&gossiper::uninit_messaging_service_handler);
+            return container().invoke_on_all(&gossiper::uninit_messaging_service_handler);
         }
         return make_ready_future<>();
     }
@@ -2189,9 +2187,9 @@ future<> gossiper::do_stop_gossiping() {
         }).get();
         _scheduled_gossip_task.cancel();
         // Take the semaphore makes sure existing gossip loop is finished
-        seastar::with_semaphore(_callback_running, 1, [] {
+        seastar::with_semaphore(_callback_running, 1, [this] {
             logger.info("Disable and wait for gossip loop finished");
-            return get_gossiper().invoke_on_all([] (gossiper& g) {
+            return container().invoke_on_all([] (gossiper& g) {
                 g._features_condvar.broken();
                 return g.uninit_messaging_service_handler();
             });
@@ -2203,10 +2201,10 @@ future<> gossiper::do_stop_gossiping() {
     });
 }
 
-future<> stop_gossiping() {
-    return smp::submit_to(0, [] {
-        if (get_gossiper().local_is_initialized()) {
-            return get_local_gossiper().do_stop_gossiping();
+future<> stop_gossiping(sharded<gossiper>& g) {
+    return smp::submit_to(0, [&g] {
+        if (g.local_is_initialized()) {
+            return g.local().do_stop_gossiping();
         }
         return make_ready_future<>();
     });

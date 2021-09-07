@@ -47,6 +47,7 @@ class server {
     executor& _executor;
     cql3::query_processor& _qp;
     service::storage_proxy& _proxy;
+    gms::gossiper& _gossiper;
 
     key_cache _key_cache;
     bool _enforce_authorization;
@@ -78,7 +79,7 @@ class server {
     json_parser _json_parser;
 
 public:
-    server(executor& executor, cql3::query_processor& qp, service::storage_proxy& proxy);
+    server(executor& executor, cql3::query_processor& qp, service::storage_proxy& proxy, gms::gossiper& gossiper);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
             bool enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);

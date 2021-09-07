@@ -47,6 +47,12 @@ namespace db { class snapshot_ctl; }
 namespace netw { class messaging_service; }
 class repair_service;
 
+namespace gms {
+
+class gossiper;
+
+}
+
 namespace api {
 
 struct http_context {
@@ -70,7 +76,7 @@ struct http_context {
 future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx);
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
@@ -79,15 +85,15 @@ future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl);
 future<> unset_rpc_controller(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl);
 future<> unset_server_snapshot(http_context& ctx);
-future<> set_server_gossip(http_context& ctx);
+future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_load_sstable(http_context& ctx);
 future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms);
 future<> unset_server_messaging_service(http_context& ctx);
 future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_service>& ss);
 future<> set_server_stream_manager(http_context& ctx);
-future<> set_hinted_handoff(http_context& ctx);
+future<> set_hinted_handoff(http_context& ctx, sharded<gms::gossiper>& g);
 future<> unset_hinted_handoff(http_context& ctx);
-future<> set_server_gossip_settle(http_context& ctx);
+future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);

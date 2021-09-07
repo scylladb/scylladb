@@ -66,8 +66,8 @@ using namespace std::chrono_literals;
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms);
 
-migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms) :
-        _notifier(notifier), _feat(feat), _messaging(ms)
+migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, gms::gossiper& gossiper) :
+        _notifier(notifier), _feat(feat), _messaging(ms), _gossiper(gossiper)
 {
 }
 
@@ -194,7 +194,7 @@ future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoi
 }
 
 bool migration_manager::have_schema_agreement() {
-    const auto known_endpoints = gms::get_local_gossiper().endpoint_state_map;
+    const auto known_endpoints = _gossiper.endpoint_state_map;
     if (known_endpoints.size() == 1) {
         // Us.
         return true;
@@ -249,8 +249,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
         // pushed out simultaneously. See CASSANDRA-5025
         return sleep_abortable(migration_delay, _as).then([this, &db, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
-            auto& gossiper = gms::get_local_gossiper();
-            auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+            auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
             if (!ep_state) {
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
@@ -273,7 +272,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
 {
-    if (!gms::get_local_gossiper().is_alive(endpoint)) {
+    if (!_gossiper.is_alive(endpoint)) {
         auto msg = format("Can't send migration request: node {} is down.", endpoint);
         mlogger.warn("{}", msg);
         return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
@@ -362,13 +361,13 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
-    auto* version = gms::get_local_gossiper().get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
+    auto* version = _gossiper.get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
     return version && version->value == db::schema_tables::version;
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
     return has_compatible_schema_tables_version(endpoint)
-            && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
+            && !_gossiper.is_gossip_only_member(endpoint);
 }
 
 future<> migration_notifier::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
@@ -961,7 +960,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 future<> migration_manager::announce(std::vector<mutation> schema) {
     auto f = db::schema_tables::merge_schema(get_storage_proxy(), _feat, schema);
 
-    return do_with(std::move(schema), [this, live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
+    return do_with(std::move(schema), [this, live_members = _gossiper.get_live_members()](auto && schema) {
         return parallel_for_each(live_members.begin(), live_members.end(), [this, &schema](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
@@ -983,7 +982,7 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
  * @param version The schema version to announce
  */
 future<> migration_manager::passive_announce(utils::UUID version) {
-    return gms::get_gossiper().invoke_on(0, [version] (auto&& gossiper) {
+    return _gossiper.container().invoke_on(0, [version] (auto&& gossiper) {
         mlogger.debug("Gossiping my schema version {}", version);
         return gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(version));
     });

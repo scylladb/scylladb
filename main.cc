@@ -947,14 +947,14 @@ int main(int ac, char** av) {
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
             };
-            proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
+            proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
                     std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
-            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(gossiper)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
@@ -1059,7 +1059,7 @@ int main(int ac, char** av) {
                     cf.trigger_compaction();
                 }
             }).get();
-            api::set_server_gossip(ctx).get();
+            api::set_server_gossip(ctx, gossiper).get();
             api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx, ss).get();
             api::set_server_load_sstable(ctx).get();
@@ -1105,7 +1105,7 @@ int main(int ac, char** av) {
 
             proxy.invoke_on_all([&lifecycle_notifier] (service::storage_proxy& local_proxy) {
                 lifecycle_notifier.local().register_subscriber(&local_proxy);
-                return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this());
+                return local_proxy.start_hints_manager();
             }).get();
 
             auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy, &lifecycle_notifier] {
@@ -1163,7 +1163,7 @@ int main(int ac, char** av) {
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss).get();
+            api::set_server_storage_service(ctx, ss, gossiper).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
@@ -1179,8 +1179,8 @@ int main(int ac, char** av) {
              * drain_on_shutdown below is not registered. When we fix the
              * start-stop sequence it will be removed.
              */
-            auto gossiping_fuse = defer_verbose_shutdown("gossiping", [] {
-                gms::stop_gossiping().get();
+            auto gossiping_fuse = defer_verbose_shutdown("gossiping", [&gossiper] {
+                gms::stop_gossiping(gossiper).get();
             });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
@@ -1292,14 +1292,14 @@ int main(int ac, char** av) {
             (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
-            api::set_server_gossip_settle(ctx).get();
+            api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 local_proxy.allow_replaying_hints();
             }).get();
 
-            api::set_hinted_handoff(ctx).get();
+            api::set_hinted_handoff(ctx, gossiper).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();
             });
@@ -1372,7 +1372,7 @@ int main(int ac, char** av) {
                 api::unset_rpc_controller(ctx).get();
             });
 
-            alternator::controller alternator_ctl(proxy, mm, sys_dist_ks, cdc_generation_service, qp, service_memory_limiter, *cfg);
+            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, qp, service_memory_limiter, *cfg);
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {
@@ -1386,8 +1386,8 @@ int main(int ac, char** av) {
 
             static redis_service redis;
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg] {
-                    return redis.init(proxy, db, auth_service, mm, *cfg);
+                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg, &gossiper] {
+                    return redis.init(proxy, db, auth_service, mm, *cfg, gossiper);
                 }).get();
             }
 

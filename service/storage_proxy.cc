@@ -1788,9 +1788,10 @@ inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
 using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
+storage_proxy::storage_proxy(distributed<database>& db, gms::gossiper& gossiper, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
         scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms)
     : _db(db)
+    , _gossiper(gossiper)
     , _shared_token_metadata(stm)
     , _read_smp_service_group(cfg.read_smp_service_group)
     , _write_smp_service_group(cfg.write_smp_service_group)
@@ -1960,7 +1961,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
     std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
-            std::back_inserter(dead_endpoints), std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper()));
+            std::back_inserter(dead_endpoints), std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper));
 
     slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
@@ -2269,7 +2270,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     live_endpoints.reserve(participants);
 
     boost::copy(boost::range::join(natural_endpoints, pending_endpoints) |
-            boost::adaptors::filtered(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())), std::back_inserter(live_endpoints));
+            boost::adaptors::filtered(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -2542,7 +2543,7 @@ future<> storage_proxy::send_to_endpoint(
                 boost::range::join(pending_endpoints, target),
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
-                [] (gms::inet_address ep) { return gms::get_local_gossiper().is_alive(ep); });
+                [this] (gms::inet_address ep) { return _gossiper.is_alive(ep); });
         auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, ks, targets, pending_endpoints);
@@ -4659,7 +4660,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 inet_address_vector_replica_set storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) const {
     auto& rs = ks.get_replication_strategy();
     inet_address_vector_replica_set eps = rs.get_natural_endpoints_without_node_being_replaced(token);
-    auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
+    auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &_gossiper)));
     eps.erase(itend, eps.end());
     return eps;
 }
@@ -4791,21 +4792,19 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
 
-    auto& gossiper = gms::get_local_gossiper();
-
-    if (!gossiper.get_unreachable_token_owners().empty()) {
+    if (!_gossiper.get_unreachable_token_owners().empty()) {
         slogger.info("Cannot perform truncate, some hosts are down");
         // Since the truncate operation is so aggressive and is typically only
         // invoked by an admin, for simplicity we require that all nodes are up
         // to perform the operation.
-        auto live_members = gossiper.get_live_members().size();
+        auto live_members = _gossiper.get_live_members().size();
 
         return make_exception_future<>(exceptions::unavailable_exception(db::consistency_level::ALL,
-                live_members + gossiper.get_unreachable_members().size(),
+                live_members + _gossiper.get_unreachable_members().size(),
                 live_members));
     }
 
-    auto all_endpoints = gossiper.get_live_token_owners();
+    auto all_endpoints = _gossiper.get_live_token_owners();
     auto& ms = _messaging;
     auto timeout = std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
 
@@ -5290,15 +5289,15 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
     co_return ret;
 }
 
-future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> storage_proxy::start_hints_manager() {
     future<> f = make_ready_future<>();
     if (!_hints_manager.is_disabled_for_all()) {
         f = _hints_resource_manager.register_manager(_hints_manager);
     }
     return f.then([this] {
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
-    }).then([this, gossiper_ptr] {
-        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr);
+    }).then([this] {
+        return _hints_resource_manager.start(shared_from_this(), _gossiper.shared_from_this());
     });
 }
 

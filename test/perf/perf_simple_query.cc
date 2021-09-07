@@ -365,7 +365,7 @@ static std::vector<perf_result> do_alternator_test(std::string isolation_level,
     assert(cfg.frontend == test_config::frontend_type::alternator);
     std::cout << "Running test with config: " << cfg << std::endl;
 
-    alternator_test_env env(qp.local().proxy().container(), mm, qp);
+    alternator_test_env env(gms::get_gossiper(), qp.local().proxy().container(), mm, qp);
     env.start(isolation_level).get();
     auto stop_env = defer([&] {
         env.stop().get();
