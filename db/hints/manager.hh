@@ -84,6 +84,8 @@ class manager {
 private:
     struct stats {
         uint64_t size_of_hints_in_progress = 0;
+        uint64_t size_of_sent_hints_in_progress = 0;
+        uint64_t count_of_sent_hints_in_progress = 0;
         uint64_t written = 0;
         uint64_t errors = 0;
         uint64_t dropped = 0;

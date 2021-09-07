@@ -81,6 +81,12 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_gauge("size_of_hints_in_progress", _stats.size_of_hints_in_progress,
                         sm::description("Size of hinted mutations that are scheduled to be written.")),
 
+        sm::make_gauge("size_of_sent_hints_in_progress", _stats.size_of_sent_hints_in_progress,
+                        sm::description("Size of hints which are being sent at the moment.")),
+
+        sm::make_gauge("count_of_sent_hints_in_progress", _stats.count_of_sent_hints_in_progress,
+                        sm::description("Number of hints which are being sent at the moment.")),
+
         sm::make_derive("written", _stats.written,
                         sm::description("Number of successfully written hints.")),
 
@@ -854,6 +860,8 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
     return _concurrency_limiter.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto local_units) mutable {
       return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr, local_units = std::move(local_units)] (auto global_units) mutable {
         const size_t mutation_size = buf.size_bytes();
+        shard_stats().size_of_sent_hints_in_progress += mutation_size;
+        ++shard_stats().count_of_sent_hints_in_progress;
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
@@ -894,6 +902,9 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             }
             return make_ready_future<>();
         }).then_wrapped([this, local_units = std::move(local_units), global_units = std::move(global_units), rp, ctx_ptr, mutation_size] (future<>&& f) {
+            shard_stats().size_of_sent_hints_in_progress -= mutation_size;
+            --shard_stats().count_of_sent_hints_in_progress;
+
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
