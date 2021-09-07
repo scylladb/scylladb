@@ -1804,19 +1804,25 @@ future<> db::commitlog::segment_manager::shutdown() {
         } catch (...) {
             p = std::current_exception();
         }
-            
-        discard_unused_segments();
 
-        try {
-            co_await clear_reserve_segments();
-        } catch (...) {
-            p = std::current_exception();
+        for (int i = 0; ; ++i) {            
+            discard_unused_segments();
+
+            try {
+                co_await clear_reserve_segments();
+            } catch (...) {
+                p = std::current_exception();
+            }
+            if (i > 0) {
+                break;
+            }
+            try {
+                co_await std::move(_reserve_replenisher);
+            } catch (...) {
+                p = std::current_exception();
+            }
         }
-        try {
-            co_await std::move(_reserve_replenisher);
-        } catch (...) {
-            p = std::current_exception();
-        }
+
         // slight functional change from non-coroutine version: we propagate all/any
         // exceptions, not just the replenish one.
         if (p) {
