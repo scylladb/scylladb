@@ -522,6 +522,9 @@ public:
             const query_options& options, const schema& idx_tbl_schema) const;
 
     sstring to_string() const;
+
+    /// True iff the partition range or slice is empty specifically due to a =NULL restriction.
+    bool range_or_slice_eq_null(const query_options& options) const;
 };
 
 }
