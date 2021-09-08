@@ -1717,14 +1717,17 @@ static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction
         }
     });
 
-    clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
+    clogger.info("Scrubbing in validate mode: {}", sstables_list_msg);
 
     auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "scrub:validate", db::no_timeout);
     auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
 
     const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), *info);
+    if (!valid) {
+        info->invalid_sstables++;
+    }
 
-    clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+    clogger.info("Scrubbing in validate mode done: {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
 
     co_return *info;
 }

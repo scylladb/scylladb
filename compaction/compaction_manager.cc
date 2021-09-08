@@ -781,12 +781,16 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* 
         };
         pending_tasks pending(_stats, sstables.size());
 
+        size_t total_sstables = sstables.size();
+        size_t invalid_sstables = 0;
+        cmlog.info("Starting scrubbing of {} SSTables in validate mode", total_sstables);
+
         while (!sstables.empty()) {
             auto sst = sstables.back();
             sstables.pop_back();
 
             try {
-                co_await with_scheduling_group(_maintenance_sg.cpu, [&] () {
+                auto info = co_await with_scheduling_group(_maintenance_sg.cpu, [&] () {
                     auto desc = sstables::compaction_descriptor(
                             { sst },
                             {},
@@ -797,6 +801,7 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* 
                             sstables::compaction_options::make_scrub(sstables::compaction_options::scrub::mode::validate));
                     return compact_sstables(std::move(desc), cf);
                 });
+                invalid_sstables += info.invalid_sstables;
             } catch (sstables::compaction_stop_exception&) {
                 throw; // let run_custom_job() handle this
             } catch (storage_io_error&) {
@@ -810,6 +815,12 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* 
             }
 
             pending--;
+        }
+
+        if (!invalid_sstables) {
+            cmlog.info("Finished scrubbing of {} SSTables in validate mode. All are valid.", total_sstables);
+        } else {
+            cmlog.error("Finished scrubbing of {} SSTables in validate mode, of which {} were invalid.", total_sstables, invalid_sstables);
         }
     });
 }

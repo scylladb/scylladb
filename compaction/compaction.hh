@@ -64,6 +64,7 @@ namespace sstables {
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
         int64_t ended_at;
+        size_t invalid_sstables;
         std::vector<shared_sstable> new_sstables;
         sstring stop_requested;
         bool tracking = true;
