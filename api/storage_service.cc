@@ -1247,24 +1247,24 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::scrub.set(r, wrap_ks_cf(ctx, [&snap_ctl] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
-        auto scrub_mode = sstables::compaction_options::scrub::mode::abort;
+        auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
 
         const sstring scrub_mode_str = req_param<sstring>(*req, "scrub_mode", "");
         if (scrub_mode_str == "") {
             const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
 
             if (skip_corrupted) {
-                scrub_mode = sstables::compaction_options::scrub::mode::skip;
+                scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
             }
         } else {
             if (scrub_mode_str == "ABORT") {
-                scrub_mode = sstables::compaction_options::scrub::mode::abort;
+                scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
             } else if (scrub_mode_str == "SKIP") {
-                scrub_mode = sstables::compaction_options::scrub::mode::skip;
+                scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
             } else if (scrub_mode_str == "SEGREGATE") {
-                scrub_mode = sstables::compaction_options::scrub::mode::segregate;
+                scrub_mode = sstables::compaction_type_options::scrub::mode::segregate;
             } else if (scrub_mode_str == "VALIDATE") {
-                scrub_mode = sstables::compaction_options::scrub::mode::validate;
+                scrub_mode = sstables::compaction_type_options::scrub::mode::validate;
             } else {
                 throw std::invalid_argument(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
             }

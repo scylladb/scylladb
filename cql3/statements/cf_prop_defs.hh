@@ -98,7 +98,7 @@ public:
 
     schema::extensions_map make_schema_extensions(const db::extensions& exts) const;
     void validate(const database& db, const schema::extensions_map& schema_extensions) const;
-    std::map<sstring, sstring> get_compaction_options() const;
+    std::map<sstring, sstring> get_compaction_type_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
     const cdc::options* get_cdc_options(const schema::extensions_map&) const;
     std::optional<caching_options> get_caching_options() const;

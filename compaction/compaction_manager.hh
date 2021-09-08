@@ -174,7 +174,7 @@ private:
     class can_purge_tombstones_tag;
     using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
-    future<> rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<> rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     future<> stop_ongoing_compactions(sstring reason);
     optimized_optional<abort_source::subscription> _early_abort_subscription;
@@ -222,7 +222,7 @@ public:
     future<> perform_sstable_upgrade(database& db, column_family* cf, bool exclude_current_version);
 
     // Submit a column family to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode);
+    future<> perform_sstable_scrub(column_family* cf, sstables::compaction_type_options::scrub::mode scrub_mode);
 
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);

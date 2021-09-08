@@ -410,7 +410,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
             return parallel_for_each(buckets, [this, iop, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
                 return cm.run_custom_job(&table, compaction_type::Reshard, [this, iop, &cm, &table, creator, &sstlist] () {
                     sstables::compaction_descriptor desc(sstlist, {}, iop);
-                    desc.options = sstables::compaction_options::make_reshard();
+                    desc.options = sstables::compaction_type_options::make_reshard();
                     desc.creator = std::move(creator);
 
                     return sstables::compact_sstables(std::move(desc), table).then([this, &sstlist] (sstables::compaction_info result) {

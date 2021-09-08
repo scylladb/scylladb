@@ -160,7 +160,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         // Everything that spans multiple windows will need reshaping
         multi_window.resize(std::min(multi_window.size(), max_sstables));
         compaction_descriptor desc(std::move(multi_window), std::optional<sstables::sstable_set>(), iop);
-        desc.options = compaction_options::make_reshape();
+        desc.options = compaction_type_options::make_reshape();
         return desc;
     }
 
@@ -184,7 +184,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                 ssts.resize(std::min(ssts.size(), max_sstables));
             }
             compaction_descriptor desc(std::move(ssts), std::optional<sstables::sstable_set>(), iop);
-            desc.options = compaction_options::make_reshape();
+            desc.options = compaction_type_options::make_reshape();
             return desc;
         }
     }

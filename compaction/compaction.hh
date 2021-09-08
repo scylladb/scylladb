@@ -111,7 +111,7 @@ namespace sstables {
     get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
 
     // For tests, can drop after we virtualize sstables.
-    flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_options::scrub::mode scrub_mode);
+    flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode);
 
     // For tests, can drop after we virtualize sstables.
     future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader rd, const compaction_info& info);

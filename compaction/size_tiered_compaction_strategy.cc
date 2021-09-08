@@ -256,7 +256,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         // which is possible because partitioned set is able to incrementally open sstables during compaction
         if (sstable_set_overlapping_count(schema, input) <= max_sstables) {
             compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop);
-            desc.options = compaction_options::make_reshape();
+            desc.options = compaction_type_options::make_reshape();
             return desc;
         }
     }
@@ -272,7 +272,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                 bucket.resize(max_sstables);
             }
             compaction_descriptor desc(std::move(bucket), std::optional<sstables::sstable_set>(), iop);
-            desc.options = compaction_options::make_reshape();
+            desc.options = compaction_type_options::make_reshape();
             return desc;
         }
     }

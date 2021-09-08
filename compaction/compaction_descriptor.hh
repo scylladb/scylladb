@@ -62,7 +62,7 @@ using compaction_sstable_creator_fn = std::function<shared_sstable(shard_id shar
 // Replaces old sstable(s) by new one(s) which contain all non-expired data.
 using compaction_sstable_replacer_fn = std::function<void(compaction_completion_desc)>;
 
-class compaction_options {
+class compaction_type_options {
 public:
     struct regular {
     };
@@ -92,32 +92,32 @@ private:
     options_variant _options;
 
 private:
-    explicit compaction_options(options_variant options) : _options(std::move(options)) {
+    explicit compaction_type_options(options_variant options) : _options(std::move(options)) {
     }
 
 public:
-    static compaction_options make_reshape() {
-        return compaction_options(reshape{});
+    static compaction_type_options make_reshape() {
+        return compaction_type_options(reshape{});
     }
 
-    static compaction_options make_reshard() {
-        return compaction_options(reshard{});
+    static compaction_type_options make_reshard() {
+        return compaction_type_options(reshard{});
     }
 
-    static compaction_options make_regular() {
-        return compaction_options(regular{});
+    static compaction_type_options make_regular() {
+        return compaction_type_options(regular{});
     }
 
-    static compaction_options make_cleanup(database& db) {
-        return compaction_options(cleanup{db});
+    static compaction_type_options make_cleanup(database& db) {
+        return compaction_type_options(cleanup{db});
     }
 
-    static compaction_options make_upgrade(database& db) {
-        return compaction_options(upgrade{db});
+    static compaction_type_options make_upgrade(database& db) {
+        return compaction_type_options(upgrade{db});
     }
 
-    static compaction_options make_scrub(scrub::mode mode) {
-        return compaction_options(scrub{mode});
+    static compaction_type_options make_scrub(scrub::mode mode) {
+        return compaction_type_options(scrub{mode});
     }
 
     template <typename... Visitor>
@@ -130,8 +130,8 @@ public:
     compaction_type type() const;
 };
 
-std::string_view to_string(compaction_options::scrub::mode);
-std::ostream& operator<<(std::ostream& os, compaction_options::scrub::mode scrub_mode);
+std::string_view to_string(compaction_type_options::scrub::mode);
+std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::mode scrub_mode);
 
 struct compaction_descriptor {
     // List of sstables to be compacted.
@@ -149,7 +149,7 @@ struct compaction_descriptor {
     std::function<void(const std::vector<shared_sstable>& exhausted_sstables)> release_exhausted;
     // The options passed down to the compaction code.
     // This also selects the kind of compaction to do.
-    compaction_options options = compaction_options::make_regular();
+    compaction_type_options options = compaction_type_options::make_regular();
 
     compaction_sstable_creator_fn creator;
     compaction_sstable_replacer_fn replacer;
@@ -167,7 +167,7 @@ struct compaction_descriptor {
                                    int level = default_level,
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                    utils::UUID run_identifier = utils::make_random_uuid(),
-                                   compaction_options options = compaction_options::make_regular())
+                                   compaction_type_options options = compaction_type_options::make_regular())
         : sstables(std::move(sstables))
         , all_sstables_snapshot(std::move(all_sstables_snapshot))
         , level(level)

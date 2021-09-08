@@ -159,7 +159,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
             // This is really unexpected, so we'll just compact it all to fix it
             compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, leveled_manifest::MAX_LEVELS - 1, max_sstable_size_in_bytes);
-            desc.options = compaction_options::make_reshape();
+            desc.options = compaction_type_options::make_reshape();
             return desc;
         }
         level_info[sst_level].push_back(sst);
@@ -199,7 +199,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
         leveled_manifest::logger.info("Reshaping {} disjoint sstables in level 0 into level {}", level_info[0].size(), ideal_level);
         compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, ideal_level, max_sstable_size_in_bytes);
-        desc.options = compaction_options::make_reshape();
+        desc.options = compaction_type_options::make_reshape();
         return desc;
     }
 
@@ -219,7 +219,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
             leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so compacting everything on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
             // Unfortunately no good limit to limit input size to max_sstables for LCS major
             compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, max_filled_level, max_sstable_size_in_bytes);
-            desc.options = compaction_options::make_reshape();
+            desc.options = compaction_type_options::make_reshape();
             return desc;
         }
     }

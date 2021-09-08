@@ -123,10 +123,10 @@ void cf_prop_defs::validate(const database& db, const schema::extensions_map& sc
         std::throw_with_nested(exceptions::configuration_exception("Invalid table id"));
     }
 
-    auto compaction_options = get_compaction_options();
-    if (!compaction_options.empty()) {
-        auto strategy = compaction_options.find(COMPACTION_STRATEGY_CLASS_KEY);
-        if (strategy == compaction_options.end()) {
+    auto compaction_type_options = get_compaction_type_options();
+    if (!compaction_type_options.empty()) {
+        auto strategy = compaction_type_options.find(COMPACTION_STRATEGY_CLASS_KEY);
+        if (strategy == compaction_type_options.end()) {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
         }
         _compaction_strategy_class = sstables::compaction_strategy::type(strategy->second);
@@ -171,10 +171,10 @@ void cf_prop_defs::validate(const database& db, const schema::extensions_map& sc
     speculative_retry::from_sstring(get_string(KW_SPECULATIVE_RETRY, speculative_retry(speculative_retry::type::NONE, 0).to_sstring()));
 }
 
-std::map<sstring, sstring> cf_prop_defs::get_compaction_options() const {
-    auto compaction_options = get_map(KW_COMPACTION);
-    if (compaction_options ) {
-        return compaction_options.value();
+std::map<sstring, sstring> cf_prop_defs::get_compaction_type_options() const {
+    auto compaction_type_options = get_map(KW_COMPACTION);
+    if (compaction_type_options ) {
+        return compaction_type_options.value();
     }
     return std::map<sstring, sstring>{};
 }
@@ -258,16 +258,16 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
 
     std::optional<sstring> tmp_value = {};
     if (has_property(KW_COMPACTION)) {
-        if (get_compaction_options().contains(KW_MINCOMPACTIONTHRESHOLD)) {
-            tmp_value = get_compaction_options().at(KW_MINCOMPACTIONTHRESHOLD);
+        if (get_compaction_type_options().contains(KW_MINCOMPACTIONTHRESHOLD)) {
+            tmp_value = get_compaction_type_options().at(KW_MINCOMPACTIONTHRESHOLD);
         }
     }
     int min_compaction_threshold = to_int(KW_MINCOMPACTIONTHRESHOLD, tmp_value, builder.get_min_compaction_threshold());
 
     tmp_value = {};
     if (has_property(KW_COMPACTION)) {
-        if (get_compaction_options().contains(KW_MAXCOMPACTIONTHRESHOLD)) {
-            tmp_value = get_compaction_options().at(KW_MAXCOMPACTIONTHRESHOLD);
+        if (get_compaction_type_options().contains(KW_MAXCOMPACTIONTHRESHOLD)) {
+            tmp_value = get_compaction_type_options().at(KW_MAXCOMPACTIONTHRESHOLD);
         }
     }
     int max_compaction_threshold = to_int(KW_MAXCOMPACTIONTHRESHOLD, tmp_value, builder.get_max_compaction_threshold());
@@ -278,8 +278,8 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     builder.set_max_compaction_threshold(max_compaction_threshold);
 
     if (has_property(KW_COMPACTION)) {
-        if (get_compaction_options().contains(COMPACTION_ENABLED_KEY)) {
-            auto enabled = boost::algorithm::iequals(get_compaction_options().at(COMPACTION_ENABLED_KEY), "true");
+        if (get_compaction_type_options().contains(COMPACTION_ENABLED_KEY)) {
+            auto enabled = boost::algorithm::iequals(get_compaction_type_options().at(COMPACTION_ENABLED_KEY), "true");
             builder.set_compaction_enabled(enabled);
         }
     }
@@ -306,7 +306,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
 
     if (_compaction_strategy_class) {
         builder.set_compaction_strategy(*_compaction_strategy_class);
-        builder.set_compaction_strategy_options(get_compaction_options());
+        builder.set_compaction_strategy_options(get_compaction_type_options());
     }
 
     builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
@@ -349,9 +349,9 @@ std::optional<sstables::compaction_strategy_type> cf_prop_defs::get_compaction_s
     if (_compaction_strategy_class) {
         return _compaction_strategy_class;
     }
-    auto compaction_options = get_compaction_options();
-    auto strategy = compaction_options.find(COMPACTION_STRATEGY_CLASS_KEY);
-    if (strategy != compaction_options.end()) {
+    auto compaction_type_options = get_compaction_type_options();
+    auto strategy = compaction_type_options.find(COMPACTION_STRATEGY_CLASS_KEY);
+    if (strategy != compaction_type_options.end()) {
         return sstables::compaction_strategy::type(strategy->second);
     }
     return std::nullopt;

@@ -686,7 +686,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
     return false;
 }
 
-future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
+future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     task->type = options.type();
@@ -797,7 +797,7 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* 
                             sst->get_sstable_level(),
                             sstables::compaction_descriptor::default_max_sstable_bytes,
                             sst->run_identifier(),
-                            sstables::compaction_options::make_scrub(sstables::compaction_options::scrub::mode::validate));
+                            sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
                     return compact_sstables(std::move(desc), cf);
                 });
             } catch (sstables::compaction_stop_exception&) {
@@ -858,7 +858,7 @@ future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
         });
         return sstables;
     }).then([this, cf, &db] (std::vector<sstables::shared_sstable> sstables) {
-        return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(db),
+        return rewrite_sstables(cf, sstables::compaction_type_options::make_cleanup(db),
                 [sstables = std::move(sstables)] (const table&) { return sstables; });
     });
 }
@@ -890,7 +890,7 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, column_family
             // Note that we potentially could be doing multiple
             // upgrades here in parallel, but that is really the users
             // problem.
-            return rewrite_sstables(cf, sstables::compaction_options::make_upgrade(db), [&](auto&) mutable {
+            return rewrite_sstables(cf, sstables::compaction_type_options::make_upgrade(db), [&](auto&) mutable {
                 return std::exchange(tables, {});
             });
         });
@@ -898,15 +898,15 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, column_family
 }
 
 // Submit a column family to be scrubbed and wait for its termination.
-future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode) {
-    if (scrub_mode == sstables::compaction_options::scrub::mode::validate) {
+future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::compaction_type_options::scrub::mode scrub_mode) {
+    if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(cf);
     }
     // since we might potentially have ongoing compactions, and we
     // must ensure that all sstables created before we run are scrubbed,
     // we need to barrier out any previously running compaction.
     return cf->run_with_compaction_disabled([this, cf, scrub_mode] {
-        return rewrite_sstables(cf, sstables::compaction_options::make_scrub(scrub_mode), [this] (const table& cf) {
+        return rewrite_sstables(cf, sstables::compaction_type_options::make_scrub(scrub_mode), [this] (const table& cf) {
             return get_candidates(cf);
         }, can_purge_tombstones::no);
     });

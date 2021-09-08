@@ -2046,7 +2046,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             cf->start();
 
             auto descriptor = sstables::compaction_descriptor({std::move(sst)}, cf->get_sstable_set(), default_priority_class(), compaction_descriptor::default_level,
-                compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_options::make_cleanup(db));
+                compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(db));
             auto ret = compact_sstables(std::move(descriptor), *cf, sst_gen).get0();
 
             BOOST_REQUIRE(ret.total_keys_written == total_partitions);
@@ -2222,7 +2222,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             testlog.info("Validate");
 
             // No way to really test validation besides observing the log messages.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::validate).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::validate).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
@@ -2418,7 +2418,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             testlog.info("Scrub in abort mode");
 
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::abort).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::abort).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2426,7 +2426,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             testlog.info("Scrub in skip mode");
 
             // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::skip).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::skip).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             BOOST_REQUIRE(table->in_strategy_sstables().front() != sst);
@@ -2515,7 +2515,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             testlog.info("Scrub in abort mode");
 
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::abort).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::abort).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2523,7 +2523,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             testlog.info("Scrub in segregate mode");
 
             // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::segregate).get();
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::segregate).get();
 
             testlog.info("Scrub resulted in {} sstables", table->in_strategy_sstables().size());
             BOOST_REQUIRE(table->in_strategy_sstables().size() > 1);
@@ -2630,7 +2630,7 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
     std::list<std::deque<mutation_fragment>> segregated_fragment_streams;
 
     mutation_writer::segregate_by_partition(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(all_fragments)),
-                sstables::compaction_options::scrub::mode::segregate), [&schema, &segregated_fragment_streams] (flat_mutation_reader rd) {
+                sstables::compaction_type_options::scrub::mode::segregate), [&schema, &segregated_fragment_streams] (flat_mutation_reader rd) {
         return async([&schema, &segregated_fragment_streams, rd = std::move(rd)] () mutable {
             auto close = deferred_close(rd);
             auto& fragments = segregated_fragment_streams.emplace_back();
@@ -2769,7 +2769,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     scrubbed_fragments.emplace_back(*schema, permit, partition_end{}); // missing partition-end - at EOS
 
     auto r = assert_that(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(corrupt_fragments)),
-                compaction_options::scrub::mode::skip));
+                compaction_type_options::scrub::mode::skip));
     for (const auto& mf : scrubbed_fragments) {
        testlog.info("Expecting {}", mutation_fragment::printer(*schema, mf));
        r.produces(*schema, mf);
