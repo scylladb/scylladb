@@ -93,6 +93,9 @@ public:
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
         virtual shared_ptr<terminal> bind(const query_options& options) override;
+
+        // Binds the value, but skips all nulls inside the list
+        virtual shared_ptr<terminal> bind_ignore_null(const query_options& options);
         const std::vector<shared_ptr<term>>& get_elements() const {
             return _elements;
         }
