@@ -72,6 +72,11 @@ struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
     std::set<inet_address> seeds;
+    sstring partitioner;
+    uint32_t ring_delay_ms = 30 * 1000;
+    uint32_t shadow_round_ms = 300 * 1000;
+    uint32_t shutdown_announce_ms = 2 * 1000;
+    uint32_t skip_wait_for_gossip_to_settle = -1;
 };
 
 /**
@@ -129,7 +134,11 @@ public:
     // Only respond echo message listed in nodes with the generation number
     future<> advertise_to_nodes(std::unordered_map<gms::inet_address, int32_t> advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
-    const sstring& get_partitioner_name() const noexcept;
+
+    const sstring& get_partitioner_name() const noexcept {
+        return _gcfg.partitioner;
+    }
+
     inet_address get_broadcast_address() const noexcept {
         return utils::fb_utilities::get_broadcast_address();
     }
