@@ -90,15 +90,14 @@ public:
     future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
 };
 
-gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _feature_service(features)
         , _shared_token_metadata(stm)
         , _messaging(ms)
         , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
         , _force_gossip_generation(cfg.force_gossip_generation)
-        , _cfg(cfg)
-        , _gcfg(gcfg) {
+        , _gcfg(std::move(gcfg)) {
     // Gossiper's stuff below runs only on CPU0
     if (this_shard_id() != 0) {
         return;
