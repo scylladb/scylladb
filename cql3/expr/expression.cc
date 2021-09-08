@@ -47,6 +47,7 @@
 #include "cql3/lists.hh"
 #include "cql3/sets.hh"
 #include "cql3/maps.hh"
+#include "cql3/user_types.hh"
 
 namespace cql3 {
 namespace expr {
@@ -1317,7 +1318,9 @@ constant evaluate(term* term_ptr, const query_options& options) {
      || dynamic_cast<sets::value*>(term_ptr) != nullptr
      || dynamic_cast<sets::delayed_value*>(term_ptr) != nullptr
      || dynamic_cast<maps::value*>(term_ptr) != nullptr
-     || dynamic_cast<maps::delayed_value*>(term_ptr) != nullptr) {
+     || dynamic_cast<maps::delayed_value*>(term_ptr) != nullptr
+     || dynamic_cast<user_types::value*>(term_ptr) != nullptr
+     || dynamic_cast<user_types::delayed_value*>(term_ptr) != nullptr) {
         return evaluate(term_ptr->to_expression(), options);
     }
 
@@ -1751,7 +1754,41 @@ constant evaluate(const collection_constructor& collection, const query_options&
 }
 
 constant evaluate(const usertype_constructor& user_val, const query_options& options) {
-    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+    if (user_val.type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(usertype_constructor) called with nullptr type, should be prepared first");
+    }
+
+    const user_type_impl& utype = dynamic_cast<const user_type_impl&>(user_val.type->without_reversed());
+    if (user_val.elements.size() != utype.size()) {
+        on_internal_error(expr_logger,
+            "evaluate(usertype_constructor) called with bad number of elements, should be prepared first");
+    }
+
+    std::vector<managed_bytes_opt> field_values;
+    field_values.reserve(utype.size());
+
+    for (std::size_t i = 0; i < utype.size(); i++) {
+        column_identifier field_id(to_bytes(utype.field_name(i)), utf8_type);
+        auto cur_field = user_val.elements.find(field_id);
+
+        if (cur_field == user_val.elements.end()) {
+            on_internal_error(expr_logger, fmt::format(
+                "evaluate(usertype_constructor) called without a value for field {}, should be prepared first",
+                utype.field_name_as_string(i)));
+        }
+
+        constant field_val = evaluate(*cur_field->second, options);
+        if (field_val.is_unset_value()) {
+            // TODO: Behaviour copied from user_types::delayed_value::bind(), but this seems incorrect
+            field_val.value = raw_value::make_null();
+        }
+
+        field_values.emplace_back(std::move(field_val.value).to_managed_bytes_opt());
+    }
+
+    raw_value val_bytes = cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(field_values));
+    return constant(std::move(val_bytes), std::move(user_val.type));
 }
 
 constant evaluate(const function_call& fun_call, const query_options& options) {
