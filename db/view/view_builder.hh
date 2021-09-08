@@ -206,6 +206,11 @@ public:
     future<> start(service::migration_manager&);
 
     /**
+     * Drains view building in order to prepare it for shutdown.
+     */
+    future<> drain();
+
+    /**
      * Stops the view building process.
      */
     future<> stop();
