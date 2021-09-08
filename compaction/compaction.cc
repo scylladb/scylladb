@@ -54,6 +54,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "sstables/sstables.hh"
 #include "sstables/sstable_writer.hh"
@@ -1642,7 +1643,7 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
     return descriptor.options.visit(visitor_factory);
 }
 
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_info& info) {
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_info& info, compaction_options::scrub::mode scrub_mode) {
     auto schema = reader.schema();
 
     bool valid = true;
@@ -1678,8 +1679,11 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
                     valid = false;
                 }
             }
+            if (!valid && scrub_mode == compaction_options::scrub::mode::abort) {
+                break;
+            }
         }
-        if (!validator.on_end_of_stream()) {
+        if (valid && !validator.on_end_of_stream()) {
             scrub_compaction::report_invalid_end_of_stream(compaction_type::Scrub, validator);
             valid = false;
         }
@@ -1696,7 +1700,7 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
     co_return valid;
 }
 
-static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, column_family& cf) {
+static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, column_family& cf, compaction_options::scrub::mode scrub_mode) {
     auto schema = cf.schema();
 
     formatted_sstables_list sstables_list_msg;
@@ -1717,17 +1721,30 @@ static future<compaction_info> scrub_sstables_validate_mode(sstables::compaction
         }
     });
 
-    clogger.info("Scrubbing in validate mode: {}", sstables_list_msg);
+    sstring mode_desc;
+    switch (scrub_mode) {
+    case compaction_options::scrub::mode::validate:
+        mode_desc = format("{}", scrub_mode);
+        break;
+    case compaction_options::scrub::mode::abort:
+        mode_desc = format("{}/{}", compaction_options::scrub::mode::validate, scrub_mode);
+        break;
+    default:
+        on_internal_error(clogger, format("Unsupported validate mode: {}", scrub_mode));
+    }
+
+    clogger.info("Scrubbing in {} mode: {}", mode_desc, sstables_list_msg);
 
     auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "scrub:validate", db::no_timeout);
     auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
 
-    const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), *info);
+    const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), *info, scrub_mode);
+
     if (!valid) {
         info->invalid_sstables++;
     }
 
-    clogger.info("Scrubbing in validate mode done: {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+    clogger.info("Scrubbing in {} mode done: {} - sstable(s) are {}", mode_desc, sstables_list_msg, valid ? "valid" : "invalid");
 
     co_return *info;
 }
@@ -1738,10 +1755,12 @@ compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) 
         return make_exception_future<compaction_info>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
                 compaction_name(descriptor.options.type()), cf.schema()->ks_name(), cf.schema()->cf_name())));
     }
-    if (descriptor.options.type() == compaction_type::Scrub
-            && std::get<compaction_options::scrub>(descriptor.options.options()).operation_mode == compaction_options::scrub::mode::validate) {
+    if (descriptor.options.type() == compaction_type::Scrub) {
+      auto scrub_mode = std::get<compaction_options::scrub>(descriptor.options.options()).operation_mode;
+      if (sstables::compaction_options::scrub::is_validate_mode(scrub_mode)) {
         // Bypass the usual compaction machinery for dry-mode scrub
-        return scrub_sstables_validate_mode(std::move(descriptor), cf);
+        return scrub_sstables_validate_mode(std::move(descriptor), cf, scrub_mode);
+      }
     }
     auto c = make_compaction(cf, std::move(descriptor));
     if (c->enable_garbage_collected_sstable_writer()) {

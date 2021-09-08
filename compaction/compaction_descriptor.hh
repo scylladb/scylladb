@@ -80,6 +80,17 @@ public:
             validate, // validate data, printing all errors found (sstables are only read, not rewritten)
         };
         mode operation_mode = mode::abort;
+
+        static bool is_validate_mode(mode m) {
+            switch (m) {
+            case mode::abort:
+            case mode::validate:
+                return true;
+            case mode::skip:
+            case mode::segregate:
+                return false;
+            }
+        }
     };
     struct reshard {
     };

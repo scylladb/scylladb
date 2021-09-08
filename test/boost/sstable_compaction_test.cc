@@ -2274,8 +2274,13 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
 
     auto info = make_lw_shared<compaction_info>();
 
+    constexpr std::array<compaction_options::scrub::mode, 2> validate_modes = {
+        compaction_options::scrub::mode::abort,
+        compaction_options::scrub::mode::validate,
+    };
+
     BOOST_TEST_MESSAGE("valid");
-    {
+    for (auto mode : validate_modes) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_static_row());
         frags.emplace_back(make_clustering_row(0));
@@ -2284,61 +2289,61 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info, mode).get();
         BOOST_REQUIRE(valid);
     }
 
     BOOST_TEST_MESSAGE("out-of-order clustering row");
-    {
+    for (auto mode : validate_modes) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(1));
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info, mode).get();
         BOOST_REQUIRE(!valid);
     }
 
     BOOST_TEST_MESSAGE("out-of-order static row");
-    {
+    for (auto mode : validate_modes) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_static_row());
         frags.emplace_back(make_partition_end());
 
-        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info, mode).get();
         BOOST_REQUIRE(!valid);
     }
 
     BOOST_TEST_MESSAGE("out-of-order partition start");
-    {
+    for (auto mode : validate_modes) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(1));
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info, mode).get();
         BOOST_REQUIRE(!valid);
     }
 
     BOOST_TEST_MESSAGE("out-of-order partition");
-    {
+    for (auto mode : validate_modes) {
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_partition_end());
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_partition_end());
 
-        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info, mode).get();
         BOOST_REQUIRE(!valid);
     }
 
     BOOST_TEST_MESSAGE("missing end-of-partition at EOS");
-    {
+    for (auto mode : validate_modes) {
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(0));
 
-        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        const auto valid = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info, mode).get();
         BOOST_REQUIRE(!valid);
     }
 }

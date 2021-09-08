@@ -907,7 +907,7 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, column_family
 
 // Submit a column family to be scrubbed and wait for its termination.
 future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode) {
-    if (scrub_mode == sstables::compaction_options::scrub::mode::validate) {
+    if (sstables::compaction_options::scrub::is_validate_mode(scrub_mode)) {
         return perform_sstable_scrub_validate_mode(cf);
     }
     return rewrite_sstables(cf, sstables::compaction_options::make_scrub(scrub_mode), [this] (const table& cf) {
