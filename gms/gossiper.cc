@@ -95,6 +95,8 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
         , _feature_service(features)
         , _shared_token_metadata(stm)
         , _messaging(ms)
+        , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
+        , _force_gossip_generation(cfg.force_gossip_generation)
         , _cfg(cfg)
         , _gcfg(gcfg) {
     // Gossiper's stuff below runs only on CPU0
@@ -738,7 +740,7 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
-    auto max_duration = echo_interval + std::chrono::milliseconds(_cfg.failure_detector_timeout_in_ms());
+    auto max_duration = echo_interval + std::chrono::milliseconds(_failure_detector_timeout_ms());
     while (is_enabled()) {
         bool failed = false;
         try {
@@ -1807,8 +1809,8 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
     });
 
     build_seeds_list();
-    if (_cfg.force_gossip_generation() > 0) {
-        generation_nbr = _cfg.force_gossip_generation();
+    if (_force_gossip_generation() > 0) {
+        generation_nbr = _force_gossip_generation();
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
     endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];

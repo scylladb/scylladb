@@ -27,6 +27,7 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/updateable_value.hh"
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <optional>
@@ -584,6 +585,8 @@ private:
     feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
+    utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
+    utils::updateable_value<int32_t> _force_gossip_generation;
     db::config& _cfg;
     gossip_config _gcfg;
     // Get features supported by a particular node
