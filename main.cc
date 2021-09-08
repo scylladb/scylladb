@@ -607,7 +607,6 @@ int main(int ac, char** av) {
                 }).get();
             });
 
-            uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
@@ -626,11 +625,10 @@ int main(int ac, char** av) {
                 }
             }();
             supervisor::notify("starting prometheus API server");
-            uint16_t pport = cfg->prometheus_port();
             std::any stop_prometheus;
-            if (pport) {
+            if (cfg->prometheus_port()) {
                 prometheus_server.start("prometheus").get();
-                stop_prometheus = defer_verbose_shutdown("prometheus API server", [&prometheus_server, pport] {
+                stop_prometheus = defer_verbose_shutdown("prometheus API server", [&prometheus_server] {
                     prometheus_server.stop().get();
                 });
 
@@ -640,8 +638,8 @@ int main(int ac, char** av) {
                 pctx.prefix = cfg->prometheus_prefix();
                 (void)prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
-                  return prometheus_server.listen(socket_address{prom_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
-                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
+                  return prometheus_server.listen(socket_address{prom_addr, cfg->prometheus_port()}).handle_exception([&cfg] (auto ep) {
+                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), cfg->prometheus_port(), ep);
                     return make_exception_future<>(ep);
                   });
                 }).get();
@@ -740,9 +738,9 @@ int main(int ac, char** av) {
             });
             api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ctx.http_server.listen(socket_address{ip, api_port});
+                return ctx.http_server.listen(socket_address{ip, cfg->api_port()});
             }).get();
-            startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
+            startlog.info("Scylla API server listening on {}:{} ...", api_address, cfg->api_port());
 
             api::set_server_config(ctx, *cfg).get();
 
