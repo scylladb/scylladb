@@ -1274,14 +1274,7 @@ private:
         bool _skip_to_next_partition = false;
 
     private:
-        void maybe_abort_scrub() {
-            if (_scrub_mode == compaction_options::scrub::mode::abort) {
-                throw compaction_stop_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data", false);
-            }
-        }
-
         void on_unexpected_partition_start(const mutation_fragment& ps) {
-            maybe_abort_scrub();
             report_invalid_partition_start(compaction_type::Scrub, _validator, ps.as_partition_start().key(),
                     "Rectifying by adding assumed missing partition-end");
 
@@ -1305,7 +1298,6 @@ private:
         }
 
         skip on_invalid_partition(const dht::decorated_key& new_key) {
-            maybe_abort_scrub();
             if (_scrub_mode == compaction_options::scrub::mode::segregate) {
                 report_invalid_partition(compaction_type::Scrub, _validator, new_key, "Detected");
                 _validator.reset(new_key);
@@ -1318,8 +1310,6 @@ private:
         }
 
         skip on_invalid_mutation_fragment(const mutation_fragment& mf) {
-            maybe_abort_scrub();
-
             const auto& key = _validator.previous_partition_key();
 
             // If the unexpected fragment is a partition end, we just drop it.
@@ -1346,7 +1336,6 @@ private:
         }
 
         void on_invalid_end_of_stream() {
-            maybe_abort_scrub();
             // Handle missing partition_end
             push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
             report_invalid_end_of_stream(compaction_type::Scrub, _validator, "Rectifying by adding missing partition-end to the end of the stream");
