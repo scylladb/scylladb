@@ -188,6 +188,21 @@ struct column_mutation_attribute {
 struct function_call {
     std::variant<functions::function_name, shared_ptr<functions::function>> func;
     std::vector<expression> args;
+
+    // 0-based index of the function call within a CQL statement.
+    // Used to populate the cache of execution results while passing to
+    // another shard (handling `bounce_to_shard` messages) in LWT statements.
+    //
+    // The id is set only for the function calls that are a part of LWT
+    // statement restrictions for the partition key. Otherwise, the id is not
+    // set and the call is not considered when using or populating the cache.
+    //
+    // For example in a query like:
+    // INSERT INTO t (pk) VALUES (uuid()) IF NOT EXISTS
+    // The query should be executed on a shard that has the pk partition,
+    // but it changes with each uuid() call.
+    // uuid() call result is cached and sent to the proper shard.
+    std::optional<uint8_t> lwt_cache_id;
 };
 
 struct cast {

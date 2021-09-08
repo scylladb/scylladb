@@ -48,6 +48,8 @@
 #include "cql3/sets.hh"
 #include "cql3/maps.hh"
 #include "cql3/user_types.hh"
+#include "cql3/functions/scalar_function.hh"
+#include "cql3/functions/function_call.hh"
 
 namespace cql3 {
 namespace expr {
@@ -1312,15 +1314,14 @@ constant evaluate(term* term_ptr, const query_options& options) {
      || dynamic_cast<tuples::value*>(term_ptr) != nullptr
      || dynamic_cast<tuples::delayed_value*>(term_ptr) != nullptr
      || dynamic_cast<lists::value*>(term_ptr) != nullptr
-     // tests using lists::delayed_value use evaluate(function_call) which is not implemented yet
-     // commented out for now
-     //|| dynamic_cast<lists::delayed_value*>(term_ptr) != nullptr 
+     || dynamic_cast<lists::delayed_value*>(term_ptr) != nullptr 
      || dynamic_cast<sets::value*>(term_ptr) != nullptr
      || dynamic_cast<sets::delayed_value*>(term_ptr) != nullptr
      || dynamic_cast<maps::value*>(term_ptr) != nullptr
      || dynamic_cast<maps::delayed_value*>(term_ptr) != nullptr
      || dynamic_cast<user_types::value*>(term_ptr) != nullptr
-     || dynamic_cast<user_types::delayed_value*>(term_ptr) != nullptr) {
+     || dynamic_cast<user_types::delayed_value*>(term_ptr) != nullptr
+     || dynamic_cast<functions::function_call*>(term_ptr) != nullptr) {
         return evaluate(term_ptr->to_expression(), options);
     }
 
@@ -1792,7 +1793,56 @@ constant evaluate(const usertype_constructor& user_val, const query_options& opt
 }
 
 constant evaluate(const function_call& fun_call, const query_options& options) {
-    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+    const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
+    if (fun == nullptr) {
+        throw std::runtime_error("Can't evaluate function call with name only, should be prepared earlier");
+    }
+
+    // Can't use static_cast<> because function is a virtual base class of scalar_function
+    functions::scalar_function* scalar_fun = dynamic_cast<functions::scalar_function*>(fun->get());
+    if (scalar_fun == nullptr) {
+        throw std::runtime_error("Only scalar functions can be evaluated using evaluate()");
+    }
+
+    std::vector<bytes_opt> arguments;
+    arguments.reserve(fun_call.args.size());
+
+    for (const expression& arg : fun_call.args) {
+        constant arg_val = evaluate(arg, options);
+        if (arg_val.is_null_or_unset()) {
+            throw exceptions::invalid_request_exception(format("Invalid null or unset value for argument to {}", *scalar_fun));
+        }
+
+        arguments.emplace_back(to_bytes_opt(std::move(arg_val.value)));
+    }
+
+    if (fun_call.lwt_cache_id.has_value()) {
+        computed_function_values::mapped_type* cached_value = options.find_cached_pk_function_call(*fun_call.lwt_cache_id);
+        if (cached_value != nullptr) {
+            return constant(raw_value::make_value(*cached_value), scalar_fun->return_type());
+        }
+    }
+
+    bytes_opt result = scalar_fun->execute(cql_serialization_format::internal(), arguments);
+
+    if (fun_call.lwt_cache_id.has_value()) {
+        options.cache_pk_function_call(*fun_call.lwt_cache_id, result);
+    }
+
+    if (!result.has_value()) {
+        return constant::make_null(scalar_fun->return_type());
+    }
+
+    try {
+        scalar_fun->return_type()->validate(*result, cql_serialization_format::internal());
+    } catch (marshal_exception&) {
+        throw runtime_exception(format("Return of function {} ({}) is not a valid value for its declared return type {}",
+                                       *scalar_fun, to_hex(result),
+                                       scalar_fun->return_type()->as_cql3_type()
+                                       ));
+    }
+
+    return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
 }
 
 static void ensure_can_get_value_elements(const constant& val,
