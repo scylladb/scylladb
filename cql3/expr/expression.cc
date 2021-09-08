@@ -1364,6 +1364,43 @@ constant evaluate(term& term_ref, const query_options& options) {
     return evaluate(&term_ref, options);
 }
 
+constant evaluate_IN_list(term* term_ptr, const query_options& options) {
+    if (term_ptr == nullptr) {
+        return constant::make_null();
+    }
+
+    ::shared_ptr<terminal> bound;
+    lists::delayed_value* delayed_list = dynamic_cast<lists::delayed_value*>(term_ptr);
+    if (delayed_list != nullptr) {
+        bound = delayed_list->bind_ignore_null(options);
+    } else {
+        bound = term_ptr->bind(options);
+    }
+
+    if (bound.get() == nullptr) {
+        return constant::make_null();
+    }
+
+    lists::value* list_value = dynamic_cast<lists::value*>(bound.get());
+    if (list_value != nullptr) {
+        // Remove NULL elements from the list
+        std::remove_if(list_value->_elements.begin(), list_value->_elements.end(),
+                       [](const managed_bytes_opt& element) { return !element.has_value(); });
+    }
+
+    raw_value raw_val = bound->get(options);
+    data_type val_type = bound->get_value_type();
+    return constant(std::move(raw_val), std::move(val_type));
+}
+
+constant evaluate_IN_list(const ::shared_ptr<term>& term_ptr, const query_options& options) {
+    return evaluate_IN_list(term_ptr.get(), options);
+}
+
+constant evaluate_IN_list(term& term_ref, const query_options& options) {
+    return evaluate_IN_list(&term_ref, options);
+}
+
 cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, const query_options& options) {
     constant value = evaluate(term_ptr, options);
     return cql3::raw_value_view::make_temporary(std::move(value.value));

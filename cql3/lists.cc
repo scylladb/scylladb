@@ -149,6 +149,25 @@ lists::delayed_value::bind(const query_options& options) {
     return ::make_shared<value>(buffers, _my_type);
 }
 
+shared_ptr<terminal>
+lists::delayed_value::bind_ignore_null(const query_options& options) {
+    utils::chunked_vector<managed_bytes_opt> buffers;
+    buffers.reserve(_elements.size());
+    for (auto&& t : _elements) {
+        auto bo = t->bind_and_get(options);
+
+        if (bo.is_null()) {
+            continue;
+        }
+        if (bo.is_unset_value()) {
+            return constants::UNSET_VALUE;
+        }
+
+        buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
+    }
+    return ::make_shared<value>(buffers, _my_type);
+}
+
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
     const auto& value = options.get_value_at(_bind_index);

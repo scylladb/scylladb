@@ -546,6 +546,12 @@ constant evaluate(const ::shared_ptr<term>&, const query_options&);
 constant evaluate(term*, const query_options&);
 constant evaluate(term&, const query_options&);
 
+// Similar to evaluate(), but ignores any NULL values in the final list value.
+// In an IN restriction nulls can be ignored, because nothing equals NULL.
+constant evaluate_IN_list(const ::shared_ptr<term>&, const query_options&);
+constant evaluate_IN_list(term*, const query_options&);
+constant evaluate_IN_list(term&, const query_options&);
+
 // Calls evaluate() on the term and then converts the constant to raw_value_view
 cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
 cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
