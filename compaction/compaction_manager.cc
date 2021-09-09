@@ -548,7 +548,9 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
         // case we won't retry.
         retry = e.retry();
         decision_msg = !retry ? stop_msg : decision_msg;
-        cmlog.info("compaction info: {}: {}", e.what(), decision_msg);
+        auto error_msg = sstring(e.what());
+        logging::log_level level = error_msg.find("failed") == sstring::npos ? logging::log_level::info : logging::log_level::error;
+        cmlog.log(level, "compaction info: {}: {}", error_msg, decision_msg);
     } catch (storage_io_error& e) {
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
         retry = false;
