@@ -607,6 +607,11 @@ int main(int ac, char** av) {
                 }).get();
             });
 
+            if (cfg->broadcast_address().empty() && cfg->listen_address().empty()) {
+                startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
+                throw bad_configuration_error();
+            }
+
             if (cfg->broadcast_rpc_address().empty() && cfg->rpc_address() == "0.0.0.0") {
                 startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address", cfg->rpc_address());
                 throw bad_configuration_error();
@@ -618,7 +623,6 @@ int main(int ac, char** av) {
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
-            sstring broadcast_address = cfg->broadcast_address();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
             supervisor::notify("starting prometheus API server");
@@ -643,24 +647,9 @@ int main(int ac, char** av) {
                   });
                 }).get();
             }
-            if (!broadcast_address.empty()) {
-                try {
-                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address, family, preferred).get0());
-                } catch (...) {
-                    startlog.error("Bad configuration: invalid 'broadcast_address': {}: {}", broadcast_address, std::current_exception());
-                    throw bad_configuration_error();
-                }
-            } else if (!listen_address.empty()) {
-                try {
-                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(listen_address, family, preferred).get0());
-                } catch (...) {
-                    startlog.error("Bad configuration: invalid 'listen_address': {}: {}", listen_address, std::current_exception());
-                    throw bad_configuration_error();
-                }
-            } else {
-                startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
-                throw bad_configuration_error();
-            }
+
+            auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
+            utils::fb_utilities::set_broadcast_address(broadcast_addr);
 
             auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
             utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
