@@ -607,6 +607,11 @@ int main(int ac, char** av) {
                 }).get();
             });
 
+            if (cfg->broadcast_rpc_address().empty() && cfg->rpc_address() == "0.0.0.0") {
+                startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address", cfg->rpc_address());
+                throw bad_configuration_error();
+            }
+
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
@@ -614,7 +619,6 @@ int main(int ac, char** av) {
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             sstring broadcast_address = cfg->broadcast_address();
-            sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
             supervisor::notify("starting prometheus API server");
@@ -658,15 +662,8 @@ int main(int ac, char** av) {
                 throw bad_configuration_error();
             }
 
-            if (!broadcast_rpc_address.empty()) {
-                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(broadcast_rpc_address, family, preferred).get0());
-            } else {
-                if (rpc_address == "0.0.0.0") {
-                    startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address to a value other than {}", rpc_address, rpc_address);
-                    throw bad_configuration_error();
-                }
-                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address, family, preferred).get0());
-            }
+            auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
+            utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
 
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
