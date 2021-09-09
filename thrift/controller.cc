@@ -63,8 +63,8 @@ future<> thrift_controller::do_start_server() {
     thrift_server_config tsc;
     tsc.timeout_config = make_timeout_config(cfg);
     tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
-    return gms::inet_address::lookup(addr, family, preferred).then([this, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
-        return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_ss), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, addr, ip, keepalive] {
+    return gms::inet_address::lookup(addr, family, preferred).then([this, tserver, port, keepalive, tsc] (gms::inet_address ip) {
+        return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_ss), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, ip, keepalive] {
             // #293 - do not stop anything
             //engine().at_exit([tserver] {
             //    return tserver->stop();
