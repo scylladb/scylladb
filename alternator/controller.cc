@@ -69,7 +69,7 @@ future<> controller::start() {
 
         net::inet_address addr;
         try {
-            addr = net::dns::get_host_by_name(_config.alternator_address(), family).get0().addr_list.front();
+            addr = gms::inet_address::lookup(_config.alternator_address(), family).get0();
         } catch (...) {
             std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", _config.alternator_address())));
         }
