@@ -29,6 +29,7 @@ partition_slice_builder::partition_slice_builder(const schema& schema, query::pa
     : _regular_columns(std::move(slice.regular_columns))
     , _static_columns(std::move(slice.static_columns))
     , _row_ranges(std::move(slice._row_ranges))
+    , _specific_ranges(std::move(slice._specific_ranges))
     , _schema(schema)
     , _options(std::move(slice.options))
 {
@@ -72,7 +73,8 @@ partition_slice_builder::build() {
         std::move(ranges),
         std::move(static_columns),
         std::move(regular_columns),
-        std::move(_options)
+        std::move(_options),
+        std::move(_specific_ranges)
     };
 }
 
@@ -93,6 +95,22 @@ partition_slice_builder::with_ranges(std::vector<query::clustering_range> ranges
         for (auto&& r : ranges) {
             with_range(std::move(r));
         }
+    }
+    return *this;
+}
+
+partition_slice_builder&
+partition_slice_builder::mutate_ranges(std::function<void(std::vector<query::clustering_range>&)> func) {
+    if (_row_ranges) {
+        func(*_row_ranges);
+    }
+    return *this;
+}
+
+partition_slice_builder&
+partition_slice_builder::mutate_specific_ranges(std::function<void(query::specific_ranges&)> func) {
+    if (_specific_ranges) {
+        func(*_specific_ranges);
     }
     return *this;
 }
