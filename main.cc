@@ -1317,6 +1317,11 @@ int main(int ac, char** av) {
                     return vb.start(mm.local());
                 }).get();
             }
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
+                if (cfg->view_building()) {
+                    view_builder.stop().get();
+                }
+            });
 
             // Truncate `clients' CF - this table should not persist between server restarts.
             clear_clientlist().get();
@@ -1415,9 +1420,9 @@ int main(int ac, char** av) {
                 ss.local().drain_on_shutdown().get();
             });
 
-            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
+            auto drain_view_builder = defer_verbose_shutdown("view builder ops", [cfg] {
                 if (cfg->view_building()) {
-                    view_builder.stop().get();
+                    view_builder.invoke_on_all(&db::view::view_builder::drain).get();
                 }
             });
 

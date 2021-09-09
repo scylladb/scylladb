@@ -1473,8 +1473,11 @@ future<> view_builder::start(service::migration_manager& mm) {
     return make_ready_future<>();
 }
 
-future<> view_builder::stop() {
-    vlogger.info("Stopping view builder");
+future<> view_builder::drain() {
+    if (_as.abort_requested()) {
+        return make_ready_future();
+    }
+    vlogger.info("Draining view builder");
     _as.request_abort();
     return _started.then([this] {
         return _mnotifier.unregister_listener(this).then([this] {
@@ -1492,6 +1495,11 @@ future<> view_builder::stop() {
             });
         });
     });
+}
+
+future<> view_builder::stop() {
+    vlogger.info("Stopping view builder");
+    return drain();
 }
 
 view_builder::build_step& view_builder::get_or_create_build_step(utils::UUID base_id) {
