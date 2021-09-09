@@ -1082,4 +1082,19 @@ future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, d
     }
 }
 
+future<gms::inet_address> resolve(const config_file::named_value<sstring>& address, gms::inet_address::opt_family family, gms::inet_address::opt_family preferred) {
+    std::exception_ptr ex;
+    try {
+        co_return co_await gms::inet_address::lookup(address(), family, preferred);
+    } catch (...) {
+        try {
+            std::throw_with_nested(std::runtime_error(fmt::format("Couldn't resolve {}", address.name())));
+        } catch (...) {
+            ex = std::current_exception();
+        }
+    }
+
+    co_return coroutine::exception(std::move(ex));
+}
+
 }
