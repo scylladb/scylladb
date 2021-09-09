@@ -621,7 +621,6 @@ int main(int ac, char** av) {
             ctx.api_doc = cfg->api_doc_dir();
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-            sstring rpc_address = cfg->rpc_address();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
             supervisor::notify("starting prometheus API server");
