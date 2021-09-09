@@ -728,6 +728,8 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
             };
 
             return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &cf, descriptor = std::move(descriptor)] () mutable {
+              // Take write lock for cf to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
+              return with_lock(_compaction_locks[&cf].for_write(), [this, task, &cf, descriptor = std::move(descriptor)] () mutable {
                 _stats.pending_tasks--;
                 _stats.active_tasks++;
                 task->compaction_running = true;
@@ -737,6 +739,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                         return cf.compact_sstables(std::move(descriptor));
                     });
                 });
+              });
             }).then_wrapped([this, task, compacting] (future<> f) mutable {
                 task->compaction_running = false;
                 _stats.active_tasks--;
@@ -765,7 +768,9 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
 }
 
 future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* cf) {
-    return run_custom_job(cf, sstables::compaction_type::Scrub, [this, &cf = *cf, sstables = get_candidates(*cf)] () mutable -> future<> {
+    // All sstables must be included, even the ones being compacted, such that everything in table is validated.
+    auto all_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*cf->get_sstables());
+    return run_custom_job(cf, sstables::compaction_type::Scrub, [this, &cf = *cf, sstables = std::move(all_sstables)] () mutable -> future<> {
         class pending_tasks {
             compaction_manager::stats& _stats;
             size_t _n;
@@ -897,9 +902,14 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
     if (scrub_mode == sstables::compaction_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(cf);
     }
-    return rewrite_sstables(cf, sstables::compaction_options::make_scrub(scrub_mode), [this] (const table& cf) {
-        return get_candidates(cf);
-    }, can_purge_tombstones::no);
+    // since we might potentially have ongoing compactions, and we
+    // must ensure that all sstables created before we run are scrubbed,
+    // we need to barrier out any previously running compaction.
+    return cf->run_with_compaction_disabled([this, cf, scrub_mode] {
+        return rewrite_sstables(cf, sstables::compaction_options::make_scrub(scrub_mode), [this] (const table& cf) {
+            return get_candidates(cf);
+        }, can_purge_tombstones::no);
+    });
 }
 
 future<> compaction_manager::remove(column_family* cf) {
