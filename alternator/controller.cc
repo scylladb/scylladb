@@ -67,12 +67,7 @@ future<> controller::start() {
         rmw_operation::set_default_write_isolation(_config.alternator_write_isolation());
         executor::set_default_timeout(std::chrono::milliseconds(_config.alternator_timeout_in_ms()));
 
-        net::inet_address addr;
-        try {
-            addr = gms::inet_address::lookup(_config.alternator_address(), family).get0();
-        } catch (...) {
-            std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", _config.alternator_address())));
-        }
+        net::inet_address addr = utils::resolve(_config.alternator_address, family).get0();
 
         auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
 

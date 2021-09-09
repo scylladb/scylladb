@@ -47,7 +47,6 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
     auto server = make_shared<seastar::sharded<redis_transport::redis_server>>();
     _server = server;
 
-    auto addr = cfg.rpc_address();
     auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     auto ceo = cfg.client_encryption_options();
@@ -58,7 +57,7 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
     redis_cfg._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level());
     redis_cfg._max_request_size = memory::stats().total_memory() / 10;
     redis_cfg._total_redis_db_count = cfg.redis_database_count();
-    return gms::inet_address::lookup(addr, family, preferred).then([this, server, &cfg, keepalive, ceo = std::move(ceo), redis_cfg, &auth_service] (seastar::net::inet_address ip) {
+    return utils::resolve(cfg.rpc_address, family, preferred).then([this, server, &cfg, keepalive, ceo = std::move(ceo), redis_cfg, &auth_service] (seastar::net::inet_address ip) {
         return server->start(std::ref(_query_processor), std::ref(auth_service), redis_cfg).then([server, &cfg, ip, ceo, keepalive]() {
             auto f = make_ready_future();
             struct listen_cfg {
