@@ -625,6 +625,24 @@ query_processor::parse_statement(const sstring_view& query) {
     }
 }
 
+std::vector<std::unique_ptr<raw::parsed_statement>>
+query_processor::parse_statements(std::string_view queries) {
+    try {
+        auto statements = util::do_with_parser(queries, std::mem_fn(&cql3_parser::CqlParser::queries));
+        if (statements.empty()) {
+            throw exceptions::syntax_exception("Parsing failed");
+        }
+        return statements;
+    } catch (const exceptions::recognition_exception& e) {
+        throw exceptions::syntax_exception(format("Invalid or malformed CQL query string: {}", e.what()));
+    } catch (const exceptions::cassandra_exception& e) {
+        throw;
+    } catch (const std::exception& e) {
+        log.error("The statements: {} could not be parsed: {}", queries, e.what());
+        throw exceptions::syntax_exception(format("Failed parsing statements: [{}] reason: {}", queries, e.what()));
+    }
+}
+
 query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
         const std::initializer_list<data_value>& values,

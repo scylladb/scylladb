@@ -122,7 +122,7 @@ const sstring& create_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-inline user_type create_type_statement::create_type(database& db) const
+user_type create_type_statement::create_type(database& db) const
 {
     std::vector<bytes> field_names;
     std::vector<data_type> field_types;

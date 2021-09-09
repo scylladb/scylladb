@@ -214,6 +214,11 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
     });
 }
 
+lw_shared_ptr<keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm) {
+    _attrs->validate();
+    return _attrs->as_ks_metadata(_name, tm);
+}
+
 }
 
 }
