@@ -613,7 +613,6 @@ int main(int ac, char** av) {
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
-            sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
@@ -719,14 +718,8 @@ int main(int ac, char** av) {
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
-            supervisor::notify("determining DNS name");
-            auto ip = [&] {
-                try {
-                    return gms::inet_address::lookup(api_address, family, preferred).get0();
-                } catch (...) {
-                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve api_address {}", api_address)));
-                }
-            }();
+
+            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
             supervisor::notify("starting API server");
             ctx.http_server.start("API").get();
             auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
@@ -734,9 +727,9 @@ int main(int ac, char** av) {
             });
             api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ctx.http_server.listen(socket_address{ip, cfg->api_port()});
+                return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
-            startlog.info("Scylla API server listening on {}:{} ...", api_address, cfg->api_port());
+            startlog.info("Scylla API server listening on {}:{} ...", api_addr, cfg->api_port());
 
             api::set_server_config(ctx, *cfg).get();
 
