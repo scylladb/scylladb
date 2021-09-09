@@ -41,6 +41,8 @@
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/random_utils.hh"
+#include "test/lib/random_schema.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
@@ -476,8 +478,8 @@ using in_thread = seastar::bool_class<class in_thread_tag>;
 
 struct flat_stream_consumer {
     schema_ptr _schema;
+    schema_ptr _reversed_schema;
     reader_permit _permit;
-    reversed_partitions _reversed;
     skip_after_first_fragment _skip_partition;
     skip_after_first_partition _skip_stream;
     std::vector<mutation> _mutations;
@@ -485,22 +487,17 @@ struct flat_stream_consumer {
     bool _inside_partition = false;
 private:
     void verify_order(position_in_partition_view pos) {
-        position_in_partition::less_compare cmp(*_schema);
-        if (!_reversed) {
-            BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row()
-                          || cmp(*_previous_position, pos));
-        } else {
-            BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row()
-                          || cmp(pos, *_previous_position));
-        }
+        const schema& s = _reversed_schema ? *_reversed_schema : *_schema;
+        position_in_partition::less_compare cmp(s);
+        BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row() || cmp(*_previous_position, pos));
     }
 public:
     flat_stream_consumer(schema_ptr s, reader_permit permit, reversed_partitions reversed,
                          skip_after_first_fragment skip_partition = skip_after_first_fragment::no,
                          skip_after_first_partition skip_stream = skip_after_first_partition::no)
         : _schema(std::move(s))
+        , _reversed_schema(reversed ? _schema->make_reversed() : nullptr)
         , _permit(std::move(permit))
-        , _reversed(reversed)
         , _skip_partition(skip_partition)
         , _skip_stream(skip_stream)
     { }
@@ -534,10 +531,13 @@ public:
     }
     stop_iteration consume(range_tombstone&& rt) {
         BOOST_REQUIRE(_inside_partition);
-        auto pos = _reversed ? rt.end_position() : rt.position();
+        auto pos = rt.position();
         verify_order(pos);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(pos);
+        if (_reversed_schema) {
+            rt.reverse(); // undo the reversing
+        }
         _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(rt)));
         return stop_iteration(bool(_skip_partition));
     }
@@ -564,7 +564,8 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return fmr.consume_in_thread(std::move(fsc));
         } else {
             if (reversed) {
-                return with_closeable(make_reversing_reader(fmr, query::max_result_size(size_t(1) << 20)), [fsc = std::move(fsc)] (flat_mutation_reader& reverse_reader) mutable {
+                return with_closeable(make_reversing_reader(make_flat_mutation_reader<delegating_reader>(fmr), query::max_result_size(size_t(1) << 20)),
+                        [fsc = std::move(fsc)] (flat_mutation_reader& reverse_reader) mutable {
                     return reverse_reader.consume(std::move(fsc));
                 }).get0();
             }
@@ -813,11 +814,8 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
         }
 
         const uint64_t hard_limit = size_t(1) << 18;
-        auto reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), {mut});
-        // need to close both readers since the reverse_reader
-        // doesn't own the reader passed to it by ref.
-        auto close_reader = deferred_close(reader);
-        auto reverse_reader = make_reversing_reader(reader, query::max_result_size(size_t(1) << 10, hard_limit));
+        auto reverse_reader = make_reversing_reader(flat_mutation_reader_from_mutations(semaphore.make_permit(), {mut}),
+                query::max_result_size(size_t(1) << 10, hard_limit));
         auto close_reverse_reader = deferred_close(reverse_reader);
 
         try {
@@ -839,4 +837,95 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
 
     test_with_partition(true);
     test_with_partition(false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
+    using namespace tests::data_model;
+    using key_range = nonwrapping_interval<mutation_description::key>;
+
+    std::mt19937 engine(tests::random::get_int<uint32_t>());
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    auto rnd_schema_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 8));
+    auto rnd_schema = tests::random_schema(engine(), *rnd_schema_spec);
+
+    auto forward_schema = rnd_schema.schema();
+    auto reverse_schema = forward_schema->make_reversed();
+
+    auto forward_mt = make_lw_shared<memtable>(forward_schema);
+    auto reverse_mt = make_lw_shared<memtable>(reverse_schema);
+
+    for (size_t pk = 0; pk != 8; ++pk) {
+        auto mut = rnd_schema.new_mutation(pk);
+
+        if (forward_schema->has_static_columns()) {
+            rnd_schema.add_static_row(engine, mut);
+        }
+
+        auto ckeys = rnd_schema.make_ckeys(8);
+
+        for (size_t ck = 0; ck != ckeys.size(); ++ck) {
+            const auto& ckey = ckeys.at(ck);
+            if (ck % 4 == 0 && ck + 3 < ckeys.size()) {
+                const auto& ckey_1 = ckeys.at(ck + 1);
+                const auto& ckey_2 = ckeys.at(ck + 2);
+                const auto& ckey_3 = ckeys.at(ck + 3);
+                rnd_schema.delete_range(engine, mut, key_range::make({ckey, true}, {ckey_2, true}));
+                rnd_schema.delete_range(engine, mut, key_range::make({ckey, true}, {ckey_3, true}));
+                rnd_schema.delete_range(engine, mut, key_range::make({ckey_1, true}, {ckey_3, true}));
+            }
+            rnd_schema.add_row(engine, mut, ckey);
+        }
+
+        forward_mt->apply(mut.build(forward_schema));
+        reverse_mt->apply(mut.build(reverse_schema));
+    }
+
+    auto reversed_forward_reader = assert_that(make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit), query::max_result_size(1 << 20)));
+
+    auto reverse_reader = reverse_mt->make_flat_reader(reverse_schema, permit);
+    auto deferred_reverse_close = deferred_close(reverse_reader);
+
+    while (auto mf_opt = reverse_reader().get()) {
+        auto& mf = *mf_opt;
+        reversed_forward_reader.produces(*forward_schema, mf);
+    }
+    reversed_forward_reader.produces_end_of_stream();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
+    std::list<query::partition_slice> reversed_slices;
+    auto populate = [&reversed_slices] (schema_ptr s, const std::vector<mutation> &muts) {
+        auto reverse_schema = s->make_reversed();
+        auto reverse_mt = make_lw_shared<memtable>(reverse_schema);
+        for (const auto& mut : muts) {
+            reverse_mt->apply(reverse(mut));
+        }
+
+        return mutation_source([=, &reversed_slices] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_ptr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) mutable {
+            reversed_slices.emplace_back(query::reverse_slice(*schema, slice));
+            // We don't want the memtable reader to read in reverse.
+            reversed_slices.back().options.remove(query::partition_slice::option::reversed);
+            auto rd = make_reversing_reader(reverse_mt->make_flat_reader(schema->make_reversed(), std::move(permit), range, reversed_slices.back(), pc,
+                        std::move(trace_ptr), streamed_mutation::forwarding::no, fwd_mr), query::max_result_size(1 << 20));
+            if (fwd_sm) {
+                return make_forwardable(std::move(rd));
+            }
+            return rd;
+        });
+    };
+    run_mutation_source_tests(populate);
 }

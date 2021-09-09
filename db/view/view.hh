@@ -192,8 +192,8 @@ public:
             , _view_updates(std::move(views_to_update))
             , _updates(std::move(updates))
             , _existings(std::move(existings))
-            , _update_tombstone_tracker(*_schema, false)
-            , _existing_tombstone_tracker(*_schema, false)
+            , _update_tombstone_tracker(*_schema)
+            , _existing_tombstone_tracker(*_schema)
             , _now(now) {
     }
     view_update_builder(view_update_builder&& other) noexcept = default;

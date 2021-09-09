@@ -192,6 +192,15 @@ public:
         end_kind = new_end.kind();
     }
 
+    // Swap bounds to reverse range-tombstone -- as if it came from a table with
+    // reverse native order. See docs/design-notes/reverse-reads.md.
+    void reverse() {
+        std::swap(start, end);
+        std::swap(start_kind, end_kind);
+        start_kind = reverse_kind(start_kind);
+        end_kind = reverse_kind(end_kind);
+    }
+
     size_t external_memory_usage(const schema&) const noexcept {
         return start.external_memory_usage() + end.external_memory_usage();
     }
@@ -252,13 +261,12 @@ class range_tombstone_accumulator {
     tombstone _partition_tombstone;
     std::deque<range_tombstone> _range_tombstones;
     tombstone _current_tombstone;
-    bool _reversed;
 private:
     void update_current_tombstone();
     void drop_unneeded_tombstones(const clustering_key_prefix& ck, int w = 0);
 public:
-    range_tombstone_accumulator(const schema& s, bool reversed)
-        : _cmp(s), _reversed(reversed) { }
+    explicit range_tombstone_accumulator(const schema& s)
+        : _cmp(s) { }
 
     void set_partition_tombstone(tombstone t) {
         _partition_tombstone = t;

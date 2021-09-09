@@ -2052,7 +2052,10 @@ table::mutation_query(schema_ptr s,
 
     std::exception_ptr ex;
   try {
-    auto rrb = reconcilable_result_builder(*s, cmd.slice, std::move(accounter));
+    // Un-reverse the schema sent to the coordinator, it expects the
+    // legacy format.
+    auto result_schema = cmd.slice.options.contains(query::partition_slice::option::reversed) ? s->make_reversed() : s;
+    auto rrb = reconcilable_result_builder(*result_schema, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, class_config.max_memory_for_unlimited_query);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {

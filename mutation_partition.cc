@@ -1978,8 +1978,7 @@ void reconcilable_result_builder::consume_new_partition(const dht::decorated_key
         !has_ck_selector(_slice.row_ranges(_schema, dk.key()));
     _static_row_is_alive = false;
     _live_rows = 0;
-    auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
-    _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), is_reversed));
+    _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), _reversed));
 }
 
 void reconcilable_result_builder::consume(tombstone t) {
@@ -2008,6 +2007,10 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
 
 stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
     _memory_accounter.update(rt.memory_usage(_schema));
+    if (_reversed) {
+        // undo reversing done for the native reversed format, coordinator still uses old reversing format
+        rt.reverse();
+    }
     return _mutation_consumer->consume(std::move(rt));
 }
 
@@ -2040,7 +2043,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
     auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
             max_partitions, query_result_builder(*s, builder));
-    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
+    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::legacy_half_reverse : consume_in_reverse::no;
 
     for (const partition& p : r.partitions()) {
         const auto res = p.mut().unfreeze(s).consume(consumer, reverse);
@@ -2059,7 +2062,7 @@ query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_l
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
     auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*m.schema(), now, slice, row_limit,
             query::max_partitions, query_result_builder(*m.schema(), builder));
-    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
+    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::legacy_half_reverse : consume_in_reverse::no;
     std::move(m).consume(consumer, reverse);
     return builder.build();
 }

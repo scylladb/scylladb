@@ -890,17 +890,19 @@ future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer) {
 flat_mutation_reader
 make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
 
-/// A reader that emits partitions in reverse.
+/// A reader that emits partitions in native reverse order.
 ///
-/// 1. Static row is still emitted first.
-/// 2. Range tombstones are ordered by their end position.
-/// 3. Clustered rows and range tombstones are emitted in descending order.
-/// Because of 2 and 3 the guarantee that a range tombstone is emitted before
+/// 1. The reader's schema() method will return a reversed schema (see
+///    \ref schema::make_reversed()).
+/// 2. Static row is still emitted first.
+/// 3. Range tombstones' bounds are reversed (see \ref range_tombstone::reverse()).
+/// 4. Clustered rows and range tombstones are emitted in descending order.
+/// Because of 3 and 4 the guarantee that a range tombstone is emitted before
 /// any mutation fragment affected by it still holds.
 /// Ordering of partitions themselves remains unchanged.
+/// For more details see docs/design-notes/reverse-reads.md.
 ///
-/// \param original the reader to be reversed, has to be kept alive while the
-///     reversing reader is in use.
+/// \param original the reader to be reversed
 /// \param max_size the maximum amount of memory the reader is allowed to use
 ///     for reversing and conversely the maximum size of the results. The
 ///     reverse reader reads entire partitions into memory, before reversing
@@ -911,7 +913,7 @@ make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<
 ///
 /// FIXME: reversing should be done in the sstable layer, see #1413.
 flat_mutation_reader
-make_reversing_reader(flat_mutation_reader& original, query::max_result_size max_size);
+make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size);
 
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
