@@ -25,6 +25,15 @@
 
 #include "partition_slice_builder.hh"
 
+partition_slice_builder::partition_slice_builder(const schema& schema, query::partition_slice slice)
+    : _regular_columns(std::move(slice.regular_columns))
+    , _static_columns(std::move(slice.static_columns))
+    , _row_ranges(std::move(slice._row_ranges))
+    , _schema(schema)
+    , _options(std::move(slice.options))
+{
+}
+
 partition_slice_builder::partition_slice_builder(const schema& schema)
     : _schema(schema)
 {

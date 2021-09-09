@@ -44,6 +44,7 @@ class partition_slice_builder {
     query::partition_slice::option_set _options;
 public:
     partition_slice_builder(const schema& schema);
+    partition_slice_builder(const schema& schema, query::partition_slice slice);
 
     partition_slice_builder& with_static_column(bytes name);
     partition_slice_builder& with_no_static_columns();

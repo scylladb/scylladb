@@ -33,6 +33,7 @@
 #include "query_class_config.hh"
 
 class position_in_partition_view;
+class partition_slice_builder;
 
 namespace query {
 
@@ -128,6 +129,7 @@ constexpr auto max_rows_if_set = std::numeric_limits<uint32_t>::max();
 // Can be accessed across cores.
 // Schema-dependent.
 class partition_slice {
+    friend class ::partition_slice_builder;
 public:
     enum class option {
         send_clustering_key,
