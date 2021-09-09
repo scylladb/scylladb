@@ -617,13 +617,7 @@ int main(int ac, char** av) {
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
-            auto prom_addr = [&] {
-                try {
-                    return gms::inet_address::lookup(cfg->prometheus_address(), family, preferred).get0();
-                } catch (...) {
-                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve prometheus_address {}", cfg->prometheus_address())));
-                }
-            }();
+
             supervisor::notify("starting prometheus API server");
             std::any stop_prometheus;
             if (cfg->prometheus_port()) {
@@ -632,14 +626,16 @@ int main(int ac, char** av) {
                     prometheus_server.stop().get();
                 });
 
+                auto ip = utils::resolve(cfg->prometheus_address, family, preferred).get0();
+
                 //FIXME discarded future
                 prometheus::config pctx;
                 pctx.metric_help = "Scylla server statistics";
                 pctx.prefix = cfg->prometheus_prefix();
                 (void)prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
-                  return prometheus_server.listen(socket_address{prom_addr, cfg->prometheus_port()}).handle_exception([&cfg] (auto ep) {
-                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), cfg->prometheus_port(), ep);
+                  return prometheus_server.listen(socket_address{ip, cfg->prometheus_port()}).handle_exception([&ip, &cfg] (auto ep) {
+                    startlog.error("Could not start Prometheus API server on {}:{}: {}", ip, cfg->prometheus_port(), ep);
                     return make_exception_future<>(ep);
                   });
                 }).get();
