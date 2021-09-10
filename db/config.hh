@@ -365,6 +365,7 @@ public:
     named_value<string_map> redis_keyspace_replication_strategy_options;
 
     named_value<bool> sanitizer_report_backtrace;
+    named_value<bool> flush_schema_tables_after_modification;
 
     // Options to restrict (forbid, warn or somehow limit) certain operations
     // or options which non-expert users are more likely to regret than to

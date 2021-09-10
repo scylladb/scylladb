@@ -107,6 +107,8 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
     db_config->commitlog_use_o_dsync.set(false);
 
     db_config->add_cdc_extension();
+
+    db_config->flush_schema_tables_after_modification.set(false);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
