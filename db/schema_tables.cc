@@ -898,7 +898,8 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
 future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
 {
     co_await with_merge_lock([&] () mutable -> future<> {
-        co_await do_merge_schema(proxy, std::move(mutations), true);
+        bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
+        co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
         co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
     });
 }

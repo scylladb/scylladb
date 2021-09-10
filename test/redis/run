@@ -71,6 +71,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --smp 2 -m 1G \
         --overprovisioned --unsafe-bypass-fsync 1 --kernel-page-cache 1 \
         --max-networking-io-control-blocks 100 \
+        --flush-schema-tables-after-modification false \
         --api-address $SCYLLA_IP \
         --rpc-address $SCYLLA_IP \
         --listen-address $SCYLLA_IP \
