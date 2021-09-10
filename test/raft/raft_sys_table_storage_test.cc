@@ -29,6 +29,8 @@
 #include "test/lib/cql_test_env.hh"
 #include "cql3/query_processor.hh"
 
+#include "gms/inet_address_serializer.hh"
+
 namespace raft{
 
 // these operators provided exclusively for testing purposes
@@ -88,7 +90,7 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
 SEASTAR_TEST_CASE(test_store_load_term_and_vote) {
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid);
+        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
 
         raft::term_t vote_term(1);
         auto vote_id = raft::server_id::create_random_id();
@@ -104,11 +106,13 @@ SEASTAR_TEST_CASE(test_store_load_term_and_vote) {
 SEASTAR_TEST_CASE(test_store_load_snapshot) {
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid);
+        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
 
         raft::term_t snp_term(1);
         raft::index_t snp_idx(1);
-        raft::configuration snp_cfg({raft::server_id::create_random_id()});
+        raft::server_address srv_addr{raft::server_id::create_random_id()};
+        srv_addr.info = ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"));
+        raft::configuration snp_cfg({std::move(srv_addr)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
         raft::snapshot_descriptor snp{
@@ -130,7 +134,7 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
 SEASTAR_TEST_CASE(test_store_load_log_entries) {
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid);
+        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
 
         std::vector<raft::log_entry_ptr> entries = create_test_log();
         co_await storage.store_log_entries(entries);
@@ -146,7 +150,7 @@ SEASTAR_TEST_CASE(test_store_load_log_entries) {
 SEASTAR_TEST_CASE(test_truncate_log) {
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid);
+        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
 
         std::vector<raft::log_entry_ptr> entries = create_test_log();
         co_await storage.store_log_entries(entries);
@@ -164,14 +168,16 @@ SEASTAR_TEST_CASE(test_truncate_log) {
 SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid);
+        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
 
         std::vector<raft::log_entry_ptr> entries = create_test_log();
         co_await storage.store_log_entries(entries);
 
         raft::term_t snp_term(3);
         raft::index_t snp_idx(3);
-        raft::configuration snp_cfg({raft::server_id::create_random_id()});
+        raft::server_address srv_addr{raft::server_id::create_random_id()};
+        srv_addr.info = ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"));
+        raft::configuration snp_cfg({std::move(srv_addr)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
         raft::snapshot_descriptor snp{

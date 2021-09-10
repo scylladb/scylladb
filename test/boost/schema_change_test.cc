@@ -797,6 +797,10 @@ SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
             BOOST_REQUIRE(it != cf_metadata.end());
             BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
 
+            it = cf_metadata.find("raft_config");
+            BOOST_REQUIRE(it != cf_metadata.end());
+            BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
+
             // The schemas returned by all_tables() may be different than those stored in the `db` object:
             // the schemas stored inside `db` come from deserializing mutations. The schemas in all_tables()
             // are hardcoded. If there is some information in the schema object that is not serialized into

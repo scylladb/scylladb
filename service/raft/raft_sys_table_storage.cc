@@ -33,13 +33,16 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/query_processor.hh"
 
+#include "gms/inet_address_serializer.hh"
+
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
 
 namespace service {
 
-raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid)
+raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id)
     : _group_id(std::move(gid))
+    , _server_id(std::move(server_id))
     , _qp(qp)
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
@@ -108,17 +111,32 @@ future<raft::snapshot_descriptor> raft_sys_table_storage::load_snapshot_descript
     const auto& id_row = id_rs->one(); // should be only one row since snapshot_id column is static
     utils::UUID snapshot_id = id_row.get_as<utils::UUID>("snapshot_id");
 
-    static const auto load_snp_info_cql = format("SELECT idx, term, config FROM system.{} WHERE group_id = ? AND id = ?",
+    // Fetch raft log index and term for the latest snapshot descriptor
+    static const auto load_snp_info_cql = format("SELECT idx, term FROM system.{} WHERE group_id = ? AND server_id = ?",
         db::system_keyspace::RAFT_SNAPSHOTS);
-    ::shared_ptr<cql3::untyped_result_set> snp_rs = co_await _qp.execute_internal(load_snp_info_cql, {_group_id.id, snapshot_id});
-    const auto& snp_row = snp_rs->one(); // should be only one matching row for a given snapshot id
-    auto snp_cfg = snp_row.get_blob("config");
-    auto in = ser::as_input_stream(snp_cfg);
+    ::shared_ptr<cql3::untyped_result_set> snp_rs = co_await _qp.execute_internal(load_snp_info_cql, {_group_id.id, _server_id.id});
+    // Should be only one matching row, since each individual server can only
+    // have a single snapshot installed at a time
+    const auto& snp_row = snp_rs->one();
+    // Fetch current and previous raft configurations for the snapshot
+    static const auto  load_cfg_cql = format("SELECT server_id, disposition, can_vote, ip_addr FROM system.{} WHERE group_id = ? AND my_server_id = ?", db::system_keyspace::RAFT_CONFIG);
+    ::shared_ptr<cql3::untyped_result_set> cfg_rs = co_await _qp.execute_internal(load_cfg_cql, {_group_id.id, _server_id.id});
+
+    raft::configuration cfg;
+
+    for (const cql3::untyped_result_set_row& row : *cfg_rs) {
+        const auto disposition = row.get_as<sstring>("disposition");
+        auto& cfg_part = disposition == "CURRENT" ? cfg.current : cfg.previous;
+        cfg_part.insert(raft::server_address{
+            raft::server_id{row.get_as<utils::UUID>("server_id")},
+            row.get_as<bool>("can_vote"),
+            ser::serialize_to_buffer<bytes>(gms::inet_address{row.get_as<net::inet_address>("ip_addr")})});
+    }
 
     raft::snapshot_descriptor s{
         .idx = raft::index_t(snp_row.get_as<int64_t>("idx")),
         .term = raft::term_t(snp_row.get_as<int64_t>("term")),
-        .config = ser::deserialize(in, boost::type<raft::configuration>()),
+        .config = std::move(cfg),
         .id = raft::snapshot_id(snapshot_id)};
     co_return s;
 }
@@ -126,12 +144,28 @@ future<raft::snapshot_descriptor> raft_sys_table_storage::load_snapshot_descript
 future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
     // TODO: check that snap.idx refers to an already persisted entry
     return execute_with_linearization_point([this, &snap, preserve_log_entries] () -> future<> {
-        static const auto store_snp_cql = format("INSERT INTO system.{} (group_id, id, idx, term, config) VALUES (?, ?, ?, ?, ?)",
+        static const auto store_snp_cql = format("INSERT INTO system.{} (group_id, server_id, snapshot_id, idx, term) VALUES (?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_SNAPSHOTS);
         co_await _qp.execute_internal(
             store_snp_cql,
-            {_group_id.id, snap.id.id, int64_t(snap.idx), int64_t(snap.term), data_value(ser::serialize_to_buffer<bytes>(snap.config))}
+            {_group_id.id, _server_id.id, snap.id.id, int64_t(snap.idx), int64_t(snap.term)}
         );
+        // remove old configs
+        static const auto delete_raft_cfg_cql = format("DELETE FROM system.{} WHERE group_id = ? AND my_server_id = ?", db::system_keyspace::RAFT_CONFIG);
+        co_await _qp.execute_internal(delete_raft_cfg_cql, {_group_id.id, _server_id.id});
+        // store current and previous raft configurations
+        static const auto store_raft_cfg_cql = format("INSERT INTO system.{} (group_id, my_server_id, server_id, disposition, can_vote, ip_addr) VALUES (?, ?, ?, ?, ?, ?)",
+            db::system_keyspace::RAFT_CONFIG);
+        for (const raft::server_address& srv_addr : snap.config.current) {
+            co_await _qp.execute_internal(store_raft_cfg_cql,
+                {_group_id.id, _server_id.id, srv_addr.id.id, "CURRENT", srv_addr.can_vote,
+                    ser::deserialize_from_buffer(srv_addr.info, boost::type<gms::inet_address>()).addr()});
+        }
+        for (const raft::server_address& srv_addr : snap.config.previous) {
+            co_await _qp.execute_internal(store_raft_cfg_cql,
+                {_group_id.id, _server_id.id, srv_addr.id.id, "PREVIOUS", srv_addr.can_vote,
+                    ser::deserialize_from_buffer(srv_addr.info, boost::type<gms::inet_address>()).addr()});
+        }
         // Also update the latest snapshot id in `system.raft` table
         static const auto store_latest_id_cql = format("INSERT INTO system.{} (group_id, snapshot_id) VALUES (?, ?)",
             db::system_keyspace::RAFT);

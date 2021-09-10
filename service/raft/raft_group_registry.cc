@@ -189,7 +189,7 @@ raft_group_registry::server_for_group raft_group_registry::create_server_for_gro
     auto rpc = std::make_unique<raft_rpc>(_ms, *this, gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), gid);
+    auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), gid, my_id);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _fd, raft::server::configuration());

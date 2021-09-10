@@ -50,6 +50,7 @@ namespace service {
 // Uses "raft" system table as a backend storage to persist raft state.
 class raft_sys_table_storage : public raft::persistence {
     raft::group_id _group_id;
+    raft::server_id _server_id;
     // Prepared statement instance used for construction of batch statements on
     // `store_log_entries` calls.
     shared_ptr<cql3::statements::modification_statement> _store_entry_stmt;
@@ -64,7 +65,7 @@ class raft_sys_table_storage : public raft::persistence {
     future<> _pending_op_fut;
 
 public:
-    explicit raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid);
+    explicit raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id);
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
