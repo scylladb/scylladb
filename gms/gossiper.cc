@@ -2477,8 +2477,12 @@ void gossiper::check_knows_remote_features(std::set<std::string_view>& local_fea
     }
 }
 
+void gossiper::update_snitch_name(sstring name) {
+    _gcfg.snitch_name = std::move(name);
+}
+
 void gossiper::check_snitch_name_matches() const {
-    const auto& my_snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+    const auto& my_snitch_name = _gcfg.snitch_name;
     for (const auto& [address, state] : _endpoint_state_map) {
         const auto remote_snitch_name = state.get_application_state_ptr(application_state::SNITCH_NAME);
         if (!remote_snitch_name) {

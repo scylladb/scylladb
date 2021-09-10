@@ -811,11 +811,17 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return map_keys(ctx.db.local().get_keyspaces());
     });
 
-    ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
+    ss::update_snitch.set(r, [&g](std::unique_ptr<request> req) {
         locator::snitch_config cfg;
+        auto ep_snitch_class_name = req->get_query_param("ep_snitch_class_name");
         cfg.name = req->get_query_param("ep_snitch_class_name");
-        return locator::i_endpoint_snitch::reset_snitch(cfg).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
+        return locator::i_endpoint_snitch::reset_snitch(cfg).then([&g] {
+            auto name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+            return g.invoke_on_all([name] (gms::gossiper& g) {
+                g.update_snitch_name(name);
+            }).then([] {
+                return make_ready_future<json::json_return_type>(json_void());
+            });
         });
     });
 

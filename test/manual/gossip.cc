@@ -18,6 +18,7 @@
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
+#include "locator/snitch_base.hh"
 #include "utils/fb_utilities.hh"
 #include "log.hh"
 #include <seastar/core/thread.hh>
@@ -80,6 +81,7 @@ int main(int ac, char ** av) {
 
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
+            gcfg.snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 gcfg.seeds.emplace(std::move(s));
             }

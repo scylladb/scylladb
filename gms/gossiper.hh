@@ -74,6 +74,7 @@ struct ack_msg_pending {
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
+    sstring snitch_name;
     std::set<inet_address> seeds;
     sstring partitioner;
     uint32_t ring_delay_ms = 30 * 1000;
@@ -149,6 +150,7 @@ public:
 
     netw::messaging_service& get_local_messaging() const noexcept { return _messaging; }
     sharded<db::system_keyspace>& get_system_keyspace() const noexcept { return _sys_ks; }
+    void update_snitch_name(sstring name);
 public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
