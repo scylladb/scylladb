@@ -336,6 +336,22 @@ def test_batch_write_item_large(test_table_sn):
     assert full_query(test_table_sn, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p}
         ) == [{'p': p, 'c': i, 'content': long_content} for i in range(25)]
 
+# DynamoDB limits the number of items written by a BatchWriteItem operation
+# to 25, even if they are small. Exceeding this limit results in a
+# ValidationException error - and none of the items in the batch are written.
+# Reproduces #5057
+@pytest.mark.xfail(reason="Issue #5057")
+def test_batch_write_item_too_many(test_table_sn):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*length'):
+        test_table_sn.meta.client.batch_write_item(RequestItems = {
+            test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i}}} for i in range(30)]
+    })
+    with pytest.raises(ClientError, match='ValidationException.*length'):
+        test_table_sn.meta.client.batch_write_item(RequestItems = {
+            test_table_sn.name: [{'DeleteRequest': {'Key': {'p': p, 'c': i}}} for i in range(30)]
+    })
+
 # According to the DynamoDB documention, a single BatchGetItem operation is
 # limited to retrieving up to 100 items or a total of 16 MB of data,
 # whichever is smaller. If we read less than those limits in a single
