@@ -538,12 +538,10 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
     try {
         f.get();
     } catch (sstables::compaction_stop_exception& e) {
-        retry = false;
         cmlog.info("compaction info: {}: stopping", e.what());
     } catch (storage_io_error& e) {
         _stats.errors++;
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
-        retry = false;
         do_stop();
     } catch (...) {
         _stats.errors++;
