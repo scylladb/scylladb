@@ -248,29 +248,6 @@ future<lw_shared_ptr<query::result_set>> query(
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info();
 
-#if 0
-    public static KSMetaData definition()
-    {
-        Iterable<CFMetaData> tables =
-            Iterables.concat(LegacySchemaTables.All,
-                             Arrays.asList(BuiltIndexes,
-                                           Hints,
-                                           Batchlog,
-                                           Paxos,
-                                           Local,
-                                           Peers,
-                                           PeerEvents,
-                                           RangeXfers,
-                                           CompactionsInProgress,
-                                           CompactionHistory,
-                                           SSTableActivity));
-        return new KSMetaData(NAME, LocalStrategy.class, Collections.<String, String>emptyMap(), true, tables);
-    }
-
-    private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
-    private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
-#endif
-
 enum class bootstrap_state {
     NEEDS_BOOTSTRAP,
     COMPLETED,
@@ -278,114 +255,6 @@ enum class bootstrap_state {
     DECOMMISSIONED
 };
 
-#if 0
-    private static DecoratedKey decorate(ByteBuffer key)
-    {
-        return StorageService.getPartitioner().decorateKey(key);
-    }
-
-    public static void finishStartup()
-    {
-        setupVersion();
-        LegacySchemaTables.saveSystemKeyspaceSchema();
-    }
-
-    private static void setupVersion()
-    {
-        String req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-        executeOnceInternal(String.format(req, LOCAL),
-                            LOCAL,
-                            FBUtilities.getReleaseVersionString(),
-                            QueryProcessor.CQL_VERSION.toString(),
-                            cassandraConstants.VERSION,
-                            String.valueOf(Server.CURRENT_VERSION),
-                            snitch.getDatacenter(FBUtilities.getBroadcastAddress()),
-                            snitch.getRack(FBUtilities.getBroadcastAddress()),
-                            DatabaseDescriptor.getPartitioner().getClass().getName());
-    }
-
-    /**
-     * Write compaction log, except columfamilies under system keyspace.
-     *
-     * @param cfs cfs to compact
-     * @param toCompact sstables to compact
-     * @return compaction task id or null if cfs is under system keyspace
-     */
-    public static UUID startCompaction(ColumnFamilyStore cfs, Iterable<SSTableReader> toCompact)
-    {
-        if (NAME.equals(cfs.keyspace.getName()))
-            return null;
-
-        UUID compactionId = UUIDGen.getTimeUUID();
-        Iterable<Integer> generations = Iterables.transform(toCompact, new Function<SSTableReader, Integer>()
-        {
-            public Integer apply(SSTableReader sstable)
-            {
-                return sstable.descriptor.generation;
-            }
-        });
-        String req = "INSERT INTO system.%s (id, keyspace_name, columnfamily_name, inputs) VALUES (?, ?, ?, ?)";
-        executeInternal(String.format(req, COMPACTIONS_IN_PROGRESS), compactionId, cfs.keyspace.getName(), cfs.name, Sets.newHashSet(generations));
-        forceBlockingFlush(COMPACTIONS_IN_PROGRESS);
-        return compactionId;
-    }
-
-    /**
-     * Deletes the entry for this compaction from the set of compactions in progress.  The compaction does not need
-     * to complete successfully for this to be called.
-     * @param taskId what was returned from {@code startCompaction}
-     */
-    public static void finishCompaction(UUID taskId)
-    {
-        assert taskId != null;
-
-        executeInternal(String.format("DELETE FROM system.%s WHERE id = ?", COMPACTIONS_IN_PROGRESS), taskId);
-        forceBlockingFlush(COMPACTIONS_IN_PROGRESS);
-    }
-
-    /**
-     * Returns a Map whose keys are KS.CF pairs and whose values are maps from sstable generation numbers to the
-     * task ID of the compaction they were participating in.
-     */
-    public static Map<Pair<String, String>, Map<Integer, UUID>> getUnfinishedCompactions()
-    {
-        String req = "SELECT * FROM system.%s";
-        UntypedResultSet resultSet = executeInternal(String.format(req, COMPACTIONS_IN_PROGRESS));
-
-        Map<Pair<String, String>, Map<Integer, UUID>> unfinishedCompactions = new HashMap<>();
-        for (UntypedResultSet.Row row : resultSet)
-        {
-            String keyspace = row.getString("keyspace_name");
-            String columnfamily = row.getString("columnfamily_name");
-            Set<Integer> inputs = row.getSet("inputs", Int32Type.instance);
-            UUID taskID = row.getUUID("id");
-
-            Pair<String, String> kscf = Pair.create(keyspace, columnfamily);
-            Map<Integer, UUID> generationToTaskID = unfinishedCompactions.get(kscf);
-            if (generationToTaskID == null)
-                generationToTaskID = new HashMap<>(inputs.size());
-
-            for (Integer generation : inputs)
-                generationToTaskID.put(generation, taskID);
-
-            unfinishedCompactions.put(kscf, generationToTaskID);
-        }
-        return unfinishedCompactions;
-    }
-
-    public static void discardCompactionsInProgress()
-    {
-        ColumnFamilyStore compactionLog = Keyspace.open(NAME).getColumnFamilyStore(COMPACTIONS_IN_PROGRESS);
-        compactionLog.truncateBlocking();
-    }
-
-    public static TabularData getCompactionHistory() throws OpenDataException
-    {
-        UntypedResultSet queryResultSet = executeInternal(String.format("SELECT * from system.%s", COMPACTION_HISTORY));
-        return CompactionHistoryTabularData.from(queryResultSet);
-    }
-#endif
     struct compaction_history_entry {
         utils::UUID id;
         sstring ks;
@@ -410,91 +279,6 @@ enum class bootstrap_state {
     future<replay_positions> get_truncated_position(utils::UUID);
     future<db::replay_position> get_truncated_position(utils::UUID, uint32_t shard);
     future<db_clock::time_point> get_truncated_at(utils::UUID);
-
-#if 0
-
-    /**
-     * Record tokens being used by another node
-     */
-    public static synchronized void updateTokens(InetAddress ep, Collection<Token> tokens)
-    {
-        if (ep.equals(FBUtilities.getBroadcastAddress()))
-        {
-            removeEndpoint(ep);
-            return;
-        }
-
-        String req = "INSERT INTO system.%s (peer, tokens) VALUES (?, ?)";
-        executeInternal(String.format(req, PEERS), ep, tokensAsSet(tokens));
-    }
-
-    public static synchronized void updatePreferredIP(InetAddress ep, InetAddress preferred_ip)
-    {
-        String req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
-        executeInternal(String.format(req, PEERS), ep, preferred_ip);
-        forceBlockingFlush(PEERS);
-    }
-
-    public static synchronized void updatePeerInfo(InetAddress ep, String columnName, Object value)
-    {
-        if (ep.equals(FBUtilities.getBroadcastAddress()))
-            return;
-
-        String req = "INSERT INTO system.%s (peer, %s) VALUES (?, ?)";
-        executeInternal(String.format(req, PEERS, columnName), ep, value);
-    }
-
-    public static synchronized void updateHintsDropped(InetAddress ep, UUID timePeriod, int value)
-    {
-        // with 30 day TTL
-        String req = "UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?";
-        executeInternal(String.format(req, PEER_EVENTS), timePeriod, value, ep);
-    }
-
-    public static synchronized void updateSchemaVersion(UUID version)
-    {
-        String req = "INSERT INTO system.%s (key, schema_version) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), version);
-    }
-
-    private static Set<String> tokensAsSet(Collection<Token> tokens)
-    {
-        Token.TokenFactory factory = StorageService.getPartitioner().getTokenFactory();
-        Set<String> s = new HashSet<>(tokens.size());
-        for (Token tk : tokens)
-            s.add(factory.toString(tk));
-        return s;
-    }
-
-    private static Collection<Token> deserializeTokens(Collection<String> tokensStrings)
-    {
-        Token.TokenFactory factory = StorageService.getPartitioner().getTokenFactory();
-        List<Token> tokens = new ArrayList<>(tokensStrings.size());
-        for (String tk : tokensStrings)
-            tokens.add(factory.fromString(tk));
-        return tokens;
-    }
-
-    /**
-     * Remove stored tokens being used by another node
-     */
-    public static synchronized void removeEndpoint(InetAddress ep)
-    {
-        String req = "DELETE FROM system.%s WHERE peer = ?";
-        executeInternal(String.format(req, PEERS), ep);
-    }
-
-    /**
-     * This method is used to update the System Keyspace with the new tokens for this node
-    */
-    public static synchronized void updateTokens(Collection<Token> tokens)
-    {
-        assert !tokens.isEmpty() : "removeEndpoint should be used instead";
-        String req = "INSERT INTO system.%s (key, tokens) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), tokensAsSet(tokens));
-        forceBlockingFlush(LOCAL);
-    }
-#endif
 
     /**
      * Return a map of stored tokens to IP addresses
@@ -529,32 +313,6 @@ bootstrap_state get_bootstrap_state();
 bool was_decommissioned();
 future<> set_bootstrap_state(bootstrap_state state);
 
-#if 0
-    public static boolean isIndexBuilt(String keyspaceName, String indexName)
-    {
-        ColumnFamilyStore cfs = Keyspace.open(NAME).getColumnFamilyStore(BUILT_INDEXES);
-        QueryFilter filter = QueryFilter.getNamesFilter(decorate(ByteBufferUtil.bytes(keyspaceName)),
-                                                        BUILT_INDEXES,
-                                                        FBUtilities.singleton(cfs.getComparator().makeCellName(indexName), cfs.getComparator()),
-                                                        System.currentTimeMillis());
-        return ColumnFamilyStore.removeDeleted(cfs.getColumnFamily(filter), Integer.MAX_VALUE) != null;
-    }
-
-    public static void setIndexBuilt(String keyspaceName, String indexName)
-    {
-        ColumnFamily cf = ArrayBackedSortedColumns.factory.create(NAME, BUILT_INDEXES);
-        cf.addColumn(new BufferCell(cf.getComparator().makeCellName(indexName), ByteBufferUtil.EMPTY_BYTE_BUFFER, FBUtilities.timestampMicros()));
-        new Mutation(NAME, ByteBufferUtil.bytes(keyspaceName), cf).apply();
-    }
-
-    public static void setIndexRemoved(String keyspaceName, String indexName)
-    {
-        Mutation mutation = new Mutation(NAME, ByteBufferUtil.bytes(keyspaceName));
-        mutation.delete(BUILT_INDEXES, BuiltIndexes.comparator.makeCellName(indexName), FBUtilities.timestampMicros());
-        mutation.apply();
-    }
-#endif
-
     /**
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
@@ -565,54 +323,6 @@ future<> set_bootstrap_state(bootstrap_state state);
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
     future<utils::UUID> set_local_host_id(const utils::UUID& host_id);
-
-#if 0
-
-    /**
-     * Returns a RestorableMeter tracking the average read rate of a particular SSTable, restoring the last-seen rate
-     * from values in system.sstable_activity if present.
-     * @param keyspace the keyspace the sstable belongs to
-     * @param table the table the sstable belongs to
-     * @param generation the generation number for the sstable
-     */
-    public static RestorableMeter getSSTableReadMeter(String keyspace, String table, int generation)
-    {
-        String cql = "SELECT * FROM system.%s WHERE keyspace_name=? and columnfamily_name=? and generation=?";
-        UntypedResultSet results = executeInternal(String.format(cql, SSTABLE_ACTIVITY), keyspace, table, generation);
-
-        if (results.isEmpty())
-            return new RestorableMeter();
-
-        UntypedResultSet.Row row = results.one();
-        double m15rate = row.getDouble("rate_15m");
-        double m120rate = row.getDouble("rate_120m");
-        return new RestorableMeter(m15rate, m120rate);
-    }
-
-    /**
-     * Writes the current read rates for a given SSTable to system.sstable_activity
-     */
-    public static void persistSSTableReadMeter(String keyspace, String table, int generation, RestorableMeter meter)
-    {
-        // Store values with a one-day TTL to handle corner cases where cleanup might not occur
-        String cql = "INSERT INTO system.%s (keyspace_name, columnfamily_name, generation, rate_15m, rate_120m) VALUES (?, ?, ?, ?, ?) USING TTL 864000";
-        executeInternal(String.format(cql, SSTABLE_ACTIVITY),
-                        keyspace,
-                        table,
-                        generation,
-                        meter.fifteenMinuteRate(),
-                        meter.twoHourRate());
-    }
-
-    /**
-     * Clears persisted read rates from system.sstable_activity for SSTables that have been deleted.
-     */
-    public static void clearSSTableReadMeter(String keyspace, String table, int generation)
-    {
-        String cql = "DELETE FROM system.%s WHERE keyspace_name=? AND columnfamily_name=? and generation=?";
-        executeInternal(String.format(cql, SSTABLE_ACTIVITY), keyspace, table, generation);
-    }
-#endif
 
     api::timestamp_type schema_creation_timestamp();
 
