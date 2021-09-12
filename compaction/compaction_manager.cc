@@ -541,14 +541,8 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
     try {
         f.get();
     } catch (sstables::compaction_stop_exception& e) {
-        // We want compaction stopped here to be retried because this may have
-        // happened at user request (using nodetool stop), and to mimic C*
-        // behavior, compaction is retried later on.
-        // The compaction might request to not try again (e.retry()), in this
-        // case we won't retry.
-        retry = e.retry();
-        decision_msg = !retry ? stop_msg : decision_msg;
-        cmlog.info("compaction info: {}: {}", e.what(), decision_msg);
+        retry = false;
+        cmlog.info("compaction info: {}: stopping", e.what());
     } catch (storage_io_error& e) {
         _stats.errors++;
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());

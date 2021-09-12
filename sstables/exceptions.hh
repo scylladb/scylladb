@@ -47,13 +47,9 @@ struct bufsize_mismatch_exception : malformed_sstable_exception {
 
 class compaction_stop_exception : public std::exception {
     sstring _msg;
-    bool _retry;
 public:
-    compaction_stop_exception(sstring ks, sstring cf, sstring reason, bool retry = false) :
-        _msg(format("Compaction for {}/{} was stopped due to: {}", ks, cf, reason)), _retry(retry) {}
-    bool retry() const {
-        return _retry;
-    }
+    compaction_stop_exception(sstring ks, sstring cf, sstring reason) :
+        _msg(format("Compaction for {}/{} was stopped due to: {}", ks, cf, reason)) {}
     const char *what() const noexcept {
         return _msg.c_str();
     }
