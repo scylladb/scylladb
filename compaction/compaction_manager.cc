@@ -534,9 +534,6 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
 
 inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration will_stop) {
     bool retry = false;
-    const char* stop_msg = "stopping";
-    const char* retry_msg = "retrying";
-    const char* decision_msg = will_stop ? stop_msg : retry_msg;
 
     try {
         f.get();
@@ -550,8 +547,8 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
         do_stop();
     } catch (...) {
         _stats.errors++;
-        cmlog.error("compaction failed: {}: {}", std::current_exception(), decision_msg);
-        retry = true;
+        retry = (will_stop == stop_iteration::no);
+        cmlog.error("compaction failed: {}: {}", std::current_exception(), retry ? "retrying" : "stopping");
     }
     return retry;
 }
