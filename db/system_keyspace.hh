@@ -145,6 +145,15 @@ static constexpr auto TRIGGERS = "schema_triggers";
 static constexpr auto USERTYPES = "schema_usertypes";
 static constexpr auto FUNCTIONS = "schema_functions";
 static constexpr auto AGGREGATES = "schema_aggregates";
+
+schema_ptr keyspaces();
+schema_ptr column_families();
+schema_ptr columns();
+schema_ptr triggers();
+schema_ptr usertypes();
+schema_ptr functions();
+schema_ptr aggregates();
+
 }
 
 static constexpr const char* extra_durable_tables[] = { PAXOS };
@@ -169,18 +178,6 @@ extern schema_ptr paxos();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 schema_ptr raft();
 schema_ptr raft_snapshots();
-
-namespace legacy {
-
-schema_ptr keyspaces();
-schema_ptr column_families();
-schema_ptr columns();
-schema_ptr triggers();
-schema_ptr usertypes();
-schema_ptr functions();
-schema_ptr aggregates();
-
-}
 
 table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
