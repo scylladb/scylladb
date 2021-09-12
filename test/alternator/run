@@ -10,6 +10,12 @@ import time
 import cassandra.cluster
 import cassandra.auth
 
+# When tests are to be run against AWS (the "--aws" option), it is not
+# necessary to start Scylla at all. All we need to do is to run pytest.
+if '--aws' in sys.argv:
+    success = run.run_pytest(sys.path[0], sys.argv[1:])
+    exit(0 if success else 1)
+
 # check_alternator() below uses verify=False to accept self-signed SSL
 # certificates but then we get scary warnings. This trick disables them:
 import urllib3
