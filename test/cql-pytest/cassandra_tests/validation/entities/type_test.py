@@ -32,6 +32,7 @@ def testNonExistingOnes(cql, test_keyspace):
     # reported instead of just doing nothing:
     execute(cql, test_keyspace, "DROP TYPE IF EXISTS keyspace_does_not_exist.type_does_not_exist")
 
+@pytest.mark.skip(reason="Issue #9300")
 def testNowToUUIDCompatibility(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b uuid, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, now())")
@@ -44,6 +45,7 @@ def testDateCompatibility(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (1, unixTimestampOf(now()), dateOf(now()), dateOf(now()))")
         assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=1 AND b <= toUnixTimestamp(now())"))) == 1
 
+@pytest.mark.skip(reason="Issue #9300")
 def testReversedTypeCompatibility(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b timeuuid, PRIMARY KEY (a, b)) WITH CLUSTERING ORDER BY (b DESC)") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, now())")
