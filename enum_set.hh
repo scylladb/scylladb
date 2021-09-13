@@ -239,6 +239,15 @@ public:
         _mask |= mask_for(e);
     }
 
+    template<enum_type e>
+    void toggle() {
+        _mask ^= mask_for<e>();
+    }
+
+    void toggle(enum_type e) {
+        _mask ^= mask_for(e);
+    }
+
     void add(const enum_set& other) {
         _mask |= other._mask;
     }

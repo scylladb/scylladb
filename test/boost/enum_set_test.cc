@@ -150,3 +150,60 @@ BOOST_AUTO_TEST_CASE(set_add) {
     fs0.add(fruit_set::of<fruit::apple>());
     BOOST_REQUIRE(!fs0.contains(fruit::pear) && fs0.contains(fruit::apple) && !fs0.contains(fruit::banana));
 }
+
+BOOST_AUTO_TEST_CASE(set_toggle) {
+    auto fs = fruit_set();
+    fs.set<fruit::pear>();
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+
+    fs.toggle<fruit::pear>();
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(!fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+
+    fs.toggle<fruit::pear>();
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+
+    fs.toggle(fruit::pear);
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(!fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+
+    fs.toggle(fruit::pear);
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+
+    fs.toggle<fruit::banana>();
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(fs.contains<fruit::banana>());
+
+    fs.toggle<fruit::apple>();
+
+    BOOST_REQUIRE(fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(fs.contains<fruit::banana>());
+
+    fs.toggle(fruit::banana);
+
+    BOOST_REQUIRE(fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+
+    fs.toggle(fruit::apple);
+
+    BOOST_REQUIRE(!fs.contains<fruit::apple>());
+    BOOST_REQUIRE(fs.contains<fruit::pear>());
+    BOOST_REQUIRE(!fs.contains<fruit::banana>());
+}
