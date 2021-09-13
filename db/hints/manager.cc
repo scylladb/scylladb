@@ -959,8 +959,11 @@ future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed
         (**ptr).set_exception(abort_requested_exception());
     });
 
-    return (**ptr).get_future().finally([this, sub = std::move(sub)] {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", end_point_key());
+    // When the future resolves, the endpoint manager is not guaranteed to exist anymore
+    // therefore we cannot capture `this`
+    auto ep = end_point_key();
+    return (**ptr).get_future().finally([sub = std::move(sub), ep] {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
     });
 }
 
