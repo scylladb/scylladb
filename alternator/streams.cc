@@ -195,7 +195,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
         if (table && ks_name != table->ks_name()) {
             continue;
         }
-        if (cdc::is_log_for_some_table(ks_name, cf_name)) {
+        if (cdc::is_log_for_some_table(db, ks_name, cf_name)) {
             if (table && table != cdc::get_base_table(db, *s)) {
                 continue;
             }

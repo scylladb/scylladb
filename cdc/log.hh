@@ -114,7 +114,7 @@ enum class operation : int8_t {
     post_image = 9,
 };
 
-bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name);
+bool is_log_for_some_table(const database& db, const sstring& ks_name, const std::string_view& table_name);
 
 schema_ptr get_base_table(const database&, const schema&);
 schema_ptr get_base_table(const database&, sstring_view, std::string_view);

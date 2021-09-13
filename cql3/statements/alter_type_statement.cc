@@ -43,6 +43,7 @@
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "database.hh"
 #include "boost/range/adaptor/map.hpp"
 #include "user_types_metadata.hh"
@@ -65,7 +66,7 @@ void alter_type_statement::prepare_keyspace(const service::client_state& state)
 
 future<> alter_type_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    return state.has_keyspace_access(keyspace(), auth::permission::ALTER);
+    return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::ALTER);
 }
 
 void alter_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const

@@ -61,7 +61,7 @@ const sstring& cql3::statements::alter_keyspace_statement::keyspace() const {
 }
 
 future<> cql3::statements::alter_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_keyspace_access(_name, auth::permission::ALTER);
+    return state.has_keyspace_access(proxy.local_db(), _name, auth::permission::ALTER);
 }
 
 void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
