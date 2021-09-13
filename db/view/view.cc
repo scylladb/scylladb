@@ -995,7 +995,8 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
         throw std::logic_error("Empty materialized view updated");
     }
 
-    auto gc_before = _now - _schema->gc_grace_seconds();
+    auto dk = dht::decorate_key(*_schema, _key);
+    auto gc_before = ::get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {

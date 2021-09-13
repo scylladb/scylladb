@@ -76,6 +76,7 @@ constexpr std::string_view features::UDA = "UDA";
 constexpr std::string_view features::SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT = "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT";
 constexpr std::string_view features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT = "SUPPORTS_RAFT_CLUSTER_MANAGEMENT";
 constexpr std::string_view features::USES_RAFT_CLUSTER_MANAGEMENT = "USES_RAFT_CLUSTER_MANAGEMENT";
+constexpr std::string_view features::TOMBSTONE_GC_OPTIONS = "TOMBSTONE_GC_OPTIONS";
 
 static logging::logger logger("features");
 
@@ -104,6 +105,7 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _separate_page_size_and_safety_limit(*this, features::SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT)
         , _supports_raft_cluster_mgmt(*this, features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT)
         , _uses_raft_cluster_mgmt(*this, features::USES_RAFT_CLUSTER_MANAGEMENT)
+        , _tombstone_gc_options(*this, features::TOMBSTONE_GC_OPTIONS)
         , _raft_support_listener(_supports_raft_cluster_mgmt.when_enabled([this] {
             // When the cluster fully supports raft-based cluster management,
             // we can re-enable support for the second gossip feature to trigger
@@ -227,6 +229,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT,
         gms::features::SUPPORTS_RAFT_CLUSTER_MANAGEMENT,
         gms::features::USES_RAFT_CLUSTER_MANAGEMENT,
+        gms::features::TOMBSTONE_GC_OPTIONS,
     };
 
     for (const sstring& s : _config._disabled_features) {
@@ -335,6 +338,7 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_separate_page_size_and_safety_limit),
         std::ref(_supports_raft_cluster_mgmt),
         std::ref(_uses_raft_cluster_mgmt),
+        std::ref(_tombstone_gc_options),
     })
     {
         if (list.contains(f.name())) {

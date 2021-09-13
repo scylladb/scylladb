@@ -40,8 +40,10 @@
 #include "dht/i_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"
+#include "tombstone_gc_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
 #include "utils/rjson.hh"
+#include "tombstone_gc_options.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -529,6 +531,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
         && x._raw._compaction_enabled == y._raw._compaction_enabled
         && x.cdc_options() == y.cdc_options()
+        && x.tombstone_gc_options() == y.tombstone_gc_options()
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
@@ -1267,8 +1270,23 @@ const cdc::options& schema::cdc_options() const {
     return default_cdc_options;
 }
 
+const ::tombstone_gc_options& schema::tombstone_gc_options() const {
+    static const ::tombstone_gc_options default_tombstone_gc_options;
+    const auto& schema_extensions = _raw._extensions;
+
+    if (auto it = schema_extensions.find(tombstone_gc_extension::NAME); it != schema_extensions.end()) {
+        return dynamic_pointer_cast<tombstone_gc_extension>(it->second)->get_options();
+    }
+    return default_tombstone_gc_options;
+}
+
 schema_builder& schema_builder::with_cdc_options(const cdc::options& opts) {
     add_extension(cdc::cdc_extension::NAME, ::make_shared<cdc::cdc_extension>(opts));
+    return *this;
+}
+
+schema_builder& schema_builder::with_tombstone_gc_options(const tombstone_gc_options& opts) {
+    add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(opts));
     return *this;
 }
 

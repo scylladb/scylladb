@@ -71,6 +71,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
+#include "tombstone_gc.hh"
 
 #include "data_dictionary/impl.hh"
 
@@ -940,6 +941,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     lw_shared_ptr<table> cf;
     try {
         cf = _column_families.at(uuid);
+        drop_repair_history_map_for_table(uuid);
     } catch (std::out_of_range&) {
         on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
@@ -2067,6 +2069,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         // call.
         auto low_mark = cf.set_low_replay_position_mark();
 
+        const auto uuid = cf.schema()->id();
 
         return _compaction_manager->run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
             future<> f = make_ready_future<>();
@@ -2112,6 +2115,8 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                     });
                 });
             });
+        }).then([this, uuid] {
+            drop_repair_history_map_for_table(uuid);
         });
     });
 }

@@ -25,6 +25,7 @@
 #include "database_fwd.hh"
 #include "cdc/log.hh"
 #include "dht/i_partitioner.hh"
+#include "tombstone_gc_options.hh"
 
 struct schema_builder {
 public:
@@ -291,6 +292,7 @@ public:
     schema_builder& without_indexes();
 
     schema_builder& with_cdc_options(const cdc::options&);
+    schema_builder& with_tombstone_gc_options(const tombstone_gc_options& opts);
     
     default_names get_default_names() const {
         return default_names(_raw);

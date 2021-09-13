@@ -112,12 +112,12 @@ public:
         : _options(options) {}
 
     std::vector<sstables::shared_sstable>
-    get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before);
+    get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point compaction_time);
 
     int64_t get_estimated_tasks(table_state& table_s) const;
 private:
     std::vector<sstables::shared_sstable>
-    get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before);
+    get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point compaction_time);
 
     std::vector<sstables::shared_sstable>
     get_compaction_candidates(table_state& table_s, std::vector<sstables::shared_sstable> candidate_sstables, int64_t now, int base);

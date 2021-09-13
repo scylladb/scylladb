@@ -46,6 +46,8 @@
 #include "cdc/cdc_extension.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "tombstone_gc_extension.hh"
+#include "tombstone_gc.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -94,7 +96,7 @@ schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions
     return er;
 }
 
-void cf_prop_defs::validate(const data_dictionary::database db, const schema::extensions_map& schema_extensions) const {
+void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {
@@ -155,6 +157,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, const schema::ex
     if (cdc_options && cdc_options->enabled() && !db.features().cluster_supports_cdc()) {
         throw exceptions::configuration_exception("CDC not supported by the cluster");
     }
+
+    auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
+    validate_tombstone_gc_options(tombstone_gc_options, db.real_database(), ks_name);
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
@@ -233,6 +238,16 @@ const cdc::options* cf_prop_defs::get_cdc_options(const schema::extensions_map& 
 
     auto cdc_ext = dynamic_pointer_cast<cdc::cdc_extension>(it->second);
     return &cdc_ext->get_options();
+}
+
+const tombstone_gc_options* cf_prop_defs::get_tombstone_gc_options(const schema::extensions_map& schema_exts) const {
+    auto it = schema_exts.find(tombstone_gc_extension::NAME);
+    if (it == schema_exts.end()) {
+        return nullptr;
+    }
+
+    auto ext = dynamic_pointer_cast<tombstone_gc_extension>(it->second);
+    return &ext->get_options();
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions) const {

@@ -41,6 +41,7 @@
 #include "utils/exceptions.hh"
 #include "clustering_key_filter.hh"
 #include "mutation_partition_view.hh"
+#include "tombstone_gc.hh"
 
 logging::logger mplog("mutation_partition");
 
@@ -1294,17 +1295,20 @@ void mutation_partition::trim_rows(const schema& s,
 }
 
 uint32_t mutation_partition::do_compact(const schema& s,
+    const dht::decorated_key& dk,
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
     bool always_return_static_content,
     bool reverse,
     uint64_t row_limit,
-    can_gc_fn& can_gc)
+    can_gc_fn& can_gc,
+    bool drop_tombstones_unconditionally)
 {
     check_schema(s);
     assert(row_limit > 0);
 
-    auto gc_before = saturating_subtract(query_time, s.gc_grace_seconds());
+    auto gc_before = drop_tombstones_unconditionally ? gc_clock::time_point::max() :
+        ::get_gc_before_for_key(s.shared_from_this(), dk, query_time);
 
     auto should_purge_tombstone = [&] (const tombstone& t) {
         return t.deletion_time < gc_before && can_gc(t);
@@ -1363,6 +1367,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
 uint64_t
 mutation_partition::compact_for_query(
     const schema& s,
+    const dht::decorated_key& dk,
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
     bool always_return_static_content,
@@ -1370,18 +1375,31 @@ mutation_partition::compact_for_query(
     uint64_t row_limit)
 {
     check_schema(s);
-    return do_compact(s, query_time, row_ranges, always_return_static_content, reverse, row_limit, always_gc);
+    bool drop_tombstones_unconditionally = false;
+    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, reverse, row_limit, always_gc, drop_tombstones_unconditionally);
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
-    can_gc_fn& can_gc, gc_clock::time_point compaction_time)
+    can_gc_fn& can_gc, const dht::decorated_key& dk, gc_clock::time_point compaction_time)
 {
     check_schema(s);
     static const std::vector<query::clustering_range> all_rows = {
         query::clustering_range::make_open_ended_both_sides()
     };
 
-    do_compact(s, compaction_time, all_rows, true, false, query::partition_max_rows, can_gc);
+    bool drop_tombstones_unconditionally = false;
+    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, can_gc, drop_tombstones_unconditionally);
+}
+
+void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(const schema& s, const dht::decorated_key& dk)
+{
+    check_schema(s);
+    static const std::vector<query::clustering_range> all_rows = {
+        query::clustering_range::make_open_ended_both_sides()
+    };
+    bool drop_tombstones_unconditionally = true;
+    auto compaction_time = gc_clock::time_point::max();
+    do_compact(s, dk, compaction_time, all_rows, true, false, query::partition_max_rows, always_gc, drop_tombstones_unconditionally);
 }
 
 // Returns true if the mutation_partition represents no writes.

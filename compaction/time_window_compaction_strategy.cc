@@ -227,7 +227,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 
 compaction_descriptor
 time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidates) {
-    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
+    auto compaction_time = gc_clock::now();
 
     if (candidates.empty()) {
         return compaction_descriptor();
@@ -238,7 +238,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
 
     if (db_clock::now() - _last_expired_check > _options.expired_sstable_check_frequency) {
         clogger.debug("TWCS expired check sufficiently far in the past, checking for fully expired SSTables");
-        expired = table_s.fully_expired_sstables(candidates);
+        expired = table_s.fully_expired_sstables(candidates, compaction_time);
         _last_expired_check = db_clock::now();
     } else {
         clogger.debug("TWCS skipping check for fully expired SSTables");
@@ -249,7 +249,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
         return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), table_s.get_sstable_set(), service::get_local_compaction_priority());
     }
 
-    auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), gc_before);
+    auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
     return compaction_descriptor(std::move(compaction_candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
 }
 
@@ -270,7 +270,7 @@ time_window_compaction_strategy::compaction_mode(const bucket_t& bucket, timesta
 
 std::vector<shared_sstable>
 time_window_compaction_strategy::get_next_non_expired_sstables(table_state& table_s, strategy_control& control,
-        std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before) {
+        std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time) {
     auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_sstables);
 
     if (!most_interesting.empty()) {
@@ -279,8 +279,8 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
-    auto e = boost::range::remove_if(non_expiring_sstables, [this, &gc_before] (const shared_sstable& sst) -> bool {
-        return !worth_dropping_tombstones(sst, gc_before);
+    auto e = boost::range::remove_if(non_expiring_sstables, [this, compaction_time] (const shared_sstable& sst) -> bool {
+        return !worth_dropping_tombstones(sst, compaction_time);
     });
     non_expiring_sstables.erase(e, non_expiring_sstables.end());
     if (non_expiring_sstables.empty()) {

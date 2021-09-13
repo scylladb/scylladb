@@ -288,6 +288,26 @@ schema_ptr system_keyspace::raft_config() {
     return schema;
 }
 
+schema_ptr system_keyspace::repair_history() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, REPAIR_HISTORY);
+        return schema_builder(NAME, REPAIR_HISTORY, std::optional(id))
+            .with_column("table_uuid", uuid_type, column_kind::partition_key)
+            // The time is repair start time
+            .with_column("repair_time", timestamp_type, column_kind::clustering_key)
+            .with_column("repair_uuid", uuid_type, column_kind::clustering_key)
+            // The token range is (range_start, range_end]
+            .with_column("range_start", long_type, column_kind::clustering_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("keyspace_name", utf8_type, column_kind::static_column)
+            .with_column("table_name", utf8_type, column_kind::static_column)
+            .set_comment("Record repair history")
+            .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::built_indexes() {
     static thread_local auto built_indexes = [] {
         schema_builder builder(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
@@ -2518,6 +2538,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
+                    repair_history(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),

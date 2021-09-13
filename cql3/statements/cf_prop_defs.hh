@@ -51,6 +51,8 @@ namespace data_dictionary {
 class database;
 }
 
+class tombstone_gc_options;
+
 namespace db {
 class extensions;
 }
@@ -101,11 +103,12 @@ public:
     std::optional<sstables::compaction_strategy_type> get_compaction_strategy_class() const;
 
     schema::extensions_map make_schema_extensions(const db::extensions& exts) const;
-    void validate(const data_dictionary::database db, const schema::extensions_map& schema_extensions) const;
+    void validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const;
     std::map<sstring, sstring> get_compaction_type_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
     const cdc::options* get_cdc_options(const schema::extensions_map&) const;
     std::optional<caching_options> get_caching_options() const;
+    const tombstone_gc_options* get_tombstone_gc_options(const schema::extensions_map&) const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {

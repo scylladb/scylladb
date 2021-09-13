@@ -349,7 +349,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 
         {
             auto schema_extensions = _properties->make_schema_extensions(db.extensions());
-            _properties->validate(db, schema_extensions);
+            _properties->validate(db, keyspace(), schema_extensions);
 
             if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
                 throw exceptions::invalid_request_exception(

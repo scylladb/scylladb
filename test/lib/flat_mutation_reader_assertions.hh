@@ -501,7 +501,7 @@ public:
         BOOST_REQUIRE(bool(mo));
         memory::scoped_critical_alloc_section dfg;
         mutation got = *mo;
-        got.partition().compact_for_compaction(*m.schema(), always_gc, query_time);
+        got.partition().compact_for_compaction(*m.schema(), always_gc, got.decorated_key(), query_time);
         assert_that(got).is_equal_to(m, ck_ranges);
         return *this;
     }
@@ -912,7 +912,7 @@ public:
         BOOST_REQUIRE(bool(mo));
         memory::scoped_critical_alloc_section dfg;
         mutation got = *mo;
-        got.partition().compact_for_compaction(*m.schema(), always_gc, query_time);
+        got.partition().compact_for_compaction(*m.schema(), always_gc, got.decorated_key(), query_time);
         assert_that(got).is_equal_to(m, ck_ranges);
         return *this;
     }

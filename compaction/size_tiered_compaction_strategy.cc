@@ -161,7 +161,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();
-    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
+    auto compaction_time = gc_clock::now();
 
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
@@ -184,8 +184,8 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
     // tombstone purge, i.e. less likely to shadow even older data.
     for (auto&& sstables : buckets | boost::adaptors::reversed) {
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-        auto e = boost::range::remove_if(sstables, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
-            return !worth_dropping_tombstones(sst, gc_before);
+        auto e = boost::range::remove_if(sstables, [this, compaction_time] (const sstables::shared_sstable& sst) -> bool {
+            return !worth_dropping_tombstones(sst, compaction_time);
         });
         sstables.erase(e, sstables.end());
         if (sstables.empty()) {

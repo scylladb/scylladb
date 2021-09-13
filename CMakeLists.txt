@@ -537,6 +537,8 @@ set(scylla_sources
     raft/tracker.cc
     range_tombstone.cc
     range_tombstone_list.cc
+    tombstone_gc_options.cc
+    tombstone_gc.cc
     reader_concurrency_semaphore.cc
     redis/abstract_command.cc
     redis/command_factory.cc

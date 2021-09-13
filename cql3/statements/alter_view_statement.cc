@@ -90,7 +90,7 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     }
 
     auto schema_extensions = _properties->make_schema_extensions(db.extensions());
-    _properties->validate(db, schema_extensions);
+    _properties->validate(db, keyspace(), schema_extensions);
 
     auto builder = schema_builder(schema);
     _properties->apply_to_builder(builder, std::move(schema_extensions));

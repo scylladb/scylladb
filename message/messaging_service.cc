@@ -81,7 +81,6 @@
 #include "idl/gossip_digest.dist.impl.hh"
 #include "idl/read_command.dist.impl.hh"
 #include "idl/range.dist.impl.hh"
-#include "idl/partition_checksum.dist.impl.hh"
 #include "idl/query.dist.impl.hh"
 #include "idl/cache_temperature.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
@@ -103,6 +102,7 @@
 #include "locator/snitch_base.hh"
 
 #include "message/rpc_protocol_impl.hh"
+#include "idl/partition_checksum.dist.impl.hh"
 
 namespace netw {
 
@@ -469,6 +469,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_UPDATE_SYSTEM_TABLE:
+    case messaging_verb::REPAIR_FLUSH_HINTS_BATCHLOG:
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
         return 1;

@@ -52,6 +52,13 @@
 #include "service/migration_manager.hh"
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/all.hh>
+#include "db/query_context.hh"
+#include "db/system_keyspace.hh"
+#include "service/storage_proxy.hh"
+#include "db/batchlog_manager.hh"
+#include "cql3/untyped_result_set.hh"
+#include "idl/partition_checksum.dist.hh"
 
 extern logging::logger rlogger;
 
@@ -2266,6 +2273,66 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
+future<repair_update_system_table_response> repair_service::repair_update_system_table_handler(gms::inet_address from, repair_update_system_table_request req) {
+    rlogger.debug("repair[{}]: Got repair_update_system_table_request from node={}, range={}, repair_time={}", req.repair_uuid, from, req.range, req.repair_time);
+    auto& db = this->get_db();
+    bool is_valid_range = true;
+    if (req.range.start()) {
+        if (req.range.start()->is_inclusive()) {
+            is_valid_range = false;
+        }
+    }
+    if (req.range.end()) {
+        if (!req.range.end()->is_inclusive()) {
+            is_valid_range = false;
+        }
+    }
+    if (!is_valid_range) {
+        throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
+    }
+    co_await db.invoke_on_all([&req] (database& local_db) {
+        auto& table = local_db.find_column_family(req.table_uuid);
+        return ::update_repair_time(table.schema(), req.range, req.repair_time);
+    });
+    sstring cql = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            db::system_keyspace::REPAIR_HISTORY);
+    auto range_start = req.range.start() ? req.range.start()->value() : dht::minimum_token();
+    auto range_end = req.range.end() ? req.range.end()->value() : dht::maximum_token();
+    db_clock::time_point ts = db_clock::from_time_t(gc_clock::to_time_t(req.repair_time));
+    co_await db::qctx->execute_cql(cql, req.table_uuid, ts, req.repair_uuid, req.keyspace_name, req.table_name,
+            dht::token::to_int64(range_start), dht::token::to_int64(range_end)).discard_result();
+    co_return repair_update_system_table_response();
+}
+
+future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_batchlog_handler(gms::inet_address from, repair_flush_hints_batchlog_request req) {
+    rlogger.info("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={}, target_nodes={}, hints_timeout={}s, batchlog_timeout={}s",
+            req.repair_uuid, from, req.target_nodes, req.hints_timeout.count(), req.batchlog_timeout.count());
+    std::vector<gms::inet_address> target_nodes(req.target_nodes.begin(), req.target_nodes.end());
+    db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::move(target_nodes));
+    lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
+    try {
+        co_await coroutine::all(
+            [this, &from, &req, &sync_point, &deadline] () -> future<> {
+                rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
+                co_await _sp.local().wait_for_hint_sync_point(std::move(sync_point), deadline);
+                rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}, target_hosts={}", req.repair_uuid, from, req.target_nodes);
+                co_return;
+            },
+            [this, &from, &req] () -> future<>  {
+                rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
+                co_await _bm.local().do_batch_log_replay();
+                rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
+            }
+        );
+    } catch (...) {
+        rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={}, target_hosts={}, {}",
+                req.repair_uuid, from, req.target_nodes, std::current_exception());
+        throw;
+    }
+    rlogger.info("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
+    co_return repair_flush_hints_batchlog_response();
+}
+
 future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
@@ -2430,6 +2497,14 @@ future<> repair_service::init_ms_handlers() {
     ms.register_repair_get_diff_algorithms([] (const rpc::client_info& cinfo) {
         return make_ready_future<std::vector<row_level_diff_detect_algorithm>>(suportted_diff_detect_algorithms());
     });
+    ser::partition_checksum_rpc_verbs::register_repair_update_system_table(&ms, [this] (const rpc::client_info& cinfo, repair_update_system_table_request req) {
+        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return repair_update_system_table_handler(from, std::move(req));
+    });
+    ser::partition_checksum_rpc_verbs::register_repair_flush_hints_batchlog(&ms, [this] (const rpc::client_info& cinfo, repair_flush_hints_batchlog_request req) {
+        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return repair_flush_hints_batchlog_handler(from, std::move(req));
+    });
 
     return make_ready_future<>();
 }
@@ -2450,7 +2525,10 @@ future<> repair_service::uninit_ms_handlers() {
         ms.unregister_repair_row_level_stop(),
         ms.unregister_repair_get_estimated_partitions(),
         ms.unregister_repair_set_estimated_partitions(),
-        ms.unregister_repair_get_diff_algorithms()).discard_result();
+        ms.unregister_repair_get_diff_algorithms(),
+        ser::partition_checksum_rpc_verbs::unregister_repair_update_system_table(&ms),
+        ser::partition_checksum_rpc_verbs::unregister_repair_flush_hints_batchlog(&ms)
+        ).discard_result();
 }
 
 class repair_meta_tracker {
@@ -2522,6 +2600,8 @@ class row_level_repair {
     // the next repair.
     uint64_t _seed;
 
+    gc_clock::time_point _start_time;
+
 public:
     row_level_repair(repair_info& ri,
             sstring cf_name,
@@ -2534,7 +2614,8 @@ public:
         , _range(std::move(range))
         , _all_live_peer_nodes(std::move(all_live_peer_nodes))
         , _cf(_ri.db.local().find_column_family(_table_id))
-        , _seed(get_random_seed()) {
+        , _seed(get_random_seed())
+        , _start_time(gc_clock::now()) {
     }
 
 private:
@@ -2771,6 +2852,45 @@ private:
         master.stats().round_nr_slow_path++;
     }
 
+private:
+    // Update system.repair_history table
+    future<> update_system_repair_table() {
+        // Update repair_history table only if it is a reguar repair.
+        if (_ri.reason != streaming::stream_reason::repair) {
+            co_return;
+        }
+        // Update repair_history table only if all replicas have been repaired
+        size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
+        if (_ri.total_rf != repaired_replicas){
+            rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
+                    _ri.id.uuid, _ri.total_rf, repaired_replicas, utils::fb_utilities::get_broadcast_address(), _all_live_peer_nodes);
+            co_return;
+        }
+        // Update repair_history table only if both hints and batchlog have been flushed.
+        if (!_ri.hints_batchlog_flushed()) {
+            co_return;
+        }
+        repair_service& rs = _ri.rs;
+        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_ri.id.uuid, _table_id, _range, _start_time);
+        if (!repair_time_opt) {
+            co_return;
+        }
+        auto repair_time = repair_time_opt.value();
+        repair_update_system_table_request req{_ri.id.uuid, _table_id, _ri.keyspace, _cf_name, _range, repair_time};
+        auto all_nodes = _all_live_peer_nodes;
+        all_nodes.push_back(utils::fb_utilities::get_broadcast_address());
+        co_await parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
+            try {
+                auto& ms = _ri.messaging.local();
+                repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);
+                rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _ri.id.uuid, node);
+            } catch (...) {
+                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {}", _ri.id.uuid, node, std::current_exception());
+            }
+        });
+        co_return;
+    }
+
 public:
     future<> run() {
         return seastar::async([this] {
@@ -2884,6 +3004,8 @@ public:
                 } else {
                     throw std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _ri.keyspace, _cf_name, _range));
                 }
+            } else {
+                update_system_repair_table().get();
             }
             rlogger.debug("<<< Finished Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}, tx_hashes_nr={}, rx_hashes_nr={}, tx_row_nr={}, rx_row_nr={}, row_from_disk_bytes={}, row_from_disk_nr={}",
                     master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, _range, master.stats().tx_hashes_nr, master.stats().rx_hashes_nr, master.stats().tx_row_nr, master.stats().rx_row_nr, master.stats().row_from_disk_bytes, master.stats().row_from_disk_nr);
@@ -2957,6 +3079,8 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
 repair_service::repair_service(distributed<gms::gossiper>& gossiper,
         netw::messaging_service& ms,
         sharded<database>& db,
+        sharded<service::storage_proxy>& sp,
+        sharded<db::batchlog_manager>& bm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& vug,
         service::migration_manager& mm,
@@ -2964,6 +3088,8 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     : _gossiper(gossiper)
     , _messaging(ms)
     , _db(db)
+    , _sp(sp)
+    , _bm(bm)
     , _sys_dist_ks(sys_dist_ks)
     , _view_update_generator(vug)
     , _mm(mm)
@@ -2976,6 +3102,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 }
 
 future<> repair_service::start() {
+    co_await load_history();
     co_await init_metrics();
     co_await init_ms_handlers();
 }
@@ -2990,4 +3117,80 @@ future<> repair_service::stop() {
 
 repair_service::~repair_service() {
     assert(_stopped);
+}
+
+static shard_id repair_id_to_shard(utils::UUID& repair_id) {
+    return shard_id(repair_id.get_most_significant_bits()) % smp::count;
+}
+
+future<std::optional<gc_clock::time_point>>
+repair_service::update_history(utils::UUID repair_id, utils::UUID table_id, dht::token_range range, gc_clock::time_point repair_time) {
+    auto shard = repair_id_to_shard(repair_id);
+    return container().invoke_on(shard, [repair_id, table_id, range, repair_time] (repair_service& rs) mutable -> future<std::optional<gc_clock::time_point>> {
+        repair_history& rh = rs._finished_ranges_history[repair_id];
+        if (rh.repair_time > repair_time) {
+            rh.repair_time = repair_time;
+        }
+        auto finished_shards = ++(rh.finished_ranges[table_id][range]);
+        if (finished_shards == smp::count) {
+            // All shards have finished repair the range. Send an rpc to ask peers to update system.repair_history table
+            rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_history table, finished_shards={}",
+                    repair_id, range, table_id, finished_shards);
+            co_return rh.repair_time;
+        } else {
+            rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_historytable, finished_shards={}",
+                    repair_id, range, table_id, finished_shards);
+            co_return std::nullopt;
+        }
+    });
+}
+
+future<> repair_service::cleanup_history(utils::UUID repair_id) {
+    auto shard = repair_id_to_shard(repair_id);
+    return container().invoke_on(shard, [repair_id] (repair_service& rs) mutable {
+        rs._finished_ranges_history.erase(repair_id);
+        rlogger.debug("repair[{}]: Finished cleaning up repair_service history", repair_id);
+    });
+}
+
+future<> repair_service::load_history() {
+    auto tables = get_db().local().get_column_families();
+    for (const auto& x : tables) {
+        auto& table_uuid = x.first;
+        auto& table = x.second;
+        auto shard = unsigned(table_uuid.get_most_significant_bits()) % smp::count;
+        if (shard != this_shard_id()) {
+            continue;
+        }
+        rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
+                table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
+        auto req = format("SELECT * from system.{} WHERE table_uuid = {}", db::system_keyspace::REPAIR_HISTORY, table_uuid);
+        co_await db::qctx->qp().query_internal(req, [this] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+            auto table_uuid = row.get_as<utils::UUID>("table_uuid");
+            auto range_start = row.get_as<int64_t>("range_start");
+            auto range_end = row.get_as<int64_t>("range_end");
+            auto keyspace_name = row.get_as<sstring>("keyspace_name");
+            auto table_name = row.get_as<sstring>("table_name");
+            auto start = range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(range_start);
+            auto end = range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(range_end);
+            auto repair_time = to_gc_clock(row.get_as<db_clock::time_point>("repair_time"));
+            auto range = dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true));
+            rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
+                    keyspace_name, table_name, table_uuid, repair_time, range);
+            co_await get_db().invoke_on_all([table_uuid, range, repair_time, keyspace_name, table_name] (database& local_db) -> future<> {
+                try {
+                    auto& table = local_db.find_column_family(table_uuid);
+                    ::update_repair_time(table.schema(), range, repair_time);
+                } catch (no_such_column_family&) {
+                    rlogger.trace("Table {}.{} with {} does not exist", keyspace_name, table_name, table_uuid);
+                } catch (...) {
+                    rlogger.warn("Failed to load repair history for keyspace={}, table={}, range={}, repair_time={}",
+                            keyspace_name, table_name, range, repair_time);
+                }
+                co_return;
+            });
+            co_return stop_iteration::no;
+        });
+    }
+    co_return;
 }

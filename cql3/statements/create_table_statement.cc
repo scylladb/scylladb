@@ -211,7 +211,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         throw exceptions::invalid_request_exception(format("Multiple definition of identifier {}", (*i)->text()));
     }
 
-    _properties.validate(db, _properties.properties()->make_schema_extensions(db.extensions()));
+    _properties.validate(db, keyspace(), _properties.properties()->make_schema_extensions(db.extensions()));
     const bool has_default_ttl = _properties.properties()->get_default_time_to_live() > 0;
 
     auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());

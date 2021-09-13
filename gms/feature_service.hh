@@ -103,6 +103,7 @@ private:
     gms::feature _separate_page_size_and_safety_limit;
     gms::feature _supports_raft_cluster_mgmt;
     gms::feature _uses_raft_cluster_mgmt;
+    gms::feature _tombstone_gc_options;
 
     gms::feature::listener_registration _raft_support_listener;
 
@@ -197,6 +198,10 @@ public:
     // send it to replicas.
     bool cluster_supports_separate_page_size_and_safety_limit() const {
         return bool(_separate_page_size_and_safety_limit);
+    }
+
+    bool cluster_supports_tombstone_gc_options() const {
+        return bool(_tombstone_gc_options);
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);

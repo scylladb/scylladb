@@ -68,7 +68,7 @@ compaction_descriptor compaction_strategy_impl::get_major_compaction_job(table_s
     return compaction_descriptor(std::move(candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
 }
 
-bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
+bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time) {
     if (_disable_tombstone_compaction) {
         return false;
     }
@@ -79,6 +79,7 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
         return false;
     }
+    auto gc_before = sst->get_gc_before_for_drop_estimation(compaction_time);
     return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
 }
 
@@ -421,20 +422,20 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
 } // namespace sstables
 
 std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before) {
+date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point compaction_time) {
     if (table_s.get_sstable_set().all()->empty()) {
         return {};
     }
 
     // Find fully expired SSTables. Those will be included no matter what.
-    auto expired = table_s.fully_expired_sstables(uncompacting);
+    auto expired = table_s.fully_expired_sstables(uncompacting, compaction_time);
 
     if (!expired.empty()) {
         auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.contains(s); };
         uncompacting.erase(boost::remove_if(uncompacting, is_expired), uncompacting.end());
     }
 
-    auto compaction_candidates = get_next_non_expired_sstables(table_s, uncompacting, gc_before);
+    auto compaction_candidates = get_next_non_expired_sstables(table_s, uncompacting, compaction_time);
     if (!expired.empty()) {
         compaction_candidates.insert(compaction_candidates.end(), expired.begin(), expired.end());
     }
@@ -464,7 +465,7 @@ int64_t date_tiered_manifest::get_estimated_tasks(table_state& table_s) const {
 }
 
 std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before) {
+date_tiered_manifest::get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point compaction_time) {
     int base = table_s.schema()->min_compaction_threshold();
     int64_t now = get_now(table_s.get_sstable_set().all());
     auto most_interesting = get_compaction_candidates(table_s, non_expiring_sstables, now, base);
@@ -582,8 +583,8 @@ date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<
 }
 
 compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) {
-    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
-    auto sstables = _manifest.get_next_sstables(table_s, candidates, gc_before);
+    auto compaction_time = gc_clock::now();
+    auto sstables = _manifest.get_next_sstables(table_s, candidates, compaction_time);
 
     if (!sstables.empty()) {
         date_tiered_manifest::logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
@@ -591,8 +592,8 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     }
 
     // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-    auto e = boost::range::remove_if(candidates, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
-        return !worth_dropping_tombstones(sst, gc_before);
+    auto e = boost::range::remove_if(candidates, [this, compaction_time] (const sstables::shared_sstable& sst) -> bool {
+        return !worth_dropping_tombstones(sst, compaction_time);
     });
     candidates.erase(e, candidates.end());
     if (candidates.empty()) {

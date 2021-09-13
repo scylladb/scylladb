@@ -94,8 +94,8 @@ public:
         _defined_ordering.emplace_back(alias, reversed);
     }
 
-    void validate(const data_dictionary::database db, const schema::extensions_map& schema_extensions) const {
-        _properties->validate(db, schema_extensions);
+    void validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
+        _properties->validate(db, std::move(ks_name), schema_extensions);
     }
 };
 

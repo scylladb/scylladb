@@ -151,6 +151,7 @@ extern const std::string_view UDA;
 extern const std::string_view SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT;
 extern const std::string_view SUPPORTS_RAFT_CLUSTER_MANAGEMENT;
 extern const std::string_view USES_RAFT_CLUSTER_MANAGEMENT;
+extern const std::string_view TOMBSTONE_GC_OPTIONS;
 
 }
 
