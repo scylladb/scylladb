@@ -124,45 +124,45 @@ class system_keyspace {
 public:
     static schema_ptr size_estimates();
 public:
-static constexpr auto NAME = "system";
-static constexpr auto HINTS = "hints";
-static constexpr auto BATCHLOG = "batchlog";
-static constexpr auto PAXOS = "paxos";
-static constexpr auto BUILT_INDEXES = "IndexInfo";
-static constexpr auto LOCAL = "local";
-static constexpr auto TRUNCATED = "truncated";
-static constexpr auto PEERS = "peers";
-static constexpr auto PEER_EVENTS = "peer_events";
-static constexpr auto RANGE_XFERS = "range_xfers";
-static constexpr auto COMPACTIONS_IN_PROGRESS = "compactions_in_progress";
-static constexpr auto COMPACTION_HISTORY = "compaction_history";
-static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
-static constexpr auto SIZE_ESTIMATES = "size_estimates";
-static constexpr auto LARGE_PARTITIONS = "large_partitions";
-static constexpr auto LARGE_ROWS = "large_rows";
-static constexpr auto LARGE_CELLS = "large_cells";
-static constexpr auto SCYLLA_LOCAL = "scylla_local";
-static constexpr auto RAFT = "raft";
-static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
-static constexpr auto RAFT_CONFIG = "raft_config";
-static const char *const CLIENTS;
+    static constexpr auto NAME = "system";
+    static constexpr auto HINTS = "hints";
+    static constexpr auto BATCHLOG = "batchlog";
+    static constexpr auto PAXOS = "paxos";
+    static constexpr auto BUILT_INDEXES = "IndexInfo";
+    static constexpr auto LOCAL = "local";
+    static constexpr auto TRUNCATED = "truncated";
+    static constexpr auto PEERS = "peers";
+    static constexpr auto PEER_EVENTS = "peer_events";
+    static constexpr auto RANGE_XFERS = "range_xfers";
+    static constexpr auto COMPACTIONS_IN_PROGRESS = "compactions_in_progress";
+    static constexpr auto COMPACTION_HISTORY = "compaction_history";
+    static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
+    static constexpr auto SIZE_ESTIMATES = "size_estimates";
+    static constexpr auto LARGE_PARTITIONS = "large_partitions";
+    static constexpr auto LARGE_ROWS = "large_rows";
+    static constexpr auto LARGE_CELLS = "large_cells";
+    static constexpr auto SCYLLA_LOCAL = "scylla_local";
+    static constexpr auto RAFT = "raft";
+    static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
+    static constexpr auto RAFT_CONFIG = "raft_config";
+    static const char *const CLIENTS;
 
-struct v3 {
-static constexpr auto BATCHES = "batches";
-static constexpr auto PAXOS = "paxos";
-static constexpr auto BUILT_INDEXES = "IndexInfo";
-static constexpr auto LOCAL = "local";
-static constexpr auto PEERS = "peers";
-static constexpr auto PEER_EVENTS = "peer_events";
-static constexpr auto RANGE_XFERS = "range_xfers";
-static constexpr auto COMPACTION_HISTORY = "compaction_history";
-static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
-static constexpr auto SIZE_ESTIMATES = "size_estimates";
-static constexpr auto AVAILABLE_RANGES = "available_ranges";
-static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
-static constexpr auto BUILT_VIEWS = "built_views";
-static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
-static constexpr auto CDC_LOCAL = "cdc_local";
+    struct v3 {
+        static constexpr auto BATCHES = "batches";
+        static constexpr auto PAXOS = "paxos";
+        static constexpr auto BUILT_INDEXES = "IndexInfo";
+        static constexpr auto LOCAL = "local";
+        static constexpr auto PEERS = "peers";
+        static constexpr auto PEER_EVENTS = "peer_events";
+        static constexpr auto RANGE_XFERS = "range_xfers";
+        static constexpr auto COMPACTION_HISTORY = "compaction_history";
+        static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
+        static constexpr auto SIZE_ESTIMATES = "size_estimates";
+        static constexpr auto AVAILABLE_RANGES = "available_ranges";
+        static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
+        static constexpr auto BUILT_VIEWS = "built_views";
+        static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
+        static constexpr auto CDC_LOCAL = "cdc_local";
         static schema_ptr batches();
         static schema_ptr built_indexes();
         static schema_ptr local();
@@ -180,18 +180,18 @@ static constexpr auto CDC_LOCAL = "cdc_local";
         static schema_ptr built_views();
         static schema_ptr scylla_views_builds_in_progress();
         static schema_ptr cdc_local();
-};
+    };
 
-struct legacy {
-static constexpr auto HINTS = "hints";
-static constexpr auto BATCHLOG = "batchlog";
-static constexpr auto KEYSPACES = "schema_keyspaces";
-static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
-static constexpr auto COLUMNS = "schema_columns";
-static constexpr auto TRIGGERS = "schema_triggers";
-static constexpr auto USERTYPES = "schema_usertypes";
-static constexpr auto FUNCTIONS = "schema_functions";
-static constexpr auto AGGREGATES = "schema_aggregates";
+    struct legacy {
+        static constexpr auto HINTS = "hints";
+        static constexpr auto BATCHLOG = "batchlog";
+        static constexpr auto KEYSPACES = "schema_keyspaces";
+        static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
+        static constexpr auto COLUMNS = "schema_columns";
+        static constexpr auto TRIGGERS = "schema_triggers";
+        static constexpr auto USERTYPES = "schema_usertypes";
+        static constexpr auto FUNCTIONS = "schema_functions";
+        static constexpr auto AGGREGATES = "schema_aggregates";
 
         static schema_ptr keyspaces();
         static schema_ptr column_families();
@@ -202,103 +202,103 @@ static constexpr auto AGGREGATES = "schema_aggregates";
         static schema_ptr aggregates();
         static schema_ptr hints();
         static schema_ptr batchlog();
-};
+    };
 
-static constexpr const char* extra_durable_tables[] = { PAXOS };
+    static constexpr const char* extra_durable_tables[] = { PAXOS };
 
-static bool is_extra_durable(const sstring& name);
+    static bool is_extra_durable(const sstring& name);
 
-// Partition estimates for a given range of tokens.
-struct range_estimates {
-    schema_ptr schema;
-    bytes range_start_token;
-    bytes range_end_token;
-    int64_t partitions_count;
-    int64_t mean_partition_size;
-};
+    // Partition estimates for a given range of tokens.
+    struct range_estimates {
+        schema_ptr schema;
+        bytes range_start_token;
+        bytes range_end_token;
+        int64_t partitions_count;
+        int64_t mean_partition_size;
+    };
 
-using view_name = system_keyspace_view_name;
-using view_build_progress = system_keyspace_view_build_progress;
+    using view_name = system_keyspace_view_name;
+    using view_build_progress = system_keyspace_view_build_progress;
 
-static schema_ptr hints();
-static schema_ptr batchlog();
-static schema_ptr paxos();
-static schema_ptr built_indexes(); // TODO (from Cassandra): make private
-static schema_ptr raft();
-static schema_ptr raft_snapshots();
+    static schema_ptr hints();
+    static schema_ptr batchlog();
+    static schema_ptr paxos();
+    static schema_ptr built_indexes(); // TODO (from Cassandra): make private
+    static schema_ptr raft();
+    static schema_ptr raft_snapshots();
 
-static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
+    static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
-// Only for testing.
-static void minimal_setup(distributed<cql3::query_processor>& qp);
+    // Only for testing.
+    static void minimal_setup(distributed<cql3::query_processor>& qp);
 
-static future<> init_local_cache();
-static future<> deinit_local_cache();
-static future<> setup(distributed<database>& db,
-               distributed<cql3::query_processor>& qp,
-               distributed<gms::feature_service>& feat,
-               sharded<netw::messaging_service>& ms);
-static future<> update_schema_version(utils::UUID version);
+    static future<> init_local_cache();
+    static future<> deinit_local_cache();
+    static future<> setup(distributed<database>& db,
+                distributed<cql3::query_processor>& qp,
+                distributed<gms::feature_service>& feat,
+                sharded<netw::messaging_service>& ms);
+    static future<> update_schema_version(utils::UUID version);
 
-/*
- * Save tokens used by this node in the LOCAL table.
- */
-static future<> update_tokens(const std::unordered_set<dht::token>& tokens);
+    /*
+    * Save tokens used by this node in the LOCAL table.
+    */
+    static future<> update_tokens(const std::unordered_set<dht::token>& tokens);
 
-/**
- * Record tokens being used by another node in the PEERS table.
- */
-static future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
+    /**
+     * Record tokens being used by another node in the PEERS table.
+     */
+    static future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
-static future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
-static future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
+    static future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
+    static future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
-template <typename Value>
-static future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
+    template <typename Value>
+    static future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
-static future<> remove_endpoint(gms::inet_address ep);
+    static future<> remove_endpoint(gms::inet_address ep);
 
-static future<> set_scylla_local_param(const sstring& key, const sstring& value);
-static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
+    static future<> set_scylla_local_param(const sstring& key, const sstring& value);
+    static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
-static std::vector<schema_ptr> all_tables(const db::config& cfg);
-static future<> make(database& db, service::storage_service& ss);
+    static std::vector<schema_ptr> all_tables(const db::config& cfg);
+    static future<> make(database& db, service::storage_service& ss);
 
-/// overloads
+    /// overloads
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-static query_mutations(distributed<service::storage_proxy>& proxy,
-                const sstring& ks_name,
-                const sstring& cf_name);
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+    static query_mutations(distributed<service::storage_proxy>& proxy,
+                    const sstring& ks_name,
+                    const sstring& cf_name);
 
-// Returns all data from given system table.
-// Intended to be used by code which is not performance critical.
-static future<lw_shared_ptr<query::result_set>> query(distributed<service::storage_proxy>& proxy,
-                const sstring& ks_name,
-                const sstring& cf_name);
+    // Returns all data from given system table.
+    // Intended to be used by code which is not performance critical.
+    static future<lw_shared_ptr<query::result_set>> query(distributed<service::storage_proxy>& proxy,
+                    const sstring& ks_name,
+                    const sstring& cf_name);
 
-// Returns a slice of given system table.
-// Intended to be used by code which is not performance critical.
-static future<lw_shared_ptr<query::result_set>> query(
-    distributed<service::storage_proxy>& proxy,
-    const sstring& ks_name,
-    const sstring& cf_name,
-    const dht::decorated_key& key,
-    query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
+    // Returns a slice of given system table.
+    // Intended to be used by code which is not performance critical.
+    static future<lw_shared_ptr<query::result_set>> query(
+        distributed<service::storage_proxy>& proxy,
+        const sstring& ks_name,
+        const sstring& cf_name,
+        const dht::decorated_key& key,
+        query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
 
 
-/**
- * Return a map of IP addresses containing a map of dc and rack info
- */
-static std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
-load_dc_rack_info();
+    /**
+     * Return a map of IP addresses containing a map of dc and rack info
+     */
+    static std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
+    load_dc_rack_info();
 
-enum class bootstrap_state {
-    NEEDS_BOOTSTRAP,
-    COMPLETED,
-    IN_PROGRESS,
-    DECOMMISSIONED
-};
+    enum class bootstrap_state {
+        NEEDS_BOOTSTRAP,
+        COMPLETED,
+        IN_PROGRESS,
+        DECOMMISSIONED
+    };
 
     struct compaction_history_entry {
         utils::UUID id;
@@ -352,12 +352,12 @@ enum class bootstrap_state {
 
     static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
-static future<int> increment_and_get_generation();
-static bool bootstrap_complete();
-static bool bootstrap_in_progress();
-static bootstrap_state get_bootstrap_state();
-static bool was_decommissioned();
-static future<> set_bootstrap_state(bootstrap_state state);
+    static future<int> increment_and_get_generation();
+    static bool bootstrap_complete();
+    static bool bootstrap_in_progress();
+    static bootstrap_state get_bootstrap_state();
+    static bool was_decommissioned();
+    static future<> set_bootstrap_state(bootstrap_state state);
 
     /**
      * Read the host ID from the system keyspace, creating (and storing) one if
@@ -372,43 +372,43 @@ static future<> set_bootstrap_state(bootstrap_state state);
 
     static api::timestamp_type schema_creation_timestamp();
 
-/**
- * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
- */
-static mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
+    /**
+     * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
+     */
+    static mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
 
-static future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
-static future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
-static future<> remove_view_build_progress(sstring ks_name, sstring view_name);
-static future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
-static future<> mark_view_as_built(sstring ks_name, sstring view_name);
-static future<> remove_built_view(sstring ks_name, sstring view_name);
-static future<std::vector<view_name>> load_built_views();
-static future<std::vector<view_build_progress>> load_view_build_progress();
+    static future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
+    static future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
+    static future<> remove_view_build_progress(sstring ks_name, sstring view_name);
+    static future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
+    static future<> mark_view_as_built(sstring ks_name, sstring view_name);
+    static future<> remove_built_view(sstring ks_name, sstring view_name);
+    static future<std::vector<view_name>> load_built_views();
+    static future<std::vector<view_build_progress>> load_view_build_progress();
 
-// Paxos related functions
-static future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
-        db::timeout_clock::time_point timeout);
-static future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
-static future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout);
-static future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
-static future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
+    // Paxos related functions
+    static future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
+            db::timeout_clock::time_point timeout);
+    static future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
+    static future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout);
+    static future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
+    static future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
 
-// CDC related functions
+    // CDC related functions
 
-/*
- * Save the CDC generation ID announced by this node in persistent storage.
- */
-static future<> update_cdc_generation_id(cdc::generation_id);
+    /*
+    * Save the CDC generation ID announced by this node in persistent storage.
+    */
+    static future<> update_cdc_generation_id(cdc::generation_id);
 
-/*
- * Read the CDC generation ID announced by this node from persistent storage.
- * Used to initialize a restarting node.
- */
-static future<std::optional<cdc::generation_id>> get_cdc_generation_id();
+    /*
+    * Read the CDC generation ID announced by this node from persistent storage.
+    * Used to initialize a restarting node.
+    */
+    static future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
-static future<bool> cdc_is_rewritten();
-static future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
+    static future<bool> cdc_is_rewritten();
+    static future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
 }; // class system_keyspace
 
