@@ -93,6 +93,7 @@ class reader_permit::impl
     uint64_t _blocked_branches = 0;
     bool _marked_as_blocked = false;
     db::timeout_clock::time_point _timeout;
+    query::max_result_size _max_result_size{query::result_memory_limiter::unlimited_result_size};
 
 private:
     void on_permit_used() {
@@ -320,6 +321,14 @@ public:
         }
         _timeout = timeout;
     }
+
+    query::max_result_size max_result_size() const {
+        return _max_result_size;
+    }
+
+    void set_max_result_size(query::max_result_size s) {
+        _max_result_size = std::move(s);
+    }
 };
 
 static_assert(std::is_nothrow_copy_constructible_v<reader_permit>);
@@ -410,6 +419,14 @@ db::timeout_clock::time_point reader_permit::timeout() const noexcept {
 
 void reader_permit::set_timeout(db::timeout_clock::time_point timeout) noexcept {
     _impl->set_timeout(timeout);
+}
+
+query::max_result_size reader_permit::max_result_size() const {
+    return _impl->max_result_size();
+}
+
+void reader_permit::set_max_result_size(query::max_result_size s) {
+    _impl->set_max_result_size(std::move(s));
 }
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {

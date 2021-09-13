@@ -26,6 +26,7 @@
 
 #include "db/timeout_clock.hh"
 #include "schema_fwd.hh"
+#include "query_class_config.hh"
 
 namespace seastar {
     class file;
@@ -165,6 +166,9 @@ public:
     db::timeout_clock::time_point timeout() const noexcept;
 
     void set_timeout(db::timeout_clock::time_point timeout) noexcept;
+
+    query::max_result_size max_result_size() const;
+    void set_max_result_size(query::max_result_size);
 };
 
 using reader_permit_opt = optimized_optional<reader_permit>;
