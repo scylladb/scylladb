@@ -3853,13 +3853,21 @@ public:
 };
 
 db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s) {
-    double chance = _read_repair_chance(_urandom);
-    if (s.read_repair_chance() > chance) {
-        return db::read_repair_decision::GLOBAL;
-    }
+    // We do this check as a workaround for a performance problem on ARM.
+    // For computing random floating point numbers, libstdc++ uses
+    // `long double` arithmetic under the hood, which on ARM is emulated in software,
+    // visibly slowing down read queries.
+    // This workaround fixes the problem when probabilistic read repair is disabled,
+    // which is overwhelmingly the most common case.
+    if (s.dc_local_read_repair_chance() > 0 || s.read_repair_chance() > 0) {
+        double chance = _read_repair_chance(_urandom);
+        if (s.read_repair_chance() > chance) {
+            return db::read_repair_decision::GLOBAL;
+        }
 
-    if (s.dc_local_read_repair_chance() > chance) {
-        return db::read_repair_decision::DC_LOCAL;
+        if (s.dc_local_read_repair_chance() > chance) {
+            return db::read_repair_decision::DC_LOCAL;
+        }
     }
 
     return db::read_repair_decision::NONE;
