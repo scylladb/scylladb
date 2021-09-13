@@ -146,7 +146,7 @@ partition_slice reverse_slice(const schema& schema, partition_slice slice) {
             std::reverse(ranges.begin(), ranges.end());
             reverse_clustering_ranges_bounds(ranges);
         })
-        .with_option<partition_slice::option::reversed>()
+        .with_option_toggled<partition_slice::option::reversed>()
         .build();
 }
 
