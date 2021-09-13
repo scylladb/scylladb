@@ -198,7 +198,7 @@ template<typename Input>
 }}""")
 
 
-class Attribute(ASTBase):
+class Attributes(ASTBase):
     ''' AST node for representing class and field attributes.
 
     The following attributes are supported:
@@ -206,14 +206,18 @@ class Attribute(ASTBase):
        for a class.
      - `[[version id]] field attribute, marks that a field is available starting
        from a specific version.'''
-    def __init__(self, name):
-        super().__init__(name)
+    def __init__(self, attr_items):
+        super().__init__('attributes')
+        self.attr_items = attr_items
 
     def __str__(self):
-        return f"[[{self.name}]]"
+        return f"[[{', '.join([a for a in self.attr_items])}]]"
 
     def __repr__(self):
         return self.__str__()
+
+    def empty(self):
+        return not self.attr_items
 
 
 class DataClassMember(ASTBase):
@@ -433,13 +437,18 @@ def enum_def_parse_action(tokens):
     return EnumDef(name=tokens['name'], underlying_type=tokens['underlying_type'], members=tokens['enum_values'].asList())
 
 
-def attribute_parse_action(tokens):
-    return Attribute(name=tokens[0])
+def attributes_parse_action(tokens):
+    items = []
+    for attr_clause in tokens:
+        # Split individual attributes inside each attribute clause by commas and strip extra whitespace characters
+        items += [arg.strip() for arg in attr_clause.split(',')]
+    return Attributes(attr_items=items)
 
 
 def class_member_parse_action(tokens):
     member_name = tokens['name']
-    attribute = tokens['attribute'][0] if 'attribute' in tokens else None
+    raw_attrs = tokens['attributes']
+    attribute = raw_attrs.attr_items[0] if not raw_attrs.empty() else None
     default = tokens['default'][0] if 'default' in tokens else None
     if not isinstance(member_name, str): # accessor function declaration
         return FunctionClassMember(type=tokens["type"], name=member_name[0], attribute=attribute, default_value=default)
@@ -451,7 +460,8 @@ def class_def_parse_action(tokens):
     is_final = 'final' in tokens
     is_stub = 'stub' in tokens
     class_members = tokens['members'].asList() if 'members' in tokens else []
-    attribute = tokens['attribute'][0] if 'attribute' in tokens else None
+    raw_attrs = tokens['attributes']
+    attribute = raw_attrs.attr_items[0] if not raw_attrs.empty() else None
     template_params = None
     if 'template' in tokens:
         template_params = [ClassTemplateParam(typename=tp[0], name=tp[1]) for tp in tokens['template']]
@@ -514,19 +524,19 @@ def parse_file(file_name):
     content = pp.Forward()
 
     attrib = lbrack - lbrack - pp.SkipTo(']') - rbrack - rbrack
-    attrib.setParseAction(attribute_parse_action)
-    opt_attribute = pp.Optional(attrib)("attribute")
+    opt_attributes = pp.ZeroOrMore(attrib)("attributes")
+    opt_attributes.setParseAction(attributes_parse_action)
 
     default_value = equals - pp.SkipTo(';')
     member_name = pp.Combine(identifier - pp.Optional(lparen - rparen)("function_marker"))
-    class_member = type("type") - member_name("name") - opt_attribute - pp.Optional(default_value)("default") - semi
+    class_member = type("type") - member_name("name") - opt_attributes - pp.Optional(default_value)("default") - semi
     class_member.setParseAction(class_member_parse_action)
 
     template_param = pp.Group(identifier("type") - identifier("name"))
     template_def = template - langle - pp.delimitedList(template_param)("params") - rangle
     class_content = pp.Forward()
     class_def = pp.Optional(template_def)("template") + (cls | struct) - ns_qualified_ident("name") - \
-        pp.Optional(final)("final") - pp.Optional(stub)("stub") - opt_attribute - \
+        pp.Optional(final)("final") - pp.Optional(stub)("stub") - opt_attributes - \
         lbrace - pp.ZeroOrMore(class_content)("members") - rbrace - pp.Optional(semi)
     class_content <<= enum | class_def | class_member
     class_def.setParseAction(class_def_parse_action)
@@ -1076,7 +1086,7 @@ def register_local_type(cls):
 def register_writable_local_type(cls):
     global local_writable_types
     global stubs
-    if not cls.attribute or cls.attribute.name != 'writable':
+    if not cls.attribute or cls.attribute != 'writable':
         return
     local_writable_types[cls.name] = cls
     if cls.stub:
