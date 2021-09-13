@@ -39,6 +39,11 @@ if __name__ == '__main__':
     if is_debian_variant():
         if not shutil.which('cpufreq-set'):
             apt_install('cpufrequtils')
+        try:
+            ondemand = systemd_unit('ondemand')
+            ondemand.disable()
+        except:
+            pass
         cfg = sysconfig_parser('/etc/default/cpufrequtils')
         cfg.set('GOVERNOR', 'performance')
         cfg.commit()
