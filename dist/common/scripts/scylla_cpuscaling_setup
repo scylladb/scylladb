@@ -22,6 +22,7 @@
 
 import os
 import sys
+import argparse
 import shlex
 import distro
 from scylla_util import *
@@ -46,7 +47,12 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
-    if not os.path.exists('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'):
+    parser = argparse.ArgumentParser(description='CPU scaling setup script for Scylla.')
+    parser.add_argument('--force', dest='force', action='store_true',
+                        help='force running setup even CPU scaling unsupported')
+    args = parser.parse_args()
+
+    if not args.force and not os.path.exists('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'):
         print('This computer doesn\'t supported CPU scaling configuration.')
         sys.exit(0)
     if not is_debian_variant():
