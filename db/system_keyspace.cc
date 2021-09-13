@@ -1371,6 +1371,8 @@ future<> setup(distributed<database>& db,
     });
 }
 
+}
+
 struct truncation_record {
     static constexpr uint32_t current_magic = 0x53435452; // 'S' 'C' 'T' 'R'
 
@@ -1378,7 +1380,7 @@ struct truncation_record {
     std::vector<db::replay_position> positions;
     db_clock::time_point time_stamp;
 };
-}
+
 }
 
 #include "idl/replay_position.dist.hh"
@@ -2021,13 +2023,15 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
             || s == v3::scylla_views_builds_in_progress();
 }
 
-future<> make(database& db, service::storage_service& ss) {
-    register_virtual_tables(ss);
+}
+
+future<> system_keyspace_make(database& db, service::storage_service& ss) {
+    system_keyspace::register_virtual_tables(ss);
 
     auto& db_config = db.get_config();
     auto enable_cache = db_config.enable_cache();
     bool durable = db_config.data_file_directories().size() > 0;
-    for (auto&& table : all_tables(db_config)) {
+    for (auto&& table : system_keyspace::all_tables(db_config)) {
         auto ks_name = table->ks_name();
         if (!db.has_keyspace(ks_name)) {
             auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
@@ -2039,7 +2043,7 @@ future<> make(database& db, service::storage_service& ss) {
         }
         auto& ks = db.find_keyspace(ks_name);
         auto cfg = ks.make_column_family_config(*table, db);
-        if (maybe_write_in_user_memory(table, db)) {
+        if (system_keyspace::maybe_write_in_user_memory(table, db)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;
         } else {
             cfg.memtable_scheduling_group = default_scheduling_group();
@@ -2048,7 +2052,13 @@ future<> make(database& db, service::storage_service& ss) {
         db.add_column_family(ks, table, std::move(cfg));
     }
 
-    install_virtual_readers(db);
+    system_keyspace::install_virtual_readers(db);
+}
+
+namespace system_keyspace {
+
+future<> make(database& db, service::storage_service& ss) {
+    return system_keyspace_make(db, ss);
 }
 
 future<utils::UUID> get_local_host_id() {
@@ -2418,5 +2428,7 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
+
+const char *const system_keyspace_CLIENTS = system_keyspace::CLIENTS;
 
 } // namespace db

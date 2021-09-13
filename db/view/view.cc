@@ -1610,8 +1610,8 @@ void view_builder::reshard(
 
 void view_builder::setup_shard_build_step(
         view_builder_init_state& vbi,
-        std::vector<system_keyspace::view_name> built,
-        std::vector<system_keyspace::view_build_progress> in_progress) {
+        std::vector<system_keyspace_view_name> built,
+        std::vector<system_keyspace_view_build_progress> in_progress) {
     // Shard 0 makes cleanup changes to the system tables, but none that could conflict
     // with the other shards; everyone is thus able to proceed independently.
     auto base_table_exists = [this] (const view_ptr& view) {
@@ -1625,7 +1625,7 @@ void view_builder::setup_shard_build_step(
             return false;
         }
     };
-    auto maybe_fetch_view = [&, this] (system_keyspace::view_name& name) {
+    auto maybe_fetch_view = [&, this] (system_keyspace_view_name& name) {
         try {
             auto s = _db.find_schema(name.first, name.second);
             if (s->is_view()) {

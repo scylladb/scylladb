@@ -46,10 +46,10 @@ class system_distributed_keyspace;
 
 }
 
-namespace db::system_keyspace {
+namespace db {
 
-using view_name = std::pair<sstring, sstring>;
-class view_build_progress;
+using system_keyspace_view_name = std::pair<sstring, sstring>;
+class system_keyspace_view_build_progress;
 
 }
 
@@ -227,7 +227,7 @@ private:
     future<> initialize_reader_at_current_token(build_step&);
     void load_view_status(view_build_status, std::unordered_set<utils::UUID>&);
     void reshard(std::vector<std::vector<view_build_status>>, std::unordered_set<utils::UUID>&);
-    void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace::view_name>, std::vector<system_keyspace::view_build_progress>);
+    void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace_view_name>, std::vector<system_keyspace_view_build_progress>);
     future<> calculate_shard_build_step(view_builder_init_state& vbi);
     future<> add_new_view(view_ptr, build_step&);
     future<> do_build_step();

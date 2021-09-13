@@ -51,6 +51,7 @@
 #include "db_clock.hh"
 #include "db/commitlog/replay_position.hh"
 #include "mutation_query.hh"
+#include "system_keyspace_view_types.hh"
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
@@ -169,8 +170,8 @@ struct range_estimates {
     int64_t mean_partition_size;
 };
 
-using view_name = std::pair<sstring, sstring>;
-struct view_build_progress;
+using view_name = system_keyspace_view_name;
+using view_build_progress = system_keyspace_view_build_progress;
 
 extern schema_ptr hints();
 extern schema_ptr batchlog();
@@ -362,4 +363,8 @@ future<bool> cdc_is_rewritten();
 future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
 } // namespace system_keyspace
+
+future<> system_keyspace_make(database& db, service::storage_service& ss);
+extern const char *const system_keyspace_CLIENTS;
+
 } // namespace db

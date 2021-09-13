@@ -101,7 +101,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "cql3/functions/user_aggregate.hh"
 
-using namespace db::system_keyspace;
+using namespace db;
 using namespace std::chrono_literals;
 
 
@@ -236,12 +236,12 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
 
     // delete old, possibly obsolete entries in schema tables
     co_await parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) -> future<> {
-        auto deletion_timestamp = schema_creation_timestamp() - 1;
+        auto deletion_timestamp = system_keyspace::schema_creation_timestamp() - 1;
         co_await qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
     });
     {
-        auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
+        auto mvec  = make_create_keyspace_mutations(ksm, system_keyspace::schema_creation_timestamp(), true);
         co_await qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
     }
 }
@@ -275,7 +275,7 @@ schema_ptr keyspaces() {
         "keyspace definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -317,7 +317,7 @@ schema_ptr tables() {
         "table definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -346,7 +346,7 @@ schema_ptr scylla_tables(schema_features features) {
             sb.with_column("partitioner", utf8_type);
             offset += 2;
         }
-        sb.with_version(generate_schema_version(id, offset));
+        sb.with_version(system_keyspace::generate_schema_version(id, offset));
         sb.with_null_sharder();
         return sb.build();
     };
@@ -388,7 +388,7 @@ static schema_ptr columns_schema(const char* columns_table_name) {
         "column definitions"
         ));
     builder.set_gc_grace_seconds(schema_gc_grace);
-    builder.with_version(generate_schema_version(builder.uuid()));
+    builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
     builder.with_null_sharder();
     return builder.build();
 }
@@ -424,7 +424,7 @@ static schema_ptr computed_columns_schema(const char* columns_table_name) {
         "computed columns"
         ));
     builder.set_gc_grace_seconds(schema_gc_grace);
-    builder.with_version(generate_schema_version(builder.uuid()));
+    builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
     builder.with_null_sharder();
     return builder.build();
 }
@@ -454,7 +454,7 @@ schema_ptr dropped_columns() {
         "dropped column registry"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -480,7 +480,7 @@ schema_ptr triggers() {
         "trigger definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -525,7 +525,7 @@ schema_ptr views() {
         "view definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -552,7 +552,7 @@ schema_ptr indexes() {
         "secondary index definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -579,7 +579,7 @@ schema_ptr types() {
         "user defined type definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -609,7 +609,7 @@ schema_ptr functions() {
         "user defined function definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -639,7 +639,7 @@ schema_ptr aggregates() {
         "user defined aggregate definitions"
         ));
         builder.set_gc_grace_seconds(schema_gc_grace);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build();
     }();
@@ -659,7 +659,7 @@ schema_ptr scylla_table_schema_history() {
         builder.with_column("type", utf8_type);
         builder.set_comment("Scylla specific table to store a history of column mappings "
             "for each table schema version upon an CREATE TABLE/ALTER TABLE operations");
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build(schema_builder::compact_storage::no);
     }();
