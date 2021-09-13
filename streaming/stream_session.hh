@@ -150,11 +150,7 @@ private:
     using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
-public:
-    static future<> init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-            distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms,
-            sharded<service::migration_manager>& mm);
-    static future<> uninit_streaming_service();
+
 public:
     /**
      * Streaming endpoint.

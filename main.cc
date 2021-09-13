@@ -488,6 +488,7 @@ int main(int ac, char** av) {
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
     sharded<sstables_loader> sst_loader;
+    sharded<streaming::stream_manager>& stream_manager = streaming::get_stream_manager();
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -517,7 +518,7 @@ int main(int ac, char** av) {
         return seastar::async([cfg, ext, &db, &qp, &bm, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -1039,10 +1040,14 @@ int main(int ac, char** av) {
             }
 
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();
-            auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
-                streaming::stream_session::uninit_streaming_service().get();
+            stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging), std::ref(mm)).get();
+            auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
+                // FIXME -- keep the instances alive, just call .stop on them
+                stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
             });
+
+            stream_manager.invoke_on_all(&streaming::stream_manager::start).get();
+
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");

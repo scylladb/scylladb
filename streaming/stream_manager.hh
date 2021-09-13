@@ -127,6 +127,9 @@ public:
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm);
 
+    future<> start();
+    future<> stop();
+
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
 
     void register_sending(shared_ptr<stream_result_future> result);
@@ -194,7 +197,6 @@ private:
     void fail_sessions(inet_address endpoint);
     bool has_peer(inet_address endpoint) const;
 
-    friend class stream_session; // temporary
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
 };

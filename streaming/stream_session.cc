@@ -38,7 +38,6 @@
 
 #include "log.hh"
 #include "message/messaging_service.hh"
-#include "gms/gossiper.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -258,24 +257,6 @@ stream_session::stream_session(inet_address peer_)
 }
 
 stream_session::~stream_session() = default;
-
-future<> stream_session::init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm) {
-    // #293 - do not stop anything
-    // engine().at_exit([] {
-    //     return get_stream_manager().stop();
-    // });
-    return get_stream_manager().start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm)).then([&ms, &mm] {
-        gms::get_local_gossiper().register_(get_local_stream_manager().shared_from_this());
-        return get_stream_manager().invoke_on_all([] (stream_manager& sm) { sm.init_messaging_service_handler(); });
-    });
-}
-
-future<> stream_session::uninit_streaming_service() {
-    return get_stream_manager().invoke_on_all([] (stream_manager& sm) {
-        return sm.uninit_messaging_service_handler();
-    });
-}
 
 future<> stream_session::on_initialization_complete() {
     // send prepare message

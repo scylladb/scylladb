@@ -37,11 +37,13 @@
  */
 
 #include <seastar/core/distributed.hh>
+#include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
 #include "log.hh"
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
 
 namespace streaming {
 
@@ -70,6 +72,16 @@ stream_manager::stream_manager(sharded<database>& db,
         sm::make_derive("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
     });
+}
+
+future<> stream_manager::start() {
+    gms::get_local_gossiper().register_(shared_from_this());
+    init_messaging_service_handler();
+    return make_ready_future<>();
+}
+
+future<> stream_manager::stop() {
+    co_await uninit_messaging_service_handler();
 }
 
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {
