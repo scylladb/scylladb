@@ -3139,7 +3139,7 @@ private:
         auto mp = mutation_partition(s, m.partition());
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
         bool always_return_static_content = cmd.slice.options.contains<query::partition_slice::option::always_return_static_content>();
-        mp.compact_for_query(s, cmd.timestamp, ranges, always_return_static_content, is_reversed, limit);
+        mp.compact_for_query(s, m.decorated_key(), cmd.timestamp, ranges, always_return_static_content, is_reversed, limit);
         return primary_key{m.decorated_key(), get_last_reconciled_row(s, mp, is_reversed)};
     }
 
@@ -3214,7 +3214,7 @@ private:
                     std::vector<query::clustering_range> ranges;
                     ranges.emplace_back(is_reversed ? query::clustering_range::make_starting_with(std::move(*shortest_read->clustering))
                                                     : query::clustering_range::make_ending_with(std::move(*shortest_read->clustering)));
-                    it->live_row_count = it->mut.partition().compact_for_query(s, cmd.timestamp, ranges, always_return_static_content,
+                    it->live_row_count = it->mut.partition().compact_for_query(s, it->mut.decorated_key(), cmd.timestamp, ranges, always_return_static_content,
                             is_reversed, query::partition_max_rows);
                 }
             }

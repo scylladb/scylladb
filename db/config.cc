@@ -35,6 +35,7 @@
 #include <seastar/net/tls.hh>
 
 #include "cdc/cdc_extension.hh"
+#include "tombstone_gc_extension.hh"
 #include "config.hh"
 #include "extensions.hh"
 #include "log.hh"

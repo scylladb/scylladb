@@ -161,7 +161,9 @@ enum class messaging_verb : int32_t {
     RAFT_MODIFY_CONFIG = 56,
     GROUP0_PEER_EXCHANGE = 57,
     GROUP0_MODIFY_CONFIG = 58,
-    LAST = 59,
+    REPAIR_UPDATE_SYSTEM_TABLE = 59,
+    REPAIR_FLUSH_HINTS_BATCHLOG = 60,
+    LAST = 61,
 };
 
 } // namespace netw

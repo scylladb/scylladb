@@ -90,6 +90,7 @@
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "cdc/generation_service.hh"
+#include "tombstone_gc_extension.hh"
 #include "alternator/tags_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -427,6 +428,7 @@ int main(int ac, char** av) {
     ext->add_schema_extension<alternator::tags_extension>(alternator::tags_extension::NAME);
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
+    ext->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
 
     auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();
@@ -1083,7 +1085,7 @@ int main(int ac, char** av) {
             // both)
             supervisor::notify("starting messaging service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });

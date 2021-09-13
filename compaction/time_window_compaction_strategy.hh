@@ -139,7 +139,7 @@ private:
     compaction_mode(const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
-    get_next_non_expired_sstables(table_state& table_s, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before);
+    get_next_non_expired_sstables(table_state& table_s, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
 
     std::vector<shared_sstable> get_compaction_candidates(table_state& table_s, std::vector<shared_sstable> candidate_sstables);
 public:

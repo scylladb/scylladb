@@ -142,3 +142,28 @@ struct node_ops_cmd_response {
     // Optional field, set by query_pending_ops cmd
     std::list<utils::UUID> pending_ops;
 };
+
+struct repair_update_system_table_request {
+    utils::UUID repair_uuid;
+    utils::UUID table_uuid;
+    sstring keyspace_name;
+    sstring table_name;
+    dht::token_range range;
+    gc_clock::time_point repair_time;
+};
+
+struct repair_update_system_table_response {
+};
+
+struct repair_flush_hints_batchlog_request {
+    utils::UUID repair_uuid;
+    std::list<gms::inet_address> target_nodes;
+    std::chrono::seconds hints_timeout;
+    std::chrono::seconds batchlog_timeout;
+};
+
+struct repair_flush_hints_batchlog_response {
+};
+
+verb [[with_client_info]] repair_update_system_table (repair_update_system_table_request) -> repair_update_system_table_response;
+verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request) -> repair_flush_hints_batchlog_response;

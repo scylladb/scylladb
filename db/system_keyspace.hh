@@ -149,6 +149,7 @@ public:
     static constexpr auto RAFT = "raft";
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
     static constexpr auto RAFT_CONFIG = "raft_config";
+    static constexpr auto REPAIR_HISTORY = "repair_history";
     static const char *const CLIENTS;
 
     struct v3 {
@@ -230,6 +231,7 @@ public:
     static schema_ptr built_indexes(); // TODO (from Cassandra): make private
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
+    static schema_ptr repair_history();
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 

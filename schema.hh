@@ -41,6 +41,7 @@
 #include "caching_options.hh"
 #include "column_computation.hh"
 #include "timestamp.hh"
+#include "tombstone_gc_options.hh"
 
 namespace dht {
 
@@ -820,6 +821,8 @@ public:
     }
 
     const cdc::options& cdc_options() const;
+
+    const ::tombstone_gc_options& tombstone_gc_options() const;
 
     const ::speculative_retry& speculative_retry() const {
         return _raw._speculative_retry;

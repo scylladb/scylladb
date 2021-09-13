@@ -154,7 +154,7 @@ view_ptr create_view_statement::prepare_view(database& db) const {
     //  - make sure base_table gc_grace_seconds > 0
 
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
-    _properties.validate(db, schema_extensions);
+    _properties.validate(db, keyspace(), schema_extensions);
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));

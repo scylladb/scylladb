@@ -457,7 +457,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd).get0();
         BOOST_REQUIRE(res_mut_opt);
 
-        res_mut_opt->partition().compact_for_query(*schema, gc_clock::now(), {query::full_clustering_range}, true, false,
+        res_mut_opt->partition().compact_for_query(*schema, res_mut_opt->decorated_key(), gc_clock::now(), {query::full_clustering_range}, true, false,
                 std::numeric_limits<uint32_t>::max());
 
         const auto stats_after = memory::stats();
@@ -1245,7 +1245,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, gc_clock::now());
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now());
     return result;
 }
 
@@ -1638,7 +1638,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
-    m.partition().compact_for_compaction(*s, always_gc, gc_clock::now());
+    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now());
     // Check that row was covered by tombstone.
     BOOST_REQUIRE(m.partition().empty());
     // Check that tombstone was purged after compact_for_compaction().
@@ -1744,11 +1744,11 @@ SEASTAR_TEST_CASE(test_trim_rows) {
 
         auto compact_and_expect_empty = [&] (mutation m, std::vector<query::clustering_range> ranges) {
             mutation m2 = m;
-            m.partition().compact_for_query(*s, now, ranges, false, false, query::max_rows);
+            m.partition().compact_for_query(*s, m.decorated_key(), now, ranges, false, false, query::max_rows);
             BOOST_REQUIRE(m.partition().clustered_rows().empty());
 
             std::reverse(ranges.begin(), ranges.end());
-            m2.partition().compact_for_query(*s, now, ranges, false, true, query::max_rows);
+            m2.partition().compact_for_query(*s, m2.decorated_key(), now, ranges, false, true, query::max_rows);
             BOOST_REQUIRE(m2.partition().clustered_rows().empty());
         };
 
@@ -1830,8 +1830,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             if (s != m2.schema()) {
                 return;
             }
-            m1.partition().compact_for_compaction(*s, never_gc, now);
-            m2.partition().compact_for_compaction(*s, never_gc, now);
+            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now);
+            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now);
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
@@ -2949,6 +2949,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
     };
+    auto gc_grace_seconds = schema.gc_grace_seconds();
     auto consumer = make_stable_flattened_mutations_consumer<compact_for_compaction<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>>(
             schema,
             query_time,

@@ -940,7 +940,7 @@ sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, s
 
 static mutation compacted(const mutation& m) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, gc_clock::now());
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now());
     return result;
 }
 
@@ -2621,7 +2621,8 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) mutable {
                 auto source = mt->make_flat_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
-                auto mr = make_compacting_reader(std::move(source), query_time, [] (const dht::decorated_key&) { return api::min_timestamp; });
+                auto mr = make_compacting_reader(std::move(source), query_time,
+                        [] (const dht::decorated_key&) { return api::min_timestamp; });
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);
                 }
@@ -2672,7 +2673,8 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         }
 
         auto mr = make_compacting_reader(make_flat_mutation_reader_from_fragments(ss.schema(), permit, std::move(mfs)),
-                gc_clock::now(), [] (const dht::decorated_key&) { return api::min_timestamp; });
+                gc_clock::now(),
+                [] (const dht::decorated_key&) { return api::min_timestamp; });
         mr.set_max_buffer_size(buffer_size);
 
         return mr;

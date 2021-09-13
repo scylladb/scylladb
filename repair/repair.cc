@@ -55,6 +55,8 @@
 
 #include <cfloat>
 
+#include "idl/partition_checksum.dist.hh"
+
 logging::logger rlogger("repair");
 
 void node_ops_info::check_abort() {
@@ -313,7 +315,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 #endif
 }
 
-static future<std::vector<gms::inet_address>> get_hosts_participating_in_repair(database& db,
+static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(database& db,
         const sstring& ksname,
         const dht::token_range_vector& ranges,
         const std::vector<sstring>& data_centers,
@@ -333,7 +335,7 @@ static future<std::vector<gms::inet_address>> get_hosts_participating_in_repair(
         }
     });
 
-    co_return std::vector<gms::inet_address>(participating_hosts.begin(), participating_hosts.end());
+    co_return std::list<gms::inet_address>(participating_hosts.begin(), participating_hosts.end());
 }
 
 static tracker* _the_tracker = nullptr;
@@ -591,8 +593,10 @@ repair_info::repair_info(repair_service& repair,
     const std::vector<sstring>& hosts_,
     const std::unordered_set<gms::inet_address>& ignore_nodes_,
     streaming::stream_reason reason_,
-    std::optional<utils::UUID> ops_uuid)
-    : db(repair.get_db())
+    std::optional<utils::UUID> ops_uuid,
+    bool hints_batchlog_flushed)
+    : rs(repair)
+    , db(repair.get_db())
     , messaging(repair.get_messaging().container())
     , sys_dist_ks(repair.get_sys_dist_ks())
     , view_update_generator(repair.get_view_update_generator())
@@ -609,8 +613,10 @@ repair_info::repair_info(repair_service& repair,
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
     , reason(reason_)
+    , total_rf(db.local().find_keyspace(keyspace).get_effective_replication_map()->get_replication_factor())
     , nr_ranges_total(ranges.size())
-    , _ops_uuid(std::move(ops_uuid)) {
+    , _ops_uuid(std::move(ops_uuid))
+    , _hints_batchlog_flushed(std::move(hints_batchlog_flushed)) {
 }
 
 void repair_info::check_failed_ranges() {
@@ -1120,12 +1126,41 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     // Do it in the background.
     (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
+        auto uuid = id.uuid;
+
+        auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
+        std::erase_if(waiting_nodes, [&] (const auto& addr) {
+            return ignore_nodes.contains(addr);
+        });
         auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
+        auto hints_timeout = std::chrono::seconds(300);
+        auto batchlog_timeout = std::chrono::seconds(300);
+        repair_flush_hints_batchlog_request req{id.uuid, participants, hints_timeout, batchlog_timeout};
+
+        bool hints_batchlog_flushed = false;
+        try {
+            parallel_for_each(waiting_nodes, [this, uuid, &req, &participants] (gms::inet_address node) -> future<> {
+                rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, started",
+                        uuid, node, participants);
+                try {
+                    auto& ms = get_messaging();
+                    auto resp = co_await ser::partition_checksum_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
+                } catch (...) {
+                    rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, failed: {}",
+                            uuid, node, participants, std::current_exception());
+                    throw;
+                }
+            }).get();
+            hints_batchlog_flushed = true;
+        } catch (...) {
+            rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to participants={} failed, continue to run repair",
+                    uuid, participants);
+        }
+
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         abort_source as;
-        auto uuid = id.uuid;
         auto off_strategy_updater = seastar::async([this, uuid, &table_ids, &participants, &as] {
             auto tables = std::list<utils::UUID>(table_ids.begin(), table_ids.end());
             auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, uuid, {}, {}, {}, {}, std::move(tables));
@@ -1155,13 +1190,21 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
+        auto cleanup_repair_range_history = defer([this, uuid] () mutable {
+            try {
+                this->cleanup_history(uuid).get();
+            } catch (...) {
+                rlogger.warn("repair[{}]: Failed to cleanup history: {}", uuid, std::current_exception());
+            }
+        });
+
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges,
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
                 _node_ops_metrics.repair_total_ranges_sum += ranges.size();
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid, hints_batchlog_flushed);
                 return repair_ranges(ri);
             });
             repair_results.push_back(std::move(f));
@@ -1263,9 +1306,10 @@ future<> repair_service::do_sync_data_using_repair(
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                bool hints_batchlog_flushed = false;
                 auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid, hints_batchlog_flushed);
                 ri->neighbors = std::move(neighbors);
                 return repair_ranges(ri);
             });
