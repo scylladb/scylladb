@@ -150,8 +150,6 @@ private:
     using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
-    static void init_messaging_service_handler(netw::messaging_service& ms, shared_ptr<service::migration_manager> mm);
-    static future<> uninit_messaging_service_handler(netw::messaging_service& ms);
     static distributed<database>* _db;
     static distributed<db::system_distributed_keyspace>* _sys_dist_ks;
     static distributed<db::view::view_update_generator>* _view_update_generator;

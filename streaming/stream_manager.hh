@@ -191,6 +191,10 @@ private:
     void fail_all_sessions();
     void fail_sessions(inet_address endpoint);
     bool has_peer(inet_address endpoint) const;
+
+    friend class stream_session; // temporary
+    void init_messaging_service_handler();
+    future<> uninit_messaging_service_handler();
 };
 
 extern distributed<stream_manager> _the_stream_manager;

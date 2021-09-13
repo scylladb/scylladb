@@ -70,12 +70,6 @@ stream_manager::stream_manager(sharded<database>& db,
         sm::make_derive("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
     });
-
-    (void)_db;
-    (void)_sys_dist_ks;
-    (void)_view_update_generator;
-    (void)_ms;
-    (void)_mm;
 }
 
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {
