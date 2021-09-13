@@ -64,6 +64,10 @@ namespace netw {
 class messaging_service;
 };
 
+namespace gms {
+class gossiper;
+}
+
 namespace streaming {
 
 class stream_result_future;
@@ -111,6 +115,7 @@ private:
     sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<netw::messaging_service>& _ms;
     sharded<service::migration_manager>& _mm;
+    gms::gossiper& _gossiper;
 
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
@@ -125,7 +130,8 @@ public:
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
-            sharded<service::migration_manager>& mm);
+            sharded<service::migration_manager>& mm,
+            gms::gossiper& gossiper);
 
     future<> start();
     future<> stop();

@@ -56,12 +56,14 @@ stream_manager::stream_manager(sharded<database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
-            sharded<service::migration_manager>& mm)
+            sharded<service::migration_manager>& mm,
+            gms::gossiper& gossiper)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
         , _ms(ms)
         , _mm(mm)
+        , _gossiper(gossiper)
 {
     namespace sm = seastar::metrics;
 
@@ -75,12 +77,13 @@ stream_manager::stream_manager(sharded<database>& db,
 }
 
 future<> stream_manager::start() {
-    gms::get_local_gossiper().register_(shared_from_this());
+    _gossiper.register_(shared_from_this());
     init_messaging_service_handler();
     return make_ready_future<>();
 }
 
 future<> stream_manager::stop() {
+    co_await _gossiper.unregister_(shared_from_this());
     co_await uninit_messaging_service_handler();
 }
 
