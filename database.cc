@@ -340,14 +340,16 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _streaming_concurrency_sem(
             max_count_streaming_concurrent_reads,
             max_memory_streaming_concurrent_reads(),
-            "_streaming_concurrency_sem")
+            "_streaming_concurrency_sem",
+            std::numeric_limits<size_t>::max())
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction")
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
             max_memory_system_concurrent_reads(),
-            "_system_read_concurrency_sem")
+            "_system_read_concurrency_sem",
+            std::numeric_limits<size_t>::max())
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)

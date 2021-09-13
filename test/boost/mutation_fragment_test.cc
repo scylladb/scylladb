@@ -425,7 +425,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
 
     simple_schema s;
 
-    reader_concurrency_semaphore sem(1, 100, get_name());
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 100);
     auto stop_sem = deferred_stop(sem);
     auto permit = sem.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
 

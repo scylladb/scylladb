@@ -625,7 +625,8 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
     : reader_concurrency_semaphore(
             std::numeric_limits<int>::max(),
             std::numeric_limits<ssize_t>::max(),
-            std::move(name)) {}
+            std::move(name),
+            std::numeric_limits<size_t>::max()) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     if (!_stats.total_permits) {

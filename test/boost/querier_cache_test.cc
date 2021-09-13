@@ -163,7 +163,7 @@ public:
     };
 
     test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, ssize_t max_memory = std::numeric_limits<ssize_t>::max())
-        : _sem(std::numeric_limits<int>::max(), max_memory, "test_querier_cache")
+        : _sem(reader_concurrency_semaphore::for_tests{}, "test_querier_cache", std::numeric_limits<int>::max(), max_memory)
         , _cache(entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
