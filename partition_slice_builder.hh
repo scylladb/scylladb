@@ -65,6 +65,11 @@ public:
         _options.set<OPTION>();
         return *this;
     }
+    template <query::partition_slice::option OPTION>
+    partition_slice_builder& with_option_toggled() {
+        _options.toggle<OPTION>();
+        return *this;
+    }
 
     query::partition_slice build();
 };
