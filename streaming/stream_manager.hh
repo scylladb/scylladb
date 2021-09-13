@@ -139,6 +139,8 @@ public:
 
     std::vector<shared_ptr<stream_result_future>> get_all_streams() const;
 
+    database& db() noexcept { return _db.local(); }
+    netw::messaging_service& ms() noexcept { return _ms.local(); }
 
     const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_initiated_streams() const {
         return _initiated_streams;
