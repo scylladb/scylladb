@@ -3853,13 +3853,15 @@ public:
 };
 
 db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s) {
-    double chance = _read_repair_chance(_urandom);
-    if (s.read_repair_chance() > chance) {
-        return db::read_repair_decision::GLOBAL;
-    }
+    if (s.dc_local_read_repair_chance() > 0 || s.read_repair_chance() > 0) {
+        double chance = _read_repair_chance(_urandom);
+        if (s.read_repair_chance() > chance) {
+            return db::read_repair_decision::GLOBAL;
+        }
 
-    if (s.dc_local_read_repair_chance() > chance) {
-        return db::read_repair_decision::DC_LOCAL;
+        if (s.dc_local_read_repair_chance() > chance) {
+            return db::read_repair_decision::DC_LOCAL;
+        }
     }
 
     return db::read_repair_decision::NONE;
