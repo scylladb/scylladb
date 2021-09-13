@@ -1827,7 +1827,7 @@ future<> storage_service::do_stop_stream_manager() {
     }
     _stream_manager_stopped = true;
     return streaming::get_stream_manager().invoke_on_all([] (auto& sm) {
-        return sm.stop();
+        return sm.shutdown();
     }).then([] {
         slogger.info("stream_manager stopped");
     });

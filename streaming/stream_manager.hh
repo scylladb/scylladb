@@ -154,7 +154,7 @@ public:
 
     void show_streams() const;
 
-    future<> stop() {
+    future<> shutdown() {
         fail_all_sessions();
         return make_ready_future<>();
     }
