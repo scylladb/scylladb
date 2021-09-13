@@ -48,7 +48,7 @@ future<> notify_new_client(client_data cd) {
     // FIXME: consider prepared statement
     const static sstring req
             = format("INSERT INTO system.{} (address, port, client_type, connection_stage, shard_id, protocol_version, username) "
-                     "VALUES (?, ?, ?, ?, ?, ?, ?);", db::system_keyspace::CLIENTS);
+                     "VALUES (?, ?, ?, ?, ?, ?, ?);", db::system_keyspace_CLIENTS);
     
     return db::qctx->execute_cql(req,
             std::move(cd.ip), cd.port, to_string(cd.ct), to_string(cd.connection_stage), cd.shard_id,
@@ -60,7 +60,7 @@ future<> notify_disconnected_client(net::inet_address addr, int port, client_typ
     // FIXME: consider prepared statement
     const static sstring req
             = format("DELETE FROM system.{} where address=? AND port=? AND client_type=?;",
-                     db::system_keyspace::CLIENTS);
+                     db::system_keyspace_CLIENTS);
     return db::qctx->execute_cql(req, std::move(addr), port, to_string(ct)).discard_result();
 }
 
@@ -69,7 +69,7 @@ future<> clear_clientlist() {
     return db_local.truncate(
             db_local.find_keyspace(db::system_keyspace_name()),
             db_local.find_column_family(db::system_keyspace_name(),
-                    db::system_keyspace::CLIENTS),
+                    db::system_keyspace_CLIENTS),
             [] { return make_ready_future<db_clock::time_point>(db_clock::now()); },
             false /* with_snapshot */);
 }

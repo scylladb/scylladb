@@ -20,11 +20,11 @@
  */
 
 namespace db {
-namespace system_keyspace {
+
 struct truncation_record {
     uint32_t magic;
     std::vector<db::replay_position> positions;
     db_clock::time_point time_stamp;
 };
-}
+
 }
