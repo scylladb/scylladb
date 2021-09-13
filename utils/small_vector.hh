@@ -192,7 +192,7 @@ public:
         }
     }
 
-    small_vector(const small_vector& other) noexcept : small_vector() {
+    small_vector(const small_vector& other) : small_vector() {
         reserve(other.size());
         _end = std::uninitialized_copy(other.begin(), other.end(), _end);
     }
