@@ -250,11 +250,6 @@ future<> stream_manager::uninit_messaging_service_handler() {
         ms.unregister_complete_message()).discard_result();
 }
 
-distributed<database>* stream_session::_db;
-distributed<db::system_distributed_keyspace>* stream_session::_sys_dist_ks;
-distributed<db::view::view_update_generator>* stream_session::_view_update_generator;
-sharded<netw::messaging_service>* stream_session::_messaging;
-
 stream_session::stream_session() = default;
 
 stream_session::stream_session(inet_address peer_)
@@ -266,10 +261,6 @@ stream_session::~stream_session() = default;
 
 future<> stream_session::init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm) {
-    _db = &db;
-    _sys_dist_ks = &sys_dist_ks;
-    _view_update_generator = &view_update_generator;
-    _messaging = &ms;
     // #293 - do not stop anything
     // engine().at_exit([] {
     //     return get_stream_manager().stop();
