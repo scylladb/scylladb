@@ -155,8 +155,8 @@ static void with_sstable_directory(
     func(sstdir);
 }
 
-SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
-  sstables::test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
+  return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
     // Write a manifest file to make sure it's ignored
@@ -176,12 +176,12 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_simple_empty_directory_sca
     // No generation found on empty directory.
     BOOST_REQUIRE_EQUAL(max_generation_seen, 0);
    });
-  }).get();
+  });
 }
 
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
-SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
-  sstables::test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
+  return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
 
@@ -199,12 +199,12 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) 
     auto expect_malformed_sstable = distributed_loader::process_sstable_dir(sstdir);
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
    });
-  }).get();
+  });
 }
 
 // Test always-benign incomplete SSTable: temporaryTOC found
-SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
-  sstables::test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
+  return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
@@ -219,7 +219,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
     auto expect_ok = distributed_loader::process_sstable_dir(sstdir);
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
    });
-  }).get();
+  });
 }
 
 // Test always-benign incomplete SSTable: with extraneous temporaryTOC found
@@ -243,8 +243,8 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
 }
 
 // Test the absence of TOC. Behavior is controllable by a flag
-SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
-  sstables::test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
+  return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
     auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
@@ -271,7 +271,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
     auto expect_ok = distributed_loader::process_sstable_dir(sstdir_ok);
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
    });
-  }).get();
+  });
 }
 
 // Test the presence of TemporaryStatistics. If the old Statistics file is around

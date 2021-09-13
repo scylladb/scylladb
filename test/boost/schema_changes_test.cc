@@ -35,8 +35,8 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
-  sstables::test_env::do_with_async([] (sstables::test_env& env) {
+SEASTAR_TEST_CASE(test_schema_changes) {
+  return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     auto dir = tmpdir();
     int gen = 1;
 
@@ -87,5 +87,5 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             mr.produces_end_of_stream();
         }
     });
-  }).get();
+  });
 }

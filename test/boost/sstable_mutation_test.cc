@@ -53,8 +53,8 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-SEASTAR_THREAD_TEST_CASE(nonexistent_key) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(nonexistent_key) {
+  return test_env::do_with_async([] (test_env& env) {
     env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "invalid_key")), [&env, sstp] (auto& pr) {
             auto s = uncompressed_schema();
@@ -66,7 +66,7 @@ SEASTAR_THREAD_TEST_CASE(nonexistent_key) {
             });
         });
     }).get();
-  }).get();
+  });
 }
 
 future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_map<bytes, data_value> &&map) {
@@ -93,28 +93,28 @@ future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(uncompressed_1) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(uncompressed_1) {
+  return test_env::do_with_async([] (test_env& env) {
     test_no_clustered(env, "vinna", {{ "col1", to_sstring("daughter") }, { "col2", 3 }}).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(uncompressed_2) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(uncompressed_2) {
+  return test_env::do_with_async([] (test_env& env) {
     test_no_clustered(env, "gustaf", {{ "col1", to_sstring("son") }, { "col2", 0 }}).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(uncompressed_3) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(uncompressed_3) {
+  return test_env::do_with_async([] (test_env& env) {
     test_no_clustered(env, "isak", {{ "col1", to_sstring("son") }, { "col2", 1 }}).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(uncompressed_4) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(uncompressed_4) {
+  return test_env::do_with_async([] (test_env& env) {
     test_no_clustered(env, "finna", {{ "col1", to_sstring("daughter") }, { "col2", 2 }}).get();
-  }).get();
+  });
 }
 
 /*
@@ -165,8 +165,8 @@ inline auto clustered_row(mutation& mutation, const schema& s, std::vector<bytes
     return deletable_row(s, mutation.partition().clustered_row(s, clustering_pair));
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst1_k1) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst1_k1) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<1>(env, "key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -193,11 +193,11 @@ SEASTAR_THREAD_TEST_CASE(complex_sst1_k1) {
 
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst1_k2) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst1_k2) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<1>(env, "key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -226,11 +226,11 @@ SEASTAR_THREAD_TEST_CASE(complex_sst1_k2) {
 
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst2_k1) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst2_k1) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<2>(env, "key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -246,11 +246,11 @@ SEASTAR_THREAD_TEST_CASE(complex_sst2_k1) {
         match_collection_element<status::dead>(reg_list.cells[0], bytes_opt{}, bytes_opt{});
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst2_k2) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst2_k2) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<2>(env, "key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -277,11 +277,11 @@ SEASTAR_THREAD_TEST_CASE(complex_sst2_k2) {
 
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst2_k3) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst2_k3) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<2>(env, "key3").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -297,11 +297,11 @@ SEASTAR_THREAD_TEST_CASE(complex_sst2_k3) {
         match_absent(row1.cells(), *s, "reg_fset");
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst3_k1) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst3_k1) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<3>(env, "key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -319,11 +319,11 @@ SEASTAR_THREAD_TEST_CASE(complex_sst3_k1) {
         match_absent(row.cells(), *s, "reg_fset");
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(complex_sst3_k2) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(complex_sst3_k2) {
+  return test_env::do_with_async([] (test_env& env) {
     generate_clustered<3>(env, "key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
@@ -339,7 +339,7 @@ SEASTAR_THREAD_TEST_CASE(complex_sst3_k2) {
         match_absent(row.cells(), *s, "reg_fset");
         return make_ready_future<>();
     }).get();
-  }).get();
+  });
 }
 
 future<> test_range_reads(sstables::test_env& env, const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
@@ -377,31 +377,31 @@ future<> test_range_reads(sstables::test_env& env, const dht::token& min, const 
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(read_range) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(read_range) {
+  return test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak"), to_bytes("gustaf"), to_bytes("vinna") };
     do_with(std::move(expected), [&env] (auto& expected) {
         return test_range_reads(env, dht::minimum_token(), dht::maximum_token(), expected);
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(read_partial_range) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(read_partial_range) {
+  return test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak") };
     do_with(std::move(expected), [&env] (auto& expected) {
         return test_range_reads(env, uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::maximum_token(), expected);
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(read_partial_range_2) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(read_partial_range_2) {
+  return test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("gustaf"), to_bytes("vinna") };
     do_with(std::move(expected), [&env] (auto& expected) {
         return test_range_reads(env, dht::minimum_token(), uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.front()))), expected);
     }).get();
-  }).get();
+  });
 }
 
 static
@@ -411,8 +411,7 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 }
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
-    return seastar::async([] {
-      test_env::do_with_async([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();
         auto s = make_shared_schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
@@ -448,12 +447,11 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
                         c_key_end,
                         bound_kind::excl_end,
                         tombstone(9, ttl))));
-      }).get();
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(compact_storage_sparse_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(compact_storage_sparse_read) {
+  return test_env::do_with_async([] (test_env& env) {
     env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse", 1).then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(compact_sparse_schema(), "first_row")), [&env, sstp] (auto& pr) {
             auto s = compact_sparse_schema();
@@ -469,11 +467,11 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_sparse_read) {
           });
         });
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(compact_storage_simple_dense_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
+  return test_env::do_with_async([] (test_env& env) {
     env.reusable_sst(compact_simple_dense_schema(), "test/resource/sstables/compact_simple_dense", 1).then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(compact_simple_dense_schema(), "first_row")), [&env, sstp] (auto& pr) {
             auto s = compact_simple_dense_schema();
@@ -491,11 +489,11 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_simple_dense_read) {
             });
         });
     }).get();
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(compact_storage_dense_read) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(compact_storage_dense_read) {
+  return test_env::do_with_async([] (test_env& env) {
     env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense", 1).then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(compact_dense_schema(), "first_row")), [&env, sstp] (auto& pr) {
             auto s = compact_dense_schema();
@@ -513,15 +511,15 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_dense_read) {
             });
         });
     }).get();
-  }).get();
+  });
 }
 
 // We recently had an issue, documented at #188, where range-reading from an
 // sstable would break if collections were used.
 //
 // Make sure we don't regress on that.
-SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(broken_ranges_collection) {
+  return test_env::do_with_async([] (test_env& env) {
     env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", 2).then([&env] (auto sstp) {
         auto s = peers_schema();
         return with_closeable(sstp->as_mutation_source().make_reader(s, env.make_reader_permit(), query::full_partition_range), [s] (flat_mutation_reader& reader) {
@@ -550,7 +548,7 @@ SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
           });
         });
     }).get();
-  }).get();
+  });
 }
 
 static schema_ptr tombstone_overlap_schema() {
@@ -589,8 +587,8 @@ static future<sstable_ptr> ka_sst(sstables::test_env& env, schema_ptr schema, ss
 //                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
 //                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
 //               ]
-SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(tombstone_in_tombstone) {
+  return test_env::do_with_async([] (test_env& env) {
     ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 1).then([&env] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
@@ -642,7 +640,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
             });
         });
     }).get();
-  }).get();
+  });
 }
 
 //  Same schema as above, the sstable looks like:
@@ -654,8 +652,8 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
 //
 // We're not sure how this sort of sstable can be generated with Cassandra 2's
 // CQL, but we saw a similar thing is a real use case.
-SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(range_tombstone_reading) {
+  return test_env::do_with_async([] (test_env& env) {
     ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).then([&env] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
@@ -692,7 +690,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
             });
         });
     }).get();
-  }).get();
+  });
 }
 
 // In this test case we have *three* levels of of tombstones:
@@ -733,8 +731,8 @@ static schema_ptr tombstone_overlap_schema2() {
     }();
     return s;
 }
-SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
+  return test_env::do_with_async([] (test_env& env) {
     ka_sst(env, tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).then([&env] (auto sstp) {
         auto s = tombstone_overlap_schema2();
         return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
@@ -791,7 +789,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
             });
         });
     }).get();
-  }).get();
+  });
 }
 
 // Reproducer for #4783
@@ -815,8 +813,8 @@ static schema_ptr buffer_overflow_schema() {
     }();
     return s;
 }
-SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(buffer_overflow) {
+  return test_env::do_with_async([] (test_env& env) {
     auto s = buffer_overflow_schema();
     auto sstp = ka_sst(env, s, "test/resource/sstables/buffer_overflow", 5).get0();
     auto r = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
@@ -850,12 +848,11 @@ SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
         .produces_range_tombstone_change(rt2_after)
         .produces_partition_end()
         .produces_end_of_stream();
-  }).get();
+  });
 }
 
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         schema_builder builder("ks", "cf");
@@ -886,13 +883,11 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         }).get0();
         BOOST_REQUIRE(bool(mut));
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_has_partition_key) {
-    return seastar::async([] {
-      test_env::do_with_async([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
             auto dir = tmpdir();
             schema_builder builder("ks", "cf");
@@ -930,7 +925,6 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             res =  sst->has_partition_key(hk2, dk2).get0();
             BOOST_REQUIRE(! bool(res));
         }
-      }).get();
     });
 }
 
@@ -940,8 +934,7 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
-    return seastar::async([] {
-      test_env::do_with_async([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
@@ -984,13 +977,11 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
         assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
-      }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         schema_builder builder("ks", "cf");
@@ -1047,13 +1038,11 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                     .produces_end_of_stream();
         }
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         schema_builder builder("ks", "cf");
@@ -1106,13 +1095,11 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                     .produces_end_of_stream();
         }
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         int id = 0;
@@ -1159,13 +1146,11 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             }
         }
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound_dense_schemas) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         schema_builder builder("ks", "cf");
@@ -1202,13 +1187,11 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                     .produces_end_of_stream();
         }
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         schema_builder builder("ks", "cf");
@@ -1237,13 +1220,11 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
 
         assert_that(get_index_reader(sst, env.make_reader_permit())).is_empty(*s);
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_position) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
+   return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
         simple_schema ss;
@@ -1288,13 +1269,11 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
             .produces(m1 + m2)
             .produces_end_of_stream();
       }
-     }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
-    return seastar::async([] {
-      test_env::do_with_async([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
             simple_schema ss(simple_schema::with_static::yes);
             auto s = ss.schema();
@@ -1332,13 +1311,11 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
                 BOOST_REQUIRE_EQUAL(index_accesses(), before);
             }
       }
-      }).get();
     });
 }
 
 SEASTAR_TEST_CASE(test_key_count_estimation) {
-    return seastar::async([] {
-      test_env::do_with_async([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
             simple_schema ss;
             auto s = ss.schema();
@@ -1398,12 +1375,11 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 BOOST_REQUIRE_EQUAL(est, 0);
             }
         }
-      }).get();
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
+  return test_env::do_with_async([] (test_env& env) {
     // We create a sequence of partitions such that first we have a partition with a very long key, then
     // series of partitions with small keys. This should result in large index page.
     auto dir = tmpdir();
@@ -1481,11 +1457,11 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
 
     assert_that(actual).is_equal_to(expected);
     BOOST_REQUIRE_EQUAL(large_allocs_after - large_allocs_before, 0);
-  }).get();
+  });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_reading_serialization_header) {
+  return test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
     auto random_int32_value = [] {
@@ -1552,7 +1528,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
     // Like Cassandra even if a row marker is not expiring we update the metadata with NO_TTL value
     // which is 0.
     BOOST_CHECK(stats.min_ttl == gc_clock::duration(0));
-  }).get();
+  });
 }
 
 SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
@@ -1590,8 +1566,8 @@ SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
 
 
 // Reproducer for #4206
-SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
-  test_env::do_with_async([] (test_env& env) {
+SEASTAR_TEST_CASE(test_counter_header_size) {
+  return test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
     auto s = schema_builder("ks", "counter_test")
@@ -1630,7 +1606,7 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
             .produces(m)
             .produces_end_of_stream();
     }
-  }).get();
+  });
 }
 
 SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
