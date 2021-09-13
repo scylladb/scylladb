@@ -66,9 +66,8 @@ public:
     class value : public terminal {
     public:
         cql3::raw_value _bytes;
-        value(cql3::raw_value bytes_) : _bytes(std::move(bytes_)) {}
+        value(cql3::raw_value bytes_, data_type my_type) : terminal(std::move(my_type)), _bytes(std::move(bytes_)) {}
         virtual cql3::raw_value get(const query_options& options) override { return _bytes; }
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override { return _bytes.to_view(); }
         virtual sstring to_string() const override { return _bytes.to_view().with_value([] (const FragmentedView auto& v) { return to_hex(v); }); }
     };
 
@@ -76,7 +75,7 @@ public:
 
     class null_value final : public value {
     public:
-        null_value() : value(cql3::raw_value::make_null()) {}
+        null_value() : value(cql3::raw_value::make_null(), empty_type) {}
         virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
         virtual sstring to_string() const override { return "null"; }
     };
@@ -91,7 +90,19 @@ public:
             assert(!_receiver->type->is_collection() && !_receiver->type->is_user_type());
         }
 
-        virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            auto bytes = bind_and_get_internal(options);
+            if (bytes.is_null()) {
+                return ::shared_ptr<terminal>{};
+            }
+            if (bytes.is_unset_value()) {
+                return UNSET_VALUE;
+            }
+            return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes), _receiver->type);
+        }
+
+    private:
+        cql3::raw_value_view bind_and_get_internal(const query_options& options) {
             try {
                 auto value = options.get_value_at(_bind_index);
                 if (value) {
@@ -103,17 +114,6 @@ public:
                         format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
             }
         }
-
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            auto bytes = bind_and_get(options);
-            if (bytes.is_null()) {
-                return ::shared_ptr<terminal>{};
-            }
-            if (bytes.is_unset_value()) {
-                return UNSET_VALUE;
-            }
-            return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes));
-        }
     };
 
     class setter : public operation {
@@ -121,7 +121,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = _t->bind_and_get(params._options);
+            auto value = expr::evaluate_to_raw_view(_t, params._options);
             execute(m, prefix, params, column, std::move(value));
         }
 
@@ -138,7 +138,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = _t->bind_and_get(params._options);
+            auto value = expr::evaluate_to_raw_view(_t, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
             } else if (value.is_unset_value()) {
@@ -153,7 +153,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = _t->bind_and_get(params._options);
+            auto value = expr::evaluate_to_raw_view(_t, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
             } else if (value.is_unset_value()) {

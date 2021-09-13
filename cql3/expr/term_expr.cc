@@ -224,9 +224,7 @@ map_prepare_term(const collection_constructor& c, database& db, const sstring& k
 
         values.emplace(k, v);
     }
-    maps::delayed_value value(
-            dynamic_cast<const map_type_impl&>(receiver->type->without_reversed()).get_keys_type()->as_less_comparator(),
-            values);
+    maps::delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -300,10 +298,11 @@ set_prepare_term(const collection_constructor& c, database& db, const sstring& k
         }
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now. This branch works for frozen sets/maps only.
-        if (dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
-            // use empty_type for comparator, set is empty anyway.
+        const map_type_impl* maybe_map_type = dynamic_cast<const map_type_impl*>(receiver->type.get());
+        if (maybe_map_type != nullptr) {
+            serialized_compare comparator = maybe_map_type->get_keys_type()->as_less_comparator();
             std::map<managed_bytes, managed_bytes, serialized_compare> m(empty_type->as_less_comparator());
-            return ::make_shared<maps::value>(std::move(m));
+            return ::make_shared<maps::value>(std::move(m), receiver->type);
         }
     }
 
@@ -325,10 +324,8 @@ set_prepare_term(const collection_constructor& c, database& db, const sstring& k
 
         values.push_back(std::move(t));
     }
-    auto compare = dynamic_cast<const set_type_impl&>(receiver->type->without_reversed())
-            .get_elements_type()->as_less_comparator();
 
-    auto value = ::make_shared<sets::delayed_value>(compare, std::move(values));
+    auto value = ::make_shared<sets::delayed_value>(std::move(values), receiver->type);
     if (all_terminal) {
         return value->bind(query_options::DEFAULT);
     } else {
@@ -405,7 +402,7 @@ list_prepare_term(const collection_constructor& c, database& db, const sstring& 
         }
         values.push_back(std::move(t));
     }
-    lists::delayed_value value(values);
+    lists::delayed_value value(values, receiver->type);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -619,7 +616,8 @@ untyped_constant_prepare_term(const untyped_constant& uc, database& db, const ss
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
             uc.partial_type, uc.raw_text, *receiver->name, receiver->type->as_cql3_type().to_string()));
     }
-    return ::make_shared<constants::value>(cql3::raw_value::make_value(untyped_constant_parsed_value(uc, receiver->type)));
+    raw_value raw_val = cql3::raw_value::make_value(untyped_constant_parsed_value(uc, receiver->type));
+    return ::make_shared<constants::value>(std::move(raw_val), receiver->type);
 }
 
 static
@@ -787,8 +785,8 @@ cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_share
 ::shared_ptr<term>
 prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return std::visit(overloaded_functor{
-        [&] (bool bool_constant) -> ::shared_ptr<term> {
-            on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::prepare()");
+        [] (const constant&) -> ::shared_ptr<term> {
+            on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
         [&] (const binary_operator&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via term_raw_expr::prepare()");
@@ -874,8 +872,9 @@ assignment_testable::test_result
 test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     return std::visit(overloaded_functor{
-        [&] (bool bool_constant) -> test_result {
-            on_internal_error(expr_logger, "bool constants are not yet reachable via term_raw_expr::test_assignment()");
+        [&] (const constant&) -> test_result {
+            // constants shouldn't appear in parser output, only untyped_constants
+            on_internal_error(expr_logger, "constants are not yet reachable via term_raw_expr::test_assignment()");
         },
         [&] (const binary_operator&) -> test_result {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via term_raw_expr::test_assignment()");

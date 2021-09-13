@@ -256,7 +256,7 @@ uint64_t select_statement::do_get_limit(const query_options& options, ::shared_p
         return default_limit;
     }
 
-    auto val = limit->bind_and_get(options);
+    auto val = expr::evaluate_to_raw_view(limit, options);
     if (val.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of limit");
     }

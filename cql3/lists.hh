@@ -58,19 +58,17 @@ public:
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification&);
     static lw_shared_ptr<column_specification> uuid_index_spec_of(const column_specification&);
 
-    class value : public multi_item_terminal, collection_terminal {
+    class value : public terminal, collection_terminal {
     public:
         utils::chunked_vector<managed_bytes_opt> _elements;
     public:
-        explicit value(utils::chunked_vector<managed_bytes_opt> elements)
-            : _elements(std::move(elements)) {
+        explicit value(utils::chunked_vector<managed_bytes_opt> elements, data_type my_type)
+            : terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& v, const list_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const list_type_impl& lt, const value& v);
-        const utils::chunked_vector<managed_bytes_opt>& get_elements() const;
-        virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const;
         friend class lists;
     };
@@ -85,13 +83,17 @@ public:
      */
     class delayed_value : public non_terminal {
         std::vector<shared_ptr<term>> _elements;
+        data_type _my_type;
     public:
-        explicit delayed_value(std::vector<shared_ptr<term>> elements)
-                : _elements(std::move(elements)) {
+        explicit delayed_value(std::vector<shared_ptr<term>> elements, data_type my_type)
+                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
         virtual shared_ptr<terminal> bind(const query_options& options) override;
+
+        // Binds the value, but skips all nulls inside the list
+        virtual shared_ptr<terminal> bind_ignore_null(const query_options& options);
         const std::vector<shared_ptr<term>>& get_elements() const {
             return _elements;
         }
@@ -115,7 +117,7 @@ public:
                 : operation(column, std::move(t)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
+        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const expr::constant& value);
     };
 
     class setter_by_index : public operation {
@@ -145,7 +147,7 @@ public:
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
-    static void do_append(shared_ptr<term> value,
+    static void do_append(const expr::constant& list_value,
             mutation& m,
             const clustering_key_prefix& prefix,
             const column_definition& column,

@@ -140,7 +140,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             assert(_column_operations.empty());
-            constants::setter(*s->regular_begin(), make_shared<constants::value>(cql3::raw_value::make_value(bytes()))).execute(m, prefix, params);
+            constants::setter(*s->regular_begin(), make_shared<constants::value>(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {
@@ -180,7 +180,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
 }
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
-    sstring json_string = utf8_type->to_string(to_bytes(_term->bind_and_get(options)));
+    sstring json_string = utf8_type->to_string(to_bytes(expr::evaluate_to_raw_view(_term, options)));
     return json_helpers::parse(std::move(json_string), s->all_columns(), options.get_cql_serialization_format());
 }
 
@@ -191,16 +191,16 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     if (!value) {
         visit(*column.type, make_visitor(
         [&] (const list_type_impl&) {
-            lists::setter::execute(m, prefix, params, column, {});
+            lists::setter::execute(m, prefix, params, column, expr::constant::make_null());
         },
         [&] (const set_type_impl&) {
-            sets::setter::execute(m, prefix, params, column, {});
+            sets::setter::execute(m, prefix, params, column, expr::constant::make_null());
         },
         [&] (const map_type_impl&) {
-            maps::setter::execute(m, prefix, params, column, {});
+            maps::setter::execute(m, prefix, params, column, expr::constant::make_null());
         },
         [&] (const user_type_impl&) {
-            user_types::setter::execute(m, prefix, params, column, {});
+            user_types::setter::execute(m, prefix, params, column, expr::constant::make_null());
         },
         [&] (const abstract_type& type) {
             if (type.is_collection()) {
@@ -215,20 +215,20 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     cql_serialization_format sf = params._options.get_cql_serialization_format();
     visit(*column.type, make_visitor(
     [&] (const list_type_impl& ltype) {
-        lists::setter::execute(m, prefix, params, column,
-                ::make_shared<lists::value>(lists::value::from_serialized(raw_value_view::make_value(*value), ltype, sf)));
+        auto val = ::make_shared<lists::value>(lists::value::from_serialized(raw_value_view::make_value(*value), ltype, sf));
+        lists::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
     },
     [&] (const set_type_impl& stype) {
-        sets::setter::execute(m, prefix, params, column,
-                ::make_shared<sets::value>(sets::value::from_serialized(raw_value_view::make_value(*value), stype, sf)));
+        auto val = ::make_shared<sets::value>(sets::value::from_serialized(raw_value_view::make_value(*value), stype, sf));
+        sets::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
     },
     [&] (const map_type_impl& mtype) {
-        maps::setter::execute(m, prefix, params, column,
-                ::make_shared<maps::value>(maps::value::from_serialized(raw_value_view::make_value(*value), mtype, sf)));
+        auto val = ::make_shared<maps::value>(maps::value::from_serialized(raw_value_view::make_value(*value), mtype, sf));
+        maps::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
     },
     [&] (const user_type_impl& utype) {
-        user_types::setter::execute(m, prefix, params, column,
-                ::make_shared<user_types::value>(user_types::value::from_serialized(raw_value_view::make_value(*value), utype)));
+        auto val = ::make_shared<user_types::value>(user_types::value::from_serialized(raw_value_view::make_value(*value), utype));
+        user_types::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
     },
     [&] (const abstract_type& type) {
         if (type.is_collection()) {
