@@ -2107,7 +2107,7 @@ with open(buildfile_tmp, 'w') as f:
           artifact = $builddir/{scylla_product}-python3-{arch}-package.tar.gz
         build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
         build dist-python3-compat: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch) for mode in default_modes])}
-        build dist-python3: phony dist-python3-tar dist-python3-compat dist-python3-rpm dist-python3-deb $builddir/release/{scylla_product}-python3-{arch}-package.tar.gz
+        build dist-python3: phony dist-python3-tar dist-python3-compat dist-python3-rpm dist-python3-deb
         build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb
         build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm
         build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-jmx-tar dist-tools-tar
