@@ -49,6 +49,21 @@
 #include <seastar/core/metrics_registration.hh>
 #include <map>
 
+namespace db {
+class system_distributed_keyspace;
+namespace view {
+class view_update_generator;
+}
+}
+
+namespace service {
+class migration_manager;
+};
+
+namespace netw {
+class messaging_service;
+};
+
 namespace streaming {
 
 class stream_result_future;
@@ -91,6 +106,12 @@ class stream_manager : public gms::i_endpoint_state_change_subscriber, public en
      * receiving ones withing the same JVM.
      */
 private:
+    sharded<database>& _db;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::view::view_update_generator>& _view_update_generator;
+    sharded<netw::messaging_service>& _ms;
+    sharded<service::migration_manager>& _mm;
+
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
     std::unordered_map<UUID, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
@@ -100,7 +121,11 @@ private:
     seastar::metrics::metric_groups _metrics;
 
 public:
-    stream_manager();
+    stream_manager(sharded<database>& db,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<netw::messaging_service>& ms,
+            sharded<service::migration_manager>& mm);
 
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
 

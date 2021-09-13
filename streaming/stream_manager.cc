@@ -50,7 +50,17 @@ extern logging::logger sslog;
 distributed<stream_manager> _the_stream_manager;
 
 
-stream_manager::stream_manager() {
+stream_manager::stream_manager(sharded<database>& db,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<netw::messaging_service>& ms,
+            sharded<service::migration_manager>& mm)
+        : _db(db)
+        , _sys_dist_ks(sys_dist_ks)
+        , _view_update_generator(view_update_generator)
+        , _ms(ms)
+        , _mm(mm)
+{
     namespace sm = seastar::metrics;
 
     _metrics.add_group("streaming", {
@@ -60,6 +70,12 @@ stream_manager::stream_manager() {
         sm::make_derive("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
     });
+
+    (void)_db;
+    (void)_sys_dist_ks;
+    (void)_view_update_generator;
+    (void)_ms;
+    (void)_mm;
 }
 
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {

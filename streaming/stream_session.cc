@@ -271,7 +271,7 @@ future<> stream_session::init_streaming_service(distributed<database>& db, distr
     // engine().at_exit([] {
     //     return get_stream_manager().stop();
     // });
-    return get_stream_manager().start().then([&ms, &mm] {
+    return get_stream_manager().start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm)).then([&ms, &mm] {
         gms::get_local_gossiper().register_(get_local_stream_manager().shared_from_this());
         return ms.invoke_on_all([&mm] (netw::messaging_service& ms) { init_messaging_service_handler(ms, mm.local().shared_from_this()); });
     });
