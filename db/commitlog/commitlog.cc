@@ -1521,7 +1521,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
             for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
-                auto nf = co_await ext->wrap_file(std::move(filename), f, flags);
+                auto nf = co_await ext->wrap_file(filename, f, flags);
                 if (nf) {
                     f = std::move(nf);
                     align = is_overwrite ? f.disk_overwrite_dma_alignment() : f.disk_write_dma_alignment();
@@ -1541,6 +1541,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_await f.close();
     }
     if (ep) {
+        add_file_to_delete(filename, d);
         co_return coroutine::exception(std::move(ep));
     }
 
@@ -1870,6 +1871,8 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
 
     std::exception_ptr recycle_error;
 
+    size_t num_deleted = 0;
+
     while (!files.empty()) {
         auto filename = std::move(files.back());
         files.pop_back();
@@ -1919,6 +1922,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
                 }
             }
             co_await delete_file(filename);
+            ++num_deleted;
         } catch (...) {
             clogger.error("Could not delete segment {}: {}", filename, std::current_exception());
         }
@@ -1932,6 +1936,11 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     // we will at least make more noise.
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
+    }
+    // If recycle failed and turned into a delete, we should fake-wakeup waiters
+    // since we might still have cleaned up disk space.
+    if (!recycle_error && num_deleted && cfg.reuse_segments && _recycled_segments.empty()) {
+        abort_recycled_list(std::make_exception_ptr(std::runtime_error("deleted files")));
     }
 }
 
