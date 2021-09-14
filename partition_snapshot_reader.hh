@@ -27,7 +27,7 @@
 #include "query-request.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
-template <typename Accounter>
+template <bool Reversing, typename Accounter>
 class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public Accounter {
     using rows_iter_type = std::conditional_t<Reversing,
           mutation_partition::rows_type::const_reverse_iterator,
@@ -36,15 +36,33 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         rows_iter_type _position, _end;
     };
 
+    static rows_iter_type make_iterator(mutation_partition::rows_type::const_iterator it) {
+        if constexpr (Reversing) {
+            return std::make_reverse_iterator(it);
+        } else {
+            return it;
+        }
+    }
+
     class heap_compare {
         position_in_partition::less_compare _less;
     public:
+        // `s` shall be native to the query clustering order.
         explicit heap_compare(const schema& s) : _less(s) { }
         bool operator()(const rows_position& a, const rows_position& b) {
-            return _less(b._position->position(), a._position->position());
+            if constexpr (Reversing) {
+                // Here `reversed()` doesn't change anything, but keep it for consistency.
+                return _less(b._position->position().reversed(), a._position->position().reversed());
+            } else {
+                return _less(b._position->position(), a._position->position());
+            }
         }
         bool operator()(const range_tombstone_list::iterator_range& a, const range_tombstone_list::iterator_range& b) {
-            return _less(b.front().position(), a.front().position());
+            if constexpr (Reversing) {
+                return _less(b.back().end_position().reversed(), a.back().end_position().reversed());
+            } else {
+                return _less(b.front().position(), a.front().position());
+            }
         }
     };
 
@@ -93,6 +111,25 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             }
         }
 
+        // In reversing mode, upper and lower bounds still need to be executed against
+        // snapshot schema and ck_range, however we need them to search from "opposite" direction.
+        template<typename T, typename... Args>
+        static rows_iter_type lower_bound(const T& t, Args... args) {
+            if constexpr (Reversing) {
+                return make_iterator(t.upper_bound(std::forward<Args>(args)...));
+            } else {
+                return make_iterator(t.lower_bound(std::forward<Args>(args)...));
+            }
+        }
+        template<typename T, typename... Args>
+        static rows_iter_type upper_bound(const T& t, Args... args) {
+            if constexpr (Reversing) {
+                return make_iterator(t.lower_bound(std::forward<Args>(args)...));
+            } else {
+                return make_iterator(t.upper_bound(std::forward<Args>(args)...));
+            }
+        }
+
         void do_refresh_state(const query::clustering_range& ck_range_snapshot,
                            const std::optional<position_in_partition>& last_row,
                            const std::optional<position_in_partition>& last_rts) {
@@ -101,14 +138,14 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
 
             rows_entry::tri_compare rows_cmp(*_snapshot_schema);
             for (auto&& v : _snapshot->versions()) {
-                mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(*_snapshot_schema, ck_range_snapshot);
-                auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
+                auto cr = [&] () {
                     if (last_row) {
-                        return v.partition().clustered_rows().upper_bound(*last_row, rows_cmp);
+                        return upper_bound(v.partition().clustered_rows(), *last_row, rows_cmp);
                     } else {
-                        return v.partition().lower_bound(*_snapshot_schema, ck_range_snapshot);
+                        return lower_bound(v.partition(), *_snapshot_schema, ck_range_snapshot);
                     }
                 }();
+                auto cr_end = upper_bound(v.partition(), *_snapshot_schema, ck_range_snapshot);
 
                 if (cr != cr_end) {
                     _clustering_rows.emplace_back(rows_position { cr, cr_end });
@@ -143,11 +180,16 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return e;
         }
 
-        const range_tombstone& pop_range_tombstone() {
+        range_tombstone pop_range_tombstone() {
             boost::range::pop_heap(_range_tombstones, _heap_cmp);
             auto& current = _range_tombstones.back();
-            const range_tombstone& rt = current.begin()->tombstone();
-            current.advance_begin(1);
+            range_tombstone rt = (Reversing ? std::prev(current.end()) : current.begin())->tombstone();
+            if constexpr (Reversing) {
+                current.advance_end(-1);
+                rt.reverse();
+            } else {
+                current.advance_begin(1);
+            }
             if (current.begin() == current.end()) {
                 _range_tombstones.pop_back();
             } else {
@@ -164,8 +206,14 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return !_clustering_rows.empty();
         }
 
-        const range_tombstone& peek_range_tombstone() const {
-            return _range_tombstones.front().begin()->tombstone();
+        range_tombstone peek_range_tombstone() const {
+            if constexpr (Reversing) {
+                range_tombstone rt = std::prev(_range_tombstones.front().end())->tombstone();
+                rt.reverse();
+                return rt;
+            } else {
+                return _range_tombstones.front().begin()->tombstone();
+            }
         }
         bool has_more_range_tombstones() const {
             return !_range_tombstones.empty();
@@ -175,7 +223,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                                       logalloc::region& region, logalloc::allocating_section& read_section,
                                       bool digest_requested)
             : _query_schema(s)
-            , _snapshot_schema(s.shared_from_this())
+            , _snapshot_schema(Reversing ? s.make_reversed() : s.shared_from_this())
             , _permit(permit)
             , _heap_cmp(s)
             , _snapshot(std::move(snp))
@@ -228,6 +276,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                         e.row().cells().prepare_hash(_query_schema, column_kind::regular_column);
                     }
                     auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _query_schema, _permit, _query_schema, e);
+                    // TODO: Ideally this should be position() or position().reversed(), depending on Reversing.
                     while (has_more_rows() && rows_eq(peek_row().position(), result.as_clustering_row().position())) {
                         const rows_entry& e = pop_clustering_row();
                         if (_digest_requested) {
@@ -267,7 +316,6 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                         _rt_stream.apply(std::move(rt));
                     }
                 }
-
                 return _rt_stream.get_next(std::move(pos));
             });
         }
@@ -416,7 +464,7 @@ public:
     }
 };
 
-template <typename Accounter, typename... Args>
+template <bool Reversing, typename Accounter, typename... Args>
 inline flat_mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
                                     reader_permit permit,
@@ -430,7 +478,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<Accounter>>(std::move(s), std::move(permit), std::move(dk),
+    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<Reversing, Accounter>>(std::move(s), std::move(permit), std::move(dk),
             snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
