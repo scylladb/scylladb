@@ -508,7 +508,7 @@ set(scylla_sources
     locator/simple_strategy.cc
     locator/snitch_base.cc
     locator/token_metadata.cc
-    lua.cc
+    lang/lua.cc
     main.cc
     memtable.cc
     message/messaging_service.cc

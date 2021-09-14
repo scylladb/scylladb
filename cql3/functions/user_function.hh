@@ -25,31 +25,39 @@
 
 #include "abstract_function.hh"
 #include "scalar_function.hh"
-#include "lua.hh"
+#include "lang/lua.hh"
+#include "lang/wasm.hh"
 
 namespace cql3 {
 namespace functions {
 
+
 class user_function final : public abstract_function, public scalar_function {
+public:
+    struct lua_context {
+        sstring bitcode;
+        // FIXME: We should not need a copy in each function. It is here
+        // because user_function::execute is only passed the
+        // cql_serialization_format and the runtime arguments.  We could
+        // avoid it by having a runtime->execute(user_function) instead,
+        // but that is a large refactoring. We could also store a
+        // lua_runtime in a thread_local variable, but that is one extra
+        // global.
+        lua::runtime_config cfg;
+    };
+
+    using context = std::variant<lua_context, wasm::context>;
+
+private:
     std::vector<sstring> _arg_names;
     sstring _body;
     sstring _language;
     bool _called_on_null_input;
-    sstring _bitcode;
-
-    // FIXME: We should not need a copy in each function. It is here
-    // because user_function::execute is only passed the
-    // cql_serialization_format and the runtime arguments.  We could
-    // avoid it by having a runtime->execute(user_function) instead,
-    // but that is a large refactoring. We could also store a
-    // lua_runtime in a thread_local variable, but that is one extra
-    // global.
-    lua::runtime_config _cfg;
+    context _ctx;
 
 public:
     user_function(function_name name, std::vector<data_type> arg_types, std::vector<sstring> arg_names, sstring body,
-            sstring language, data_type return_type, bool called_on_null_input, sstring bitcode,
-            lua::runtime_config cfg);
+            sstring language, data_type return_type, bool called_on_null_input, context ctx);
 
     const std::vector<sstring>& arg_names() const { return _arg_names; }
 

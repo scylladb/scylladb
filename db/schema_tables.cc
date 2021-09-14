@@ -90,7 +90,7 @@
 #include "user_types_metadata.hh"
 
 #include "index/target_parser.hh"
-#include "lua.hh"
+#include "lang/lua.hh"
 
 #include "db/query_context.hh"
 #include "serializer.hh"
@@ -1548,12 +1548,26 @@ static shared_ptr<cql3::functions::user_function> create_func(database& db, cons
 
     auto arg_names = get_list<sstring>(row, "argument_names");
     auto body = row.get_nonnull<sstring>("body");
-    lua::runtime_config cfg = lua::make_runtime_config(db.get_config());
-    auto bitcode = lua::compile(cfg, arg_names, body);
+    auto language = row.get_nonnull<sstring>("language");
+    if (language == "lua") {
+        lua::runtime_config cfg = lua::make_runtime_config(db.get_config());
+        cql3::functions::user_function::context ctx = cql3::functions::user_function::lua_context {
+            .bitcode = lua::compile(cfg, arg_names, body),
+            .cfg = cfg,
+        };
 
-    return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
-            std::move(body), row.get_nonnull<sstring>("language"), std::move(return_type),
-            row.get_nonnull<bool>("called_on_null_input"), std::move(bitcode), std::move(cfg));
+        return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
+                std::move(body), language, std::move(return_type),
+                row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
+    } else if (language == "xwasm") {
+       wasm::context ctx{db.wasm_engine(), name.name};
+        wasm::compile(ctx, arg_names, body);
+        return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
+                std::move(body), language, std::move(return_type),
+                row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
+    } else {
+        throw std::runtime_error(format("Unsupported language for UDF: {}", language));
+    }
 }
 
 static shared_ptr<cql3::functions::user_aggregate> create_aggregate(database& db, const query::result_set_row& row) {

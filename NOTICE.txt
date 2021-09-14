@@ -7,3 +7,5 @@ These files are located in utils/arch/powerpc/crc32-vpmsum. Their license may be
 It includes modified code from https://gitbox.apache.org/repos/asf?p=cassandra-dtest.git (owned by The Apache Software Foundation)
 
 It includes modified tests from https://github.com/etcd-io/etcd.git (owned by The etcd Authors)
+
+It includes files from https://github.com/bytecodealliance/wasmtime-cpp (owned by Bytecode Alliance), licensed with Apache License 2.0.
