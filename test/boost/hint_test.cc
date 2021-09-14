@@ -25,6 +25,8 @@
 #include "db/hints/sync_point.hh"
 
 SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization) {
+    const unsigned encoded_shard_count = 2;
+
     const gms::inet_address addr1{"172.16.0.1"};
     const gms::inet_address addr2{"172.16.0.2"};
 
@@ -35,12 +37,12 @@ SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization) {
 
     db::hints::sync_point spoint;
 
-    spoint.regular_per_shard_rps.resize(2);
+    spoint.regular_per_shard_rps.resize(encoded_shard_count);
     spoint.regular_per_shard_rps[0][addr1] = s0_rp1;
     spoint.regular_per_shard_rps[0][addr2] = s0_rp2;
     spoint.regular_per_shard_rps[1][addr1] = s1_rp1;
 
-    spoint.mv_per_shard_rps.resize(2);
+    spoint.mv_per_shard_rps.resize(encoded_shard_count);
     spoint.mv_per_shard_rps[0][addr1] = s0_rp1;
     spoint.mv_per_shard_rps[1][addr1] = s1_rp1;
     spoint.mv_per_shard_rps[1][addr2] = s1_rp2;
@@ -53,6 +55,19 @@ SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization) {
     // with zeros in the original sync point.
     spoint.regular_per_shard_rps[1][addr2] = db::replay_position();
     spoint.mv_per_shard_rps[0][addr2] = db::replay_position();
+
+    // If the sync point contains information about less shards than smp::count,
+    // the missing shards are filled with zero. Do it here manually so that
+    // we can compare spoint with decoded_spoint.
+    const unsigned adjusted_count = std::max(encoded_shard_count, smp::count);
+    spoint.regular_per_shard_rps.resize(adjusted_count);
+    spoint.mv_per_shard_rps.resize(adjusted_count);
+    for (unsigned s = encoded_shard_count; s < smp::count; s++) {
+        spoint.regular_per_shard_rps[s][addr1] = db::replay_position();
+        spoint.regular_per_shard_rps[s][addr2] = db::replay_position();
+        spoint.mv_per_shard_rps[s][addr1] = db::replay_position();
+        spoint.mv_per_shard_rps[s][addr2] = db::replay_position();
+    }
 
     std::cout << "spoint:  " << spoint << std::endl;
     std::cout << "encoded: " << encoded << std::endl;
