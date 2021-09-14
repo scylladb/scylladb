@@ -98,18 +98,18 @@ public:
         : _type{type}
     { }
 public:
-    virtual cql3_type prepare(database& db, const sstring& keyspace) {
+    virtual cql3_type prepare(database& db, const sstring& keyspace) override {
         return _type;
     }
     cql3_type prepare_internal(const sstring&, const user_types_metadata&) override {
         return _type;
     }
 
-    virtual bool supports_freezing() const {
+    virtual bool supports_freezing() const override {
         return false;
     }
 
-    virtual bool is_counter() const {
+    virtual bool is_counter() const override {
         return _type.is_counter();
     }
 

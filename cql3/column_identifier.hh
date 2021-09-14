@@ -80,7 +80,7 @@ public:
 
     const bytes& name() const;
 
-    sstring to_string() const;
+    virtual sstring to_string() const override;
 
     sstring to_cql_string() const;
 

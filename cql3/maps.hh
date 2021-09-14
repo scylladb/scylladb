@@ -68,9 +68,9 @@ public:
         }
         static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
-        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf);
+        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const map_type_impl& mt, const value& v);
-        virtual sstring to_string() const;
+        virtual sstring to_string() const override;
     };
 
     // See Lists.DelayedValue
@@ -83,7 +83,7 @@ public:
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
-        shared_ptr<terminal> bind(const query_options& options);
+        virtual shared_ptr<terminal> bind(const query_options& options) override;
     };
 
     class marker : public abstract_marker {

@@ -86,7 +86,7 @@ public:
         return *_id;
     }
 
-    ::shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
+    virtual ::shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) const override {
         // No validation, deleting a column is always "well typed"
         return ::make_shared<constants::deleter>(receiver);
     }

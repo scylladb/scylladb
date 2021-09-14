@@ -818,7 +818,7 @@ public:
     stop_iteration consume(static_row&& sr) override;
     stop_iteration consume(clustering_row&& cr) override;
     stop_iteration consume(range_tombstone&& rt) override;
-    stop_iteration consume_end_of_partition();
+    stop_iteration consume_end_of_partition() override;
     void consume_end_of_stream() override;
 };
 

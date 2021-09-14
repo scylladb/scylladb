@@ -134,7 +134,7 @@ public:
         assert(i.second);
         i.first.erase(key_compare{});
     }
-    virtual void show_stats() {
+    virtual void show_stats() override {
         struct bplus::stats st = _t.get_stats();
         fmt::print("nodes:     {}\n", st.nodes);
         for (int i = 0; i < (int)st.nodes_filled.size(); i++) {
@@ -191,12 +191,12 @@ public:
                 st.indirect_tiny, st.indirect_small, st.indirect_medium, st.indirect_large,
                 st.direct_static, st.direct_dynamic);
     }
-    virtual void show_stats() {
+    virtual void show_stats() override {
         test_tree::stats st = _t.get_stats();
         show_node_stats("inner", st.inners);
         show_node_stats(" leaf", st.leaves);
     }
-    virtual ~radix_tester() { clear(); }
+    virtual ~radix_tester() override { clear(); }
 };
 
 #include "intrusive_set_external_comparator.hh"
@@ -265,7 +265,7 @@ public:
         auto i = _t.insert_before(_t.end(), n);
         _t.erase(i);
     }
-    virtual void show_stats() { }
+    virtual void show_stats() override { }
     virtual ~isec_tester() { clear(); }
 };
 
@@ -302,7 +302,7 @@ public:
         auto i = _t.insert_before(_t.end(), key);
         _t.erase(i);
     }
-    virtual void show_stats() {
+    virtual void show_stats() override {
         struct intrusive_b::stats st = _t.get_stats();
         fmt::print("nodes:     {}\n", st.nodes);
         for (int i = 0; i < (int)st.nodes_filled.size(); i++) {
@@ -347,7 +347,7 @@ public:
         assert(i.second);
         _s.erase(i.first);
     }
-    virtual void show_stats() { }
+    virtual void show_stats() override { }
     virtual ~set_tester() = default;
 };
 
@@ -380,7 +380,7 @@ public:
         assert(i.second);
         _m.erase(i.first);
     }
-    virtual void show_stats() { }
+    virtual void show_stats() override { }
     virtual ~map_tester() = default;
 };
 

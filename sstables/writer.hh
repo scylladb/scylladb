@@ -108,7 +108,7 @@ public:
     explicit sizing_data_sink(uint64_t& dest) : _size(dest) {
         _size = 0;
     }
-    virtual temporary_buffer<char> allocate_buffer(size_t size) {
+    virtual temporary_buffer<char> allocate_buffer(size_t size) override {
         return temporary_buffer<char>(size);
     }
     virtual future<> put(net::packet data) override {
@@ -165,7 +165,7 @@ public:
     virtual temporary_buffer<char> allocate_buffer(size_t size) override {
         return _out.allocate_buffer(size); // preserve alignment requirements
     }
-    future<> put(net::packet data) { abort(); }
+    virtual future<> put(net::packet data) override { abort(); }
     virtual future<> put(temporary_buffer<char> buf) override {
         // bufs will usually be a multiple of chunk size, but this won't be the case for
         // the last buffer being flushed.
@@ -181,7 +181,7 @@ public:
         return _out.put(std::move(buf));
     }
 
-    virtual future<> close() {
+    virtual future<> close() override {
         // Nothing to do, because close at the file_stream level will call flush on us.
         return _out.close();
     }

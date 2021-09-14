@@ -569,7 +569,7 @@ std::unique_ptr<i_endpoint_snitch> generate_snitch(const std::unordered_map<sstr
         sstring get_datacenter(inet_address endpoint) override {
             return _node_to_dc.at(endpoint);
         }
-        sstring get_name() const {
+        sstring get_name() const override {
             return "muminpappa";
         }
     private:

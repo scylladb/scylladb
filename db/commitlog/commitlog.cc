@@ -2061,7 +2061,7 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
         serializer_func_entry_writer(const cf_id_type& id, size_t sz, serializer_func func, db::commitlog::force_sync sync)
             : entry_writer(sync), _id(id), _func(std::move(func)), _size(sz)
         {}
-        const cf_id_type& id(size_t) const { return _id; }
+        const cf_id_type& id(size_t) const override { return _id; }
         size_t size(segment&, size_t) override { return _size; }
         size_t size(segment&) override { return _size; }
         size_t size() const override { return _size; }

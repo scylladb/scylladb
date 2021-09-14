@@ -121,7 +121,7 @@ public:
         _end_of_stream = false;
         return _rd.fast_forward_to(std::move(pr));
     }
-    virtual future<> close() noexcept {
+    virtual future<> close() noexcept override {
         return _rd.close();
     }
 };

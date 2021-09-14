@@ -75,7 +75,7 @@ public:
     public:
         delayed_value(user_type type, std::vector<shared_ptr<term>> values);
         virtual bool contains_bind_marker() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const;
+        virtual void fill_prepare_context(prepare_context& ctx) const override;
     private:
         std::vector<managed_bytes_opt> bind_internal(const query_options& options);
     public:

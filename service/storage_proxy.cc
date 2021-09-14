@@ -3803,7 +3803,7 @@ class speculating_read_executor : public abstract_read_executor {
     timer<storage_proxy::clock_type> _speculate_timer;
 public:
     using abstract_read_executor::abstract_read_executor;
-    virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) {
+    virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
         _speculate_timer.set_callback([this, resolver, timeout] {
             if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
                 resolver->add_wait_targets(1); // we send one more request so wait for it too

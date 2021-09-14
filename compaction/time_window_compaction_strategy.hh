@@ -179,7 +179,7 @@ public:
         return _estimated_remaining_tasks;
     }
 
-    virtual compaction_strategy_type type() const {
+    virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::time_window;
     }
 

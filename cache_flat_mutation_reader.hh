@@ -203,7 +203,7 @@ public:
     virtual future<> fast_forward_to(position_range pr) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
-    virtual future<> close() noexcept {
+    virtual future<> close() noexcept override {
         auto close_read_context = _read_context_holder ?  _read_context_holder->close() : make_ready_future<>();
         auto close_underlying = _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
         return when_all_succeed(std::move(close_read_context), std::move(close_underlying)).discard_result();

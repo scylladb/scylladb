@@ -30,7 +30,7 @@ namespace dht {
 class murmur3_partitioner final : public i_partitioner {
 public:
     murmur3_partitioner() = default;
-    virtual const sstring name() const { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
+    virtual const sstring name() const override { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) const override;
     virtual token get_token(const sstables::key_view& key) const override;
 private:

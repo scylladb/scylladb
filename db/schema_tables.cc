@@ -2487,7 +2487,7 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
                 bytes serialize() const override {
                     return _bytes;
                 }
-                bool is_placeholder() const {
+                virtual bool is_placeholder() const override {
                     return true;
                 }
             };

@@ -157,7 +157,7 @@ public:
                 return _complete || _sasl->is_complete();
             }
 
-            virtual future<authenticated_user> get_authenticated_user() const {
+            virtual future<authenticated_user> get_authenticated_user() const override {
                 return futurize_invoke([this] {
                     return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                         try {

@@ -418,7 +418,7 @@ public:
         return _core_local.start(std::ref(_auth_service), std::ref(_sl_controller));
     }
 
-    future<> stop() {
+    future<> stop() override {
         return _core_local.stop();
     }
 

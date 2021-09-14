@@ -375,7 +375,7 @@ public:
         return 0;
     }
 
-    virtual compaction_strategy_type type() const {
+    virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::null;
     }
 

@@ -115,7 +115,7 @@ private:
         future<result> process_request_internal();
     };
 
-    shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
+    virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
     const ::timeout_config& timeout_config() { return _config._timeout_config; }

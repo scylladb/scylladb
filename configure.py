@@ -1299,7 +1299,6 @@ warnings = [
     '-Wno-overloaded-virtual',
     '-Wno-stringop-overflow',
     '-Wno-unused-command-line-argument',
-    '-Wno-inconsistent-missing-override',
     '-Wno-defaulted-function-deleted',
     '-Wno-redeclared-class-member',
     '-Wno-unsupported-friend',
