@@ -25,6 +25,7 @@
 
 namespace api {
 
-void set_stream_manager(http_context& ctx, routes& r);
+void set_stream_manager(http_context& ctx, routes& r, sharded<streaming::stream_manager>& sm);
+void unset_stream_manager(http_context& ctx, routes& r);
 
 }

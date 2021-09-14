@@ -87,7 +87,7 @@ static hs::stream_state get_state(
     return state;
 }
 
-void set_stream_manager(http_context& ctx, routes& r) {
+void set_stream_manager(http_context& ctx, routes& r, sharded<streaming::stream_manager>& sm) {
     hs::get_current_streams.set(r,
             [] (std::unique_ptr<request> req) {
                 return streaming::get_stream_manager().invoke_on_all([] (auto& sm) {
@@ -158,6 +158,15 @@ void set_stream_manager(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
+}
+
+void unset_stream_manager(http_context& ctx, routes& r) {
+    hs::get_current_streams.unset(r);
+    hs::get_all_active_streams_outbound.unset(r);
+    hs::get_total_incoming_bytes.unset(r);
+    hs::get_all_total_incoming_bytes.unset(r);
+    hs::get_total_outgoing_bytes.unset(r);
+    hs::get_all_total_outgoing_bytes.unset(r);
 }
 
 }

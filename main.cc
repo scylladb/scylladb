@@ -1048,7 +1048,10 @@ int main(int ac, char** av) {
 
             stream_manager.invoke_on_all(&streaming::stream_manager::start).get();
 
-            api::set_server_stream_manager(ctx).get();
+            api::set_server_stream_manager(ctx, stream_manager).get();
+            auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
+                api::unset_server_stream_manager(ctx).get();
+            });
 
             supervisor::notify("starting hinted handoff manager");
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
