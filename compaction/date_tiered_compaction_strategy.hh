@@ -299,7 +299,7 @@ public:
         return _manifest.get_estimated_tasks(cf);
     }
 
-    virtual compaction_strategy_type type() const {
+    virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::date_tiered;
     }
 

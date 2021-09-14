@@ -69,7 +69,7 @@ public:
         return false;
     }
 
-    virtual compaction_strategy_type type() const {
+    virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::leveled;
     }
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;

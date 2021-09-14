@@ -70,8 +70,8 @@ public:
 
     production_snitch_base(const sstring& prop_file_name = "");
 
-    virtual sstring get_rack(inet_address endpoint);
-    virtual sstring get_datacenter(inet_address endpoint);
+    virtual sstring get_rack(inet_address endpoint) override;
+    virtual sstring get_datacenter(inet_address endpoint) override;
     virtual void set_my_distributed(distributed<snitch_ptr>* d) override;
 
     void reset_io_state();

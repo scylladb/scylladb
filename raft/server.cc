@@ -73,7 +73,7 @@ public:
 
 
     // server interface
-    future<> add_entry(command command, wait_type type);
+    future<> add_entry(command command, wait_type type) override;
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> set_configuration(server_address_set c_new) override;
     raft::configuration get_configuration() const override;
@@ -84,7 +84,7 @@ public:
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
-    std::pair<index_t, term_t> log_last_idx_term();
+    std::pair<index_t, term_t> log_last_idx_term() override;
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;

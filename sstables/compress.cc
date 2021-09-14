@@ -502,7 +502,7 @@ public:
             , _full_checksum(ChecksumType::init_checksum())
     {}
 
-    future<> put(net::packet data) { abort(); }
+    virtual future<> put(net::packet data) override { abort(); }
     virtual future<> put(temporary_buffer<char> buf) override {
         auto output_len = _compression.compress_max_size(buf.size());
 

@@ -42,25 +42,25 @@ public:
         , _s(s)
     { }
 
-    virtual void accept_partition_tombstone(tombstone t) {
+    virtual void accept_partition_tombstone(tombstone t) override {
         feed_hash(_h, t);
     }
 
-    virtual void accept_static_cell(column_id id, atomic_cell_view cell) {
+    virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
         auto&& col = _s.static_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
         feed_hash(_h, cell, col);
     }
 
-    virtual void accept_static_cell(column_id id, collection_mutation_view cell) {
+    virtual void accept_static_cell(column_id id, collection_mutation_view cell) override {
         auto&& col = _s.static_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
         feed_hash(_h, cell, col);
     }
 
-    virtual void accept_row_tombstone(const range_tombstone& rt) {
+    virtual void accept_row_tombstone(const range_tombstone& rt) override {
         feed_hash(_h, rt, _s);
     }
 
@@ -73,14 +73,14 @@ public:
         feed_hash(_h, rm);
     }
 
-    virtual void accept_row_cell(column_id id, atomic_cell_view cell) {
+    virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
         auto&& col = _s.regular_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
         feed_hash(_h, cell, col);
     }
 
-    virtual void accept_row_cell(column_id id, collection_mutation_view cell) {
+    virtual void accept_row_cell(column_id id, collection_mutation_view cell) override {
         auto&& col = _s.regular_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());

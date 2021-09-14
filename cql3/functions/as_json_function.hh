@@ -76,7 +76,7 @@ public:
         : _selector_names(std::move(selector_names)), _selector_types(std::move(selector_types)) {
     }
 
-    virtual bool requires_thread() const;
+    virtual bool requires_thread() const override;
 
     virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
         bytes_ostream encoded_row;

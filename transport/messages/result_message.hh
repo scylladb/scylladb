@@ -116,7 +116,7 @@ public:
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
-    virtual std::optional<unsigned> move_to_shard() const {
+    virtual std::optional<unsigned> move_to_shard() const override {
         return _shard;
     }
 

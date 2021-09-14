@@ -54,7 +54,7 @@ public:
     virtual void on_remove(gms::inet_address) override;
 
     virtual void on_join(gms::inet_address, gms::endpoint_state) override { }
-    virtual void before_change(gms::inet_address, gms::endpoint_state, gms::application_state, const gms::versioned_value&) { }
+    virtual void before_change(gms::inet_address, gms::endpoint_state, gms::application_state, const gms::versioned_value&) override { }
     virtual void on_alive(gms::inet_address, gms::endpoint_state) override { }
     virtual void on_dead(gms::inet_address, gms::endpoint_state) override { }
     virtual void on_restart(gms::inet_address, gms::endpoint_state) override { }

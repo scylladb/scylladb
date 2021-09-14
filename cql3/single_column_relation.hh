@@ -146,7 +146,7 @@ protected:
 
 protected:
     virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
-                                           prepare_context& ctx);
+                                           prepare_context& ctx) override;
 
     virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
                                            prepare_context& ctx) override;

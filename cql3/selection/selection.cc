@@ -141,7 +141,7 @@ protected:
             }
         }
 
-        virtual bool is_aggregate() const {
+        virtual bool is_aggregate() const override {
             return false;
         }
     };
@@ -208,7 +208,7 @@ protected:
             return output_row;
         }
 
-        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) {
+        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) override {
             for (auto&& s : _selectors) {
                 s->add_input(sf, rs);
             }

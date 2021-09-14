@@ -228,7 +228,7 @@ public:
         ::free(obj);
     }
 
-    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept {
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
         return ::malloc_usable_size(const_cast<void *>(obj));
     }
 };

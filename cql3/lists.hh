@@ -69,7 +69,7 @@ public:
         virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const list_type_impl& lt, const value& v);
-        virtual sstring to_string() const;
+        virtual sstring to_string() const override;
         friend class lists;
     };
     /**
@@ -128,7 +128,7 @@ public:
             : operation(column, std::move(t)), _idx(std::move(idx)) {
         }
         virtual bool requires_read() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const;
+        virtual void fill_prepare_context(prepare_context& ctx) const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
@@ -174,7 +174,7 @@ public:
                 : operation(column, std::move(idx)) {
         }
         virtual bool requires_read() const override;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params);
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 };
 

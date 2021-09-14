@@ -39,7 +39,7 @@ public:
     table_listener(sstring cf_name) : _cf_name(cf_name) {}
 
     virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
-            const query::partition_slice& slice, flat_mutation_reader&& rd) {
+            const query::partition_slice& slice, flat_mutation_reader&& rd) override {
         if (s->cf_name() == _cf_name) {
             return make_filtering_reader(std::move(rd), [this, &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
                 testlog.info("listener {}: read {}", fmt::ptr(this), dk);

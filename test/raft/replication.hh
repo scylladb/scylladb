@@ -429,12 +429,12 @@ public:
             _conf(std::move(conf)), _snapshots(snapshots),
             _persisted_snapshots(persisted_snapshots) {}
     persistence() {}
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { return seastar::sleep(1us); }
-    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
+    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override { return seastar::sleep(1us); }
+    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
+    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
         (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id][snap.id]);
         tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id][snap.id].hasher.finalize_uint64());
         return make_ready_future<>();
@@ -442,16 +442,16 @@ public:
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
         return make_ready_future<raft::snapshot_descriptor>(_conf.snapshot);
     }
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { return seastar::sleep(1us); };
-    virtual future<raft::log_entries> load_log() {
+    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override { return seastar::sleep(1us); };
+    virtual future<raft::log_entries> load_log() override {
         raft::log_entries log;
         for (auto&& e : _conf.log) {
             log.emplace_back(make_lw_shared(std::move(e)));
         }
         return make_ready_future<raft::log_entries>(std::move(log));
     }
-    virtual future<> truncate_log(raft::index_t idx) { return make_ready_future<>(); }
-    virtual future<> abort() { return make_ready_future<>(); }
+    virtual future<> truncate_log(raft::index_t idx) override { return make_ready_future<>(); }
+    virtual future<> abort() override { return make_ready_future<>(); }
 };
 
 template <typename Clock>

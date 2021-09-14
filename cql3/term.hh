@@ -123,7 +123,7 @@ public:
     terminal(data_type my_type) : _my_type(std::move(my_type)) {
     }
 
-    virtual void fill_prepare_context(prepare_context& ctx) const {
+    virtual void fill_prepare_context(prepare_context& ctx) const override {
     }
 
     virtual ::shared_ptr<terminal> bind(const query_options& options) override {
@@ -141,7 +141,7 @@ public:
      */
     virtual cql3::raw_value get(const query_options& options) = 0;
 
-    virtual sstring to_string() const = 0;
+    virtual sstring to_string() const override = 0;
 
     data_type get_value_type() const {
         return _my_type;

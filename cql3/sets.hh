@@ -82,7 +82,7 @@ public:
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
-        virtual shared_ptr<terminal> bind(const query_options& options);
+        virtual shared_ptr<terminal> bind(const query_options& options) override;
     };
 
     class marker : public abstract_marker {
