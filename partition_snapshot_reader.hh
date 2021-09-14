@@ -24,6 +24,7 @@
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
 #include "clustering_key_filter.hh"
+#include "query-request.hh"
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
 template <typename Accounter>
@@ -80,17 +81,17 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 return fn();
             });
         }
-        void maybe_refresh_state(const query::clustering_range& ck_range,
+        void maybe_refresh_state(const query::clustering_range& ck_range_snapshot,
                            const std::optional<position_in_partition>& last_row,
                            const std::optional<position_in_partition>& last_rts) {
             auto mark = _snapshot->get_change_mark();
             if (mark != _change_mark) {
-                do_refresh_state(ck_range, last_row, last_rts);
+                do_refresh_state(ck_range_snapshot, last_row, last_rts);
                 _change_mark = mark;
             }
         }
 
-        void do_refresh_state(const query::clustering_range& ck_range,
+        void do_refresh_state(const query::clustering_range& ck_range_snapshot,
                            const std::optional<position_in_partition>& last_row,
                            const std::optional<position_in_partition>& last_rts) {
             _clustering_rows.clear();
@@ -98,12 +99,12 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
 
             rows_entry::tri_compare rows_cmp(*_snapshot_schema);
             for (auto&& v : _snapshot->versions()) {
-                mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(*_snapshot_schema, ck_range);
+                mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(*_snapshot_schema, ck_range_snapshot);
                 auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
                     if (last_row) {
                         return v.partition().clustered_rows().upper_bound(*last_row, rows_cmp);
                     } else {
-                        return v.partition().lower_bound(*_snapshot_schema, ck_range);
+                        return v.partition().lower_bound(*_snapshot_schema, ck_range_snapshot);
                     }
                 }();
 
@@ -113,9 +114,9 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
 
                 range_tombstone_list::iterator_range rt_slice = [&] () {
                     if (last_rts) {
-                        return v.partition().row_tombstones().upper_slice(*_snapshot_schema, *last_rts, bound_view::from_range_end(ck_range));
+                        return v.partition().row_tombstones().upper_slice(*_snapshot_schema, *last_rts, bound_view::from_range_end(ck_range_snapshot));
                     } else {
-                        return v.partition().row_tombstones().slice(*_snapshot_schema, ck_range);
+                        return v.partition().row_tombstones().slice(*_snapshot_schema, ck_range_snapshot);
                     }
                 }();
                 if (rt_slice.begin() != rt_slice.end()) {
@@ -182,8 +183,8 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             , _digest_requested(digest_requested)
         { }
 
-        void reset_state(const query::clustering_range& ck_range) {
-            do_refresh_state(ck_range, {}, {});
+        void reset_state(const query::clustering_range& ck_range_snapshot) {
+            do_refresh_state(ck_range_snapshot, {}, {});
         }
 
         template<typename Function>
@@ -203,17 +204,17 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         }
 
         // Returns next clustered row in the range.
-        // If the ck_range is the same as the one used previously last_row needs
+        // If the ck_range_snapshot is the same as the one used previously last_row needs
         // to be engaged and equal the position of the row returned last time.
-        // If the ck_range is different or this is the first call to this
+        // If the ck_range_snapshot is different or this is the first call to this
         // function last_row has to be disengaged. Additionally, when entering
         // new range _rt_stream will be populated with all relevant
         // tombstones.
-        mutation_fragment_opt next_row(const query::clustering_range& ck_range,
+        mutation_fragment_opt next_row(const query::clustering_range& ck_range_snapshot,
                                        const std::optional<position_in_partition>& last_row,
                                        const std::optional<position_in_partition>& last_rts) {
             return in_alloc_section([&] () -> mutation_fragment_opt {
-                maybe_refresh_state(ck_range, last_row, last_rts);
+                maybe_refresh_state(ck_range_snapshot, last_row, last_rts);
 
                 position_in_partition::equal_compare rows_eq(_query_schema);
                 while (has_more_rows()) {
@@ -240,7 +241,8 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             });
         }
 
-        mutation_fragment_opt next_range_tombstone(const query::clustering_range& ck_range,
+        mutation_fragment_opt next_range_tombstone(const query::clustering_range& ck_range_snapshot,
+                const query::clustering_range& ck_range_query,
                 const std::optional<position_in_partition>& last_row,
                 const std::optional<position_in_partition>& last_rts,
                 position_in_partition_view pos) {
@@ -248,16 +250,18 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 return _rt_stream.get_next(std::move(pos));
             }
             return in_alloc_section([&] () -> mutation_fragment_opt {
-                maybe_refresh_state(ck_range, last_row, last_rts);
+                maybe_refresh_state(ck_range_snapshot, last_row, last_rts);
 
                 position_in_partition::less_compare rt_less(_query_schema);
+
                 while (has_more_range_tombstones()
                         && !rt_less(pos, peek_range_tombstone().position())
                         && (_rt_stream.empty() || !rt_less(_rt_stream.peek_next().position(), peek_range_tombstone().position()))) {
                     range_tombstone rt = pop_range_tombstone();
+
                     if (rt.trim(_query_schema,
-                                position_in_partition_view::for_range_start(ck_range),
-                                position_in_partition_view::for_range_end(ck_range))) {
+                                position_in_partition_view::for_range_start(ck_range_query),
+                                position_in_partition_view::for_range_end(ck_range_query))) {
                         _rt_stream.apply(std::move(rt));
                     }
                 }
@@ -271,6 +275,9 @@ private:
     // that its lifetime is appropriately extended.
     boost::any _container_guard;
 
+    // Each range from _ck_ranges are taken to be in snapshot clustering key
+    // order, i.e. given a comparator derived from snapshot schema, for each ck_range from
+    // _ck_ranges, begin(ck_range) <= end(ck_range).
     query::clustering_key_filter_ranges _ck_ranges;
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
@@ -298,11 +305,18 @@ private:
         if (!_next_row && !_no_more_rows_in_current_range) {
             _next_row = _reader.next_row(*_current_ck_range, _last_entry, _last_rts);
         }
+
+        // We use the names ck_range_snapshot and ck_range_query to denote clustering order.
+        // ck_range_snapshot uses the snapshot order, while ck_range_query uses the
+        // query order. These two differ if the query was reversed (`Reversing==true`).
+        const auto& ck_range_snapshot = *_current_ck_range;
+        const auto& ck_range_query = *_current_ck_range;
+
         if (_next_row) {
             auto pos_view = _next_row->as_clustering_row().position();
             _last_entry = position_in_partition(pos_view);
 
-            auto mf = _reader.next_range_tombstone(*_current_ck_range, _last_entry, _last_rts,  pos_view);
+            auto mf = _reader.next_range_tombstone(ck_range_snapshot, ck_range_query, _last_entry, _last_rts,  pos_view);
             if (mf) {
                 _last_rts = mf->as_range_tombstone().position();
                 return mf;
@@ -310,7 +324,7 @@ private:
             return std::exchange(_next_row, {});
         } else {
             _no_more_rows_in_current_range = true;
-            auto mf = _reader.next_range_tombstone(*_current_ck_range, _last_entry, _last_rts, position_in_partition_view::for_range_end(*_current_ck_range));
+            auto mf = _reader.next_range_tombstone(ck_range_snapshot, ck_range_query, _last_entry, _last_rts, position_in_partition_view::for_range_end(ck_range_query));
             if (mf) {
                 _last_rts = mf->as_range_tombstone().position();
             }
