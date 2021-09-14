@@ -1525,8 +1525,11 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
         f = make_checked_file(commit_error_handler, std::move(f));
     } catch (...) {
-        ep = std::current_exception();
-        commit_error_handler(ep);
+        try {
+            commit_error_handler(std::current_exception());
+        } catch (...) {
+            ep = std::current_exception();
+        }
     }
     if (ep && f) {
         co_await f.close();
