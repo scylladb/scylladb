@@ -340,14 +340,16 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _streaming_concurrency_sem(
             max_count_streaming_concurrent_reads,
             max_memory_streaming_concurrent_reads(),
-            "_streaming_concurrency_sem")
+            "_streaming_concurrency_sem",
+            std::numeric_limits<size_t>::max())
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction")
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
             max_memory_system_concurrent_reads(),
-            "_system_read_concurrency_sem")
+            "_system_read_concurrency_sem",
+            std::numeric_limits<size_t>::max())
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
@@ -1383,7 +1385,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 
     column_family& cf = find_column_family(cmd.cf_id);
     auto& semaphore = get_reader_concurrency_semaphore();
-    auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
+    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
 
     std::optional<query::data_querier> querier_opt;
     lw_shared_ptr<query::result> result;
@@ -1395,7 +1397,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 
     auto read_func = [&, this] (reader_permit permit) {
         reader_permit::used_guard ug{permit};
-        return cf.query(std::move(s), std::move(permit), cmd, class_config, opts, ranges, trace_state, get_result_memory_limiter(),
+        permit.set_max_result_size(max_result_size);
+        return cf.query(std::move(s), std::move(permit), cmd, opts, ranges, trace_state, get_result_memory_limiter(),
                 timeout, &querier_opt).then([&result, ug = std::move(ug)] (lw_shared_ptr<query::result> res) {
             result = std::move(res);
         });
@@ -1440,10 +1443,10 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     }
 
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
-    auto accounter = co_await get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed);
-    column_family& cf = find_column_family(cmd.cf_id);
     auto& semaphore = get_reader_concurrency_semaphore();
-    auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
+    auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_unlimited_query_max_result_size();
+    auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
+    column_family& cf = find_column_family(cmd.cf_id);
 
     std::optional<query::mutation_querier> querier_opt;
     reconcilable_result result;
@@ -1455,7 +1458,8 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
 
     auto read_func = [&, this] (reader_permit permit) {
         reader_permit::used_guard ug{permit};
-        return cf.mutation_query(std::move(s), std::move(permit), cmd, class_config, range,
+        permit.set_max_result_size(max_result_size);
+        return cf.mutation_query(std::move(s), std::move(permit), cmd, range,
                 std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ug = std::move(ug)] (reconcilable_result res) {
             result = std::move(res);
         });

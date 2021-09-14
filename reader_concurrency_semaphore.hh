@@ -239,13 +239,24 @@ public:
     reader_concurrency_semaphore(int count,
             ssize_t memory,
             sstring name,
-            size_t max_queue_length = std::numeric_limits<size_t>::max());
+            size_t max_queue_length);
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
     /// And conversely, no queue limit either.
     /// The semaphore's name has to be unique!
     explicit reader_concurrency_semaphore(no_limits, sstring name);
+
+    /// A helper constructor *only for tests* that supplies default arguments.
+    /// The other constructors have default values removed so 'production-code'
+    /// is forced to specify all of them manually to avoid bugs.
+    struct for_tests{};
+    reader_concurrency_semaphore(for_tests, sstring name,
+            int count = std::numeric_limits<int>::max(),
+            ssize_t memory = std::numeric_limits<ssize_t>::max(),
+            size_t max_queue_length = std::numeric_limits<size_t>::max())
+        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length)
+    {}
 
     ~reader_concurrency_semaphore();
 

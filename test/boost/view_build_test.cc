@@ -796,7 +796,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         }
     };
 
-    reader_concurrency_semaphore sem(1, new_reader_base_cost, get_name());
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, new_reader_base_cost);
     auto stop_sem = deferred_stop(sem);
 
     auto schema = schema_builder("ks", "cf")

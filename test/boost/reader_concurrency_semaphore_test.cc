@@ -63,7 +63,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads)
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_releases_units) {
     simple_schema s;
     const auto initial_resources = reader_concurrency_semaphore::resources{10, 1024 * 1024};
-    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
     auto stop_sem = deferred_stop(semaphore);
 
     // Not admitted, active
@@ -123,7 +123,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
     simple_schema s;
     const auto initial_resources = reader_concurrency_semaphore::resources{10, 1024 * 1024};
     const auto base_resources = reader_concurrency_semaphore::resources{1, 1024};
-    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
 
     auto stop_sem = deferred_stop(semaphore);
 
@@ -279,7 +279,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
 #endif
 
     simple_schema s;
-    reader_concurrency_semaphore semaphore(count, count * 1024, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), count, count * 1024);
     auto stop_sem = deferred_stop(semaphore);
 
     std::vector<std::unique_ptr<reader>> readers;
@@ -396,7 +396,7 @@ class dummy_file_impl : public file_impl {
 
 SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
     return async([&] {
-        reader_concurrency_semaphore semaphore(100, 4 * 1024, get_name());
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 100, 4 * 1024);
         auto stop_sem = deferred_stop(semaphore);
         auto permit = semaphore.obtain_permit(nullptr, get_name(), 0, db::no_timeout).get();
 
@@ -452,7 +452,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
     return async([&] () {
-        reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name());
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 2, new_reader_base_cost);
         auto stop_sem = deferred_stop(semaphore);
 
         {
@@ -496,7 +496,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
     return async([&] () {
-        reader_concurrency_semaphore semaphore(1, new_reader_base_cost, get_name(), 2);
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, new_reader_base_cost, 2);
         auto stop_sem = deferred_stop(semaphore);
 
         {
@@ -599,7 +599,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     simple_schema s;
     const auto schema_ptr = s.schema().get();
     const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
-    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
     auto stop_sem = deferred_stop(semaphore);
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
@@ -841,7 +841,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
     const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
-    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
     auto stop_sem = deferred_stop(semaphore);
 
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);

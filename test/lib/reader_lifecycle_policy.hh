@@ -96,7 +96,7 @@ public:
         auto name = format("tests::reader_lifecycle_policy@{}@shard_id={}", fmt::ptr(this), shard);
         if (_evict_paused_readers) {
             // Create with no memory, so all inactive reads are immediately evicted.
-            _contexts[shard]->semaphore.emplace(1, 0, std::move(name));
+            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::for_tests{}, std::move(name), 1, 0);
         } else {
             _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{}, std::move(name));
         }
