@@ -116,6 +116,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<netw::messaging_service>& ms,
     sharded<cdc::generation_service>& cdc_gen_service,
     sharded<repair_service>& repair,
+    sharded<streaming::stream_manager>& stream_manager,
     raft_group_registry& raft_gr,
     endpoint_lifecycle_notifier& elc_notif,
     sharded<db::batchlog_manager>& bm)
@@ -127,6 +128,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _messaging(ms)
         , _migration_manager(mm)
         , _repair(repair)
+        , _stream_manager(stream_manager)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
@@ -148,6 +150,7 @@ storage_service::storage_service(abort_source& abort_source,
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
     (void) _raft_gr;
+    (void) _stream_manager;
 }
 
 enum class node_external_status {
