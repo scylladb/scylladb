@@ -70,36 +70,6 @@ namespace streaming {
 
 logging::logger sslog("stream_session");
 
-static auto get_stream_result_future(utils::UUID plan_id) {
-    auto& sm = get_local_stream_manager();
-    auto f = sm.get_sending_stream(plan_id);
-    if (!f) {
-        f = sm.get_receiving_stream(plan_id);
-    }
-    return f;
-}
-
-static auto get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id = {}) {
-    if (cf_id) {
-        sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
-    } else {
-        sslog.debug("[Stream #{}] GOT {} from {}", plan_id, verb, from);
-    }
-    auto sr = get_stream_result_future(plan_id);
-    if (!sr) {
-        auto err = format("[Stream #{}] GOT {} from {}: Can not find stream_manager", plan_id, verb, from);
-        sslog.debug("{}", err.c_str());
-        throw std::runtime_error(err);
-    }
-    auto coordinator = sr->get_coordinator();
-    if (!coordinator) {
-        auto err = format("[Stream #{}] GOT {} from {}: Can not find coordinator", plan_id, verb, from);
-        sslog.debug("{}", err.c_str());
-        throw std::runtime_error(err);
-    }
-    return coordinator->get_or_create_session(from);
-}
-
 static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
     static const std::unordered_set<streaming::stream_reason> operations_supported = {
         streaming::stream_reason::bootstrap,
@@ -118,7 +88,7 @@ void stream_manager::init_messaging_service_handler() {
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
         return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] (auto& sm) mutable {
             auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
-            auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
+            auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
             session->set_reason(reason);
@@ -128,7 +98,7 @@ void stream_manager::init_messaging_service_handler() {
     ms.register_prepare_done_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
-            auto session = get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
+            auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
             session->follower_start_sent();
             return make_ready_future<>();
         });
@@ -218,7 +188,7 @@ void stream_manager::init_messaging_service_handler() {
     ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] (auto& sm) mutable {
-            auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
+            auto session = sm.get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
         });
     });
@@ -226,7 +196,7 @@ void stream_manager::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         if (failed && *failed) {
             return container().invoke_on(dst_cpu_id, [plan_id, from, dst_cpu_id] (auto& sm) {
-                auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
+                auto session = sm.get_session(plan_id, from, "COMPLETE_MESSAGE");
                 sslog.debug("[Stream #{}] COMPLETE_MESSAGE with error flag from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
                 session->received_failed_complete_message();
                 return make_ready_future<>();

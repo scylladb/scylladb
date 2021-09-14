@@ -70,6 +70,7 @@ class gossiper;
 
 namespace streaming {
 
+class stream_session;
 class stream_result_future;
 
 struct stream_bytes {
@@ -188,6 +189,8 @@ public:
     future<stream_bytes> get_progress_on_all_shards() const;
 
     stream_bytes get_progress_on_local_shard() const;
+
+    shared_ptr<stream_session> get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id = {});
 
 public:
     virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}

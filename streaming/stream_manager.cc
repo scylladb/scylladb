@@ -344,4 +344,28 @@ void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
     }
 }
 
+shared_ptr<stream_session> stream_manager::get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id) {
+    if (cf_id) {
+        sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
+    } else {
+        sslog.debug("[Stream #{}] GOT {} from {}", plan_id, verb, from);
+    }
+    auto sr = get_sending_stream(plan_id);
+    if (!sr) {
+        sr = get_receiving_stream(plan_id);
+    }
+    if (!sr) {
+        auto err = format("[Stream #{}] GOT {} from {}: Can not find stream_manager", plan_id, verb, from);
+        sslog.debug("{}", err.c_str());
+        throw std::runtime_error(err);
+    }
+    auto coordinator = sr->get_coordinator();
+    if (!coordinator) {
+        auto err = format("[Stream #{}] GOT {} from {}: Can not find coordinator", plan_id, verb, from);
+        sslog.debug("{}", err.c_str());
+        throw std::runtime_error(err);
+    }
+    return coordinator->get_or_create_session(from);
+}
+
 } // namespace streaming
