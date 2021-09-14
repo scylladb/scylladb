@@ -1310,29 +1310,7 @@ constant evaluate(term* term_ptr, const query_options& options) {
         return constant::make_null();
     }
 
-    if (dynamic_cast<abstract_marker*>(term_ptr) != nullptr
-     || dynamic_cast<tuples::value*>(term_ptr) != nullptr
-     || dynamic_cast<tuples::delayed_value*>(term_ptr) != nullptr
-     || dynamic_cast<lists::value*>(term_ptr) != nullptr
-     || dynamic_cast<lists::delayed_value*>(term_ptr) != nullptr 
-     || dynamic_cast<sets::value*>(term_ptr) != nullptr
-     || dynamic_cast<sets::delayed_value*>(term_ptr) != nullptr
-     || dynamic_cast<maps::value*>(term_ptr) != nullptr
-     || dynamic_cast<maps::delayed_value*>(term_ptr) != nullptr
-     || dynamic_cast<user_types::value*>(term_ptr) != nullptr
-     || dynamic_cast<user_types::delayed_value*>(term_ptr) != nullptr
-     || dynamic_cast<functions::function_call*>(term_ptr) != nullptr) {
-        return evaluate(term_ptr->to_expression(), options);
-    }
-
-    ::shared_ptr<terminal> bound = term_ptr->bind(options);
-    if (bound.get() == nullptr) {
-        return constant::make_null();
-    }
-
-    raw_value raw_val = bound->get(options);
-    data_type val_type = bound->get_value_type();
-    return constant(std::move(raw_val), std::move(val_type));
+    return evaluate(term_ptr->to_expression(), options);
 }
 
 constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& options) {
