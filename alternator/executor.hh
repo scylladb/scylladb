@@ -84,6 +84,10 @@ namespace parsed {
 class path;
 };
 
+const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema);
+future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map);
+schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
+
 // An attribute_path_map object is used to hold data for various attributes
 // paths (parsed::path) in a hierarchy of attribute paths. Each attribute path
 // has a root attribute, and then modified by member and index operators -

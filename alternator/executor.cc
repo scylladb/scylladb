@@ -200,7 +200,7 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
     }
 }
 
-static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
+schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
     auto schema = executor::find_table(proxy, request);
     if (!schema) {
         // if we get here then the name was missing, since syntax or missing actual CF 
@@ -704,7 +704,7 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 // FIXME: Updating tags currently relies on updating schema, which may be subject
 // to races during concurrent updates of the same table. Once Scylla schema updates
 // are fixed, this issue will automatically get fixed as well.
-static future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
+future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     schema_builder builder(schema);
     builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(std::move(tags_map)));
     return mm.announce_column_family_update(builder.build(), false, std::vector<view_ptr>(), std::nullopt);
