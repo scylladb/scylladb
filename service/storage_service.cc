@@ -150,7 +150,6 @@ storage_service::storage_service(abort_source& abort_source,
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
     (void) _raft_gr;
-    (void) _stream_manager;
 }
 
 enum class node_external_status {
@@ -1292,7 +1291,7 @@ future<> storage_service::stop_transport() {
             do_stop_ms().get();
             slogger.info("Stop transport: shutdown messaging_service done");
 
-            do_stop_stream_manager().get();
+            _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
             slogger.info("Stop transport: shutdown stream_manager done");
         }).then_wrapped([this] (future<> f) {
             if (f.failed()) {
@@ -1821,18 +1820,6 @@ future<> storage_service::do_stop_ms() {
         return ms.shutdown();
     }).then([] {
         slogger.info("messaging_service stopped");
-    });
-}
-
-future<> storage_service::do_stop_stream_manager() {
-    if (_stream_manager_stopped) {
-        return make_ready_future<>();
-    }
-    _stream_manager_stopped = true;
-    return streaming::get_stream_manager().invoke_on_all([] (auto& sm) {
-        return sm.shutdown();
-    }).then([] {
-        slogger.info("stream_manager stopped");
     });
 }
 

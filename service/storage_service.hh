@@ -178,7 +178,6 @@ private:
     sharded<streaming::stream_manager>& _stream_manager;
     sstring _operation_in_progress;
     bool _ms_stopped = false;
-    bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
     using client_shutdown_hook = noncopyable_function<void()>;
     std::vector<protocol_server*> _protocol_servers;
@@ -357,7 +356,6 @@ public:
     }
 private:
     future<> do_stop_ms();
-    future<> do_stop_stream_manager();
     // Runs in thread context
     void shutdown_protocol_servers();
 
