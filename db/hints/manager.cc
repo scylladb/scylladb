@@ -190,6 +190,10 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         }
     });
 
+    if (as.abort_requested()) {
+        local_as.request_abort();
+    }
+
     bool was_aborted = false;
     co_await parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
         const auto addr = p.first;
