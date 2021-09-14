@@ -98,7 +98,7 @@ struct stream_bytes {
  *
  * All stream operation should be created through this class to track streaming status and progress.
  */
-class stream_manager : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<stream_manager> {
+class stream_manager : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<stream_manager>, public peering_sharded_service<stream_manager> {
     using UUID = utils::UUID;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;

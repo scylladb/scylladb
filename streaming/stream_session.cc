@@ -111,12 +111,12 @@ static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason r
 void stream_manager::init_messaging_service_handler() {
     auto& ms = _ms.local();
 
-    ms.register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
+    ms.register_prepare_message([this] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] () mutable {
+        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] (auto& sm) mutable {
             auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
             auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
@@ -125,9 +125,9 @@ void stream_manager::init_messaging_service_handler() {
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
-    ms.register_prepare_done_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
+    ms.register_prepare_done_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(dst_cpu_id, [plan_id, from] () mutable {
+        return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
             auto session = get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
             session->follower_start_sent();
             return make_ready_future<>();
@@ -215,17 +215,17 @@ void stream_manager::init_messaging_service_handler() {
         });
       });
     });
-    ms.register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
+    ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
+        return container().invoke_on(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] (auto& sm) mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
         });
     });
-    ms.register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
+    ms.register_complete_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         if (failed && *failed) {
-            return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () {
+            return container().invoke_on(dst_cpu_id, [plan_id, from, dst_cpu_id] (auto& sm) {
                 auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
                 sslog.debug("[Stream #{}] COMPLETE_MESSAGE with error flag from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
                 session->received_failed_complete_message();
