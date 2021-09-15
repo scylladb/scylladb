@@ -1328,6 +1328,11 @@ endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_v
 
 query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
     // Unpaged and reverse queries.
+    // FIXME: some reversed queries are no longer unlimited.
+    // To filter these out we need to know if it's a single partition query.
+    // Take the partition key range as a parameter? This would require changing many call sites
+    // where the partition key range is not immediately available.
+    // For now we ignore the issue, return the 'wrong' limit for some reversed queries, and wait until all reversed queries are fixed.
     if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
         return _db.local().get_unlimited_query_max_result_size();
     } else {

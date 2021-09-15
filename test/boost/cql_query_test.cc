@@ -4585,6 +4585,29 @@ SEASTAR_TEST_CASE(test_impossible_where) {
     });
 }
 
+// FIXME: copy-pasta
+static bool has_more_pages(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    BOOST_REQUIRE(rows);
+    return rows->rs().get_metadata().flags().contains(cql3::metadata::flag::HAS_MORE_PAGES);
+};
+
+static size_t count_rows_fetched(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    BOOST_REQUIRE(rows);
+    return rows->rs().result_set().size();
+};
+
+static lw_shared_ptr<service::pager::paging_state> extract_paging_state(::shared_ptr<cql_transport::messages::result_message> res) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+    BOOST_REQUIRE(rows);
+    auto paging_state = rows->rs().get_metadata().paging_state();
+    if (!paging_state) {
+        return nullptr;
+    }
+    return make_lw_shared<service::pager::paging_state>(*paging_state);
+};
+
 SEASTAR_THREAD_TEST_CASE(test_query_limit) {
     cql_test_config cfg;
 
@@ -4629,18 +4652,38 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
                     const auto select_query = format("SELECT * FROM test WHERE pk = {} ORDER BY ck {};", pk, is_reversed ? "DESC" : "ASC");
 
                     int32_t page_size = is_paged ? 10000 : -1;
-                    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                                cql3::query_options::specific_options{page_size, nullptr, {}, api::new_timestamp()});
 
-                    const auto* expected_rows = is_reversed ? &reversed_rows : &normal_rows;
+                    const auto& expected_rows = is_reversed ? reversed_rows : normal_rows;
 
                     try {
-                        auto result = with_scheduling_group(scheduling_group, [&e] (const sstring& q, std::unique_ptr<cql3::query_options> qo) {
-                            return e.execute_cql(q, std::move(qo));
-                        }, select_query, std::move(qo)).get0();
-                        assert_that(std::move(result))
+                        bool has_more_pages = true;
+                        lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+                        size_t next_expected_row_idx = 0;
+                        while (has_more_pages) {
+                            // FIXME: even though we chose a large page size, for reversed queries we may still obtain multiple pages.
+                            // This happens because the query result size limit for reversed queries is set to the 'unlimited query hard limit'
+                            // (even though single-partition reversed queries are no longer 'unlimited') which we set to a low value,
+                            // causing reversed queries to finish early.
+                            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                                        cql3::query_options::specific_options{page_size, paging_state, {}, api::new_timestamp()});
+                            auto result = with_scheduling_group(scheduling_group, [&e] (const sstring& q, std::unique_ptr<cql3::query_options> qo) {
+                                return e.execute_cql(q, std::move(qo));
+                            }, select_query, std::move(qo)).get0();
+
+                            auto rows_fetched = count_rows_fetched(result);
+                            BOOST_REQUIRE(next_expected_row_idx + rows_fetched <= expected_rows.size());
+                            assert_that(result)
                                 .is_rows()
-                                .with_rows(*expected_rows);
+                                .with_rows(std::vector<std::vector<bytes_opt>>{
+                                        expected_rows.begin() + next_expected_row_idx,
+                                        expected_rows.begin() + next_expected_row_idx + rows_fetched});
+
+                            has_more_pages = ::has_more_pages(result);
+                            paging_state = extract_paging_state(result);
+                            BOOST_REQUIRE(!has_more_pages || paging_state);
+                            next_expected_row_idx += rows_fetched;
+                        }
+                        BOOST_REQUIRE(next_expected_row_idx == expected_rows.size());
 
                         if (should_fail) {
                             BOOST_FAIL("Expected exception, but none was thrown.");
