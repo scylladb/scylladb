@@ -106,6 +106,7 @@ bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.s
 
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --entrypoint  '["/docker-entrypoint.py"]'
+bconfig --cmd  ''
 bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001 --port 22
 bconfig --volume "/var/lib/scylla"
 
