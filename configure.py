@@ -1143,8 +1143,8 @@ deps = {
     'scylla': idls + ['main.cc', 'release.cc', 'utils/build_id.cc'] + scylla_core + api + alternator + redis,
     'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
     #FIXME: we don't need all of scylla_core here, only the types module, need to modularize scylla_core.
-    'tools/scylla-types': idls + ['tools/scylla-types.cc'] + scylla_core,
-    'tools/scylla-sstable': idls + ['tools/scylla-sstable.cc', 'tools/schema_loader.cc'] + scylla_core,
+    'tools/scylla-types': idls + ['tools/scylla-types.cc', 'tools/utils.cc'] + scylla_core,
+    'tools/scylla-sstable': idls + ['tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc'] + scylla_core,
 }
 
 pure_boost_tests = set([

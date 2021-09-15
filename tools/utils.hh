@@ -22,9 +22,11 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/program_options.hpp>
+#include <seastar/core/app-template.hh>
 #include <string>
 #include <vector>
 #include <fmt/format.h>
+#include "seastarx.hh"
 
 namespace tools::utils {
 
@@ -53,5 +55,11 @@ const Op& get_selected_operation(boost::program_options::variables_map& app_conf
     }
     throw std::invalid_argument(fmt::format("error: need exactly one {}, cannot specify more then one of {}", alias, all_operation_names));
 }
+
+// Configure seastar with defaults more appropriate for a tool.
+// Make seastar not act as if it owns the place, taking over all system resources.
+// Set WARN as the default log level, except for the logger \p logger_name, which
+// is configured with INFO level.
+void configure_tool_mode(app_template::seastar_options& opts, const sstring& logger_name = {});
 
 } // namespace tools::utils

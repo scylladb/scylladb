@@ -669,7 +669,7 @@ const std::vector<operation> operations{
 } // anonymous namespace
 
 int main(int argc, char** argv) {
-    app_template::config app_cfg;
+    app_template::seastar_options app_cfg;
     app_cfg.name = app_name;
 
     const auto description_template =
@@ -725,6 +725,8 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
                     [] (const auto& op) { return sstring(op.name()); } ), ", ");
 
     const auto op_help = fmt::format("operation to run, one of ({})", op_list);
+
+    tools::utils::configure_tool_mode(app_cfg, sst_log.name());
 
     app_template app(std::move(app_cfg));
 
