@@ -5381,9 +5381,6 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     co_await container().invoke_on_all([this, original_shard, &sources, &spoint, &was_aborted] (storage_proxy& sp) {
         auto wait_for = [&sources, original_shard, &was_aborted] (db::hints::manager& mgr, const std::vector<db::hints::sync_point::shard_rps>& shard_rps) {
             const unsigned shard = this_shard_id();
-            if (shard_rps.size() < shard) {
-                return make_ready_future<>();
-            }
             return mgr.wait_for_sync_point(sources[shard], shard_rps[shard]).handle_exception([original_shard, &sources, &was_aborted] (auto eptr) {
                 // Make sure other blocking operations are cancelled soon
                 // by requesting an abort on all shards

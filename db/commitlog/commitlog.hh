@@ -142,6 +142,16 @@ public:
         bool warn_about_segments_left_on_disk_after_shutdown = true;
         bool allow_going_over_size_limit = true;
 
+        // The base segment ID to use.
+        // The segment IDs of newly allocated segments will be issued sequentially
+        // and will start _right after_ this parameter.
+        // If not set, it will be calculated based on the number of milliseconds
+        // since boot time.
+        // If there are segments to replay which have base IDs greater than
+        // this parameter, new segment IDs will start after the largest one
+        // of them.
+        std::optional<segment_id_type> base_segment_id;
+
         const db::extensions * extensions = nullptr;
     };
 

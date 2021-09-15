@@ -190,6 +190,10 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         }
     });
 
+    if (as.abort_requested()) {
+        local_as.request_abort();
+    }
+
     bool was_aborted = false;
     co_await parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
         const auto addr = p.first;
@@ -413,6 +417,27 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             // in resource_manager, so its redundant for the commitlog to apply
             // a hard limit.
             cfg.allow_going_over_size_limit = true;
+            // The API for waiting for hint replay relies on replay positions
+            // monotonically increasing. When there are no segments on disk,
+            // by default the commitlog will calculate the first segment ID
+            // based on the boot time. This may cause the following sequence
+            // of events to occur:
+            //
+            // 1. Node starts with empty hints queue
+            // 2. Some hints are written and some segments are created
+            // 3. All hints are replayed
+            // 4. Hint sync point is created
+            // 5. Commitlog instance gets re-created and resets it segment ID counter
+            // 6. New hint segment has the first ID as the first (deleted by now) segment
+            // 7. Waiting for the sync point commences but resolves immediately
+            //    before new hints are replayed - since point 5., `_last_written_rp`
+            //    and `_sent_upper_bound_rp` are not updated because RPs of new
+            //    hints are much lower than both of those marks.
+            //
+            // In order to prevent this situation, we override the base segment ID
+            // of the newly created commitlog instance - it should start with an ID
+            // which is larger than the segment ID of the RP of the last written hint.
+            cfg.base_segment_id = _last_written_rp.base_id();
 
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
@@ -959,8 +984,11 @@ future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed
         (**ptr).set_exception(abort_requested_exception());
     });
 
-    return (**ptr).get_future().finally([this, sub = std::move(sub)] {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", end_point_key());
+    // When the future resolves, the endpoint manager is not guaranteed to exist anymore
+    // therefore we cannot capture `this`
+    auto ep = end_point_key();
+    return (**ptr).get_future().finally([sub = std::move(sub), ep] {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
     });
 }
 

@@ -68,12 +68,18 @@ static std::vector<sync_point::shard_rps> decode_one_type_v1(uint16_t shard_coun
                 size_t(shard_count) * v1.addresses.size(), v1.flattened_rps.size()));
     }
 
-    ret.resize(shard_count);
+    ret.resize(std::max(unsigned(shard_count), smp::count));
 
     auto rps_it = v1.flattened_rps.begin();
     for (const auto addr : v1.addresses) {
-        for (uint16_t shard = 0; shard < shard_count; shard++) {
+        uint16_t shard;
+        for (shard = 0; shard < shard_count; shard++) {
             ret[shard].emplace(addr, *rps_it++);
+        }
+        // Fill missing shards with zero replay positions so that segments
+        // which were moved across shards will be correctly waited on
+        for (; shard < smp::count; shard++) {
+            ret[shard].emplace(addr, db::replay_position());
         }
     }
 
