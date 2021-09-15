@@ -20,6 +20,7 @@
  */
 
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include <boost/program_options.hpp>
 #include <string>
 #include <vector>
