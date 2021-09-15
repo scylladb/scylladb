@@ -1344,7 +1344,7 @@ private:
     bool _supports_infinite_bound_range_deletions = false;
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
-    wasm::engine* _wasm_engine;
+    std::unique_ptr<wasm::engine> _wasm_engine;
 
     future<> init_commitlog();
 public:
@@ -1355,11 +1355,7 @@ public:
     void set_local_id(utils::UUID uuid) noexcept { _local_host_id = std::move(uuid); }
 
     wasm::engine* wasm_engine() {
-        return _wasm_engine;
-    }
-
-    void set_wasm_engine(wasm::engine* engine) {
-        _wasm_engine = engine;
+        return _wasm_engine.get();
     }
 
 private:

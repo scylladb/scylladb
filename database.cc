@@ -368,6 +368,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _feat(feat)
     , _shared_token_metadata(stm)
     , _sst_dir_semaphore(sst_dir_sem)
+    , _wasm_engine(std::make_unique<wasm::engine>())
 {
     assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 

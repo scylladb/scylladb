@@ -91,7 +91,6 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "alternator/controller.hh"
-#include "lang/wasm_engine.hh"
 
 #include "service/raft/raft_group_registry.hh"
 
@@ -585,9 +584,6 @@ int main(int ac, char** av) {
             }
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
 
-            static sharded<wasm::engine> wasm_engine;
-            wasm::init_sharded_engine(wasm_engine).get();
-
             feature_service.start(fcfg).get();
             // FIXME storage_proxy holds a reference on it and is not yet stopped.
             // also the proxy leaves range_slice_read_executor-s hanging around
@@ -872,9 +868,6 @@ int main(int ac, char** av) {
             });
 
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
-            db.invoke_on_all([] (database& db) {
-                db.set_wasm_engine(&wasm_engine.local());
-            }).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
