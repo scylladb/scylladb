@@ -115,11 +115,18 @@ void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& range
             reversed ? position_in_partition_view::after_key(full_key) : position_in_partition_view::before_key(full_key), reversed);
 }
 
+
+clustering_range reverse(const clustering_range& range) {
+    if (range.is_singular()) {
+        return range;
+    }
+    return clustering_range(range.end(), range.start());
+}
+
+
 static void reverse_clustering_ranges_bounds(clustering_row_ranges& ranges) {
     for (auto& range : ranges) {
-        if (!range.is_singular()) {
-            range = query::clustering_range(range.end(), range.start());
-        }
+        range = reverse(range);
     }
 }
 
