@@ -959,7 +959,7 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete, bool reuse
     cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.reuse_segments = reuse;
-    cfg.allow_going_over_size_limit = do_file_delete; // we fail at size bookeep iff a file is deleted out-of-band
+    cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
     // not using cl_test, because we need to be able to abandon
