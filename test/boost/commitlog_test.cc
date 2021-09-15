@@ -950,7 +950,7 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
     }
 }
 
-SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
+static future<> do_test_exception_in_allocate_ex(bool do_file_delete, bool reuse = true) {
     commitlog::config cfg;
 
     constexpr auto max_size_mb = 1;
@@ -958,8 +958,8 @@ SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
     cfg.commitlog_sync_period_in_ms = 10;
-    cfg.reuse_segments = true;
-    cfg.allow_going_over_size_limit = false;
+    cfg.reuse_segments = reuse;
+    cfg.allow_going_over_size_limit = do_file_delete; // we fail at size bookeep iff a file is deleted out-of-band
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
     // not using cl_test, because we need to be able to abandon
@@ -977,10 +977,19 @@ SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
     public:
         bool fail = false;
         bool thrown = false;
+        bool do_file_delete;
+
+        myext(bool dd)
+            : do_file_delete(dd)
+        {}
 
         seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
             if (fail && !thrown) {
                 thrown = true;
+                if (do_file_delete) {
+                    co_await f.close();
+                    co_await seastar::remove_file(filename);
+                }
                 throw myfail{};
             }
             co_return f;
@@ -990,7 +999,7 @@ SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
         }
     };
 
-    auto ep = std::make_unique<myext>();
+    auto ep = std::make_unique<myext>(do_file_delete);
     auto& mx = *ep;
 
     db::extensions myexts;
@@ -1025,4 +1034,28 @@ SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
 
     co_await log.shutdown();
     co_await log.clear();
+}
+
+/**
+ * Test generating an exception in segment file allocation
+ */
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
+    co_await do_test_exception_in_allocate_ex(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_no_recycle) {
+    co_await do_test_exception_in_allocate_ex(false, false);
+}
+
+/**
+ * Test generating an exception in segment file allocation, but also 
+ * delete the file, which in turn should cause follow-up exceptions
+ * in cleanup delete. Which CL should handle
+ */
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file) {
+    co_await do_test_exception_in_allocate_ex(true, false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file_no_recycle) {
+    co_await do_test_exception_in_allocate_ex(true);
 }
