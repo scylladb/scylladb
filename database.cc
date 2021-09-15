@@ -316,7 +316,8 @@ void database::setup_scylla_memory_diagnostics_producer() {
     });
 }
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, abort_source& as, sharded<semaphore>& sst_dir_sem)
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+        abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
@@ -369,6 +370,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _shared_token_metadata(stm)
     , _sst_dir_semaphore(sst_dir_sem)
     , _wasm_engine(std::make_unique<wasm::engine>())
+    , _stop_barrier(std::move(barrier))
 {
     assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 

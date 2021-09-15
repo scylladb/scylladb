@@ -75,6 +75,7 @@
 #include "user_types_metadata.hh"
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
+#include "utils/cross-shard-barrier.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1344,6 +1345,7 @@ private:
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
     std::unique_ptr<wasm::engine> _wasm_engine;
+    utils::cross_shard_barrier _stop_barrier;
 
 public:
     future<> init_commitlog();
@@ -1386,7 +1388,8 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, abort_source& as, sharded<semaphore>& sst_dir_sem);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+            abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
 
