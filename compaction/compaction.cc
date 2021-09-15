@@ -498,6 +498,7 @@ protected:
     schema_ptr _schema;
     reader_permit _permit;
     std::vector<shared_sstable> _sstables;
+    const unsigned _total_input_sstables;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
     std::vector<shared_sstable> _new_unused_sstables;
@@ -528,6 +529,7 @@ protected:
         , _schema(cf.schema())
         , _permit(_cf.compaction_concurrency_semaphore().make_tracking_only_permit(_cf.schema().get(), "compaction", db::no_timeout))
         , _sstables(std::move(descriptor.sstables))
+        , _total_input_sstables(_sstables.size())
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
         , _info(info)
@@ -663,7 +665,6 @@ private:
             // compacted sstables anyway (CL should be clean by then).
             _rp = std::max(_rp, sst_stats.position);
         }
-        _info.sstables = _sstables.size();
         log_info("{} {}", report_start_desc(), formatted_msg);
         if (ssts->all()->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
@@ -721,7 +722,7 @@ private:
         // By the time being, using estimated key count.
         log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
-                _info.sstables, new_sstables_msg, pretty_printed_data_size(_info.start_size), pretty_printed_data_size(_info.end_size), int(ratio * 100),
+                _total_input_sstables, new_sstables_msg, pretty_printed_data_size(_info.start_size), pretty_printed_data_size(_info.end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info.end_size, duration),
                 _info.total_partitions, _info.total_keys_written);
 
@@ -1648,8 +1649,6 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
         sstables_list_msg += sst;
         sstables->insert(sst);
     }
-
-    info.sstables = descriptor.sstables.size();
 
     clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
 

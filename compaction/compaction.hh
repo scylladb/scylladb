@@ -57,7 +57,6 @@ namespace sstables {
         compaction_type type = compaction_type::Compaction;
         sstring ks_name;
         sstring cf_name;
-        size_t sstables = 0;
         uint64_t start_size = 0;
         uint64_t end_size = 0;
         uint64_t total_partitions = 0;
