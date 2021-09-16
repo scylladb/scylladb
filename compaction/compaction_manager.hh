@@ -75,6 +75,8 @@ private:
         bool compaction_running = false;
         utils::UUID output_run_identifier;
         lw_shared_ptr<sstables::compaction_info> compaction_info = make_lw_shared<sstables::compaction_info>();
+
+        explicit task(column_family* cf, sstables::compaction_type type) : compacting_cf(cf), type(type) {}
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
