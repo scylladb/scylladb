@@ -246,8 +246,7 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
-    auto task = make_lw_shared<compaction_manager::task>();
-    task->compacting_cf = cf;
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
 
     // first take major compaction semaphore, then exclusely take compaction lock for column family.
@@ -303,9 +302,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
         return make_ready_future<>();
     }
 
-    auto task = make_lw_shared<compaction_manager::task>();
-    task->compacting_cf = cf;
-    task->type = type;
+    auto task = make_lw_shared<compaction_manager::task>(cf, type);
     _tasks.push_back(task);
 
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_info&)>>(std::move(job));
@@ -576,8 +573,7 @@ void compaction_manager::submit(column_family* cf) {
         return;
     }
 
-    auto task = make_lw_shared<compaction_manager::task>();
-    task->compacting_cf = cf;
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
     _stats.pending_tasks++;
 
@@ -646,9 +642,7 @@ void compaction_manager::submit(column_family* cf) {
 }
 
 void compaction_manager::submit_offstrategy(column_family* cf) {
-    auto task = make_lw_shared<compaction_manager::task>();
-    task->compacting_cf = cf;
-    task->type = sstables::compaction_type::Reshape;
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Reshape);
     _tasks.push_back(task);
     _stats.pending_tasks++;
 
@@ -701,9 +695,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
 }
 
 future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
-    auto task = make_lw_shared<compaction_manager::task>();
-    task->compacting_cf = cf;
-    task->type = options.type();
+    auto task = make_lw_shared<compaction_manager::task>(cf, options.type());
     _tasks.push_back(task);
 
     auto sstables = std::make_unique<std::vector<sstables::shared_sstable>>(get_func(*cf));
