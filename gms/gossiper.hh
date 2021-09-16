@@ -148,7 +148,6 @@ private:
     std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
 public:
-    future<> advertise_myself();
     // Get current generation number for the given nodes
     future<std::unordered_map<gms::inet_address, int32_t>>
     get_generation_for_nodes(std::list<gms::inet_address> nodes);
@@ -569,7 +568,6 @@ public:
     static clk::time_point compute_expire_time();
 public:
     void dump_endpoint_state_map();
-    void debug_show();
 public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
@@ -599,13 +597,11 @@ private:
     class msg_proc_guard;
 private:
     abort_source& _abort_source;
-    condition_variable _features_condvar;
     feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
     db::config& _cfg;
     gossip_config _gcfg;
-    friend class feature;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about

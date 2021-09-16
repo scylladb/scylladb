@@ -1916,12 +1916,6 @@ future<> gossiper::advertise_to_nodes(std::unordered_map<gms::inet_address, int3
     });
 }
 
-future<> gossiper::advertise_myself() {
-    return container().invoke_on_all([] (auto& g) {
-        g._advertise_myself = true;
-    });
-}
-
 future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
     return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
         container().invoke_on_all([do_bind] (gossiper& g) {
@@ -2190,7 +2184,6 @@ future<> gossiper::do_stop_gossiping() {
         seastar::with_semaphore(_callback_running, 1, [this] {
             logger.info("Disable and wait for gossip loop finished");
             return container().invoke_on_all([] (gossiper& g) {
-                g._features_condvar.broken();
                 return g.uninit_messaging_service_handler();
             });
         }).get();
@@ -2253,15 +2246,6 @@ void gossiper::dump_endpoint_state_map() {
         logger.info("endpoint={}, endpoint_state={}", x.first, x.second);
     }
     logger.info("=== endpoint_state_map dump ends ===");
-}
-
-void gossiper::debug_show() {
-    auto reporter = std::make_shared<timer<std::chrono::steady_clock>>();
-    reporter->set_callback ([reporter] {
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.dump_endpoint_state_map();
-    });
-    reporter->arm_periodic(std::chrono::milliseconds(1000));
 }
 
 bool gossiper::is_alive(inet_address ep) const {
@@ -2623,7 +2607,6 @@ void gossiper::maybe_enable_features() {
         for (auto&& name : features) {
             g._feature_service.enable(name);
         }
-        g._features_condvar.broadcast();
     }).get();
 }
 
