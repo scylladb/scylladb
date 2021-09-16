@@ -957,9 +957,9 @@ void compaction_manager::stop_compaction(sstring type) {
         throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
     }
     // FIXME: switch to task_stop(), and wait for their termination, so API user can know when compactions actually stopped.
-    for (auto& info : get_compactions()) {
-        if (target_type == info->type) {
-            info->stop("user request");
+    for (auto& task : _tasks) {
+        if (task->compaction_running && target_type == task->type) {
+            task->compaction_info->stop("user request");
         }
     }
 }
