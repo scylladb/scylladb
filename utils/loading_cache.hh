@@ -23,6 +23,7 @@
 
 #include <chrono>
 #include <unordered_map>
+#include <memory_resource>
 
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
@@ -262,7 +263,7 @@ template<typename Key,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
          typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
-         typename Alloc = std::allocator<typename timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry>>
+         typename Alloc = std::pmr::polymorphic_allocator<>>
 class loading_cache {
 private:
     using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
@@ -349,7 +350,7 @@ public:
                     return make_exception_future<value_ptr>(entry_is_too_big());
                 }
 
-                ts_value_lru_entry* new_lru_entry = Alloc().allocate(1);
+                ts_value_lru_entry* new_lru_entry = Alloc().template allocate_object<ts_value_lru_entry>();
                 new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), _lru_list, _current_size);
 
                 // This will "touch" the entry and add it to the LRU list - we must do this before the shrink() call.
@@ -467,8 +468,7 @@ private:
     }
 
     static void destroy_ts_value(ts_value_lru_entry* val) {
-        val->~ts_value_lru_entry();
-        Alloc().deallocate(val, 1);
+        Alloc().delete_object(val);
     }
 
     future<> reload(timestamped_val_ptr ts_value_ptr) {
