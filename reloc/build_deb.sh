@@ -38,7 +38,7 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-rm -rf $BUILDDIR
+rm -rf "$BUILDDIR"/scylla-package "$BUILDDIR"/scylla-package.orig "$BUILDDIR"/debian
 mkdir -p $BUILDDIR/scylla-package
 tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG
 cd $BUILDDIR/scylla-package
