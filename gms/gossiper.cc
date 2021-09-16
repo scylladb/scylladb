@@ -1000,7 +1000,7 @@ void gossiper::run() {
                 logger.trace("ep={}, eps={}", x.first, x.second);
             }
         }
-        if (_enabled) {
+        if (is_enabled()) {
             _scheduled_gossip_task.arm(INTERVAL);
         } else {
             logger.info("Gossip loop is not scheduled because it is disabled");
@@ -1588,7 +1588,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         _endpoints_to_talk_with.front().push_back(addr);
     }
 
-    if (!_in_shadow_round) {
+    if (!is_in_shadow_round()) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
@@ -1616,7 +1616,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
 // Runs inside seastar::async context
 void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
     auto eps_old = get_endpoint_state_for_endpoint(ep);
-    if (!is_dead_state(eps) && !_in_shadow_round) {
+    if (!is_dead_state(eps) && !is_in_shadow_round()) {
         if (endpoint_state_map.contains(ep))  {
             logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
@@ -1627,7 +1627,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     endpoint_state_map[ep] = eps;
     replicate(ep, eps).get();
 
-    if (_in_shadow_round) {
+    if (is_in_shadow_round()) {
         // In shadow round, we only interested in the peer's endpoint_state,
         // e.g., gossip features, host_id, tokens. No need to call the
         // on_restart or on_join callbacks or to go through the mark alive
@@ -1975,8 +1975,8 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         if (fall_back_to_syn_msg) {
             logger.info("Fallback to old method for ShadowRound");
             auto t = clk::now();
-            _in_shadow_round = true;
-            while (this->_in_shadow_round) {
+            goto_shadow_round();
+            while (is_in_shadow_round()) {
                 // send a completely empty syn
                 for (const auto& node : nodes) {
                     utils::chunked_vector<gossip_digest> digests;
@@ -1989,7 +1989,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                     });
                 }
                 sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-                if (this->_in_shadow_round) {
+                if (is_in_shadow_round()) {
                     if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
                         throw std::runtime_error(format("Unable to gossip with any nodes={} (ShadowRound),", nodes));
                     }
