@@ -8,6 +8,7 @@
 
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
+#include <fmt/chrono.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
@@ -257,6 +258,24 @@ public:
     }
 };
 
+enum class output_format {
+    text, json
+};
+
+output_format get_output_format_from_options(const bpo::variables_map& opts, output_format default_format) {
+    if (auto it = opts.find("output-format"); it != opts.end()) {
+        const auto& value = it->second.as<std::string>();
+        if (value == "text") {
+            return output_format::text;
+        } else if (value == "json") {
+            return output_format::json;
+        } else {
+            throw std::invalid_argument(fmt::format("error: invalid value for dump option output-format: {}", value));
+        }
+    }
+    return default_format;
+}
+
 class dumping_consumer : public sstable_consumer {
     class text_dumper : public sstable_consumer {
         const schema& _schema;
@@ -299,14 +318,257 @@ class dumping_consumer : public sstable_consumer {
             return make_ready_future<>();
         }
     };
+    class json_dumper : public sstable_consumer {
+        const schema& _schema;
+        json_writer _writer;
+        bool _clustering_array_created;
+    private:
+        sstring to_string(gc_clock::time_point tp) {
+            return fmt::format("{:%F %T}", fmt::gmtime(gc_clock::to_time_t(tp)));
+        }
+        void write(gc_clock::duration ttl, gc_clock::time_point expiry) {
+            _writer.Key("ttl");
+            _writer.AsString(ttl);
+            _writer.Key("expiry");
+            _writer.String(to_string(expiry));
+        }
+        template <typename Key>
+        void write_key(const Key& key) {
+            _writer.StartObject();
+            _writer.Key("raw");
+            _writer.String(to_hex(key.representation()));
+            _writer.Key("value");
+            _writer.AsString(key.with_schema(_schema));
+            _writer.EndObject();
+        }
+        void write(const tombstone& t) {
+            _writer.StartObject();
+            if (t) {
+                _writer.Key("timestamp");
+                _writer.Int64(t.timestamp);
+                _writer.Key("deletion_time");
+                _writer.String(to_string(t.deletion_time));
+            }
+            _writer.EndObject();
+        }
+        void write(const row_marker& m) {
+            _writer.StartObject();
+            _writer.Key("timestamp");
+            _writer.Int64(m.timestamp());
+            if (m.is_live() && m.is_expiring()) {
+                write(m.ttl(), m.expiry());
+            }
+            _writer.EndObject();
+        }
+        void write(counter_cell_view cv) {
+            _writer.StartArray();
+            for (const auto& shard : cv.shards()) {
+                _writer.StartObject();
+                _writer.Key("id");
+                _writer.AsString(shard.id());
+                _writer.Key("value");
+                _writer.Int64(shard.value());
+                _writer.Key("clock");
+                _writer.Int64(shard.logical_clock());
+                _writer.EndObject();
+            }
+            _writer.EndArray();
+        }
+        void write(const atomic_cell_view& cell, data_type type) {
+            _writer.StartObject();
+            _writer.Key("is_live");
+            _writer.Bool(cell.is_live());
+            _writer.Key("timestamp");
+            _writer.Int64(cell.timestamp());
+            if (type->is_counter()) {
+                if (cell.is_counter_update()) {
+                    _writer.Key("value");
+                    _writer.Int64(cell.counter_update_value());
+                } else {
+                    _writer.Key("shards");
+                    write(counter_cell_view(cell));
+                }
+            } else {
+                if (cell.is_live_and_has_ttl()) {
+                    write(cell.ttl(), cell.expiry());
+                }
+                if (cell.is_live()) {
+                    _writer.Key("value");
+                    _writer.String(type->to_string(cell.value().linearize()));
+                }
+            }
+            _writer.EndObject();
+        }
+        void write(const collection_mutation_view_description& mv, data_type type) {
+            _writer.StartObject();
+
+            if (mv.tomb) {
+                _writer.Key("tombstone");
+                write(mv.tomb);
+            }
+
+            _writer.Key("cells");
+
+            std::function<void(size_t, bytes_view)> write_key;
+            std::function<void(size_t, atomic_cell_view)> write_value;
+            if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
+                write_key = [this, t] (size_t, bytes_view k) { _writer.Key(t->name_comparator()->to_string(k)); };
+                write_value = [this, t] (size_t, atomic_cell_view v) { write(v, t->value_comparator()); };
+            } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
+                write_key = [this] (size_t i, bytes_view) { _writer.Key(format("{}", i)); };
+                write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
+            }
+
+            if (write_key && write_value) {
+                _writer.StartObject();
+                for (size_t i = 0; i < mv.cells.size(); ++i) {
+                    write_key(i, mv.cells[i].first);
+                    write_value(i, mv.cells[i].second);
+                }
+                _writer.EndObject();
+            } else {
+                _writer.String("<unknown>");
+            }
+
+            _writer.EndObject();
+        }
+        void write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
+            if (cdef.is_atomic()) {
+                write(cell.as_atomic_cell(cdef), cdef.type);
+            } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
+                cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
+                    write(mv, cdef.type);
+                });
+            } else {
+                _writer.String("<unknown>");
+            }
+        }
+        void write(const row& r, column_kind kind) {
+            _writer.StartObject();
+            r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+                auto cdef = _schema.column_at(kind, id);
+                _writer.Key(cdef.name_as_text());
+                write(cell, cdef);
+            });
+            _writer.EndObject();
+        }
+        void write(const clustering_row& cr) {
+            _writer.StartObject();
+            _writer.Key("type");
+            _writer.String("clustering-row");
+            _writer.Key("key");
+            write_key(cr.key());
+            if (cr.tomb()) {
+                _writer.Key("tombstone");
+                write(cr.tomb().regular());
+                _writer.Key("shadowable_tombstone");
+                write(cr.tomb().shadowable().tomb());
+            }
+            if (!cr.marker().is_missing()) {
+                _writer.Key("marker");
+                write(cr.marker());
+            }
+            _writer.Key("columns");
+            write(cr.cells(), column_kind::regular_column);
+            _writer.EndObject();
+        }
+        void write(const range_tombstone_change& rtc) {
+            _writer.StartObject();
+            _writer.Key("type");
+            _writer.String("range-tombstone-change");
+            const auto pos = rtc.position();
+            if (pos.has_key()) {
+                _writer.Key("key");
+                write_key(pos.key());
+            }
+            _writer.Key("weight");
+            _writer.AsString(pos.get_bound_weight());
+            _writer.Key("tombstone");
+            write(rtc.tombstone());
+            _writer.EndObject();
+        }
+    public:
+        explicit json_dumper(const schema& s) : _schema(s) {}
+        virtual future<> on_start_of_stream() override {
+            _writer.StartStream();
+            return make_ready_future<>();
+        }
+        virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+            _writer.SstableKey(sst);
+            _writer.StartArray();
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(partition_start&& ps) override {
+            const auto& dk = ps.key();
+            _clustering_array_created = false;
+
+            _writer.StartObject();
+
+            _writer.Key("key");
+            _writer.PartitionKey(_schema, dk.key(), dk.token());
+
+            if (ps.partition_tombstone()) {
+                _writer.Key("tombstone");
+                write(ps.partition_tombstone());
+            }
+
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(static_row&& sr) override {
+            _writer.Key("static_row");
+            write(sr.cells(), column_kind::static_column);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(clustering_row&& cr) override {
+            if (!_clustering_array_created) {
+                _writer.Key("clustering_elements");
+                _writer.StartArray();
+                _clustering_array_created = true;
+            }
+            write(cr);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+            if (!_clustering_array_created) {
+                _writer.Key("clustering_elements");
+                _writer.StartArray();
+                _clustering_array_created = true;
+            }
+            write(rtc);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(partition_end&& pe) override {
+            if (_clustering_array_created) {
+                _writer.EndArray();
+            }
+            _writer.EndObject();
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> on_end_of_sstable() override {
+            _writer.EndArray();
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<> on_end_of_stream() override {
+            _writer.EndStream();
+            return make_ready_future<>();
+        }
+    };
 
 private:
     schema_ptr _schema;
     std::unique_ptr<sstable_consumer> _consumer;
 
 public:
-    explicit dumping_consumer(schema_ptr s, reader_permit, const bpo::variables_map&) : _schema(std::move(s)) {
+    explicit dumping_consumer(schema_ptr s, reader_permit, const bpo::variables_map& opts) : _schema(std::move(s)) {
         _consumer = std::make_unique<text_dumper>(*_schema);
+        switch (get_output_format_from_options(opts, output_format::text)) {
+            case output_format::text:
+                _consumer = std::make_unique<text_dumper>(*_schema);
+                break;
+            case output_format::json:
+                _consumer = std::make_unique<json_dumper>(*_schema);
+                break;
+        }
     }
     virtual future<> on_start_of_stream() override { return _consumer->on_start_of_stream(); }
     virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override { return _consumer->on_new_sstable(sst); }
@@ -1168,6 +1430,7 @@ const std::vector<option> all_options {
     typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
     typed_option<>("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index"),
     typed_option<std::string>("bucket", "months", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"),
+    typed_option<std::string>("output-format", "json", "the output-format, one of (text, json)"),
 };
 
 const std::vector<operation> operations{
@@ -1184,8 +1447,107 @@ https://docs.scylladb.com/architecture/sstable/.
 It is possible to filter the data to print via the --partitions or
 --partitions-file options. Both expect partition key values in the hexdump
 format.
+
+Supports both a text and JSON output. The text output uses the built-in scylla
+printers, which are also used when logging mutation-related data structures.
+
+The schema of the JSON output is the following:
+
+$ROOT := $NON_MERGED_ROOT | $MERGED_ROOT
+
+$NON_MERGED_ROOT := { "$sstable_path": $SSTABLE, ... } // without --merge
+
+$MERGED_ROOT := { "anonymous": $SSTABLE } // with --merge
+
+$SSTABLE := [$PARTITION, ...]
+
+$PARTITION := {
+    "key": {
+        "token": String,
+        "raw": String, // hexadecimal representation of the raw binary
+        "value": String
+    },
+    "tombstone: $TOMBSTONE, // optional
+    "static_row": $COLUMNS, // optional
+    "clustering_fragments": [
+        $CLUSTERING_ROW | $RANGE_TOMBSTONE_CHANGE,
+        ...
+    ]
+}
+
+$TOMBSTONE := {
+    "timestamp": Int64,
+    "deletion_time": String // YYYY-MM-DD HH:MM:SS
+}
+
+$COLUMNS := {
+    "$column_name": $REGULAR_CELL | $COUNTER_CELL | $COLLECTION,
+    ...
+}
+
+$REGULAR_CELL := $REGULAR_LIVE_CELL | $REGULAR_DEAD_CELL
+
+$REGULAR_LIVE_CELL := {
+    "is_live": true,
+    "timestamp": Int64,
+    "ttl": String, // gc_clock::duration - optional
+    "expiry": String, // YYYY-MM-DD HH:MM:SS - optional
+    "value": String
+}
+
+$REGULAR_DEAD_CELL := {
+    "is_live": false,
+    "timestamp": Int64,
+    "deletion_time": String // YYYY-MM-DD HH:MM:SS - optional
+}
+
+$COUNTER_CELL := {
+    "is_live": true,
+    "timestamp": Int64,
+    "shards": [$COUNTER_SHARD, ...]
+}
+
+$COUNTER_SHARD := {
+    "id": String, // UUID
+    "value": Int64,
+    "clock": Int64
+}
+
+$COLLECTION := {
+    "tombstone": $TOMBSTONE, // optional
+    "cells": {
+        "$key": $REGULAR_CELL,
+        ...
+    }
+}
+
+$CLUSTERING_ROW := {
+    "type": "clustering-row",
+    "key": {
+        "raw": String, // hexadecimal representation of the raw binary
+        "value": String
+    },
+    "tombstone": $TOMBSTONE, // optional
+    "shadowable_tombstone": $TOMBSTONE, // optional
+    "marker": { // optional
+        "timestamp": Int64,
+        "ttl": String, // gc_clock::duration
+        "expiry": String // YYYY-MM-DD HH:MM:SS
+    },
+    "columns": $COLUMNS
+}
+
+$RANGE_TOMBSTONE_CHANGE := {
+    "type": "range-tombstone-change",
+    "key": { // optional
+        "raw": String, // hexadecimal representation of the raw binary
+        "value": String
+    },
+    "weight": Int, // -1 or 1
+    "tombstone": $TOMBSTONE
+}
 )",
-            {"partition", "partitions-file", "merge", "no-skips"},
+            {"partition", "partitions-file", "merge", "no-skips", "output-format"},
             sstable_consumer_operation<dumping_consumer>},
 /* dump-index */
     {"dump-index",
