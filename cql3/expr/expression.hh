@@ -241,6 +241,10 @@ struct constant {
 // Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
 struct tuple_constructor {
     std::vector<expression> elements;
+
+    // Might be nullptr before prepare.
+    // After prepare always holds a valid type, although it might be reversed_type(tuple_type).
+    data_type type;
 };
 
 // Constructs a collection of same-typed elements
@@ -248,12 +252,20 @@ struct collection_constructor {
     enum class style_type { list, set, map };
     style_type style;
     std::vector<expression> elements;
+
+    // Might be nullptr before prepare.
+    // After prepare always holds a valid type, although it might be reversed_type(collection_type).
+    data_type type;
 };
 
 // Constructs an object of a user-defined type
 struct usertype_constructor {
     using elements_map_type = std::unordered_map<column_identifier, nested_expression>;
     elements_map_type elements;
+
+    // Might be nullptr before prepare.
+    // After prepare always holds a valid type, although it might be reversed_type(user_type).
+    data_type type;
 };
 
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted

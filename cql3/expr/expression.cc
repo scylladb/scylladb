@@ -1120,7 +1120,8 @@ expression search_and_replace(const expression& e,
                     return tuple_constructor{
                         boost::copy_range<std::vector<expression>>(
                             tc.elements | boost::adaptors::transformed(recurse)
-                        )
+                        ),
+                        tc.type
                     };
                 },
                 [&] (const collection_constructor& c) -> expression {
@@ -1128,7 +1129,8 @@ expression search_and_replace(const expression& e,
                         c.style,
                         boost::copy_range<std::vector<expression>>(
                             c.elements | boost::adaptors::transformed(recurse)
-                        )
+                        ),
+                        c.type
                     };
                 },
                 [&] (const usertype_constructor& uc) -> expression {
@@ -1136,7 +1138,7 @@ expression search_and_replace(const expression& e,
                     for (auto& [k, v] : uc.elements) {
                         m.emplace(k, recurse(*v));
                     }
-                    return usertype_constructor{std::move(m)};
+                    return usertype_constructor{std::move(m), uc.type};
                 },
                 [&] (const function_call& fc) -> expression {
                     return function_call{

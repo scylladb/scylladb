@@ -460,7 +460,10 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     expression token_expr = token{};
     expression pk1_expr = column_value(&col_pk1);
     expression pk2_expr = column_value(&col_pk1);
-    expression pk1_pk2_expr = tuple_constructor{{expression{column_value{&col_pk1}}, expression{column_value{&col_pk2}}}};
+    data_type ttype = tuple_type_impl::get_instance({int32_type, int32_type});
+    expression pk1_pk2_expr = tuple_constructor{{expression{column_value{&col_pk1}},
+                                                 expression{column_value{&col_pk2}}},
+                                                std::move(ttype)};
 
     big_where.push_back(pk1_restriction);
     big_where.push_back(pk2_restriction);

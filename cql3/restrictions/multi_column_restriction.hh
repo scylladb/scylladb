@@ -59,11 +59,14 @@ inline
 expr::tuple_constructor
 column_definitions_as_tuple_constructor(const std::vector<const column_definition*>& defs) {
     std::vector<expr::expression> columns;
+    std::vector<data_type> column_types;
     columns.reserve(defs.size());
     for (auto& def : defs) {
         columns.push_back(expr::column_value{def});
+        column_types.push_back(def->type);
     }
-    return expr::tuple_constructor{std::move(columns)};
+    data_type ttype = tuple_type_impl::get_instance(std::move(column_types));
+    return expr::tuple_constructor{std::move(columns), std::move(ttype)};
 }
 
 class multi_column_restriction : public clustering_key_restrictions {
