@@ -189,51 +189,69 @@ public:
 };
 
 class dumping_consumer : public sstable_consumer {
+    class text_dumper : public sstable_consumer {
+        const schema& _schema;
+    public:
+        explicit text_dumper(const schema& s) : _schema(s) { }
+        virtual future<> on_start_of_stream() override {
+            std::cout << "{stream_start}" << std::endl;
+            return make_ready_future<>();
+        }
+        virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
+            std::cout << "{sstable_start";
+            if (sst) {
+                std::cout << ": filename " << sst->get_filename();
+            }
+            std::cout << "}" << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(partition_start&& ps) override {
+            std::cout << ps << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(static_row&& sr) override {
+            std::cout << static_row::printer(_schema, sr) << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(clustering_row&& cr) override {
+            std::cout << clustering_row::printer(_schema, cr) << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+            std::cout << rtc << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> consume(partition_end&& pe) override {
+            std::cout << "{partition_end}" << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<stop_iteration> on_end_of_sstable() override {
+            std::cout << "{sstable_end}" << std::endl;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        virtual future<> on_end_of_stream() override {
+            std::cout << "{stream_end}" << std::endl;
+            return make_ready_future<>();
+        }
+    };
+
+private:
     schema_ptr _schema;
+    std::unique_ptr<sstable_consumer> _consumer;
 
 public:
     explicit dumping_consumer(schema_ptr s, reader_permit, const bpo::variables_map&) : _schema(std::move(s)) {
+        _consumer = std::make_unique<text_dumper>(*_schema);
     }
-    virtual future<> on_start_of_stream() override {
-        std::cout << "{stream_start}" << std::endl;
-        return make_ready_future<>();
-    }
-    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
-        std::cout << "{sstable_start";
-        if (sst) {
-            std::cout << ": filename " << sst->get_filename();
-        }
-        std::cout << "}" << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(partition_start&& ps) override {
-        std::cout << ps << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(static_row&& sr) override {
-        std::cout << static_row::printer(*_schema, sr) << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(clustering_row&& cr) override {
-        std::cout << clustering_row::printer(*_schema, cr) << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
-        std::cout << rtc << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> consume(partition_end&& pe) override {
-        std::cout << "{partition_end}" << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<stop_iteration> on_end_of_sstable() override {
-        std::cout << "{sstable_end}" << std::endl;
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-    virtual future<> on_end_of_stream() override {
-        std::cout << "{stream_end}" << std::endl;
-        return make_ready_future<>();
-    }
+    virtual future<> on_start_of_stream() override { return _consumer->on_start_of_stream(); }
+    virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override { return _consumer->on_new_sstable(sst); }
+    virtual future<stop_iteration> consume(partition_start&& ps) override { return _consumer->consume(std::move(ps)); }
+    virtual future<stop_iteration> consume(static_row&& sr) override { return _consumer->consume(std::move(sr)); }
+    virtual future<stop_iteration> consume(clustering_row&& cr) override { return _consumer->consume(std::move(cr)); }
+    virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override { return _consumer->consume(std::move(rtc)); }
+    virtual future<stop_iteration> consume(partition_end&& pe) override { return _consumer->consume(std::move(pe)); }
+    virtual future<stop_iteration> on_end_of_sstable() override { return _consumer->on_end_of_sstable(); }
+    virtual future<> on_end_of_stream() override { return _consumer->on_end_of_stream(); }
 };
 
 class writetime_histogram_collecting_consumer : public sstable_consumer {
