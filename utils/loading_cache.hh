@@ -45,10 +45,66 @@ namespace bi = boost::intrusive;
 
 namespace utils {
 
+enum class loading_cache_reload_enabled { no, yes };
+
+template <typename Tp>
+struct simple_entry_size {
+    size_t operator()(const Tp& val) {
+        return 1;
+    }
+};
+
+/// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
+///
+/// Each cached value if reloading is enabled (\tparam ReloadEnabled == loading_cache_reload_enabled::yes) is reloaded after
+/// the "refresh" time period since it was loaded for the last time.
+///
+/// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
+/// been reloaded even once during the same period.
+///
+/// If "expiration" is set to zero - the caching is going to be disabled and get_XXX(...) is going to call the "loader" callback
+/// every time in order to get the requested value.
+///
+/// \note In order to avoid the eviction of cached entries due to "aging" of the contained value the user has to choose
+/// the "expiration" to be at least ("refresh" + "max load latency"). This way the value is going to stay in the cache and is going to be
+/// read in a non-blocking way as long as it's frequently accessed. Note however that since reloading is an asynchronous
+/// procedure it may get delayed by other running task. Therefore choosing the "expiration" too close to the ("refresh" + "max load latency")
+/// value one risks to have his/her cache values evicted when the system is heavily loaded.
+///
+/// The cache is also limited in size and if adding the next value is going
+/// to exceed the cache size limit the least recently used value(s) is(are) going to be evicted until the size of the cache
+/// becomes such that adding the new value is not going to break the size limit. If the new entry's size is greater than
+/// the cache size then the get_XXX(...) method is going to return a future with the loading_cache::entry_is_too_big exception.
+///
+/// The size of the cache is defined as a sum of sizes of all cached entries.
+/// The size of each entry is defined by the value returned by the \tparam EntrySize predicate applied on it.
+///
+/// The get(key) or get_ptr(key) methods ensures that the "loader" callback is called only once for each cached entry regardless of how many
+/// callers are calling for the get_XXX(key) for the same "key" at the same time. Only after the value is evicted from the cache
+/// it's going to be "loaded" in the context of get_XXX(key). As long as the value is cached get_XXX(key) is going to return the
+/// cached value immediately and reload it in the background every "refresh" time period as described above.
+///
+/// \tparam Key type of the cache key
+/// \tparam Tp type of the cached value
+/// \tparam ReloadEnabled if loading_cache_reload_enabled::yes allow reloading the values otherwise don't reload
+/// \tparam EntrySize predicate to calculate the entry size
+/// \tparam Hash hash function
+/// \tparam EqualPred equality predicate
+/// \tparam LoadingSharedValuesStats statistics incrementing class (see utils::loading_shared_values)
+/// \tparam Alloc elements allocator
+template<typename Key,
+         typename Tp,
+         loading_cache_reload_enabled ReloadEnabled = loading_cache_reload_enabled::no,
+         typename EntrySize = simple_entry_size<Tp>,
+         typename Hash = std::hash<Key>,
+         typename EqualPred = std::equal_to<Key>,
+         typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
+         typename Alloc = std::pmr::polymorphic_allocator<>>
+class loading_cache {
+
 using loading_cache_clock_type = seastar::lowres_clock;
 using safe_link_list_hook = bi::list_base_hook<bi::link_mode<bi::safe_link>>;
 
-template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
 class timestamped_val {
 public:
     using value_type = Tp;
@@ -122,161 +178,17 @@ private:
     }
 };
 
-template <typename Tp>
-struct simple_entry_size {
-    size_t operator()(const Tp& val) {
-        return 1;
-    }
-};
-
-template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
-class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::value_ptr {
 private:
-    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
-    using loading_values_type = typename ts_value_type::loading_values_type;
-
-public:
+    using loading_values_type = typename timestamped_val::loading_values_type;
     using timestamped_val_ptr = typename loading_values_type::entry_ptr;
-    using value_type = Tp;
-
-private:
-    timestamped_val_ptr _ts_val_ptr;
-
-public:
-    value_ptr(timestamped_val_ptr ts_val_ptr) : _ts_val_ptr(std::move(ts_val_ptr)) {
-        if (_ts_val_ptr) {
-            _ts_val_ptr->touch();
-        }
-    }
-    value_ptr(std::nullptr_t) noexcept : _ts_val_ptr() {}
-    bool operator==(const value_ptr& x) const { return _ts_val_ptr == x._ts_val_ptr; }
-    bool operator!=(const value_ptr& x) const { return !operator==(x); }
-    explicit operator bool() const noexcept { return bool(_ts_val_ptr); }
-    value_type& operator*() const noexcept { return _ts_val_ptr->value(); }
-    value_type* operator->() const noexcept { return &_ts_val_ptr->value(); }
-
-    friend std::ostream& operator<<(std::ostream& os, const value_ptr& vp) {
-        return os << vp._ts_val_ptr;
-    }
-};
-
-/// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
-template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
-class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public safe_link_list_hook {
-private:
-    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
-    using loading_values_type = typename ts_value_type::loading_values_type;
-
-public:
-    using lru_list_type = bi::list<lru_entry>;
-    using timestamped_val_ptr = typename loading_values_type::entry_ptr;
-
-private:
-    timestamped_val_ptr _ts_val_ptr;
-    lru_list_type& _lru_list;
-    size_t& _cache_size;
-
-public:
-    lru_entry(timestamped_val_ptr ts_val, lru_list_type& lru_list, size_t& cache_size)
-        : _ts_val_ptr(std::move(ts_val))
-        , _lru_list(lru_list)
-        , _cache_size(cache_size)
-    {
-        _ts_val_ptr->set_anchor_back_reference(this);
-        _cache_size += _ts_val_ptr->size();
-    }
-
-    ~lru_entry() {
-        if (safe_link_list_hook::is_linked()) {
-            _lru_list.erase(_lru_list.iterator_to(*this));
-        }
-        _cache_size -= _ts_val_ptr->size();
-        _ts_val_ptr->set_anchor_back_reference(nullptr);
-    }
-
-    size_t& cache_size() noexcept {
-        return _cache_size;
-    }
-
-    /// Set this item as the most recently used item.
-    /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
-    void touch() noexcept {
-        if (safe_link_list_hook::is_linked()) {
-            _lru_list.erase(_lru_list.iterator_to(*this));
-        }
-        _lru_list.push_front(*this);
-    }
-
-    const Key& key() const noexcept {
-        return loading_values_type::to_key(_ts_val_ptr);
-    }
-
-    timestamped_val& timestamped_value() noexcept { return *_ts_val_ptr; }
-    const timestamped_val& timestamped_value() const noexcept { return *_ts_val_ptr; }
-    timestamped_val_ptr timestamped_value_ptr() noexcept { return _ts_val_ptr; }
-};
-
-enum class loading_cache_reload_enabled { no, yes };
-
-/// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
-///
-/// Each cached value if reloading is enabled (\tparam ReloadEnabled == loading_cache_reload_enabled::yes) is reloaded after
-/// the "refresh" time period since it was loaded for the last time.
-///
-/// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
-/// been reloaded even once during the same period.
-///
-/// If "expiration" is set to zero - the caching is going to be disabled and get_XXX(...) is going to call the "loader" callback
-/// every time in order to get the requested value.
-///
-/// \note In order to avoid the eviction of cached entries due to "aging" of the contained value the user has to choose
-/// the "expiration" to be at least ("refresh" + "max load latency"). This way the value is going to stay in the cache and is going to be
-/// read in a non-blocking way as long as it's frequently accessed. Note however that since reloading is an asynchronous
-/// procedure it may get delayed by other running task. Therefore choosing the "expiration" too close to the ("refresh" + "max load latency")
-/// value one risks to have his/her cache values evicted when the system is heavily loaded.
-///
-/// The cache is also limited in size and if adding the next value is going
-/// to exceed the cache size limit the least recently used value(s) is(are) going to be evicted until the size of the cache
-/// becomes such that adding the new value is not going to break the size limit. If the new entry's size is greater than
-/// the cache size then the get_XXX(...) method is going to return a future with the loading_cache::entry_is_too_big exception.
-///
-/// The size of the cache is defined as a sum of sizes of all cached entries.
-/// The size of each entry is defined by the value returned by the \tparam EntrySize predicate applied on it.
-///
-/// The get(key) or get_ptr(key) methods ensures that the "loader" callback is called only once for each cached entry regardless of how many
-/// callers are calling for the get_XXX(key) for the same "key" at the same time. Only after the value is evicted from the cache
-/// it's going to be "loaded" in the context of get_XXX(key). As long as the value is cached get_XXX(key) is going to return the
-/// cached value immediately and reload it in the background every "refresh" time period as described above.
-///
-/// \tparam Key type of the cache key
-/// \tparam Tp type of the cached value
-/// \tparam ReloadEnabled if loading_cache_reload_enabled::yes allow reloading the values otherwise don't reload
-/// \tparam EntrySize predicate to calculate the entry size
-/// \tparam Hash hash function
-/// \tparam EqualPred equality predicate
-/// \tparam LoadingSharedValuesStats statistics incrementing class (see utils::loading_shared_values)
-/// \tparam Alloc elements allocator
-template<typename Key,
-         typename Tp,
-         loading_cache_reload_enabled ReloadEnabled = loading_cache_reload_enabled::no,
-         typename EntrySize = simple_entry_size<Tp>,
-         typename Hash = std::hash<Key>,
-         typename EqualPred = std::equal_to<Key>,
-         typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
-         typename Alloc = std::pmr::polymorphic_allocator<>>
-class loading_cache {
-private:
-    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
-    using loading_values_type = typename ts_value_type::loading_values_type;
-    using timestamped_val_ptr = typename loading_values_type::entry_ptr;
-    using ts_value_lru_entry = typename ts_value_type::lru_entry;
+    using ts_value_lru_entry = typename timestamped_val::lru_entry;
     using lru_list_type = typename ts_value_lru_entry::lru_list_type;
     using list_iterator = typename lru_list_type::iterator;
 
 public:
     using value_type = Tp;
     using key_type = Key;
-    using value_ptr = typename ts_value_type::value_ptr;
+    using value_ptr = typename timestamped_val::value_ptr;
 
     class entry_is_too_big : public std::exception {};
 
@@ -339,7 +251,7 @@ public:
 
         return _loading_values.get_or_load(k, [this, load = std::forward<LoadFunc>(load)] (const Key& k) mutable {
             return load(k).then([this] (value_type val) {
-                return ts_value_type(std::move(val));
+                return timestamped_val(std::move(val));
             });
         }).then([this, k] (timestamped_val_ptr ts_val_ptr) {
             // check again since it could have already been inserted and initialized
@@ -511,7 +423,7 @@ private:
         _lru_list.remove_and_dispose_if([now, this] (const ts_value_lru_entry& lru_entry) {
             using namespace std::chrono;
             // An entry should be discarded if it hasn't been reloaded for too long or nobody cares about it anymore
-            const ts_value_type& v = lru_entry.timestamped_value();
+            const timestamped_val& v = lru_entry.timestamped_value();
             auto since_last_read = now - v.last_read();
             auto since_loaded = now - v.loaded();
             if (_expiry < since_last_read || (ReloadEnabled == loading_cache_reload_enabled::yes && _expiry < since_loaded)) {
@@ -591,6 +503,91 @@ private:
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
     seastar::gate _timer_reads_gate;
+};
+
+template<typename Key, typename Tp, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
+class loading_cache<Key, Tp, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::value_ptr {
+private:
+    using loading_values_type = typename timestamped_val::loading_values_type;
+
+public:
+    using timestamped_val_ptr = typename loading_values_type::entry_ptr;
+    using value_type = Tp;
+
+private:
+    timestamped_val_ptr _ts_val_ptr;
+
+public:
+    value_ptr(timestamped_val_ptr ts_val_ptr) : _ts_val_ptr(std::move(ts_val_ptr)) {
+        if (_ts_val_ptr) {
+            _ts_val_ptr->touch();
+        }
+    }
+    value_ptr(std::nullptr_t) noexcept : _ts_val_ptr() {}
+    bool operator==(const value_ptr& x) const { return _ts_val_ptr == x._ts_val_ptr; }
+    bool operator!=(const value_ptr& x) const { return !operator==(x); }
+    explicit operator bool() const noexcept { return bool(_ts_val_ptr); }
+    value_type& operator*() const noexcept { return _ts_val_ptr->value(); }
+    value_type* operator->() const noexcept { return &_ts_val_ptr->value(); }
+
+    friend std::ostream& operator<<(std::ostream& os, const value_ptr& vp) {
+        return os << vp._ts_val_ptr;
+    }
+};
+
+/// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
+template<typename Key, typename Tp, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
+class loading_cache<Key, Tp, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
+private:
+    using loading_values_type = typename timestamped_val::loading_values_type;
+
+public:
+    using lru_list_type = bi::list<lru_entry>;
+    using timestamped_val_ptr = typename loading_values_type::entry_ptr;
+
+private:
+    timestamped_val_ptr _ts_val_ptr;
+    lru_list_type& _lru_list;
+    size_t& _cache_size;
+
+public:
+    lru_entry(timestamped_val_ptr ts_val, lru_list_type& lru_list, size_t& cache_size)
+        : _ts_val_ptr(std::move(ts_val))
+        , _lru_list(lru_list)
+        , _cache_size(cache_size)
+    {
+        _ts_val_ptr->set_anchor_back_reference(this);
+        _cache_size += _ts_val_ptr->size();
+    }
+
+    ~lru_entry() {
+        if (safe_link_list_hook::is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(*this));
+        }
+        _cache_size -= _ts_val_ptr->size();
+        _ts_val_ptr->set_anchor_back_reference(nullptr);
+    }
+
+    size_t& cache_size() noexcept {
+        return _cache_size;
+    }
+
+    /// Set this item as the most recently used item.
+    /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
+    void touch() noexcept {
+        if (safe_link_list_hook::is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(*this));
+        }
+        _lru_list.push_front(*this);
+    }
+
+    const Key& key() const noexcept {
+        return loading_values_type::to_key(_ts_val_ptr);
+    }
+
+    timestamped_val& timestamped_value() noexcept { return *_ts_val_ptr; }
+    const timestamped_val& timestamped_value() const noexcept { return *_ts_val_ptr; }
+    timestamped_val_ptr timestamped_value_ptr() noexcept { return _ts_val_ptr; }
 };
 
 }
