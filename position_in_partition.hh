@@ -60,6 +60,18 @@ enum class bound_weight : int8_t {
 };
 
 inline
+bound_weight reversed(bound_weight w) {
+    switch (w) {
+        case bound_weight::equal:
+            return w;
+        case bound_weight::before_all_prefixed:
+            return bound_weight::after_all_prefixed;
+        case bound_weight::after_all_prefixed:
+            return bound_weight::before_all_prefixed;
+    }
+}
+
+inline
 bound_weight position_weight(bound_kind k) {
     switch (k) {
     case bound_kind::excl_end:
@@ -212,6 +224,11 @@ public:
         printer(const schema& schema, const position_in_partition_view& pipv) : _schema(schema), _pipv(pipv) {}
         friend std::ostream& operator<<(std::ostream& os, printer p);
     };
+
+    // Create a position which is the same as this one but governed by a schema with reversed clustering key order.
+    position_in_partition_view reversed() const {
+        return position_in_partition_view(_type, ::reversed(_bound_weight), _ck);
+    }
 
     friend std::ostream& operator<<(std::ostream& os, printer p);
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
@@ -522,6 +539,16 @@ public:
         }
     };
     friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
+
+    // Create a position which is the same as this one but governed by a schema with reversed clustering key order.
+    position_in_partition reversed() const& {
+        return position_in_partition(_type, ::reversed(_bound_weight), _ck);
+    }
+
+    // Create a position which is the same as this one but governed by a schema with reversed clustering key order.
+    position_in_partition reversed() && {
+        return position_in_partition(_type, ::reversed(_bound_weight), std::move(_ck));
+    }
 };
 
 inline
