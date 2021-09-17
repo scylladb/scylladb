@@ -702,7 +702,7 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server(service::bind_messaging_port(false)).get();
+            ss.local().init_server().get();
             ss.local().join_cluster().get();
 
             auth::permissions_cache_config perm_cache_config;

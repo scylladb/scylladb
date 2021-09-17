@@ -267,8 +267,7 @@ future<> storage_service::snitch_reconfigured() {
 void storage_service::prepare_to_join(
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
-        std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-        bind_messaging_port do_bind) {
+        std::unordered_map<gms::inet_address, sstring> loaded_peer_features) {
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (db::system_keyspace::was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
@@ -292,7 +291,7 @@ void storage_service::prepare_to_join(
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features, do_bind).get0();
+        _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
         auto replace_address = _db.local().get_replace_address();
         replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
@@ -302,11 +301,11 @@ void storage_service::prepare_to_join(
             get_broadcast_address(), *replace_address);
         tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address).get();
     } else if (should_bootstrap()) {
-        check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features, do_bind).get();
+        check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features).get();
     } else {
         auto local_features = _feature_service.known_feature_set();
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
-        _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).get();
+        _gossiper.do_shadow_round(initial_contact_nodes).get();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         _gossiper.check_snitch_name_matches();
         _gossiper.reset_endpoint_state_map().get();
@@ -390,7 +389,7 @@ void storage_service::prepare_to_join(
 
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
-    _gossiper.start_gossiping(generation_number, app_states, gms::bind_messaging_port(bool(do_bind)), advertise).get();
+    _gossiper.start_gossiping(generation_number, app_states, advertise).get();
 
     install_schema_version_change_listener();
 
@@ -1371,10 +1370,10 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(bind_messaging_port do_bind) {
+future<> storage_service::init_server() {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, do_bind] {
+    return seastar::async([this] {
         _initialized = true;
 
         std::unordered_set<inet_address> loaded_endpoints;
@@ -1425,7 +1424,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), do_bind);
+        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features));
     });
 }
 
@@ -1488,16 +1487,16 @@ future<> storage_service::stop() {
     });
 }
 
-future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
+future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     slogger.debug("Starting shadow gossip round to check for endpoint collision");
 
-    return seastar::async([this, initial_contact_nodes, loaded_peer_features, do_bind] {
+    return seastar::async([this, initial_contact_nodes, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
         auto local_features = _feature_service.known_feature_set();
         do {
             slogger.info("Checking remote features with gossip");
-            _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).get();
+            _gossiper.do_shadow_round(initial_contact_nodes).get();
             _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
             _gossiper.check_snitch_name_matches();
             auto addr = get_broadcast_address();
@@ -1552,7 +1551,7 @@ void storage_service::remove_endpoint(inet_address endpoint) {
 }
 
 future<storage_service::replacement_info>
-storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
+storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!_db.local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
@@ -1568,7 +1567,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // make magic happen
     slogger.info("Checking remote features with gossip");
-    return _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).then([this, loaded_peer_features, replace_address] {
+    return _gossiper.do_shadow_round(initial_contact_nodes).then([this, loaded_peer_features, replace_address] {
         auto local_features = _feature_service.known_feature_set();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 

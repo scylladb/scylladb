@@ -82,9 +82,6 @@ class gossip_get_endpoint_states_response;
 
 class feature_service;
 
-struct bind_messaging_port_tag {};
-using bind_messaging_port = bool_class<bind_messaging_port_tag>;
-
 using advertise_myself = bool_class<class advertise_myself_tag>;
 
 struct syn_msg_pending {
@@ -511,13 +508,13 @@ public:
      * replacing node being talked to is pretty high.
      */
     future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
-            bind_messaging_port do_bind = bind_messaging_port::yes, gms::advertise_myself advertise = gms::advertise_myself::yes);
+            gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:
     /**
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      */
-    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes = {}, bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes = {});
 
 private:
     void build_seeds_list();

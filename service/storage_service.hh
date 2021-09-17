@@ -109,9 +109,6 @@ class migration_manager;
 
 enum class disk_error { regular, commit };
 
-struct bind_messaging_port_tag {};
-using bind_messaging_port = bool_class<bind_messaging_port_tag>;
-
 struct storage_service_config {
     size_t available_memory;
 };
@@ -371,7 +368,7 @@ private:
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::unordered_set<token>;
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
-            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
+            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
     void run_replace_ops();
     void run_bootstrap_ops();
@@ -383,7 +380,7 @@ public:
     future<bool> is_initialized();
 
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
-            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
+            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
     /*!
      * \brief Init the messaging service part of the service.
@@ -416,7 +413,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> init_server();
 
     future<> join_cluster();
 
@@ -432,8 +429,7 @@ private:
     void prepare_to_join(
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
-            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-            bind_messaging_port do_bind = bind_messaging_port::yes);
+            std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
     void join_token_ring(int delay);
     void maybe_start_sys_dist_ks();
 public:

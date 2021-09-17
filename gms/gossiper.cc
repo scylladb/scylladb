@@ -1834,8 +1834,8 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind, gms::advertise_myself advertise) {
-    return container().invoke_on_all([do_bind, advertise] (gossiper& g) {
+future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
+    return container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
@@ -1893,8 +1893,8 @@ future<> gossiper::advertise_to_nodes(std::unordered_map<gms::inet_address, int3
     });
 }
 
-future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
-    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
+future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) {
+    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes)] () mutable {
         nodes.erase(get_broadcast_address());
         gossip_get_endpoint_states_request request{{
             gms::application_state::STATUS,
