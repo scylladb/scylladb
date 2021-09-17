@@ -1340,7 +1340,7 @@ future<> storage_service::stop_transport() {
             shutdown_client_servers();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
-            gms::stop_gossiping(_gossiper.container()).get();
+            _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
             slogger.info("Stop transport: stop_gossiping done");
 
             do_stop_ms().get();

@@ -2199,6 +2199,12 @@ future<> gossiper::start() {
     return make_ready_future();
 }
 
+future<> gossiper::shutdown() {
+    if (this_shard_id() == 0) {
+        co_await do_stop_gossiping();
+    }
+}
+
 future<> gossiper::stop() {
     return make_ready_future();
 }
