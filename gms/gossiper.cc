@@ -464,15 +464,6 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     return make_ready_future<gossip_get_endpoint_states_response>(gossip_get_endpoint_states_response{std::move(map)});
 }
 
-future<> gossiper::init_messaging(bind_messaging_port do_bind) {
-    if (!_ms_registered) {
-        return make_ready_future<>();
-    }
-
-    _ms_registered = true;
-    return make_ready_future<>();
-}
-
 void gossiper::init_messaging_service_handler() {
     _messaging.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = netw::messaging_service::get_source(cinfo);
@@ -522,11 +513,6 @@ void gossiper::init_messaging_service_handler() {
             return gossiper.handle_get_endpoint_states_msg(std::move(request));
         });
     });
-}
-
-future<> gossiper::uninit_messaging() {
-    _ms_registered = false;
-    return make_ready_future<>();
 }
 
 future<> gossiper::uninit_messaging_service_handler() {
@@ -1849,13 +1835,10 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
 }
 
 future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind, gms::advertise_myself advertise) {
-    // Although gossiper runs on cpu0 only, we need to listen incoming gossip
-    // message on all cpus and forard them to cpu0 to process.
     return container().invoke_on_all([do_bind, advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
-        return g.init_messaging(do_bind);
     }).then([this, generation_nbr, preload_local_states] () mutable {
         build_seeds_list();
         if (_cfg.force_gossip_generation() > 0) {
@@ -1912,9 +1895,6 @@ future<> gossiper::advertise_to_nodes(std::unordered_map<gms::inet_address, int3
 
 future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
     return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
-        container().invoke_on_all([do_bind] (gossiper& g) {
-            return g.init_messaging(do_bind);
-        }).get();
         nodes.erase(get_broadcast_address());
         gossip_get_endpoint_states_request request{{
             gms::application_state::STATUS,
@@ -2135,11 +2115,6 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
 future<> gossiper::do_stop_gossiping() {
     if (!is_enabled()) {
         logger.info("gossip is already stopped");
-        // Verbs might have been registered by do_shadow_round(), but
-        // gossiper itself was not enabled after it...
-        if (_ms_registered) {
-            return container().invoke_on_all(&gossiper::uninit_messaging);
-        }
         return make_ready_future<>();
     }
     return seastar::async([this, g = this->shared_from_this()] {
@@ -2175,12 +2150,7 @@ future<> gossiper::do_stop_gossiping() {
         }).get();
         _scheduled_gossip_task.cancel();
         // Take the semaphore makes sure existing gossip loop is finished
-        seastar::with_semaphore(_callback_running, 1, [this] {
-            logger.info("Disable and wait for gossip loop finished");
-            return container().invoke_on_all([] (gossiper& g) {
-                return g.uninit_messaging();
-            });
-        }).get();
+        get_units(_callback_running, 1).get0();
         container().invoke_on_all([] (auto& g) {
             return std::move(g._failure_detector_loop_done);
         }).get();

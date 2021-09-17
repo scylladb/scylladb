@@ -123,8 +123,6 @@ private:
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
 
-    future<> init_messaging(bind_messaging_port do_bind = bind_messaging_port::yes);
-    future<> uninit_messaging();
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
@@ -590,7 +588,6 @@ private:
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
-    bool _ms_registered = false;
     bool _gossip_settled = false;
 
     class msg_proc_guard;
