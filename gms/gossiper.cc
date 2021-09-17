@@ -470,10 +470,6 @@ future<> gossiper::init_messaging(bind_messaging_port do_bind) {
     }
 
     _ms_registered = true;
-    if (do_bind) {
-        return _messaging.start_listen();
-    }
-
     return make_ready_future<>();
 }
 

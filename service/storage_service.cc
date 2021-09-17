@@ -398,11 +398,6 @@ void storage_service::prepare_to_join(
     gossip_sharder().get();
 
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-
-    // Wait for gossip to settle so that the fetures will be enabled
-    if (do_bind) {
-        _gossiper.wait_for_gossip_to_settle().get();
-    }
 }
 
 void storage_service::maybe_start_sys_dist_ks() {

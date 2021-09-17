@@ -1173,9 +1173,14 @@ int main(int ac, char** av) {
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
+                return messaging.invoke_on_all(&netw::messaging_service::start_listen);
+            }).get();
+
+            with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().init_server();
             }).get();
 
+            gossiper.local().wait_for_gossip_to_settle().get();
             sst_format_selector.sync();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
