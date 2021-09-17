@@ -1806,6 +1806,8 @@ future<> storage_service::start_gossiping() {
         return seastar::async([&ss] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
+                ss._gossiper.container().invoke_on_all(&gms::gossiper::start).get();
+                auto undo = defer([&ss] { ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).get(); });
                 auto cdc_gen_ts = db::system_keyspace::get_cdc_generation_id().get0();
                 if (!cdc_gen_ts) {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
@@ -1817,6 +1819,7 @@ future<> storage_service::start_gossiping() {
                 ss._gossiper.start_gossiping(utils::get_generation_number()).then([&ss] {
                     ss._initialized = true;
                 }).get();
+                undo.cancel();
             }
         });
     });

@@ -470,8 +470,6 @@ future<> gossiper::init_messaging(bind_messaging_port do_bind) {
     }
 
     _ms_registered = true;
-    init_messaging_service_handler();
-    // Start listening messaging_service after gossip message handlers are registered
     if (do_bind) {
         return _messaging.start_listen();
     }
@@ -531,9 +529,8 @@ void gossiper::init_messaging_service_handler() {
 }
 
 future<> gossiper::uninit_messaging() {
-    return uninit_messaging_service_handler().then([this] {
-        _ms_registered = false;
-    });
+    _ms_registered = false;
+    return make_ready_future<>();
 }
 
 future<> gossiper::uninit_messaging_service_handler() {
@@ -2196,6 +2193,7 @@ future<> gossiper::do_stop_gossiping() {
 }
 
 future<> gossiper::start() {
+    init_messaging_service_handler();
     return make_ready_future();
 }
 
@@ -2207,6 +2205,7 @@ future<> gossiper::shutdown() {
 
 future<> gossiper::stop() {
     co_await shutdown();
+    co_await uninit_messaging_service_handler();
 }
 
 bool gossiper::is_enabled() const {
