@@ -840,6 +840,7 @@ int main(int ac, char** av) {
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
+            gcfg.seeds = get_seeds_from_db_config(*cfg);
             gcfg.cluster_name = cfg->cluster_name();
             if (gcfg.cluster_name.empty()) {
                 gcfg.cluster_name = "Test Cluster";
@@ -920,8 +921,6 @@ int main(int ac, char** av) {
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             distributed_loader::init_system_keyspace(db, ss).get();
-
-            gossiper.local().set_seeds(get_seeds_from_db_config(*cfg));
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);

@@ -94,11 +94,7 @@ const sstring& gossiper::get_partitioner_name() const noexcept {
 }
 
 const std::set<inet_address>& gossiper::get_seeds() const noexcept {
-    return _seeds_from_config;
-}
-
-void gossiper::set_seeds(std::set<inet_address> seeds) {
-    _seeds_from_config = std::move(seeds);
+    return _gcfg.seeds;
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
@@ -1003,7 +999,7 @@ void gossiper::check_seen_seeds() {
     });
     logger.info("Known endpoints={}, current_seeds={}, seeds_from_config={}, seen_any_seed={}",
         boost::copy_range<std::list<inet_address>>(endpoint_state_map | boost::adaptors::map_keys),
-        _seeds, _seeds_from_config, seen);
+        _seeds, _gcfg.seeds, seen);
     if (!seen) {
         dump_endpoint_state_map();
         throw std::runtime_error("Unable to contact any seeds!");

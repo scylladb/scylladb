@@ -545,13 +545,12 @@ public:
 
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
+            gcfg.seeds = std::move(seeds);
             gossiper.start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(ms), std::ref(*cfg), std::move(gcfg)).get();
             auto stop_ms_fd_gossiper = defer([&gossiper] {
                 gossiper.stop().get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            gossiper.local().set_seeds(std::move(seeds));
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;

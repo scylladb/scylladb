@@ -97,6 +97,7 @@ struct ack_msg_pending {
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
+    std::set<inet_address> seeds;
 };
 
 /**
@@ -135,7 +136,6 @@ private:
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
-    std::set<inet_address> _seeds_from_config;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
@@ -156,7 +156,6 @@ public:
         return utils::fb_utilities::get_broadcast_address();
     }
     const std::set<inet_address>& get_seeds() const noexcept;
-    void set_seeds(std::set<inet_address> _seeds);
 
     netw::messaging_service& get_local_messaging() const noexcept { return _messaging; }
 public:
