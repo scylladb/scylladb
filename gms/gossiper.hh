@@ -123,7 +123,9 @@ private:
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
 
-    future<> init_messaging_service_handler(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> init_messaging(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> uninit_messaging();
+    void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
