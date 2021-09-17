@@ -34,8 +34,7 @@ logging::logger startlog("init");
 void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg
                 , sstring listen_address_in
-                , db::seed_provider_type seed_provider
-                , sstring cluster_name) {
+                , db::seed_provider_type seed_provider) {
     auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     const auto listen = gms::inet_address::lookup(listen_address_in, family).get0();
@@ -72,12 +71,6 @@ void init_gossiper(sharded<gms::gossiper>& gossiper
         throw bad_configuration_error();
     }
     gossiper.local().set_seeds(seeds);
-    // Do it in the background.
-    (void)gossiper.invoke_on_all([cluster_name](gms::gossiper& g) {
-        g.set_cluster_name(cluster_name);
-    }).handle_exception([] (std::exception_ptr e) {
-        startlog.error("Unexpected exception while setting cluster name: {}", e);
-    });
 }
 
 

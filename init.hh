@@ -48,8 +48,7 @@ class bad_configuration_error : public std::exception {};
 void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg
                 , sstring listen_address
-                , db::seed_provider_type seed_provider
-                , sstring cluster_name = "Test Cluster");
+                , db::seed_provider_type seed_provider);
 
 /**
  * Very simplistic config registry. Allows hooking in a config object

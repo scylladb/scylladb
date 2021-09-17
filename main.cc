@@ -840,6 +840,12 @@ int main(int ac, char** av) {
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
+            gcfg.cluster_name = cfg->cluster_name();
+            if (gcfg.cluster_name.empty()) {
+                gcfg.cluster_name = "Test Cluster";
+                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
+            }
+
             auto& gossiper = gms::get_gossiper();
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
@@ -916,13 +922,7 @@ int main(int ac, char** av) {
             distributed_loader::init_system_keyspace(db, ss).get();
 
             auto seed_provider= cfg->seed_provider();
-            sstring cluster_name = cfg->cluster_name();
-            if (cluster_name.empty()) {
-                cluster_name = "Test Cluster";
-                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
-            }
-
-            init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
+            init_gossiper(gossiper, *cfg, listen_address, seed_provider);
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);

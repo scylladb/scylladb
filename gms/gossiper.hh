@@ -99,6 +99,7 @@ struct ack_msg_pending {
 
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
+    sstring cluster_name;
 };
 
 /**
@@ -138,7 +139,6 @@ private:
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
-    sstring _cluster_name;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
@@ -158,7 +158,6 @@ public:
     inet_address get_broadcast_address() const noexcept {
         return utils::fb_utilities::get_broadcast_address();
     }
-    void set_cluster_name(sstring name);
     const std::set<inet_address>& get_seeds() const noexcept;
     void set_seeds(std::set<inet_address> _seeds);
 
@@ -248,7 +247,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg = gossip_config());
+    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg);
 
     void check_seen_seeds();
 

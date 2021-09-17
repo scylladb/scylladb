@@ -83,7 +83,9 @@ int main(int ac, char ** av) {
             token_metadata.start().get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
             messaging.start(listen).get();
-            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
+            gms::gossip_config gcfg;
+            gcfg.cluster_name = "Test Cluster";
+            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::move(gcfg)).get();
 
             auto& server = messaging.local();
             auto port = server.port();
@@ -97,7 +99,6 @@ int main(int ac, char ** av) {
             std::cout << "Start gossiper service ...\n";
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(std::move(seeds));
-            gossiper.set_cluster_name("Test Cluster");
 
             std::map<gms::application_state, gms::versioned_value> app_states = {
                 { gms::application_state::LOAD, gms::versioned_value::load(0.5) },
