@@ -1304,6 +1304,10 @@ constant evaluate(term* term_ptr, const query_options& options) {
         return constant::make_null();
     }
 
+    if (dynamic_cast<abstract_marker*>(term_ptr) != nullptr) {
+        return evaluate(term_ptr->to_expression(), options);
+    }
+
     ::shared_ptr<terminal> bound = term_ptr->bind(options);
     if (bound.get() == nullptr) {
         return constant::make_null();
@@ -1411,8 +1415,153 @@ constant evaluate(const expression& e, const query_options& options) {
     }, e);
 }
 
+// Serializes a map using the internal cql serialization format
+// Takes a range of pair<managed_bytes, managed_bytes>
+template <std::ranges::range Range>
+requires std::convertible_to<std::ranges::range_value_t<Range>, std::pair<const managed_bytes, managed_bytes>>
+static managed_bytes serialize_map(const Range& map_range) {
+    size_t serialized_len = 4;
+    size_t map_size = 0;
+    for (const std::pair<managed_bytes, managed_bytes>& elem : map_range) {
+        serialized_len += 4 + elem.first.size() + 4 + elem.second.size();
+        map_size += 1;
+    }
+
+    managed_bytes result(managed_bytes::initialized_later(), serialized_len);
+    managed_bytes_mutable_view out(result);
+
+    write_collection_size(out, map_size, cql_serialization_format::internal());
+    for (const std::pair<managed_bytes, managed_bytes>& elem : map_range) {
+        write_collection_value(out, cql_serialization_format::internal(), elem.first);
+        write_collection_value(out, cql_serialization_format::internal(), elem.second);
+    }
+
+    return result;
+}
+
+// Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
+template <FragmentedView View>
+static managed_bytes reserialize_value(View value_bytes,
+                                       const abstract_type& type,
+                                       const cql_serialization_format& sf) {
+    if (type.is_list()) {
+        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes, sf);
+
+        const abstract_type& element_type = dynamic_cast<const list_type_impl&>(type).get_elements_type()->without_reversed();
+        if (element_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (managed_bytes& element : elements) {
+                element = reserialize_value(managed_bytes_view(element), element_type, sf);
+            }
+        }
+
+        return collection_type_impl::pack_fragmented(
+            elements.begin(),
+            elements.end(),
+            elements.size(), cql_serialization_format::internal()
+        );
+    }
+
+    if (type.is_set()) {
+        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes, sf);
+
+        const abstract_type& element_type = dynamic_cast<const set_type_impl&>(type).get_elements_type()->without_reversed();
+        if (element_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (managed_bytes& element : elements) {
+                element = reserialize_value(managed_bytes_view(element), element_type, sf);
+            }
+        }
+
+        std::set<managed_bytes, serialized_compare> values_set(element_type.as_less_comparator());
+        for (managed_bytes& element : elements) {
+            values_set.emplace(std::move(element));
+        }
+
+        return collection_type_impl::pack_fragmented(
+            values_set.begin(),
+            values_set.end(),
+            values_set.size(), cql_serialization_format::internal()
+        );
+    }
+
+    if (type.is_map()) {
+        std::vector<std::pair<managed_bytes, managed_bytes>> elements = partially_deserialize_map(value_bytes, sf);
+
+        const map_type_impl mapt = dynamic_cast<const map_type_impl&>(type);
+        const abstract_type& key_type = mapt.get_keys_type()->without_reversed();
+        const abstract_type& value_type = mapt.get_values_type()->without_reversed();
+
+        if (key_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (std::pair<managed_bytes, managed_bytes>& element : elements) {
+                element.first = reserialize_value(managed_bytes_view(element.first), key_type, sf);
+            }
+        }
+
+        if (value_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (std::pair<managed_bytes, managed_bytes>& element : elements) {
+                element.second = reserialize_value(managed_bytes_view(element.second), value_type, sf);
+            }
+        }
+
+        std::map<managed_bytes, managed_bytes, serialized_compare> values_map(key_type.as_less_comparator());
+        for (std::pair<managed_bytes, managed_bytes>& element : elements) {
+            values_map.emplace(std::move(element));
+        }
+
+       return serialize_map(values_map);
+    }
+
+    if (type.is_tuple() || type.is_user_type()) {
+        const tuple_type_impl& ttype = dynamic_cast<const tuple_type_impl&>(type);
+        std::vector<managed_bytes_opt> elements = ttype.split_fragmented(value_bytes);
+
+        for (std::size_t i = 0; i < elements.size(); i++) {
+            const abstract_type& element_type = ttype.all_types().at(i)->without_reversed();
+            if (elements[i].has_value() && element_type.bound_value_needs_to_be_reserialized(sf)) {
+                elements[i] = reserialize_value(managed_bytes_view(*elements[i]), element_type, sf);
+            }
+        }
+
+        return tuple_type_impl::build_value_fragmented(std::move(elements));
+    }
+
+    on_internal_error(expr_logger,
+        fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
+}
+
 constant evaluate(const bind_variable& bind_var, const query_options& options) {
-    throw std::runtime_error(fmt::format("evaluate not implemented {}:{}", __FILE__, __LINE__));
+    if (bind_var.value_type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(bind_variable) called with nullptr type, should be prepared first");
+    }
+
+    cql3::raw_value_view value = options.get_value_at(bind_var.bind_index);
+
+    if (value.is_null()) {
+        return constant::make_null(bind_var.value_type);
+    }
+
+    if (value.is_unset_value()) {
+        return constant::make_unset_value(bind_var.value_type);
+    }
+
+    const abstract_type& value_type = bind_var.value_type->without_reversed();
+    try {
+        value.validate(value_type, options.get_cql_serialization_format());
+    } catch (const marshal_exception& e) {
+        throw exceptions::invalid_request_exception(
+                format("Exception while binding value of type {}: {}",
+                       bind_var.value_type->name(), e.what()));
+    }
+
+    if (value_type.bound_value_needs_to_be_reserialized(options.get_cql_serialization_format())) {
+        managed_bytes new_value = value.with_value([&] (const FragmentedView auto& value_bytes) {
+            return reserialize_value(value_bytes, value_type, options.get_cql_serialization_format());
+        });
+
+        return constant(raw_value::make_value(std::move(new_value)), bind_var.value_type);
+    }
+
+    return constant(raw_value::make_value(value), bind_var.value_type);
 }
 
 constant evaluate(const tuple_constructor& tuple, const query_options& options) {

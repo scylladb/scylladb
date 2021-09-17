@@ -606,6 +606,10 @@ public:
     // Checks whether there can be a collection somewhere inside a value of this type.
     bool contains_collection() const;
 
+    // Checks whether a bound value of this type has to be reserialized.
+    // This can be for example because there is a set inside that needs to be sorted.
+    bool bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const;
+
     friend class list_type_impl;
 private:
     mutable sstring _cql3_type_name;

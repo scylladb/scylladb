@@ -1512,6 +1512,18 @@ static void validate_aux(const tuple_type_impl& t, View v, cql_serialization_for
         }
         ++ti;
     }
+
+    size_t extra_elements = 0;
+    while (!v.empty()) {
+        read_tuple_element(v);
+        extra_elements += 1;
+    }
+
+    if (extra_elements > 0) {
+        // This function is called for both tuple and user_type, print the name too
+        throw marshal_exception(format("Value of type {} contained too many fields (expected {}, got {})",
+                                t.name(), t.size(), t.size() + extra_elements));
+    }
 }
 
 namespace {
@@ -3494,4 +3506,20 @@ bool abstract_type::contains_set_or_map() const {
 
 bool abstract_type::contains_collection() const {
     return visit(*this, contains_collection_visitor{});
+}
+
+bool abstract_type::bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const {
+    // If a value contains set or map, then this collection can be sent in the wrong order
+    // or there could be duplicates inside. We need to reserialize it into proper set or map.
+    if (contains_set_or_map()) {
+        return true;
+    }
+
+    // If a value contains a collection and it's serialized using the old serialization format,
+    // then we need to reserialize the collection to the current serialization format.
+    if (!sf.using_32_bits_for_collections() && contains_collection()) {
+        return true;
+    }
+
+    return false;
 }
