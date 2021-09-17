@@ -260,8 +260,6 @@ public:
         return *_shared_token_metadata.get();
     }
 
-    future<> gossip_sharder();
-
     cdc::generation_service& get_cdc_generation_service() {
         if (!_cdc_gen_service.local_is_initialized()) {
             throw std::runtime_error("get_cdc_generation_service: not initialized yet");

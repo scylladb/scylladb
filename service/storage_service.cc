@@ -384,6 +384,8 @@ void storage_service::prepare_to_join(
     }
     const auto& snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch_name));
+    app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
+    app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
 
     slogger.info("Starting up server gossip");
 
@@ -392,11 +394,6 @@ void storage_service::prepare_to_join(
     _gossiper.start_gossiping(generation_number, app_states, advertise).get();
 
     install_schema_version_change_listener();
-
-    // gossip local partitioner information (shard count and ignore_msb_bits)
-    gossip_sharder().get();
-
-    // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
 }
 
 void storage_service::maybe_start_sys_dist_ks() {
@@ -1468,13 +1465,6 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             slogger.error("Failed to replicate token_metadata: {}. Aborting.", e);
             abort();
         });
-    });
-}
-
-future<> storage_service::gossip_sharder() {
-    return _gossiper.add_local_application_state({
-        { gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count) },
-        { gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()) },
     });
 }
 
