@@ -600,6 +600,12 @@ public:
         return is_reversed() ? *underlying_type() : *this;
     }
 
+    // Checks whether there can be a set or map somewhere inside a value of this type.
+    bool contains_set_or_map() const;
+
+    // Checks whether there can be a collection somewhere inside a value of this type.
+    bool contains_collection() const;
+
     friend class list_type_impl;
 private:
     mutable sstring _cql3_type_name;

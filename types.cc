@@ -3444,3 +3444,54 @@ data_type reversed(data_type type) {
         return reversed_type_impl::get_instance(type);
     }
 }
+
+// A visitor that checks whether the type contains a collection type somewhere inside.
+// Has a parameter exclude_list which if set to true makes the visitor ignore lists.
+namespace {
+struct contains_collection_visitor {
+    bool exclude_list = false;
+
+    bool operator()(const set_type_impl&) const {
+        return true;
+    }
+
+    bool operator()(const map_type_impl&) const {
+        return true;
+    }
+
+    bool operator()(const list_type_impl& ltype) const {
+        if (exclude_list) {
+            return visit(*ltype.get_elements_type(), *this);
+        }
+
+        return true;
+    }
+
+    // This also handles user_type_impl
+    bool operator()(const tuple_type_impl& ttype) const {
+        for (const data_type& element_type : ttype.all_types()) {
+            if (visit(*element_type, *this)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool operator()(const reversed_type_impl& rtype) const {
+        return visit(rtype.without_reversed(), *this);
+    }
+
+    bool operator()(const abstract_type&) const {
+        return false;
+    }
+};
+}
+
+bool abstract_type::contains_set_or_map() const {
+    return visit(*this, contains_collection_visitor{.exclude_list = true});
+}
+
+bool abstract_type::contains_collection() const {
+    return visit(*this, contains_collection_visitor{});
+}
