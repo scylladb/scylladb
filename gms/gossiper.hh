@@ -474,9 +474,6 @@ public:
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
-    future<> start_gossiping(int generation_number,
-            bind_messaging_port do_bind = bind_messaging_port::yes);
-
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      *
@@ -514,7 +511,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states,
+    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
             bind_messaging_port do_bind = bind_messaging_port::yes, gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:

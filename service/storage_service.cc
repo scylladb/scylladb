@@ -1801,9 +1801,9 @@ future<bool> storage_service::is_gossip_running() {
     });
 }
 
-future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
-    return run_with_api_lock(sstring("start_gossiping"), [do_bind] (storage_service& ss) {
-        return seastar::async([&ss, do_bind] {
+future<> storage_service::start_gossiping() {
+    return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) {
+        return seastar::async([&ss] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
                 auto cdc_gen_ts = db::system_keyspace::get_cdc_generation_id().get0();
@@ -1814,7 +1814,7 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
                         db::system_keyspace::get_local_tokens().get0(),
                         cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
-                ss._gossiper.start_gossiping(utils::get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
+                ss._gossiper.start_gossiping(utils::get_generation_number()).then([&ss] {
                     ss._initialized = true;
                 }).get();
             }

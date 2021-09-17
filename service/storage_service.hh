@@ -347,7 +347,7 @@ public:
     future<> stop_gossiping();
 
     // should only be called via JMX
-    future<> start_gossiping(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> start_gossiping();
 
     // should only be called via JMX
     future<bool> is_gossip_running();

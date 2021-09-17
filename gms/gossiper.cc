@@ -1850,10 +1850,6 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(int generation_number, bind_messaging_port do_bind) {
-    return start_gossiping(generation_number, std::map<application_state, versioned_value>(), do_bind, gms::advertise_myself::yes);
-}
-
 future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind, gms::advertise_myself advertise) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
