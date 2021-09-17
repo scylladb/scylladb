@@ -639,8 +639,6 @@ inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
 
-future<> stop_gossiping(sharded<gossiper>& g);
-
 inline future<sstring> get_all_endpoint_states(gossiper& g) {
     return g.container().invoke_on(0, [] (gossiper& g) {
         return g.get_all_endpoint_states();

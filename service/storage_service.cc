@@ -1826,7 +1826,7 @@ future<> storage_service::stop_gossiping() {
     return run_with_api_lock(sstring("stop_gossiping"), [] (storage_service& ss) {
         if (ss._initialized) {
             slogger.warn("Stopping gossip by operator request");
-            return gms::stop_gossiping(ss._gossiper.container()).then([&ss] {
+            return ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).then([&ss] {
                 ss._initialized = false;
             });
         }

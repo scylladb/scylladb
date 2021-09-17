@@ -1160,15 +1160,6 @@ int main(int ac, char** av) {
                 gossiper.local().unregister_(ss.local().shared_from_this()).get();
             });
 
-            /*
-             * This fuse prevents gossiper from staying active in case the
-             * drain_on_shutdown below is not registered. When we fix the
-             * start-stop sequence it will be removed.
-             */
-            auto gossiping_fuse = defer_verbose_shutdown("gossiping", [&gossiper] {
-                gms::stop_gossiping(gossiper).get();
-            });
-
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
