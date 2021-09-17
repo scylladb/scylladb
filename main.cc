@@ -837,12 +837,17 @@ int main(int ac, char** av) {
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
             auto stop_cql_config_updater = deferred_stop(cql_config_updater);
 
+            supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             auto& gossiper = gms::get_gossiper();
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
-            // #293 - do not stop anything
-            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
+            auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
+                // call stop on each instance, but leave the sharded<> pointers alive
+                gossiper.invoke_on_all(&gms::gossiper::stop).get();
+            });
+            gossiper.invoke_on_all(&gms::gossiper::start).get();
+
             supervisor::notify("starting Raft service");
             raft_gr.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
@@ -910,9 +915,6 @@ int main(int ac, char** av) {
             // described here: https://github.com/scylladb/scylla/issues/1014
             distributed_loader::init_system_keyspace(db, ss).get();
 
-            supervisor::notify("starting gossip");
-            // Moved local parameters here, esp since with the
-            // ssl stuff it gets to be a lot.
             auto seed_provider= cfg->seed_provider();
             sstring cluster_name = cfg->cluster_name();
             if (cluster_name.empty()) {

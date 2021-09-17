@@ -2199,6 +2199,10 @@ future<> stop_gossiping(sharded<gossiper>& g) {
     });
 }
 
+future<> gossiper::start() {
+    return make_ready_future();
+}
+
 future<> gossiper::stop() {
     return make_ready_future();
 }
