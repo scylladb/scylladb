@@ -117,28 +117,6 @@ cql_test_config::~cql_test_config() = default;
 
 static const sstring testing_superuser = "tester";
 
-static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, sharded<locator::shared_token_metadata>& stm, sharded<netw::messaging_service>& ms, db::config& cfg, db::seed_provider_type seed_provider,
-            sharded<abort_source>& abort_sources, sstring cluster_name = "Test Cluster") {
-        // Init gossiper
-        std::set<gms::inet_address> seeds;
-        if (seed_provider.parameters.contains("seeds")) {
-            size_t begin = 0;
-            size_t next = 0;
-            sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-            while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-                begin = next+1;
-            }
-        }
-        if (seeds.empty()) {
-            seeds.emplace(gms::inet_address("127.0.0.1"));
-        }
-        return gms::get_gossiper().start(std::ref(abort_sources), std::ref(features), std::ref(stm), std::ref(ms), std::ref(cfg)).then([seeds, cluster_name] {
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_seeds(seeds);
-            gossiper.set_cluster_name(cluster_name);
-        });
-}
 // END TODO
 
 class single_node_cql_env : public cql_test_env {
@@ -549,8 +527,25 @@ public:
 
             sharded<gms::gossiper>& gossiper = gms::get_gossiper();
 
-            // FIXME: split
-            tst_init_ms_fd_gossiper(feature_service, token_metadata, ms, *cfg, db::config::seed_provider_type(), abort_sources).get();
+            // Init gossiper
+            std::set<gms::inet_address> seeds;
+            auto seed_provider = db::config::seed_provider_type();
+            if (seed_provider.parameters.contains("seeds")) {
+                size_t begin = 0;
+                size_t next = 0;
+                sstring seeds_str = seed_provider.parameters.find("seeds")->second;
+                while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
+                    seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
+                    begin = next+1;
+                }
+            }
+            if (seeds.empty()) {
+                seeds.emplace(gms::inet_address("127.0.0.1"));
+            }
+
+            gossiper.start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(ms), std::ref(*cfg)).get();
+            gossiper.local().set_seeds(std::move(seeds));
+            gossiper.local().set_cluster_name("Test Cluster");
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
