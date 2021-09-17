@@ -21,9 +21,9 @@
 
 #include "init.hh"
 #include "gms/failure_detector.hh"
-#include "gms/gossiper.hh"
 #include "to_string.hh"
 #include "gms/inet_address.hh"
+#include "utils/fb_utilities.hh"
 #include "seastarx.hh"
 #include "db/config.hh"
 
@@ -31,15 +31,12 @@
 
 logging::logger startlog("init");
 
-void init_gossiper(sharded<gms::gossiper>& gossiper
-                , db::config& cfg
-                , sstring listen_address_in
-                , db::seed_provider_type seed_provider) {
+std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg) {
     auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-    const auto listen = gms::inet_address::lookup(listen_address_in, family).get0();
+    const auto listen = gms::inet_address::lookup(cfg.listen_address(), family).get0();
+    auto seed_provider = cfg.seed_provider();
 
-    // Init gossiper
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.contains("seeds")) {
         size_t begin = 0;
@@ -61,7 +58,7 @@ void init_gossiper(sharded<gms::gossiper>& gossiper
     }
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     startlog.info("seeds={}, listen_address={}, broadcast_address={}",
-            to_string(seeds), listen_address_in, broadcast_address);
+            to_string(seeds), listen, broadcast_address);
     if (broadcast_address != listen && seeds.contains(listen)) {
         startlog.error("Use broadcast_address instead of listen_address for seeds list");
         throw std::runtime_error("Use broadcast_address for seeds list");
@@ -70,7 +67,8 @@ void init_gossiper(sharded<gms::gossiper>& gossiper
         startlog.error("Bad configuration: replace-address and replace-address-first-boot are not allowed for seed nodes");
         throw bad_configuration_error();
     }
-    gossiper.local().set_seeds(seeds);
+
+    return seeds;
 }
 
 

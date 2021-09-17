@@ -921,8 +921,7 @@ int main(int ac, char** av) {
             // described here: https://github.com/scylladb/scylla/issues/1014
             distributed_loader::init_system_keyspace(db, ss).get();
 
-            auto seed_provider= cfg->seed_provider();
-            init_gossiper(gossiper, *cfg, listen_address, seed_provider);
+            gossiper.local().set_seeds(get_seeds_from_db_config(*cfg));
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
