@@ -1465,9 +1465,12 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
     _listeners.clear();
-    return _schema_version_publisher.join().finally([this] {
-        return std::move(_node_ops_abort_thread);
-    });
+    try {
+        co_await _schema_version_publisher.join();
+    } catch (...) {
+        slogger.error("schema_version_publisher failed: {}", std::current_exception());
+    }
+    co_await std::move(_node_ops_abort_thread);
 }
 
 future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
