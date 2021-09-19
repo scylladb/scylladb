@@ -98,12 +98,11 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                         auto&& f1 = std::get<0>(t);
                         auto&& f2 = std::get<1>(t);
                         if (f1.failed()) {
+                            f2.ignore_ready_future();
                             // Failed to save promise. Nothing we can do but throw.
                             return make_exception_future<prepare_response>(f1.get_exception());
                         }
                         std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
-                        // Silently ignore any errors querying the current value as the caller is prepared to fall back
-                        // on querying it by itself in case it's missing in the response.
                         if (!f2.failed()) {
                             auto&& [result, hit_rate] = f2.get0();
                             if (only_digest) {
@@ -111,6 +110,11 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                             } else {
                                 data_or_digest = std::move(make_foreign(std::move(result)));
                             }
+                        } else {
+                            // Don't return errors querying the current value, just debug-log them, as the caller is prepared to fall back
+                            // on querying it by itself in case it's missing in the response.
+                            auto ex = f2.get_exception();
+                            logger.debug("Failed to get data or digest: {}. Ignored.", std::move(ex));
                         }
                         return make_ready_future<prepare_response>(prepare_response(promise(std::move(state._accepted_proposal),
                                         std::move(state._most_recent_commit), std::move(data_or_digest))));
