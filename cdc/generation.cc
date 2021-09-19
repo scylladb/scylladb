@@ -626,30 +626,20 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
 
     auto get_num_token_owners = [tm = _token_metadata.get()] { return tm->count_normal_token_owners(); };
 
-    // It's safe to discard this future: the coroutine keeps system_distributed_keyspace alive
-    // and the abort source's lifetime extends the lifetime of any other service.
-    (void)(([_times_and_ttls = std::move(times_and_ttls), _sys_dist_ks = _sys_dist_ks.local_shared(),
-                _get_num_token_owners = std::move(get_num_token_owners), &_as = _abort_src] () mutable -> future<> {
-        auto times_and_ttls = std::move(_times_and_ttls);
-        auto sys_dist_ks = std::move(_sys_dist_ks);
-        auto get_num_token_owners = std::move(_get_num_token_owners);
-        auto& abort_src = _as;
+    // This code is racing with node startup. At this point, we're most likely still waiting for gossip to settle
+    // and some nodes that are UP may still be marked as DOWN by us.
+    // Let's sleep a bit to increase the chance that the first attempt at rewriting succeeds (it's still ok if
+    // it doesn't - we'll retry - but it's nice if we succeed without any warnings).
+    co_await sleep_abortable(std::chrono::seconds(10), _abort_src);
 
-        // This code is racing with node startup. At this point, we're most likely still waiting for gossip to settle
-        // and some nodes that are UP may still be marked as DOWN by us.
-        // Let's sleep a bit to increase the chance that the first attempt at rewriting succeeds (it's still ok if
-        // it doesn't - we'll retry - but it's nice if we succeed without any warnings).
-        co_await sleep_abortable(std::chrono::seconds(10), abort_src);
+    cdc_log.info("Rewriting stream tables in the background...");
+    auto last_rewritten = co_await rewrite_streams_descriptions(
+            std::move(times_and_ttls),
+            _sys_dist_ks.local_shared(),
+            std::move(get_num_token_owners),
+            _abort_src);
 
-        cdc_log.info("Rewriting stream tables in the background...");
-        auto last_rewritten = co_await rewrite_streams_descriptions(
-                std::move(times_and_ttls),
-                std::move(sys_dist_ks),
-                std::move(get_num_token_owners),
-                abort_src);
-
-        co_await db::system_keyspace::cdc_set_rewritten(last_rewritten);
-    })());
+    co_await db::system_keyspace::cdc_set_rewritten(last_rewritten);
 }
 
 static void assert_shard_zero(const sstring& where) {
@@ -706,6 +696,12 @@ generation_service::generation_service(
 }
 
 future<> generation_service::stop() {
+    try {
+        co_await std::move(_cdc_streams_rewrite_complete);
+    } catch (...) {
+        cdc_log.error("CDC stream rewrite failed: ", std::current_exception());
+    }
+
     if (this_shard_id() == 0) {
         co_await _gossiper.unregister_(shared_from_this());
     }
@@ -731,7 +727,10 @@ future<> generation_service::after_join(std::optional<cdc::generation_id>&& star
 
     // Ensure that the new CDC stream description table has all required streams.
     // See the function's comment for details.
-    co_await maybe_rewrite_streams_descriptions();
+    //
+    // Since this depends on the entire cluster (and therefore we cannot guarantee
+    // timely completion), run it in the background and wait for it in stop().
+    _cdc_streams_rewrite_complete = maybe_rewrite_streams_descriptions();
 }
 
 void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
