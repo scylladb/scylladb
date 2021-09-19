@@ -550,10 +550,12 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
         decision_msg = !retry ? stop_msg : decision_msg;
         cmlog.info("compaction info: {}: {}", e.what(), decision_msg);
     } catch (storage_io_error& e) {
+        _stats.errors++;
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
         retry = false;
         do_stop();
     } catch (...) {
+        _stats.errors++;
         cmlog.error("compaction failed: {}: {}", std::current_exception(), decision_msg);
         retry = true;
     }
@@ -613,7 +615,6 @@ void compaction_manager::submit(column_family* cf) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 if (maybe_stop_on_error(std::move(f))) {
-                    _stats.errors++;
                     _stats.pending_tasks++;
                     return put_task_to_sleep(task).then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -748,7 +749,6 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 if (maybe_stop_on_error(std::move(f))) {
-                    _stats.errors++;
                     _stats.pending_tasks++;
                     return put_task_to_sleep(task).then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
