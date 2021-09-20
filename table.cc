@@ -1036,10 +1036,6 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
         new_sstables.insert(s);
     });
 
-    if (!move_read_charges) {
-        _compaction_manager.stop_tracking_ongoing_compactions(this);
-    }
-
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
     _main_sstables = std::move(new_sstables);
