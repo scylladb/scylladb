@@ -206,7 +206,10 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return !_clustering_rows.empty();
         }
 
-        range_tombstone peek_range_tombstone() const {
+        // Let's not lose performance when not Reversing.
+        using peeked_range_tombstone = std::conditional_t<Reversing, range_tombstone, const range_tombstone&>;
+
+        peeked_range_tombstone peek_range_tombstone() const {
             if constexpr (Reversing) {
                 range_tombstone rt = std::prev(_range_tombstones.front().end())->tombstone();
                 rt.reverse();
