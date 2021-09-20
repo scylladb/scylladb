@@ -21,19 +21,23 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-product="$(<build/SCYLLA-PRODUCT-FILE)"
-version="$(<build/SCYLLA-VERSION-FILE)"
-release="$(<build/SCYLLA-RELEASE-FILE)"
-
-mode="release"
-
-if uname -m | grep x86_64 ; then
-  arch="amd64"
-fi
-
-if uname -m | grep aarch64 ; then
-  arch="arm64"
-fi
+MODE="release"
+BASE_IMAGE='docker.io/ubuntu:20.04'
+PRODUCT="$(<build/SCYLLA-PRODUCT-FILE)"
+VERSION="$(<build/SCYLLA-VERSION-FILE)"
+RELEASE="$(<build/SCYLLA-RELEASE-FILE)"
+MACHINE_ARCH=$(uname -m)
+    case "$MACHINE_ARCH" in
+      "x86_64")
+        arch="amd64"
+        ;;
+      "aarch64")
+        arch="arm64"
+        ;;
+      *)
+        echo "Unsupported architecture: $MACHINE_ARCH"
+        exit 1
+    esac
 
 
 print_usage() {
@@ -53,18 +57,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-container="$(buildah from docker.io/ubuntu:20.04)"
+container="$(buildah from $BASE_IMAGE)"
 
 packages=(
-    "build/dist/$mode/debian/${product}_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-server_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-conf_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
-    "build/dist/$mode/debian/$product-node-exporter_$version-$release-1_$arch.deb"
-    "tools/java/build/debian/$product-tools_$version-$release-1_all.deb"
-    "tools/java/build/debian/$product-tools-core_$version-$release-1_all.deb"
-    "tools/jmx/build/debian/$product-jmx_$version-$release-1_all.deb"
-    "tools/python3/build/debian/$product-python3_$version-$release-1_$arch.deb"
+    "build/dist/$MODE/debian/${product}_$VERSION-$RELEASE-1_$ARCH.deb"
+    "build/dist/$MODE/debian/$PRODUCT-server_$VERSION-$RELEASE-1_$ARCH.deb"
+    "build/dist/$MODE/debian/$PRODUCT-conf_$VERSION-$RELEASE-1_$ARCH.deb"
+    "build/dist/$MODE/debian/$PRODUCT-kernel-conf_$VERSION-$RELEASE-1_$ARCH.deb"
+    "build/dist/$MODE/debian/$PRODUCT-node-exporter_$VERSION-$RELEASE-1_$ARCH.deb"
+    "tools/java/build/debian/$PRODUCT-tools_$VERSION-$RELEASE-1_all.deb"
+    "tools/java/build/debian/$PRODUCT-tools-core_$VERSION-$RELEASE-1_all.deb"
+    "tools/jmx/build/debian/$PRODUCT-jmx_$VERSION-$RELEASE-1_all.deb"
+    "tools/python3/build/debian/$PRODUCT-python3_$VERSION-$RELEASE-1_$ARCH.deb"
 )
 
 bcp() { buildah copy "$container" "$@"; }
@@ -109,8 +113,8 @@ bconfig --entrypoint  '["/docker-entrypoint.py"]'
 bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001 --port 22
 bconfig --volume "/var/lib/scylla"
 
-mkdir -p build/$mode/dist/docker/
-image="oci-archive:build/$mode/dist/docker/$product-$version-$release"
+mkdir -p build/$MODE/dist/docker/
+image="oci-archive:build/$MODE/dist/docker/$PRODUCT-$VERSION-$RELEASE"
 buildah commit "$container" "$image"
 
-echo "Image is now available in $image."
+echo "Image is now available in $image"
