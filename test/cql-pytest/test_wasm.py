@@ -316,7 +316,7 @@ def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
 
         cql.execute(f"INSERT INTO {table} (p) VALUES (997)")
         # The call request takes too much time and resources, and should therefore fail
-        with pytest.raises(InvalidRequest, match="fuel consumed"):
+        with pytest.raises(InvalidRequest, match="wasm"):
           cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 997")
 
 # Test that an infinite loop gets broken out of eventually
