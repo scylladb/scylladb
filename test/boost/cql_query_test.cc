@@ -4647,7 +4647,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
         for (auto is_paged : {true, false}) {
             for (auto is_reversed : {true, false}) {
                 for (auto scheduling_group : {db.get_statement_scheduling_group(), db.get_streaming_scheduling_group(), default_scheduling_group()}) {
-                    const auto should_fail = (!is_paged || is_reversed) && scheduling_group == db.get_statement_scheduling_group();
+                    const auto should_fail = !is_paged && scheduling_group == db.get_statement_scheduling_group();
                     testlog.info("checking: is_paged={}, is_reversed={}, scheduling_group={}, should_fail={}", is_paged, is_reversed, scheduling_group.name(), should_fail);
                     const auto select_query = format("SELECT * FROM test WHERE pk = {} ORDER BY ck {};", pk, is_reversed ? "DESC" : "ASC");
 
