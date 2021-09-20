@@ -91,7 +91,6 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "alternator/controller.hh"
-#include "lang/wasm_engine.hh"
 
 #include "service/raft/raft_group_registry.hh"
 
@@ -410,6 +409,7 @@ sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
+sharded<database>* the_database;
 }
 
 int main(int ac, char** av) {
@@ -486,7 +486,6 @@ int main(int ac, char** av) {
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
-    debug::db = &db;
     auto& proxy = service::get_storage_proxy();
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
@@ -572,6 +571,7 @@ int main(int ac, char** av) {
 
             adjust_and_verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
+            verify_seastar_io_scheduler(opts, cfg->developer_mode());
             if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
                 if (cfg->enable_deprecated_partitioners()) {
                     startlog.warn("The partitioner {} is deprecated and will be removed in a future version."
@@ -584,9 +584,6 @@ int main(int ac, char** av) {
                 }
             }
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
-
-            static sharded<wasm::engine> wasm_engine;
-            wasm::init_sharded_engine(wasm_engine).get();
 
             feature_service.start(fcfg).get();
             // FIXME storage_proxy holds a reference on it and is not yet stopped.
@@ -761,6 +758,8 @@ int main(int ac, char** av) {
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
 
+            api::set_server_config(ctx, *cfg).get();
+
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
             dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
@@ -871,24 +870,6 @@ int main(int ac, char** av) {
                 // service_memory_limiter.stop().get();
             });
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
-            db.invoke_on_all([] (database& db) {
-                db.set_wasm_engine(&wasm_engine.local());
-            }).get();
-            start_large_data_handler(db).get();
-            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
-                // #293 - do not stop anything - not even db (for real)
-                //return db.stop();
-                // call stop on each db instance, but leave the shareded<database> pointers alive.
-                stop_database(db).then([&db] {
-                    return db.invoke_on_all([](auto& db) {
-                        return db.stop();
-                    });
-                }).get();
-            });
-            api::set_server_config(ctx).get();
-            verify_seastar_io_scheduler(opts, cfg->developer_mode());
-
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
             dir_set.add(cfg->data_file_directories());
@@ -903,10 +884,22 @@ int main(int ac, char** av) {
             }
             view_hints_dir_initializer.ensure_created_and_verified().get();
 
-            // We need the compaction manager ready early so we can reshard.
-            db.invoke_on_all([&proxy, &stop_signal] (database& db) {
-                db.get_compaction_manager().enable();
-            }).get();
+            supervisor::notify("starting database");
+            debug::the_database = &db;
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
+                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
+                // #293 - do not stop anything - not even db (for real)
+                //return db.stop();
+                // call stop on each db instance, but leave the shareded<database> pointers alive.
+                db.invoke_on_all(&database::stop).get();
+            });
+
+            // We need to init commitlog on shard0 before it is inited on other shards
+            // because it obtains the list of pre-existing segments for replay, which must
+            // not include reserve segments created by active commitlogs.
+            db.local().init_commitlog().get();
+            db.invoke_on_all(&database::start).get();
 
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
@@ -1001,27 +994,11 @@ int main(int ac, char** av) {
             api::set_server_compaction_manager(ctx).get();
 
             supervisor::notify("loading non-system sstables");
-            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db)).get();
-            supervisor::notify("discovering staging sstables");
-            db.invoke_on_all([] (database& db) {
-                for (auto& x : db.get_column_families()) {
-                    table& t = *(x.second);
-                    for (auto sstables = t.get_sstables(); sstables::shared_sstable sst : *sstables) {
-                        if (sst->requires_view_building()) {
-                            // FIXME: discarded future.
-                            (void)view_update_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());
-                        }
-                    }
-                }
-            }).get();
 
-            // register connection drop notification to update cf's cache hit rate data
-            db.invoke_on_all([&messaging] (database& db) {
-                db.register_connection_drop_notifier(messaging.local());
-            }).get();
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp, feature_service, messaging).get();
             supervisor::notify("starting commit log");
@@ -1127,7 +1104,7 @@ int main(int ac, char** av) {
             // it calls repair.local() before this place it'll crash (now it doesn't do
             // both)
             supervisor::notify("starting messaging service");
-            auto max_memory_repair = db.local().get_available_memory() * 0.1;
+            auto max_memory_repair = memory::stats().total_memory() * 0.1;
             repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
@@ -1408,8 +1385,8 @@ int main(int ac, char** av) {
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
 
-            auto stop_repair = defer_verbose_shutdown("repair", [&db] {
-                repair_shutdown(db).get();
+            auto stop_repair = defer_verbose_shutdown("repair", [&repair] {
+                repair.invoke_on_all(&repair_service::shutdown).get();
             });
 
             auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&lifecycle_notifier] {
@@ -1462,10 +1439,4 @@ int main(int ac, char** av) {
       fprint(std::cerr, "FATAL: Exception during startup, aborting: %s\n", std::current_exception());
       return 7; // 1 has a special meaning for upstart
   }
-}
-
-namespace debug {
-
-seastar::sharded<database>* db;
-
 }

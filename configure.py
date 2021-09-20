@@ -544,6 +544,7 @@ scylla_tests = set([
     'test/unit/btree_compaction_test',
     'test/unit/radix_tree_stress_test',
     'test/unit/radix_tree_compaction_test',
+    'test/unit/cross_shard_barrier_test',
 ])
 
 perf_tests = set([
@@ -1007,7 +1008,6 @@ scylla_core = (['database.cc',
                 'mutation_writer/partition_based_splitting_writer.cc',
                 'mutation_writer/feed_writers.cc',
                 'lang/lua.cc',
-                'lang/wasm_engine.cc',
                 'lang/wasm.cc',
                 'service/raft/schema_raft_state_machine.cc',
                 'service/raft/raft_sys_table_storage.cc',
@@ -1206,6 +1206,7 @@ tests_not_using_seastar_test_framework = set([
     'test/unit/radix_tree_stress_test',
     'test/unit/radix_tree_compaction_test',
     'test/manual/sstable_scan_footprint_test',
+    'test/unit/cross_shard_barrier_test',
 ]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:

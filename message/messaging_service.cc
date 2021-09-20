@@ -278,15 +278,6 @@ const uint64_t* messaging_service::get_dropped_messages() const {
     return _dropped_messages;
 }
 
-messaging_service::drop_notifier_handler messaging_service::register_connection_drop_notifier(std::function<void(gms::inet_address ep)> cb) {
-    _connection_drop_notifiers.push_back(std::move(cb));
-    return _connection_drop_notifiers.end();
-}
-
-void messaging_service::unregister_connection_drop_notifier(messaging_service::drop_notifier_handler h) {
-    _connection_drop_notifiers.erase(h);
-}
-
 int32_t messaging_service::get_raw_version(const gms::inet_address& endpoint) const {
     // FIXME: messaging service versioning
     return current_version;
@@ -848,9 +839,7 @@ bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
 
 void messaging_service::remove_error_rpc_client(messaging_verb verb, msg_addr id) {
     if (remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true)) {
-        for (auto&& cb : _connection_drop_notifiers) {
-            cb(id.addr);
-        }
+        _connection_dropped(id.addr);
     }
 }
 

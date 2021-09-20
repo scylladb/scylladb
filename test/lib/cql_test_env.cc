@@ -68,6 +68,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
+#include "utils/cross-shard-barrier.hh"
 #include "debug.hh"
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -464,9 +465,9 @@ public:
             abort_sources.start().get();
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<database> db;
-            debug::db = &db;
+            debug::the_database = &db;
             auto reset_db_ptr = defer([] {
-                debug::db = nullptr;
+                debug::the_database = nullptr;
             });
             auto cfg = cfg_in.db_config;
             tmpdir data_dir;
@@ -600,15 +601,14 @@ public:
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
+            dbcfg.sstables_format = cfg->enable_sstables_md_format() ? sstables::sstable_version_types::md : sstables::sstable_version_types::mc;
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore)).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });
 
-            db.invoke_on_all([] (database& db) {
-                db.set_format_by_config();
-            }).get();
+            db.invoke_on_all(&database::start).get();
 
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();
@@ -662,7 +662,7 @@ public:
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy).get();
 
             db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
@@ -672,15 +672,6 @@ public:
             }).get();
 
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
-            start_large_data_handler(db).get();
-
-            db.invoke_on_all([] (database& db) {
-                db.get_compaction_manager().enable();
-            }).get();
-
-            auto stop_database_d = defer([&db] {
-                stop_database(db).get();
-            });
 
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
@@ -827,6 +818,6 @@ cql_test_config raft_cql_test_config() {
 
 namespace debug {
 
-seastar::sharded<database>* db;
+seastar::sharded<database>* the_database;
 
 }

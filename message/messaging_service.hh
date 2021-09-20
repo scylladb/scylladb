@@ -278,7 +278,7 @@ private:
     std::vector<clients_map> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _shutting_down = false;
-    std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
+    connection_drop_signal_t _connection_dropped;
     scheduling_config _scheduling_config;
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;
@@ -600,9 +600,9 @@ public:
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_rpc_client(msg_addr id);
-    using drop_notifier_handler = decltype(_connection_drop_notifiers)::iterator;
-    drop_notifier_handler register_connection_drop_notifier(std::function<void(gms::inet_address ep)> cb);
-    void unregister_connection_drop_notifier(drop_notifier_handler h);
+    connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
+        return _connection_dropped.connect(slot);
+    }
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
     static msg_addr get_source(const rpc::client_info& client);
     scheduling_group scheduling_group_for_verb(messaging_verb verb) const;

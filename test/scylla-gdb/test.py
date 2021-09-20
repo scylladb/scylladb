@@ -28,7 +28,7 @@ do('break sstables::compact_sstables')
 do('ignore 1 10')
 do('run')
 
-db = sharded(gdb.parse_and_eval('::debug::db')).local()
+db = sharded(gdb.parse_and_eval('::debug::the_database')).local()
 gdb.set_convenience_variable('db', db)
 
 # now try some commands

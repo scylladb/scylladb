@@ -47,8 +47,7 @@
 #include <boost/container/static_vector.hpp>
 #include "frozen_mutation.hh"
 #include <seastar/core/do_with.hh>
-#include "service/migration_manager.hh"
-#include "message/messaging_service.hh"
+#include "service/migration_listener.hh"
 #include "cell_locking.hh"
 #include "view_info.hh"
 #include "db/schema_tables.hh"
@@ -316,7 +315,8 @@ void database::setup_scylla_memory_diagnostics_producer() {
     });
 }
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, abort_source& as, sharded<semaphore>& sst_dir_sem)
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+        abort_source& as, sharded<semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
@@ -368,6 +368,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _feat(feat)
     , _shared_token_metadata(stm)
     , _sst_dir_semaphore(sst_dir_sem)
+    , _wasm_engine(std::make_unique<wasm::engine>())
+    , _stop_barrier(std::move(barrier))
 {
     assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
@@ -377,6 +379,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
 
     setup_scylla_memory_diagnostics_producer();
+    if (_dbcfg.sstables_format) {
+        set_format(*_dbcfg.sstables_format);
+    }
 }
 
 const db::extensions& database::extensions() const {
@@ -710,17 +715,9 @@ database::setup_metrics() {
     }
 }
 
-void database::set_format(sstables::sstable_version_types format) {
+void database::set_format(sstables::sstable_version_types format) noexcept {
     get_user_sstables_manager().set_format(format);
     get_system_sstables_manager().set_format(format);
-}
-
-void database::set_format_by_config() {
-    if (_cfg.enable_sstables_md_format()) {
-        set_format(sstables::sstable_version_types::md);
-    } else {
-        set_format(sstables::sstable_version_types::mc);
-    }
 }
 
 database::~database() {
@@ -761,7 +758,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
     });
 }
 
-future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
+future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
     using namespace db::schema_tables;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [&] (schema_result_value_type &v) -> future<> {
         auto ksm = create_keyspace_from_schema_partition(v);
@@ -816,6 +813,10 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 
 future<>
 database::init_commitlog() {
+    if (_commitlog) {
+        return make_ready_future<>();
+    }
+
     return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
@@ -1533,15 +1534,6 @@ bool database::is_replacing() {
     return bool(get_replace_address());
 }
 
-void database::register_connection_drop_notifier(netw::messaging_service& ms) {
-    ms.register_connection_drop_notifier([this] (gms::inet_address ep) {
-        dblog.debug("Drop hit rate info for {} because of disconnect", ep);
-        for (auto&& cf : get_non_system_column_families()) {
-            cf->drop_hit_rate(ep);
-        }
-    });
-}
-
 namespace {
 
 enum class query_class {
@@ -2038,37 +2030,9 @@ future<> database::close_tables(table_kind kind_to_close) {
         } else {
             return make_ready_future<>();
         }
+    }).then([this] {
+        return _stop_barrier.arrive_and_wait();
     });
-}
-
-future<> start_large_data_handler(sharded<database>& db) {
-    return db.invoke_on_all([](database& db) {
-        db.get_large_data_handler()->start();
-    });
-}
-
-future<> stop_database(sharded<database>& sdb) {
-    return sdb.invoke_on_all([](database& db) {
-        return db.get_compaction_manager().stop();
-    }).then([&sdb] {
-        // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
-        // system.large_partitions after the regular tables.
-        return sdb.invoke_on_all([](database& db) {
-            return db.close_tables(database::table_kind::user);
-        });
-    }).then([&sdb] {
-        return sdb.invoke_on_all([](database& db) {
-            return db.close_tables(database::table_kind::system);
-        });
-    }).then([&sdb] {
-        return sdb.invoke_on_all([](database& db) {
-            return db.stop_large_data_handler();
-        });
-    });
-}
-
-future<> database::stop_large_data_handler() {
-    return _large_data_handler->stop();
 }
 
 void database::revert_initial_system_read_concurrency_boost() {
@@ -2076,9 +2040,22 @@ void database::revert_initial_system_read_concurrency_boost() {
     dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
+future<> database::start() {
+    _large_data_handler->start();
+    // We need the compaction manager ready early so we can reshard.
+    _compaction_manager->enable();
+    co_await init_commitlog();
+}
+
 future<>
 database::stop() {
-    assert(!_large_data_handler->running());
+    co_await _compaction_manager->stop();
+    co_await _stop_barrier.arrive_and_wait();
+    // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
+    // system.large_partitions after the regular tables.
+    co_await close_tables(database::table_kind::user);
+    co_await close_tables(database::table_kind::system);
+    co_await _large_data_handler->stop();
 
     // try to ensure that CL has done disk flushing
     if (_commitlog) {

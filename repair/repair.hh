@@ -110,13 +110,6 @@ future<repair_status> repair_await_completion(seastar::sharded<database>& db, in
 // returns a vector with the ids of the active repairs
 future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db);
 
-// repair_shutdown() stops all ongoing repairs started on this node (and
-// prevents any further repairs from being started). It returns a future
-// saying when all repairs have stopped, and attempts to stop them as
-// quickly as possible (we do not wait for repairs to finish but rather
-// stop them abruptly).
-future<> repair_shutdown(seastar::sharded<database>& db);
-
 void check_in_shutdown();
 
 // Abort all the repairs
