@@ -63,8 +63,8 @@ public:
     public:
         std::map<managed_bytes, managed_bytes, serialized_compare> map;
 
-        value(std::map<managed_bytes, managed_bytes, serialized_compare> map, data_type my_type)
-            : terminal(std::move(my_type)), map(std::move(map)) {
+        value(std::map<managed_bytes, managed_bytes, serialized_compare> map)
+            : map(std::move(map)) {
         }
         static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
@@ -75,11 +75,12 @@ public:
 
     // See Lists.DelayedValue
     class delayed_value : public non_terminal {
+        serialized_compare _comparator;
         std::unordered_map<shared_ptr<term>, shared_ptr<term>> _elements;
-        data_type _my_type;
     public:
-        delayed_value(std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements, data_type my_type)
-                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
+        delayed_value(serialized_compare comparator,
+                      std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements)
+                : _comparator(std::move(comparator)), _elements(std::move(elements)) {
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
@@ -101,7 +102,7 @@ public:
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value);
+        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
     };
 
     class setter_by_key : public operation {
@@ -123,7 +124,7 @@ public:
     };
 
     static void do_put(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params,
-            const expr::constant& value, const column_definition& column);
+            shared_ptr<term> value, const column_definition& column);
 
     class discarder_by_key : public operation {
     public:

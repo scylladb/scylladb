@@ -57,14 +57,17 @@ class user_types {
 public:
     static lw_shared_ptr<column_specification> field_spec_of(const column_specification& column, size_t field);
 
-    class value : public terminal {
+    class value : public multi_item_terminal {
         std::vector<managed_bytes_opt> _elements;
     public:
-        explicit value(std::vector<managed_bytes_opt>, data_type my_type);
+        explicit value(std::vector<managed_bytes_opt>);
+        explicit value(std::vector<managed_bytes_view_opt>);
 
         static value from_serialized(const raw_value_view&, const user_type_impl&);
 
         virtual cql3::raw_value get(const query_options&) override;
+        const std::vector<managed_bytes_opt>& get_elements() const;
+        virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const override;
     };
 
@@ -80,6 +83,7 @@ public:
         std::vector<managed_bytes_opt> bind_internal(const query_options& options);
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
+        virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
     };
 
     class marker : public abstract_marker {
@@ -98,7 +102,7 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const expr::constant& value);
+        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
     };
 
     class setter_by_field : public operation {

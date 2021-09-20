@@ -61,7 +61,7 @@ class statement_restrictions::initial_key_restrictions : public primary_key_rest
 public:
     initial_key_restrictions(bool allow_filtering)
         : _allow_filtering(allow_filtering) {
-        this->expression = expr::constant::make_bool(true);
+        this->expression = true;
     }
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
@@ -204,7 +204,7 @@ static std::vector<expr::expression> extract_partition_range(
             // Partition key columns are not legal in tuples, so ignore tuples.
         }
 
-        void operator()(const constant&) {}
+        void operator()(bool) {}
 
         void operator()(const unresolved_identifier&) {
             on_internal_error(rlogger, "extract_partition_range(unresolved_identifier)");
@@ -314,7 +314,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             // A token cannot be a clustering prefix restriction
         }
 
-        void operator()(const constant&) {}
+        void operator()(bool) {}
 
         void operator()(const unresolved_identifier&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(unresolved_identifier)");
@@ -976,7 +976,7 @@ struct multi_column_range_accumulator {
 
     void operator()(const binary_operator& binop) {
         if (is_compare(binop.op)) {
-            auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options));
+            auto opt_values = dynamic_pointer_cast<tuples::value>(binop.rhs->bind(options))->get_elements();
             auto& lhs = std::get<tuple_constructor>(*binop.lhs);
             std::vector<managed_bytes> values(lhs.elements.size());
             for (size_t i = 0; i < lhs.elements.size(); ++i) {
@@ -987,9 +987,21 @@ struct multi_column_range_accumulator {
             }
             intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
-            const expr::constant tup = expr::evaluate(binop.rhs, options);
-            statements::request_validations::check_false(tup.is_null(), "Invalid null value for IN restriction");
-            process_in_values(expr::get_list_of_tuples_elements(tup));
+            if (auto dv = dynamic_pointer_cast<lists::delayed_value>(binop.rhs)) {
+                process_in_values(
+                        dv->get_elements() | transformed(
+                                [&] (const ::shared_ptr<term>& t) {
+                                    return static_pointer_cast<tuples::value>(t->bind(options))->get_elements();
+                                }));
+            } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(binop.rhs)) {
+                // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<bytes_opt>.
+                const auto tup = static_pointer_cast<tuples::in_value>(mkr->bind(options));
+                statements::request_validations::check_not_null(tup, "Invalid null value for IN restriction");
+                process_in_values(tup->get_split_values());
+            }
+            else {
+                on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
+            }
         } else {
             on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
         }
@@ -999,13 +1011,8 @@ struct multi_column_range_accumulator {
         std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
     }
 
-    void operator()(const constant& v) {
-        std::optional<bool> bool_val = get_bool_value(v);
-        if (!bool_val.has_value()) {
-            on_internal_error(rlogger, "non-bool constant encountered outside binary operator");
-        }
-
-        if (*bool_val == false) {
+    void operator()(bool b) {
+        if (!b) {
             ranges.clear();
         }
     }
@@ -1401,13 +1408,12 @@ query::clustering_range range_from_raw_bounds(
     opt_bound lb, ub;
     for (const auto& e : exprs) {
         if (auto b = find_clustering_order(e)) {
-            expr::constant tup_val = expr::evaluate(b->rhs, options);
-            if (tup_val.is_null()) {
+            const auto tup = dynamic_pointer_cast<tuples::value>(b->rhs->bind(options));
+            if (!tup) {
                 on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
             }
-
             const auto r = to_range(
-                    b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val)));
+                    b->op, clustering_key_prefix::from_optional_exploded(schema, tup->get_elements()));
             if (r.start()) {
                 lb = r.start();
             }
@@ -1614,7 +1620,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
             oper_t::EQ,
             // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
             // handy mechanism for doing that in query_options.
-            ::make_shared<constants::value>(raw_value::make_unset_value(), token_column->type));
+            ::make_shared<constants::value>(raw_value::make_unset_value()));
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
@@ -1687,7 +1693,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
     // overwritten.
     const_cast<::shared_ptr<term>&>(std::get<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
-            ::make_shared<constants::value>(raw_value::make_value(*token_bytes), token_column.type);
+            ::make_shared<constants::value>(raw_value::make_value(*token_bytes));
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
@@ -1731,7 +1737,7 @@ sstring statement_restrictions::to_string() const {
 
 static bool has_eq_null(const query_options& options, const expression& expr) {
     return find_atom(expr, [&] (const binary_operator& binop) {
-        return binop.op == oper_t::EQ && !evaluate_to_raw_view(binop.rhs, options);
+        return binop.op == oper_t::EQ && !binop.rhs->bind_and_get(options);
     });
 }
 

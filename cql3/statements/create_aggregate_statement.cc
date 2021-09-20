@@ -58,7 +58,7 @@ void create_aggregate_statement::create(service::storage_proxy& proxy, functions
     auto dummy_ident = ::make_shared<column_identifier>("", true);
     auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
     auto initcond_term = prepare_term(_ival, db, _name.keyspace, {column_spec});
-    bytes_opt initcond = to_bytes(*to_managed_bytes_opt(expr::evaluate_to_raw_view(initcond_term, cql3::query_options::DEFAULT)));
+    bytes_opt initcond = to_bytes(*to_managed_bytes_opt(initcond_term->bind_and_get(cql3::query_options::DEFAULT)));
 
     _aggregate = ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
     return;

@@ -31,7 +31,6 @@
 #include <seastar/util/variant_utils.hh>
 
 #include "utils/fragmented_temporary_buffer.hh"
-#include "utils/overloaded_functor.hh"
 
 namespace cql3 {
 
@@ -249,18 +248,6 @@ public:
         case 0:  return std::move(std::get<bytes>(_data));
         default: return ::to_bytes(std::get<managed_bytes>(_data));
         }
-    }
-    managed_bytes to_managed_bytes() && {
-        return std::visit(overloaded_functor{
-            [](bytes&& bytes_val) { return managed_bytes(bytes_val); },
-            [](managed_bytes&& managed_bytes_val) { return std::move(managed_bytes_val); },
-            [](null_value&&) -> managed_bytes {
-                throw std::runtime_error("to_managed_bytes() called on raw value that is null");
-            },
-            [](unset_value&&) -> managed_bytes {
-                throw std::runtime_error("to_managed_bytes() called on raw value that is unset_value");
-            }
-        }, std::move(_data));
     }
     raw_value_view to_view() const;
     friend class raw_value_view;

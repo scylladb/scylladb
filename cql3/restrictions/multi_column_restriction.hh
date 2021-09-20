@@ -49,7 +49,6 @@
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/expr/expression.hh"
-#include "types/list.hh"
 
 namespace cql3 {
 
@@ -226,8 +225,8 @@ public:
 #endif
 
     clustering_key_prefix composite_value(const query_options& options) const {
-        expr::constant t = expr::evaluate(_value, options);
-        auto values = expr::get_tuple_elements(t);
+        auto t = static_pointer_cast<tuples::value>(_value->bind(options));
+        auto values = t->get_elements();
         std::vector<managed_bytes> components;
         for (unsigned i = 0; i < values.size(); i++) {
             auto component = statements::request_validations::check_not_null(values[i],
@@ -312,21 +311,11 @@ public:
         : multi_column_restriction::IN(schema, std::move(defs))
         , _values(std::move(value))
     {
-        std::vector<data_type> column_types;
-        column_types.reserve(defs.size());
-        for (const column_definition* cdef : defs) {
-            column_types.push_back(cdef->type);
-        }
-
-        // type of the delayed_value is frozen list of tuples
-        data_type list_elements_type = tuple_type_impl::get_instance(std::move(column_types));
-        data_type in_list_type = list_type_impl::get_instance(std::move(list_elements_type), false);
-
         using namespace expr;
         expression = binary_operator{
             column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
-            ::make_shared<lists::delayed_value>(_values, std::move(in_list_type))};
+            ::make_shared<lists::delayed_value>(_values)};
     }
 };
 
@@ -469,8 +458,7 @@ private:
      */
     ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
                                                              std::size_t column_pos, const managed_bytes_opt& value) const {
-        ::shared_ptr<cql3::term> term =
-            ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value), _column_defs[column_pos]->type);
+        ::shared_ptr<cql3::term> term = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value));
         using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);

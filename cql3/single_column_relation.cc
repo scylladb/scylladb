@@ -114,9 +114,7 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, prep
     }
     auto r = ::make_shared<single_column_restriction>(column_def);
     r->expression = binary_operator{
-            &column_def,
-            expr::oper_t::IN,
-            ::make_shared<lists::delayed_value>(std::move(terms), list_type_impl::get_instance(column_def.type, false))};
+            &column_def, expr::oper_t::IN, ::make_shared<lists::delayed_value>(std::move(terms))};
     return r;
 }
 

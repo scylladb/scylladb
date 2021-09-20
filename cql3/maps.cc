@@ -73,7 +73,7 @@ maps::value::from_serialized(const raw_value_view& fragmented_value, const map_t
                             type.get_values_type()->decompose(e.second));
             }
         }
-        return maps::value(std::move(map), type.shared_from_this());
+        return maps::value(std::move(map));
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -130,16 +130,13 @@ maps::delayed_value::fill_prepare_context(prepare_context& ctx) const {
 
 shared_ptr<terminal>
 maps::delayed_value::bind(const query_options& options) {
-    const map_type_impl& my_map_type = dynamic_cast<const map_type_impl&>(_my_type->without_reversed());
-
-    serialized_compare comparator = my_map_type.get_keys_type()->as_less_comparator();
-    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(std::move(comparator));
+    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(_comparator);
     for (auto&& entry : _elements) {
         auto&& key = entry.first;
         auto&& value = entry.second;
 
         // We don't support values > 64K because the serialization format encode the length as an unsigned short.
-        auto key_bytes = expr::evaluate_to_raw_view(key, options);
+        auto key_bytes = key->bind_and_get(options);
         if (key_bytes.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
@@ -151,7 +148,7 @@ maps::delayed_value::bind(const query_options& options) {
                                                    std::numeric_limits<uint16_t>::max(),
                                                    key_bytes.size_bytes()));
         }
-        auto value_bytes = expr::evaluate_to_raw_view(value, options);
+        auto value_bytes = value->bind_and_get(options);
         if (value_bytes.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");\
         }
@@ -160,7 +157,7 @@ maps::delayed_value::bind(const query_options& options) {
         }
         buffers.emplace(*to_managed_bytes_opt(key_bytes), *to_managed_bytes_opt(value_bytes));
     }
-    return ::make_shared<value>(std::move(buffers), _my_type);
+    return ::make_shared<value>(std::move(buffers));
 }
 
 ::shared_ptr<terminal>
@@ -187,13 +184,13 @@ maps::marker::bind(const query_options& options) {
 
 void
 maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    expr::constant value = expr::evaluate(_t, params._options);
-    execute(m, row_key, params, column, value);
+    auto value = _t->bind(params._options);
+    execute(m, row_key, params, column, std::move(value));
 }
 
 void
-maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value) {
-    if (value.is_unset_value()) {
+maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value) {
+    if (value == constants::UNSET_VALUE) {
         return;
     }
     if (column.type->is_multi_cell()) {
@@ -215,8 +212,8 @@ void
 maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     using exceptions::invalid_request_exception;
     assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
-    auto key = expr::evaluate_to_raw_view(_k, params._options);
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto key = _k->bind_and_get(params._options);
+    auto value = _t->bind_and_get(params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -237,34 +234,36 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
 void
 maps::putter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
-    expr::constant value = expr::evaluate(_t, params._options);
-    if (!value.is_unset_value()) {
+    auto value = _t->bind(params._options);
+    if (value != constants::UNSET_VALUE) {
         do_put(m, prefix, params, value, column);
     }
 }
 
 void
 maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params,
-        const expr::constant& map_value, const column_definition& column) {
+        shared_ptr<term> value, const column_definition& column) {
+    auto map_value = dynamic_pointer_cast<maps::value>(value);
     if (column.type->is_multi_cell()) {
-        if (map_value.is_null()) {
+        if (!value) {
             return;
         }
 
         collection_mutation_description mut;
 
         auto ctype = static_cast<const map_type_impl*>(column.type.get());
-        for (auto&& e : expr::get_map_elements(map_value)) {
+        for (auto&& e : map_value->map) {
             mut.cells.emplace_back(to_bytes(e.first), params.make_cell(*ctype->get_values_type(), raw_value_view::make_value(e.second), atomic_cell::collection_member::yes));
         }
 
         m.set_cell(prefix, column, mut.serialize(*ctype));
     } else {
         // for frozen maps, we're overwriting the whole cell
-        if (map_value.is_null()) {
+        if (!value) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
-            m.set_cell(prefix, column, params.make_cell(*column.type, map_value.value.to_view()));
+            auto v = map_value->get_with_protocol_version(cql_serialization_format::internal());
+            m.set_cell(prefix, column, params.make_cell(*column.type, raw_value_view::make_value(v)));
         }
     }
 }
@@ -272,15 +271,15 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 void
 maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
-    expr::constant key = expr::evaluate(_t, params._options);
-    if (key.is_null()) {
+    auto&& key = _t->bind(params._options);
+    if (!key) {
         throw exceptions::invalid_request_exception("Invalid null map key");
     }
-    if (key.is_unset_value()) {
+    if (key == constants::UNSET_VALUE) {
         throw exceptions::invalid_request_exception("Invalid unset map key");
     }
     collection_mutation_description mut;
-    mut.cells.emplace_back(std::move(key.value).to_bytes(), params.make_dead_cell());
+    mut.cells.emplace_back(key->get(params._options).to_bytes(), params.make_dead_cell());
 
     m.set_cell(prefix, column, mut.serialize(*column.type));
 }

@@ -45,7 +45,6 @@
 #include "types/collection.hh"
 #include "utils/chunked_vector.hh"
 #include "cql3/column_identifier.hh"
-#include "cql3/expr/expression.hh"
 
 class list_type_impl;
 
@@ -59,20 +58,27 @@ public:
     /**
      * A tuple of terminal values (e.g (123, 'abc')).
      */
-    class value : public terminal {
+    class value : public multi_item_terminal {
     public:
         std::vector<managed_bytes_opt> _elements;
     public:
-        value(std::vector<managed_bytes_opt> elements, data_type my_type)
-                : terminal(std::move(my_type)), _elements(std::move(elements)) {
+        value(std::vector<managed_bytes_opt> elements)
+                : _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
           return buffer.with_value([&] (const FragmentedView auto& view) {
-              return value(type.split_fragmented(view), type.shared_from_this());
+              return value(type.split_fragmented(view));
           });
         }
         virtual cql3::raw_value get(const query_options& options) override {
             return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
+        }
+
+        const std::vector<managed_bytes_opt>& get_elements() const {
+            return _elements;
+        }
+        virtual std::vector<managed_bytes_opt> copy_elements() const override {
+            return _elements;
         }
         size_t size() const {
             return _elements.size();
@@ -107,7 +113,7 @@ public:
             std::vector<managed_bytes_opt> buffers;
             buffers.resize(_elements.size());
             for (size_t i = 0; i < _elements.size(); ++i) {
-                const auto& value = expr::evaluate_to_raw_view(_elements[i], options);
+                const auto& value = _elements[i]->bind_and_get(options);
                 if (value.is_unset_value()) {
                     throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
                 }
@@ -129,7 +135,12 @@ public:
 
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            return ::make_shared<value>(bind_internal(options), _type);
+            return ::make_shared<value>(bind_internal(options));
+        }
+
+        virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
+            // We don't "need" that override but it saves us the allocation of a Value object if used
+            return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(_type->build_value_fragmented(bind_internal(options))));
         }
     };
 
@@ -141,12 +152,13 @@ public:
     private:
         utils::chunked_vector<std::vector<managed_bytes_opt>> _elements;
     public:
-        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items, data_type my_type)
-            : terminal(std::move(my_type)), _elements(std::move(items)) { }
+        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items) : _elements(std::move(items)) { }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
-        virtual cql3::raw_value get(const query_options& options) override;
+        virtual cql3::raw_value get(const query_options& options) override {
+            throw exceptions::unsupported_operation_exception();
+        }
 
         utils::chunked_vector<std::vector<managed_bytes_opt>> get_split_values() const {
             return _elements;

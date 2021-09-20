@@ -50,8 +50,8 @@
 
 namespace cql3 {
 
-user_types::value::value(std::vector<managed_bytes_opt> elements, data_type my_type)
-        : terminal(std::move(my_type)), _elements(std::move(elements)) {
+user_types::value::value(std::vector<managed_bytes_opt> elements)
+        : _elements(std::move(elements)) {
 }
 
 user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
@@ -62,12 +62,20 @@ user_types::value user_types::value::from_serialized(const raw_value_view& v, co
                     format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
         }
 
-        return value(std::move(elements), type.shared_from_this());
+        return value(std::move(elements));
     });
 }
 
 cql3::raw_value user_types::value::get(const query_options&) {
     return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
+}
+
+const std::vector<managed_bytes_opt>& user_types::value::get_elements() const {
+    return _elements;
+}
+
+std::vector<managed_bytes_opt> user_types::value::copy_elements() const {
+    return _elements;
 }
 
 sstring user_types::value::to_string() const {
@@ -96,7 +104,7 @@ std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const qu
 
     std::vector<managed_bytes_opt> buffers;
     for (size_t i = 0; i < _type->size(); ++i) {
-        const auto& value = expr::evaluate_to_raw_view(_values[i], options);
+        const auto& value = _values[i]->bind_and_get(options);
         if (!_type->is_multi_cell() && value.is_unset_value()) {
             throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}",
                         _type->field_name_as_string(i), _type->get_name_as_string()));
@@ -115,7 +123,11 @@ std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const qu
 }
 
 shared_ptr<terminal> user_types::delayed_value::bind(const query_options& options) {
-    return ::make_shared<user_types::value>(bind_internal(options), _type);
+    return ::make_shared<user_types::value>(bind_internal(options));
+}
+
+cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
+    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value_fragmented(bind_internal(options))));
 }
 
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
@@ -130,12 +142,12 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(_t, params._options);
-    execute(m, row_key, params, column, value);
+    auto value = _t->bind(params._options);
+    execute(m, row_key, params, column, std::move(value));
 }
 
-void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& ut_value) {
-    if (ut_value.is_unset_value()) {
+void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value) {
+    if (value == constants::UNSET_VALUE) {
         return;
     }
 
@@ -158,8 +170,10 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         // perhaps the user intended to leave b.a unchanged.
         mut.tomb = params.make_tombstone_just_before();
 
-        if (!ut_value.is_null()) {
-            const auto& elems = expr::get_user_type_elements(ut_value);
+        if (value) {
+            auto ut_value = static_pointer_cast<user_types::value>(value);
+
+            const auto& elems = ut_value->get_elements();
             // There might be fewer elements given than fields in the type
             // (e.g. when the user uses a short tuple literal), but never more.
             assert(elems.size() <= type.size());
@@ -177,8 +191,8 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 
         m.set_cell(row_key, column, mut.serialize(type));
     } else {
-        if (!ut_value.is_null()) {
-            m.set_cell(row_key, column, params.make_cell(type, ut_value.value.to_view()));
+        if (value) {
+            m.set_cell(row_key, column, params.make_cell(type, value->get(params._options).to_view()));
         } else {
             m.set_cell(row_key, column, params.make_dead_cell());
         }
@@ -188,7 +202,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto value = _t->bind_and_get(params._options);
     if (value.is_unset_value()) {
         return;
     }
