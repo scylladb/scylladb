@@ -368,30 +368,29 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     };
 
     virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
-        _generated_monitors.emplace_back(std::move(sst), _cf);
-        return _generated_monitors.back();
+        auto p = _generated_monitors.emplace(sst, compaction_read_monitor(sst, _cf));
+        return p.first->second;
     }
 
     explicit compaction_read_monitor_generator(column_family& cf)
         : _cf(cf) {}
 
     void remove_sstables(bool is_tracking) {
-        for (auto& rm : _generated_monitors) {
+        for (auto& rm : _generated_monitors | boost::adaptors::map_values) {
             rm.remove_sstable(is_tracking);
         }
     }
 
     void remove_sstable(bool is_tracking, sstables::shared_sstable& sst) {
-        for (auto& rm : _generated_monitors) {
-            if (rm._sst == sst) {
-                rm.remove_sstable(is_tracking);
-                break;
-            }
+        auto it = _generated_monitors.find(sst);
+        if (it != _generated_monitors.end()) {
+            it->second.remove_sstable(is_tracking);
+            _generated_monitors.erase(it);
         }
     }
 private:
      column_family& _cf;
-     std::deque<compaction_read_monitor> _generated_monitors;
+     std::unordered_map<sstables::shared_sstable, compaction_read_monitor> _generated_monitors;
 };
 
 // Writes a temporary sstable run containing only garbage collected data.
