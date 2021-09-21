@@ -1321,35 +1321,6 @@ constant evaluate(term& term_ref, const query_options& options) {
     return evaluate(&term_ref, options);
 }
 
-constant evaluate_IN_list(term* term_ptr, const query_options& options) {
-    if (term_ptr == nullptr) {
-        return constant::make_null();
-    }
-
-    ::shared_ptr<terminal> bound;
-    lists::delayed_value* delayed_list = dynamic_cast<lists::delayed_value*>(term_ptr);
-    if (delayed_list != nullptr) {
-        bound = delayed_list->bind_ignore_null(options);
-    } else {
-        bound = term_ptr->bind(options);
-    }
-
-    if (bound.get() == nullptr) {
-        return constant::make_null();
-    }
-
-    lists::value* list_value = dynamic_cast<lists::value*>(bound.get());
-    if (list_value != nullptr) {
-        // Remove NULL elements from the list
-        std::remove_if(list_value->_elements.begin(), list_value->_elements.end(),
-                       [](const managed_bytes_opt& element) { return !element.has_value(); });
-    }
-
-    raw_value raw_val = bound->get(options);
-    data_type val_type = bound->get_value_type();
-    return constant(std::move(raw_val), std::move(val_type));
-}
-
 constant evaluate_IN_list(const ::shared_ptr<term>& term_ptr, const query_options& options) {
     return evaluate_IN_list(term_ptr.get(), options);
 }
@@ -1622,7 +1593,9 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
     );
 }
 
-static constant evaluate_list(const collection_constructor& collection, const query_options& options) {
+static constant evaluate_list(const collection_constructor& collection,
+                              const query_options& options,
+                              bool skip_null = false) {
     std::vector<managed_bytes> evaluated_elements;
     evaluated_elements.reserve(collection.elements.size());
 
@@ -1630,6 +1603,10 @@ static constant evaluate_list(const collection_constructor& collection, const qu
         constant evaluated_element = evaluate(element, options);
 
         if (evaluated_element.is_null()) {
+            if (skip_null) {
+                continue;
+            }
+
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
 
@@ -1821,6 +1798,22 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
     }
 
     return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
+}
+
+constant evaluate_IN_list(term* term_ptr, const query_options& options) {
+    if (term_ptr == nullptr) {
+        return constant::make_null();
+    }
+
+    expression e = term_ptr->to_expression();
+
+    if (auto collection = std::get_if<collection_constructor>(&e)) {
+        if (collection->style == collection_constructor::style_type::list) {
+            return evaluate_list(*collection, options, true);
+        }
+    }
+
+    return evaluate(e, options);
 }
 
 static void ensure_can_get_value_elements(const constant& val,
