@@ -199,10 +199,10 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         const std::unordered_set<gms::inet_address>& ignore_nodes) {
 
     keyspace& ks = db.find_keyspace(ksname);
-    auto& rs = ks.get_replication_strategy();
+    auto erm = ks.get_effective_replication_map();
 
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
-    auto ret = rs.get_natural_endpoints(tok);
+    auto ret = erm->get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
     if (!data_centers.empty()) {
@@ -269,7 +269,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         }
         if (ret.size() < 1) {
             auto me = utils::fb_utilities::get_broadcast_address();
-            auto others = rs.get_natural_endpoints(tok);
+            auto others = erm->get_natural_endpoints(tok);
             remove_item(others, me);
             throw std::runtime_error(sprint("Repair requires at least two "
                     "endpoints that are neighbors before it can continue, "
