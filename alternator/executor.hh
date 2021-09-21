@@ -84,6 +84,10 @@ namespace parsed {
 class path;
 };
 
+const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema);
+future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map);
+schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
+
 // An attribute_path_map object is used to hold data for various attributes
 // paths (parsed::path) in a hierarchy of attribute paths. Each attribute path
 // has a root attribute, and then modified by member and index operators -
@@ -183,6 +187,8 @@ public:
     future<request_return_type> tag_resource(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> untag_resource(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> update_time_to_live(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> list_streams(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_stream(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request);
