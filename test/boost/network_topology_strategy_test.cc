@@ -72,7 +72,7 @@ static void verify_sorted(const dht::token_range_vector& trv) {
 }
 #endif
 
-static void check_ranges_are_sorted(abstract_replication_strategy* ars, gms::inet_address ep) {
+static void check_ranges_are_sorted(abstract_replication_strategy::ptr_type ars, gms::inet_address ep) {
     // Too slow in debug mode
 #ifndef SEASTAR_DEBUG
     verify_sorted(ars->get_ranges(ep));
@@ -82,11 +82,11 @@ static void check_ranges_are_sorted(abstract_replication_strategy* ars, gms::ine
 }
 
 void strategy_sanity_check(
-    abstract_replication_strategy* ars_ptr,
+    abstract_replication_strategy::ptr_type ars_ptr,
     const std::map<sstring, sstring>& options) {
 
     network_topology_strategy* nts_ptr =
-        dynamic_cast<network_topology_strategy*>(ars_ptr);
+        dynamic_cast<network_topology_strategy*>(ars_ptr.get());
 
     //
     // Check that both total and per-DC RFs in options match the corresponding
@@ -104,7 +104,7 @@ void strategy_sanity_check(
 }
 
 void endpoints_check(
-    abstract_replication_strategy* ars_ptr,
+    abstract_replication_strategy::ptr_type ars_ptr,
     inet_address_vector_replica_set& endpoints) {
 
     // Check the total RF
@@ -129,7 +129,7 @@ void endpoints_check(
     }
 
     network_topology_strategy* nts_ptr =
-        dynamic_cast<network_topology_strategy*>(ars_ptr);
+        dynamic_cast<network_topology_strategy*>(ars_ptr.get());
     for (auto& rf : dc_rf) {
         BOOST_CHECK(rf.second == nts_ptr->get_replication_factor(rf.first));
     }
@@ -148,21 +148,23 @@ auto d2t = [](double d) -> int64_t {
  * @param ring_points ring description
  * @param options strategy options
  * @param ars_ptr strategy object
+ *
+ * Run in a seastar thread.
  */
 void full_ring_check(const std::vector<ring_point>& ring_points,
                      const std::map<sstring, sstring>& options,
-                     abstract_replication_strategy* ars_ptr) {
+                     abstract_replication_strategy::ptr_type ars_ptr,
+                     locator::token_metadata_ptr tmptr) {
     strategy_sanity_check(ars_ptr, options);
+
+    auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get0();
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
         token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
-        uint64_t cache_hit_count = ars_ptr->get_cache_hits_count();
-        auto endpoints1 = ars_ptr->get_natural_endpoints(t1);
+        auto endpoints1 = erm->get_natural_endpoints(t1);
 
         endpoints_check(ars_ptr, endpoints1);
-        // validate that the result hasn't been taken from the cache
-        BOOST_CHECK(cache_hit_count == ars_ptr->get_cache_hits_count());
 
         print_natural_endpoints(cur_point1, endpoints1);
 
@@ -171,14 +173,12 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         // the endpoints has been taken from the cache and that the output is
         // identical to the one not taken from the cache.
         //
-        cache_hit_count = ars_ptr->get_cache_hits_count();
         double cur_point2 = rp.point - 0.2;
         token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
-        auto endpoints2 = ars_ptr->get_natural_endpoints(t2);
+        auto endpoints2 = erm->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, endpoints2);
         check_ranges_are_sorted(ars_ptr, rp.host);
-        BOOST_CHECK(cache_hit_count + 1 == ars_ptr->get_cache_hits_count());
         BOOST_CHECK(endpoints1 == endpoints2);
     }
 }
@@ -226,12 +226,11 @@ void simple_test() {
         {"102", "3"}
     };
 
-    auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
+    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", stm, options323);
 
-    auto ars_ptr = ars_uptr.get();
 
-    full_ring_check(ring_points, options323, ars_ptr);
+    full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
@@ -241,12 +240,10 @@ void simple_test() {
         {"102", "0"}
     };
 
-    ars_uptr = abstract_replication_strategy::create_replication_strategy(
+    ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", stm, options320);
 
-    ars_ptr = ars_uptr.get();
-
-    full_ring_check(ring_points, options320, ars_ptr);
+    full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
     //
     // Check cache invalidation: invalidate the cache and run a full ring
@@ -258,7 +255,7 @@ void simple_test() {
         tm.invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
-    full_ring_check(ring_points, options320, ars_ptr);
+    full_ring_check(ring_points, options320, ars_ptr, stm.get());
 }
 
 // Run in a seastar thread.
@@ -322,12 +319,10 @@ void heavy_origin_test() {
         return tm.update_normal_tokens(tokens);
     }).get();
 
-    auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
+    auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", stm, config_options);
 
-    auto ars_ptr = ars_uptr.get();
-
-    full_ring_check(ring_points, config_options, ars_ptr);
+    full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
 
 
