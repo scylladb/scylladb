@@ -467,11 +467,6 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     output = fsm.get_output();
     BOOST_CHECK(output.committed.size() == 1);  // Entry 1 was committed
 
-    // Now node 2 does election but fails, term stays 1
-    fsm.step(id2, raft::vote_request{current_term + term_t{1}, index_t{2}, current_term});
-    output = fsm.get_output();
-    output = fsm.get_output();
-
     // Add 2nd data entry
     cmd = create_command(2);
     fsm.add_entry(std::move(cmd));

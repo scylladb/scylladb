@@ -554,29 +554,8 @@ void fsm::step(server_id from, Message&& msg) {
             logger.error("{} [term: {}] ignoring read barrier reply with higher term {}",
                 _my_id, _current_term, msg.current_term);
             return;
-        } else if constexpr (std::is_same_v<Message, vote_request>) {
-            if (from == current_leader()) {
-                // Leader request is considered to avoid hung elections
-                // in presence of a disrupting candidate without prevote
-                // while failure detector reports leader is still up
-                logger.trace("{} [term: {}] vote request from leader {}"
-                        "within a minimum election timeout, elapsed {}",
-                        _my_id, _current_term, current_leader(),
-                        election_elapsed());
-            } else if (current_leader() != server_id{} &&
-                    election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
-                // 4.2.3 Disruptive servers
-                // If a server receives a RequestVote request
-                // within the minimum election timeout of
-                // hearing from a current leader, it does not
-                // update its term or grant its vote.
-                // Unless `force` flag is set which indicates that the current leader
-                // wants to stepdown.
-                logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
-                    _my_id, _current_term, election_elapsed(), current_leader());
-                return;
-            }
         }
+
         bool ignore_term = false;
         if constexpr (std::is_same_v<Message, vote_request>) {
             // Do not update term on prevote request

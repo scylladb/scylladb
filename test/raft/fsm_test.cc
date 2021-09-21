@@ -432,10 +432,6 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
     fsm.step(id2, raft::vote_reply{output.term_and_vote->first - term_t{1}, false});
     BOOST_CHECK(fsm.is_leader());
 
-    // Vote request within the election timeout is ignored
-    // (avoiding disruptive leaders).
-    fsm.step(id2, raft::vote_request{output.term_and_vote->first + term_t{1}});
-    BOOST_CHECK(fsm.is_leader());
     // Any message with a newer term after election timeout
     // -> immediately convert to follower
     fd.mark_all_dead();
