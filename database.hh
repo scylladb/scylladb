@@ -1161,14 +1161,14 @@ private:
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg);
 
-    void update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
+    future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
 
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    void create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options);
+    future<> create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options);
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.
@@ -1356,7 +1356,7 @@ public:
 
 private:
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
+    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
     friend future<> db::system_keyspace_make(database& db, service::storage_service& ss);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();

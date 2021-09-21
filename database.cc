@@ -863,7 +863,7 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
         }
     }
 
-    ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
+    co_await ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
     co_await get_notifier().update_keyspace(ks.metadata());
 }
 
@@ -1041,13 +1041,15 @@ bool database::column_family_exists(const utils::UUID& uuid) const {
     return _column_families.contains(uuid);
 }
 
-void
+future<>
 keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options) {
     using namespace locator;
 
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), stm, options);
+
+    return make_ready_future<>();
 }
 
 locator::abstract_replication_strategy&
@@ -1061,9 +1063,9 @@ keyspace::get_replication_strategy() const {
     return *_replication_strategy;
 }
 
-void keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
+future<> keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
     _metadata = std::move(ksm);
-   create_replication_strategy(stm, _metadata->strategy_options());
+   return create_replication_strategy(stm, _metadata->strategy_options());
 }
 
 future<> keyspace::ensure_populated() const {
@@ -1269,7 +1271,7 @@ std::vector<view_ptr> database::get_views() const {
             | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
-void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
+future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
     auto kscfg = make_keyspace_config(*ksm);
     if (system == system_keyspace::yes) {
         kscfg.enable_disk_reads = kscfg.enable_disk_writes = kscfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
@@ -1278,7 +1280,7 @@ void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>&
         kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
     }
     keyspace ks(ksm, std::move(kscfg));
-    ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
+    co_await ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
     _keyspaces.emplace(ksm->name(), std::move(ks));
 }
 
@@ -1293,7 +1295,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_b
         co_return;
     }
 
-    create_in_memory_keyspace(ksm, system);
+    co_await create_in_memory_keyspace(ksm, system);
     auto& ks = _keyspaces.at(ksm->name());
     auto& datadir = ks.datadir();
 
