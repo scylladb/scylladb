@@ -130,7 +130,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     auto s = table.schema();
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
-    auto& rs = _db.local().find_keyspace(ks_name).get_replication_strategy();
+    auto erm = _db.local().find_keyspace(ks_name).get_effective_replication_map();
 
     size_t nr_sst_total = sstables.size();
     size_t nr_sst_current = 0;
@@ -173,7 +173,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                     auto& start = mf->as_partition_start();
                     const auto& current_dk = start.key();
 
-                    current_targets = rs.get_natural_endpoints(current_dk.token());
+                    current_targets = erm->get_natural_endpoints(current_dk.token());
                     if (primary_replica_only && current_targets.size() > 1) {
                         current_targets.resize(1);
                     }

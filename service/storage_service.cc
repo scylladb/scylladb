@@ -2728,20 +2728,14 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
-    auto tmptr = get_token_metadata_ptr();
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, *tmptr).get0();
+        auto eps = ks.get_effective_replication_map()->get_natural_endpoints(end_token);
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
-    auto temp = tmptr->clone_after_all_left().get0();
-
-    // release the token_metadata_ptr
-    // as it's not needed from this point on
-    // after we got clone_after_all_left()
-    tmptr = nullptr;
+    auto temp = get_token_metadata_ptr()->clone_after_all_left().get0();
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
@@ -3191,7 +3185,7 @@ storage_service::construct_range_to_endpoint_map(
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
     for (auto r : ranges) {
-        res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(
+        res[r] = _db.local().find_keyspace(keyspace).get_effective_replication_map()->get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
     }
     return res;
@@ -3476,7 +3470,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
 
 inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos) const {
-    return _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(pos);
+    return _db.local().find_keyspace(keyspace).get_effective_replication_map()->get_natural_endpoints(pos);
 }
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {
