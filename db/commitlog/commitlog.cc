@@ -342,6 +342,21 @@ public:
         // size allocated on disk - i.e. files created (new, reserve, recycled)
         uint64_t total_size_on_disk = 0;
         uint64_t requests_blocked_memory = 0;
+        uint64_t blocked_on_new_segment = 0;
+        uint64_t active_allocations = 0;
+    };
+
+    class scope_increment_counter {
+        uint64_t& _dst;
+    public:
+        scope_increment_counter(uint64_t& dst)
+            : _dst(dst)
+        {
+            ++_dst;
+        }
+        ~scope_increment_counter() {
+            --_dst;
+        }
     };
 
     stats totals;
@@ -1258,6 +1273,8 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
         totals.requests_blocked_memory++;
     }
 
+    scope_increment_counter allocating(totals.active_allocations);
+
     auto permit = co_await std::move(fut);
     sseg_ptr s;
 
@@ -1493,6 +1510,12 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
 
         sm::make_gauge("memory_buffer_bytes", totals.buffer_list_bytes,
                        sm::description("Holds the total number of bytes in internal memory buffers.")),
+
+        sm::make_gauge("blocked_on_new_segment", totals.blocked_on_new_segment,
+                       sm::description("Number of allocations blocked on acquiring new segment.")),
+
+        sm::make_gauge("active_allocations", totals.active_allocations,
+                       sm::description("Current number of active allocations.")),
     });
 }
 
@@ -1738,6 +1761,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         if (!_segments.empty() && _segments.back()->is_still_allocating()) {
             co_return _segments.back();
         }
+
+        scope_increment_counter blocked_on_new(totals.blocked_on_new_segment);
 
         // #9896 - we don't want to issue a new_segment call until
         // the old one has terminated with either result or exception.
@@ -2788,6 +2813,14 @@ uint64_t db::commitlog::get_num_dirty_segments() const {
 
 uint64_t db::commitlog::get_num_active_segments() const {
     return _segment_manager->get_num_active_segments();
+}
+
+uint64_t db::commitlog::get_num_blocked_on_new_segment() const {
+    return _segment_manager->totals.blocked_on_new_segment;
+}
+
+uint64_t db::commitlog::get_num_active_allocations() const {
+    return _segment_manager->totals.active_allocations;
 }
 
 future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors() const {
