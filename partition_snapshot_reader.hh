@@ -29,9 +29,11 @@
 
 template <typename Accounter>
 class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public Accounter {
+    using rows_iter_type = std::conditional_t<Reversing,
+          mutation_partition::rows_type::const_reverse_iterator,
+          mutation_partition::rows_type::const_iterator>;
     struct rows_position {
-        mutation_partition::rows_type::const_iterator _position;
-        mutation_partition::rows_type::const_iterator _end;
+        rows_iter_type _position, _end;
     };
 
     class heap_compare {
