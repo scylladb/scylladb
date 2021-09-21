@@ -112,7 +112,6 @@ public:
                                               const replication_strategy_config_options& config_options);
     static void validate_replication_factor(sstring rf);
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
@@ -205,6 +204,7 @@ public:
     future<replication_map> clone_endpoints_gently() const;
 
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
+    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const;
 };
 
 using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;

@@ -103,11 +103,10 @@ inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpo
     return res->second;
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield can_yield) {
-    token_metadata_ptr tmptr = _shared_token_metadata.get();
-    inet_address_vector_replica_set natural_endpoints = do_get_natural_endpoints(search_token, *tmptr, can_yield);
-    if (tmptr->is_any_node_being_replaced() &&
-        allow_remove_node_being_replaced_from_natural_endpoints()) {
+inet_address_vector_replica_set effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
+    inet_address_vector_replica_set natural_endpoints = get_natural_endpoints(search_token);
+    if (_tmptr->is_any_node_being_replaced() &&
+        _rs->allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
         // to make the replacing node take writes but do not count it for
         // consistency level, because the replacing node can die and go away.
@@ -119,8 +118,8 @@ inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpo
         // LocalStrategy because LocalStrategy always returns the node itself
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
-        auto it = boost::range::remove_if(natural_endpoints, [tmptr = std::move(tmptr)] (gms::inet_address& p) {
-            return tmptr->is_being_replaced(p);
+        auto it = boost::range::remove_if(natural_endpoints, [this] (gms::inet_address& p) {
+            return _tmptr->is_being_replaced(p);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
     }
