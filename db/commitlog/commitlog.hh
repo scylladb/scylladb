@@ -290,6 +290,10 @@ public:
     uint64_t get_flush_limit_exceeded_count() const;
     uint64_t get_num_segments_created() const;
     uint64_t get_num_segments_destroyed() const;
+    uint64_t get_num_blocked_on_new_segment() const;
+    uint64_t get_num_active_allocations() const;
+
+
     /**
      * Get number of inactive (finished), segments lingering
      * due to still being dirty

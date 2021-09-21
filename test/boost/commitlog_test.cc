@@ -782,19 +782,25 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
         };
     });
 
+    uint64_t num_active_allocations = 0, num_blocked_on_new_segment = 0;
+
     // add a flush handler that delays releasing things until disk threshold is reached.
     auto r = log.add_flush_handler([&](cf_id_type, replay_position pos) {
         auto old = std::exchange(rps, rp_set{});
         queue.emplace_back(std::move(old));
-        if (log.disk_footprint() >= log.disk_limit() && !t.armed()) {            
-            t.arm(5s);
+        if (log.disk_footprint() >= log.disk_limit()) {
+            num_active_allocations += log.get_num_active_allocations();
+            num_blocked_on_new_segment += log.get_num_blocked_on_new_segment();
+            if (!t.armed()) {
+                t.arm(5s);
+            }
         }
     });
 
     bool release = true;
 
     try {
-        while (n < 10) {
+        while (n < 10 || !num_active_allocations || !num_blocked_on_new_segment) {
             auto now = timeout_clock::now();            
             rp_handle h = co_await with_timeout(now + 30s, log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
                 dst.fill('1', size);
@@ -810,6 +816,9 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
         co_await log.shutdown();
         co_await log.clear();
     }
+
+    BOOST_REQUIRE_GT(num_active_allocations, 0);
+    BOOST_REQUIRE_GT(num_blocked_on_new_segment, 0);
 }
 
 // Test for #8438 - ensure we can shut down (in orderly fashion)
