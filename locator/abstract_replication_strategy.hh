@@ -115,14 +115,6 @@ public:
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
     replication_strategy_type get_type() const { return _my_type; }
 
-    // get_ranges() returns the list of ranges held by the given endpoint.
-    // The list is sorted, and its elements are non overlapping and non wrap-around.
-    // It the analogue of Origin's getAddressRanges().get(endpoint).
-    // This function is not efficient, and not meant for the fast path.
-    dht::token_range_vector get_ranges(inet_address ep, can_yield can_yield = can_yield::no) const {
-        return do_get_ranges(ep, _shared_token_metadata.get(), can_yield);
-    }
-
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes
     dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield = can_yield::no) const {
@@ -140,18 +132,6 @@ protected:
     inet_address_vector_replica_set do_calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const;
 
 public:
-    // get_primary_ranges() returns the list of "primary ranges" for the given
-    // endpoint. "Primary ranges" are the ranges that the node is responsible
-    // for storing replica primarily, which means this is the first node
-    // returned calculate_natural_endpoints().
-    // This function is the analogue of Origin's
-    // StorageService.getPrimaryRangesForEndpoint().
-    dht::token_range_vector get_primary_ranges(inet_address ep, can_yield);
-    // get_primary_ranges_within_dc() is similar to get_primary_ranges()
-    // except it assigns a primary node for each range within each dc,
-    // instead of one node globally.
-    dht::token_range_vector get_primary_ranges_within_dc(inet_address ep, can_yield);
-
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, can_yield) const;
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, inet_address endpoint, can_yield) const;
 
@@ -195,6 +175,28 @@ public:
 
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const;
+
+    // get_ranges() returns the list of ranges held by the given endpoint.
+    // The list is sorted, and its elements are non overlapping and non wrap-around.
+    // It the analogue of Origin's getAddressRanges().get(endpoint).
+    // This function is not efficient, and not meant for the fast path.
+    dht::token_range_vector get_ranges(inet_address ep) const;
+
+    // get_primary_ranges() returns the list of "primary ranges" for the given
+    // endpoint. "Primary ranges" are the ranges that the node is responsible
+    // for storing replica primarily, which means this is the first node
+    // returned calculate_natural_endpoints().
+    // This function is the analogue of Origin's
+    // StorageService.getPrimaryRangesForEndpoint().
+    dht::token_range_vector get_primary_ranges(inet_address ep) const;
+
+    // get_primary_ranges_within_dc() is similar to get_primary_ranges()
+    // except it assigns a primary node for each range within each dc,
+    // instead of one node globally.
+    dht::token_range_vector get_primary_ranges_within_dc(inet_address ep) const;
+
+private:
+    dht::token_range_vector do_get_ranges(noncopyable_function<bool(inet_address_vector_replica_set)> should_add_range) const;
 };
 
 using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;

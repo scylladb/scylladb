@@ -2189,7 +2189,7 @@ const sstring& database::get_snitch_name() const {
 }
 
 dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
-    return find_keyspace(ks).get_replication_strategy().get_ranges(utils::fb_utilities::get_broadcast_address());
+    return find_keyspace(ks).get_effective_replication_map()->get_ranges(utils::fb_utilities::get_broadcast_address());
 }
 
 /*!

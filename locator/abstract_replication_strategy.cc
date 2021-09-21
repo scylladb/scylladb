@@ -154,6 +154,32 @@ insert_token_range_to_sorted_container_while_unwrapping(
     }
 }
 
+dht::token_range_vector
+effective_replication_map::do_get_ranges(noncopyable_function<bool(inet_address_vector_replica_set)> should_add_range) const {
+    dht::token_range_vector ret;
+    const auto& tm = *_tmptr;
+    auto prev_tok = tm.sorted_tokens().back();
+    for (const auto& tok : tm.sorted_tokens()) {
+        if (should_add_range(get_natural_endpoints(tok))) {
+            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
+        }
+        prev_tok = tok;
+    }
+    return ret;
+}
+
+dht::token_range_vector
+effective_replication_map::get_ranges(inet_address ep) const {
+    return do_get_ranges([ep] (inet_address_vector_replica_set eps) {
+        for (auto a : eps) {
+            if (a == ep) {
+                return true;
+            }
+        }
+        return false;
+    });
+}
+
 // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
 dht::token_range_vector
 abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield) const {
@@ -176,49 +202,27 @@ abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metada
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_primary_ranges(inet_address ep, can_yield can_yield) {
-    dht::token_range_vector ret;
-    token_metadata_ptr tmptr = _shared_token_metadata.get();
-    auto prev_tok = tmptr->sorted_tokens().back();
-    for (auto tok : tmptr->sorted_tokens()) {
-        auto&& eps = do_calculate_natural_endpoints(tok, *tmptr, can_yield);
-        if (eps.size() > 0 && eps[0] == ep) {
-            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
-        }
-        prev_tok = tok;
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
-    }
-    return ret;
+effective_replication_map::get_primary_ranges(inet_address ep) const {
+    return do_get_ranges([ep] (inet_address_vector_replica_set eps) {
+        return eps.size() > 0 && eps[0] == ep;
+    });
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep, can_yield can_yield) {
-    dht::token_range_vector ret;
-    sstring local_dc = _snitch->get_datacenter(ep);
-    token_metadata_ptr tmptr = _shared_token_metadata.get();
-    std::unordered_set<inet_address> local_dc_nodes = tmptr->get_topology().get_datacenter_endpoints().at(local_dc);
-    auto prev_tok = tmptr->sorted_tokens().back();
-    for (auto tok : tmptr->sorted_tokens()) {
-        auto&& eps = do_calculate_natural_endpoints(tok, *tmptr, can_yield);
+effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
+    sstring local_dc = _rs->_snitch->get_datacenter(ep);
+    std::unordered_set<inet_address> local_dc_nodes = _tmptr->get_topology().get_datacenter_endpoints().at(local_dc);
+    return do_get_ranges([ep, local_dc_nodes = std::move(local_dc_nodes)] (inet_address_vector_replica_set eps) {
         // Unlike get_primary_ranges() which checks if ep is the first
         // owner of this range, here we check if ep is the first just
         // among nodes which belong to the local dc of ep.
         for (auto& e : eps) {
             if (local_dc_nodes.contains(e)) {
-                if (e == ep) {
-                    insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
-                }
-                break;
+                return e == ep;
             }
         }
-        prev_tok = tok;
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
-    }
-    return ret;
+        return false;
+    });
 }
 
 std::unordered_multimap<inet_address, dht::token_range>

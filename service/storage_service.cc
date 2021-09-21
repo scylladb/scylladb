@@ -3442,7 +3442,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
 
 dht::token_range_vector
 storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
-    return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
+    return _db.local().find_keyspace(name).get_effective_replication_map()->get_ranges(ep);
 }
 
 dht::token_range_vector

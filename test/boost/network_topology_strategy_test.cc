@@ -61,7 +61,6 @@ void print_natural_endpoints(double point, const inet_address_vector_replica_set
     testlog.debug("{}", strm.str());
 }
 
-#ifndef SEASTAR_DEBUG
 static void verify_sorted(const dht::token_range_vector& trv) {
     auto not_strictly_before = [] (const dht::token_range a, const dht::token_range b) {
         return !b.start()
@@ -71,15 +70,11 @@ static void verify_sorted(const dht::token_range_vector& trv) {
     };
     BOOST_CHECK(boost::adjacent_find(trv, not_strictly_before) == trv.end());
 }
-#endif
 
-static void check_ranges_are_sorted(abstract_replication_strategy::ptr_type ars, gms::inet_address ep) {
-    // Too slow in debug mode
-#ifndef SEASTAR_DEBUG
-    verify_sorted(ars->get_ranges(ep));
-    verify_sorted(ars->get_primary_ranges(ep, utils::can_yield::no));
-    verify_sorted(ars->get_primary_ranges_within_dc(ep, utils::can_yield::no));
-#endif
+static void check_ranges_are_sorted(effective_replication_map_ptr erm, gms::inet_address ep) {
+    verify_sorted(erm->get_ranges(ep));
+    verify_sorted(erm->get_primary_ranges(ep));
+    verify_sorted(erm->get_primary_ranges_within_dc(ep));
 }
 
 void strategy_sanity_check(
@@ -179,7 +174,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         auto endpoints2 = erm->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, endpoints2);
-        check_ranges_are_sorted(ars_ptr, rp.host);
+        check_ranges_are_sorted(erm, rp.host);
         BOOST_CHECK(endpoints1 == endpoints2);
     }
 }

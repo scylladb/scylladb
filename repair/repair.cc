@@ -706,15 +706,14 @@ future<> repair_info::repair_range(const dht::token_range& range) {
 }
 
 static dht::token_range_vector get_primary_ranges_for_endpoint(
-        database& db, sstring keyspace, gms::inet_address ep, utils::can_yield can_yield = utils::can_yield::no) {
-    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
-    return rs.get_primary_ranges(ep, can_yield);
+        database& db, sstring keyspace, gms::inet_address ep) {
+    return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges(ep);
 }
 
 static dht::token_range_vector get_primary_ranges(
-        database& db, sstring keyspace, utils::can_yield can_yield = utils::can_yield::no) {
+        database& db, sstring keyspace) {
     return get_primary_ranges_for_endpoint(db, keyspace,
-            utils::fb_utilities::get_broadcast_address(), can_yield);
+            utils::fb_utilities::get_broadcast_address());
 }
 
 // get_primary_ranges_within_dc() is similar to get_primary_ranges(),
@@ -722,10 +721,8 @@ static dht::token_range_vector get_primary_ranges(
 // across the entire cluster, here each range is assigned a primary
 // owner in each of the clusters.
 static dht::token_range_vector get_primary_ranges_within_dc(
-        database& db, sstring keyspace, utils::can_yield can_yield = utils::can_yield::no) {
-    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
-    return rs.get_primary_ranges_within_dc(
-            utils::fb_utilities::get_broadcast_address(), can_yield);
+        database& db, sstring keyspace) {
+    return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges_within_dc(utils::fb_utilities::get_broadcast_address());
 }
 
 static sstring get_local_dc() {
@@ -1479,8 +1476,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 continue;
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
-            auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(leaving_node, utils::can_yield::yes);
+            dht::token_range_vector ranges = ks.get_effective_replication_map()->get_ranges(leaving_node);
             nr_ranges_total += ranges.size();
         }
         if (reason == streaming::stream_reason::decommission) {
@@ -1502,8 +1498,9 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
+            auto erm = ks.get_effective_replication_map();
             // First get all ranges the leaving node is responsible for
-            dht::token_range_vector ranges = strat.get_ranges(leaving_node, utils::can_yield::yes);
+            dht::token_range_vector ranges = erm->get_ranges(leaving_node);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
             size_t nr_ranges_total = ranges.size();
             size_t nr_ranges_skipped = 0;
