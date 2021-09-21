@@ -141,7 +141,6 @@ public:
 private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
-    virtual inet_address_vector_replica_set do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);
 
     // FIXME: temporary, until all users are converted to use the async version
     virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const = 0;

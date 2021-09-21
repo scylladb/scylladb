@@ -55,13 +55,6 @@ future<inet_address_vector_replica_set> everywhere_replication_strategy::calcula
     return make_ready_future<inet_address_vector_replica_set>(boost::copy_range<inet_address_vector_replica_set>(tm.get_all_endpoints()));
 }
 
-inet_address_vector_replica_set everywhere_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) {
-    if (tm.sorted_tokens().empty()) {
-        return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
-    }
-    return calculate_natural_endpoints_sync(search_token, tm);
-}
-
 size_t everywhere_replication_strategy::get_replication_factor() const {
     return _shared_token_metadata.get()->count_normal_token_owners();
 }

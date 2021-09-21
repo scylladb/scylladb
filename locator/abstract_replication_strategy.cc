@@ -81,22 +81,6 @@ inet_address_vector_replica_set abstract_replication_strategy::do_calculate_natu
     }
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) {
-    const token& key_token = tm.first_token(search_token);
-    auto& cached_endpoints = get_cached_endpoints(tm);
-    auto res = cached_endpoints.find(key_token);
-
-    if (res == cached_endpoints.end()) {
-        auto endpoints = do_calculate_natural_endpoints(search_token, tm, can_yield);
-        cached_endpoints.emplace(key_token, endpoints);
-
-        return endpoints;
-    }
-
-    ++_cache_hits_count;
-    return res->second;
-}
-
 inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const {
     const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
     auto res = erm.get_replication_map().find(key_token);

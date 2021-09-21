@@ -43,13 +43,6 @@ public:
     virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const override;
     virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 
-    /**
-     * We need to override this even if we override calculateNaturalEndpoints,
-     * because the default implementation depends on token calculations but
-     * LocalStrategy may be used before tokens are set up.
-     */
-    inet_address_vector_replica_set do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) override;
-
     virtual void validate_options() const override;
 
     virtual std::optional<std::set<sstring>> recognized_options() const override;
