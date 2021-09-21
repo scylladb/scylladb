@@ -332,6 +332,9 @@ private:
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
 
+    // Holds reversed current clustering key range, if Reversing was needed.
+    std::optional<query::clustering_range> opt_reversed_range;
+
     std::optional<position_in_partition> _last_entry;
     std::optional<position_in_partition> _last_rts;
     mutation_fragment_opt _next_row;
@@ -352,15 +355,15 @@ private:
     }
 
     mutation_fragment_opt read_next() {
-        if (!_next_row && !_no_more_rows_in_current_range) {
-            _next_row = _reader.next_row(*_current_ck_range, _last_entry, _last_rts);
-        }
-
         // We use the names ck_range_snapshot and ck_range_query to denote clustering order.
         // ck_range_snapshot uses the snapshot order, while ck_range_query uses the
         // query order. These two differ if the query was reversed (`Reversing==true`).
         const auto& ck_range_snapshot = *_current_ck_range;
-        const auto& ck_range_query = *_current_ck_range;
+        const auto& ck_range_query = opt_reversed_range ? *opt_reversed_range : ck_range_snapshot;
+
+        if (!_next_row && !_no_more_rows_in_current_range) {
+            _next_row = _reader.next_row(ck_range_snapshot, _last_entry, _last_rts);
+        }
 
         if (_next_row) {
             auto pos_view = _next_row->as_clustering_row().position();
@@ -397,6 +400,15 @@ private:
         _no_more_rows_in_current_range = false;
     }
 
+    void fill_opt_reversed_range() {
+        opt_reversed_range = std::nullopt;
+        if (_current_ck_range != _ck_range_end) {
+            if constexpr (Reversing) {
+                opt_reversed_range = query::reverse(*_current_ck_range);
+            }
+        }
+    }
+
     void do_fill_buffer() {
         while (!is_end_of_stream() && !is_buffer_full()) {
             auto mfopt = read_next();
@@ -406,6 +418,7 @@ private:
                 _last_entry = std::nullopt;
                 _last_rts = std::nullopt;
                 _current_ck_range = std::next(_current_ck_range);
+                fill_opt_reversed_range();
                 on_new_range();
             }
             if (need_preempt()) {
@@ -427,6 +440,7 @@ public:
         , _ck_range_end(_ck_ranges.end())
         , _reader(*_schema, _permit, std::move(snp), region, read_section, digest_requested)
     {
+        fill_opt_reversed_range();
         _reader.with_reserve([&] {
             push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), _reader.partition_tombstone()));
         });
