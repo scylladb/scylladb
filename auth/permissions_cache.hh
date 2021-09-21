@@ -67,6 +67,7 @@ class permissions_cache final {
     using cache_type = utils::loading_cache<
             std::pair<role_or_anonymous, resource>,
             permission_set,
+            1,
             utils::loading_cache_reload_enabled::yes,
             utils::simple_entry_size<permission_set>,
             utils::tuple_hash>;

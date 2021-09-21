@@ -30,6 +30,7 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/join.hpp>
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/future-util.hh>
@@ -76,6 +77,15 @@ struct simple_entry_size {
 /// becomes such that adding the new value is not going to break the size limit. If the new entry's size is greater than
 /// the cache size then the get_XXX(...) method is going to return a future with the loading_cache::entry_is_too_big exception.
 ///
+/// The cache is comprised of 2 dynamic sections.
+/// Total size of both sections should not exceed the maximum cache size.
+/// New cache entry is always added to the unprivileged section.
+/// After a cache entry is read more than SectionHitThreshold times it moves to the second (privileged) cache section.
+/// Both sections' entries obey expiration and reload rules as explained above.
+/// When cache entries need to be evicted due to a size restriction unprivileged section least recently used entries are evicted first.
+/// If cache size is still too big event after there are no more entries in the unprivileged section the least recently used entries
+/// from the privileged section are going to be evicted till the cache size restriction is met.
+///
 /// The size of the cache is defined as a sum of sizes of all cached entries.
 /// The size of each entry is defined by the value returned by the \tparam EntrySize predicate applied on it.
 ///
@@ -86,6 +96,7 @@ struct simple_entry_size {
 ///
 /// \tparam Key type of the cache key
 /// \tparam Tp type of the cached value
+/// \tparam SectionHitThreshold number of hits after which a cache item is going to be moved to the privileged cache section.
 /// \tparam ReloadEnabled if loading_cache_reload_enabled::yes allow reloading the values otherwise don't reload
 /// \tparam EntrySize predicate to calculate the entry size
 /// \tparam Hash hash function
@@ -94,6 +105,7 @@ struct simple_entry_size {
 /// \tparam Alloc elements allocator
 template<typename Key,
          typename Tp,
+         int SectionHitThreshold = 0,
          loading_cache_reload_enabled ReloadEnabled = loading_cache_reload_enabled::no,
          typename EntrySize = simple_entry_size<Tp>,
          typename Hash = std::hash<Key>,
@@ -240,7 +252,9 @@ public:
     }
 
     ~loading_cache() {
-        _lru_list.erase_and_dispose(_lru_list.begin(), _lru_list.end(), [] (ts_value_lru_entry* ptr) { loading_cache::destroy_ts_value(ptr); });
+        auto value_destroyer = [] (ts_value_lru_entry* ptr) { loading_cache::destroy_ts_value(ptr); };
+        _unprivileged_lru_list.erase_and_dispose(_unprivileged_lru_list.begin(), _unprivileged_lru_list.end(), value_destroyer);
+        _lru_list.erase_and_dispose(_lru_list.begin(), _lru_list.end(), value_destroyer);
     }
 
     template <typename LoadFunc>
@@ -263,13 +277,14 @@ public:
                 }
 
                 ts_value_lru_entry* new_lru_entry = Alloc().template allocate_object<ts_value_lru_entry>();
+
+                // Remove the least recently used items if map is too big.
+                shrink();
+
                 new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), *this);
 
                 // This will "touch" the entry and add it to the LRU list - we must do this before the shrink() call.
                 value_ptr vp(new_lru_entry->timestamped_value_ptr());
-
-                // Remove the least recently used items if map is too big.
-                shrink();
 
                 return make_ready_future<value_ptr>(std::move(vp));
             }
@@ -324,11 +339,15 @@ public:
     void remove_if(Pred&& pred) {
         static_assert(std::is_same<bool, std::result_of_t<Pred(const value_type&)>>::value, "Bad Pred signature");
 
-        _lru_list.remove_and_dispose_if([this, &pred] (const ts_value_lru_entry& v) {
+        auto cond_pred = [this, &pred] (const ts_value_lru_entry& v) {
             return pred(v.timestamped_value().value());
-        }, [this] (ts_value_lru_entry* p) {
+        };
+        auto value_destroyer = [this] (ts_value_lru_entry* p) {
             loading_cache::destroy_ts_value(p);
-        });
+        };
+
+        _unprivileged_lru_list.remove_and_dispose_if(cond_pred, value_destroyer);
+        _lru_list.remove_and_dispose_if(cond_pred, value_destroyer);
     }
 
     void remove(const Key& k) {
@@ -341,7 +360,7 @@ public:
     }
 
     size_t size() const {
-        return _lru_list.size();
+        return _lru_list.size() + _unprivileged_lru_list.size();
     }
 
     /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
@@ -354,7 +373,9 @@ private:
         if (!ts_ptr) {
             return;
         }
-        _lru_list.erase_and_dispose(_lru_list.iterator_to(*ts_ptr->lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+        ts_value_lru_entry* lru_entry_ptr = ts_ptr->lru_entry_ptr();
+        lru_list_type& entry_list = container_list(*lru_entry_ptr);
+        entry_list.erase_and_dispose(entry_list.iterator_to(*lru_entry_ptr), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
     }
 
     timestamped_val_ptr ready_entry_ptr(timestamped_val_ptr tv_ptr) {
@@ -364,8 +385,8 @@ private:
         return std::move(tv_ptr);
     }
 
-    lru_list_type& container_list() noexcept {
-        return _lru_list;
+    lru_list_type& container_list(const ts_value_lru_entry& lru_entry_ptr) noexcept {
+        return (lru_entry_ptr.touch_count() > SectionHitThreshold) ? _lru_list : _unprivileged_lru_list;
     }
 
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
@@ -387,15 +408,33 @@ private:
         Alloc().delete_object(val);
     }
 
-    /// This is the core method in the LRU implementation.
-    /// Set the given item as the most recently used item.
-    /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
+    /// This is the core method in the 2 sections LRU implementation.
+    /// Set the given item as the most recently used item at the corresponding cache section.
+    /// The MRU item is going to be at the front of the list, the LRU item - at the back.
+    /// The entry is initially entering the "unprivileged" section (represented by a _unprivileged_lru_list).
+    /// After an entry is touched more than SectionHitThreshold times it moves to a "privileged" section
+    /// (represented by an _lru_list).
+    ///
     /// \param lru_entry Cache item that has been "touched"
-    void touch_lru_entry(ts_value_lru_entry& lru_entry) {
+    void touch_lru_entry_2_sections(ts_value_lru_entry& lru_entry) {
         if (lru_entry.is_linked()) {
-            _lru_list.erase(_lru_list.iterator_to(lru_entry));
+            lru_list_type& lru_list = container_list(lru_entry);
+            lru_list.erase(lru_list.iterator_to(lru_entry));
         }
-        _lru_list.push_front(lru_entry);
+
+        if (lru_entry.touch_count() < SectionHitThreshold) {
+            _logger.trace("Putting key {} into the unpriviledged section", lru_entry.key());
+            _unprivileged_lru_list.push_front(lru_entry);
+            lru_entry.inc_touch_count();
+        } else {
+            _logger.trace("Putting key {} into the priviledged section", lru_entry.key());
+            _lru_list.push_front(lru_entry);
+
+            // Bump it up only once to avoid a wrap around
+            if (lru_entry.touch_count() == SectionHitThreshold) {
+                lru_entry.inc_touch_count();
+            }
+        }
     }
 
     future<> reload(timestamped_val_ptr ts_value_ptr) {
@@ -435,7 +474,7 @@ private:
 
     void drop_expired() {
         auto now = loading_cache_clock_type::now();
-        _lru_list.remove_and_dispose_if([now, this] (const ts_value_lru_entry& lru_entry) {
+        auto expiration_cond = [now, this] (const ts_value_lru_entry& lru_entry) {
             using namespace std::chrono;
             // An entry should be discarded if it hasn't been reloaded for too long or nobody cares about it anymore
             const timestamped_val& v = lru_entry.timestamped_value();
@@ -446,15 +485,27 @@ private:
                 return true;
             }
             return false;
-        }, [this] (ts_value_lru_entry* p) {
+        };
+        auto value_destroyer = [this] (ts_value_lru_entry* p) {
             loading_cache::destroy_ts_value(p);
-        });
+        };
+
+        _unprivileged_lru_list.remove_and_dispose_if(expiration_cond, value_destroyer);
+        _lru_list.remove_and_dispose_if(expiration_cond, value_destroyer);
     }
 
-    // Shrink the cache to the _max_size discarding the least recently used items
+    // Shrink the cache to the _max_size discarding the least recently used items.
+    // Get rid from the entries that were used exactly once first.
     void shrink() {
-        while (_current_size > _max_size) {
-            using namespace std::chrono;
+        using namespace std::chrono;
+
+        while (_current_size >= _max_size && !_unprivileged_lru_list.empty()) {
+            ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
+            _logger.trace("shrink(): {}: dropping the unpriviledged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
+            loading_cache::destroy_ts_value(&lru_entry);
+        }
+
+        while (_current_size >= _max_size) {
             ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
@@ -489,7 +540,7 @@ private:
         // Future is waited on indirectly in `stop()` (via `_timer_reads_gate`).
         // FIXME: error handling
         (void)with_gate(_timer_reads_gate, [this] {
-            auto to_reload = boost::copy_range<utils::chunked_vector<timestamped_val_ptr>>(_lru_list
+            auto to_reload = boost::copy_range<utils::chunked_vector<timestamped_val_ptr>>(boost::range::join(_unprivileged_lru_list, _lru_list)
                     | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _refresh < loading_cache_clock_type::now();
                     })
@@ -508,7 +559,8 @@ private:
     }
 
     loading_values_type _loading_values;
-    lru_list_type _lru_list;
+    lru_list_type _lru_list;              // list containing "privileged" section entries
+    lru_list_type _unprivileged_lru_list; // list containing "unprivileged" section entries
     size_t _current_size = 0;
     size_t _max_size = 0;
     std::chrono::milliseconds _expiry;
@@ -520,8 +572,8 @@ private:
     seastar::gate _timer_reads_gate;
 };
 
-template<typename Key, typename Tp, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
-class loading_cache<Key, Tp, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::value_ptr {
+template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
+class loading_cache<Key, Tp, SectionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::value_ptr {
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
 
@@ -551,8 +603,8 @@ public:
 };
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
-template<typename Key, typename Tp, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
-class loading_cache<Key, Tp, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
+template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
+class loading_cache<Key, Tp, SectionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
 
@@ -563,19 +615,32 @@ public:
 private:
     timestamped_val_ptr _ts_val_ptr;
     loading_cache& _parent;
+    int _touch_count;
 
 public:
     lru_entry(timestamped_val_ptr ts_val, loading_cache& owner_cache)
         : _ts_val_ptr(std::move(ts_val))
         , _parent(owner_cache)
+        , _touch_count(0)
     {
+        // We don't want to allow SectionHitThreshold to be greater than half the max value of _touch_count to avoid a wrap around
+        static_assert(SectionHitThreshold <= std::numeric_limits<typeof(_touch_count)>::max() / 2, "SectionHitThreshold value is too big");
+
         _ts_val_ptr->set_anchor_back_reference(this);
         cache_size() += _ts_val_ptr->size();
     }
 
+    void inc_touch_count() noexcept {
+        ++_touch_count;
+    }
+
+    int touch_count() const noexcept {
+        return _touch_count;
+    }
+
     ~lru_entry() {
         if (safe_link_list_hook::is_linked()) {
-            lru_list_type& lru_list = _parent.container_list();
+            lru_list_type& lru_list = _parent.container_list(*this);
             lru_list.erase(lru_list.iterator_to(*this));
         }
         cache_size() -= _ts_val_ptr->size();
@@ -587,7 +652,7 @@ public:
     }
 
     void touch() noexcept {
-        _parent.touch_lru_entry(*this);
+        _parent.touch_lru_entry_2_sections(*this);
     }
 
     const Key& key() const noexcept {
