@@ -1758,8 +1758,214 @@ std::ostream& operator<<(std::ostream& os, const thread_id& tid) {
 
 } // namespace operation
 
+// An immutable sequence of integers.
+class append_seq {
+public:
+    using elem_t = int32_t;
+
+private:
+    // This represents the sequence of integers from _seq->begin() to _seq->begin() + _end.
+    // The underlying vector *_seq may however be shared by other instances of `append_seq`.
+    // If only one instance is appending, the operation is O(1). However, each subsequent
+    // append performed by another instance sharing this vector must perform a copy.
+
+    lw_shared_ptr<std::vector<elem_t>> _seq; // always engaged
+    size_t _end; // <= _seq.size()
+    elem_t _digest; // sum of all elements modulo `magic`
+
+    static const elem_t magic = 54313;
+
+public:
+    append_seq(std::vector<elem_t> v) : _seq{make_lw_shared<std::vector<elem_t>>(std::move(v))}, _end{_seq->size()}, _digest{0} {
+        for (auto x : *_seq) {
+            _digest = digest_append(_digest, x);
+        }
+    }
+
+    static elem_t digest_append(elem_t d, elem_t x) {
+        assert(0 <= d < magic);
+
+        auto y = (d + x) % magic;
+        assert(digest_remove(y, x) == d);
+        return y;
+    }
+
+    static elem_t digest_remove(elem_t d, elem_t x) {
+        assert(0 <= d < magic);
+        auto y = (d - x) % magic;
+        return y < 0 ? y + magic : y;
+    }
+
+    elem_t digest() const {
+        return _digest;
+    }
+
+    append_seq append(elem_t x) const {
+        assert(_seq);
+        assert(_end <= _seq->size());
+
+        auto seq = _seq;
+        if (_end < seq->size()) {
+            // The shared sequence was already appended beyond _end by someone else.
+            // We need to copy everything so we don't break the other guy.
+            seq = make_lw_shared<std::vector<elem_t>>(seq->begin(), seq->begin() + _end);
+        }
+
+        seq->push_back(x);
+        return {std::move(seq), _end + 1, digest_append(_digest, x)};
+    }
+
+    elem_t operator[](size_t idx) const {
+        assert(_seq);
+        assert(idx < _end);
+        assert(_end <= _seq->size());
+        return (*_seq)[idx];
+    }
+
+    bool empty() const {
+        return _end == 0;
+    }
+
+    std::pair<append_seq, elem_t> pop() {
+        assert(_seq);
+        assert(_end <= _seq->size());
+        assert(0 < _end);
+
+        return {{_seq, _end - 1, digest_remove(_digest, (*_seq)[_end - 1])}, (*_seq)[_end - 1]};
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const append_seq& s) {
+        // TODO: don't copy the elements
+        std::vector<elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
+        return os << format("v {} _end {}", v, s._end);
+    }
+
+private:
+    append_seq(lw_shared_ptr<std::vector<elem_t>> seq, size_t end, elem_t d)
+        : _seq(std::move(seq)), _end(end), _digest(d) {}
+};
+
+struct AppendReg {
+    struct append { int32_t x; };
+    struct ret { int32_t x; append_seq prev; };
+
+    using state_t = append_seq;
+    using input_t = append;
+    using output_t = ret;
+
+    static std::pair<state_t, output_t> delta(const state_t& curr, input_t input) {
+        return {curr.append(input.x), {input.x, curr}};
+    }
+
+    static thread_local const state_t init;
+};
+
+thread_local const AppendReg::state_t AppendReg::init{{0}};
+
+namespace ser {
+    template <>
+    struct serializer<AppendReg::append> {
+        template <typename Output>
+        static void write(Output& buf, const AppendReg::append& op) { serializer<int32_t>::write(buf, op.x); };
+
+        template <typename Input>
+        static AppendReg::append read(Input& buf) { return { serializer<int32_t>::read(buf) }; }
+
+        template <typename Input>
+        static void skip(Input& buf) { serializer<int32_t>::skip(buf); }
+    };
+}
+
+// TODO: do some useful logging in case of consistency violation
+struct append_reg_model {
+    using elem_t = typename append_seq::elem_t;
+
+    struct entry {
+        elem_t elem;
+        elem_t digest;
+    };
+
+    std::vector<entry> seq{{0, 0}};
+    std::unordered_map<elem_t, size_t> index{{0, 0}};
+    std::unordered_set<elem_t> banned;
+    std::unordered_set<elem_t> returned;
+    std::unordered_set<elem_t> in_progress;
+
+    void invocation(elem_t x) {
+        assert(!index.contains(x));
+        assert(!in_progress.contains(x));
+        in_progress.insert(x);
+    }
+
+    void return_success(elem_t x, append_seq prev) {
+        assert(!returned.contains(x));
+        assert(x != 0);
+        assert(!prev.empty());
+        completion(x, std::move(prev));
+        returned.insert(x);
+    }
+
+    void return_failure(elem_t x) {
+        assert(!index.contains(x));
+        assert(in_progress.contains(x));
+        banned.insert(x);
+        in_progress.erase(x);
+    }
+
+private:
+    void completion(elem_t x, append_seq prev) {
+        if (prev.empty()) {
+            assert(x == 0);
+            return;
+        }
+
+        assert(x != 0);
+        assert(!banned.contains(x));
+        assert(in_progress.contains(x) || index.contains(x));
+
+        auto [prev_prev, prev_x] = prev.pop();
+
+        if (auto it = index.find(x); it != index.end()) {
+            // This element was already completed.
+            auto idx = it->second;
+            assert(0 < idx);
+            assert(idx < seq.size());
+
+            assert(prev_x == seq[idx - 1].elem);
+            assert(prev.digest() == seq[idx - 1].digest);
+
+            return;
+        }
+
+        // A new completion.
+        // First, recursively complete the previous elements...
+        completion(prev_x, std::move(prev_prev));
+
+        // Check that the existing tail matches our tail.
+        assert(!seq.empty());
+        assert(prev_x == seq.back().elem);
+        assert(prev.digest() == seq.back().digest);
+
+        // All previous elements were completed, so the new element belongs at the end.
+        index.emplace(x, seq.size());
+        seq.push_back(entry{x, append_seq::digest_append(seq.back().digest, x)});
+        in_progress.erase(x);
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const AppendReg::append& a) {
+    return os << format("append{{{}}}", a.x);
+}
+
+std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
+    return os << format("ret{{{}, {}}}", r.x, r.prev);
+}
+
 SEASTAR_TEST_CASE(basic_generator_test) {
-    using op_type = operation::invocable<operation::either_of<raft_call<ExReg>, network_majority_grudge<ExReg>>>;
+    using op_type = operation::invocable<operation::either_of<
+            raft_call<AppendReg>,
+            network_majority_grudge<AppendReg>
+        >>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
 
     static_assert(operation::Invocable<op_type>);
@@ -1769,7 +1975,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         .network_delay = 3_t,
         .fd_convict_threshold = 50_t,
     };
-    auto history = co_await with_env_and_ticker<ExReg>(cfg, [&cfg, &timer] (environment<ExReg>& env, ticker& t) -> future<history_t> {
+    co_await with_env_and_ticker<AppendReg>(cfg, [&cfg, &timer] (environment<AppendReg>& env, ticker& t) -> future<> {
         t.start({
             {1, [&] {
                 env.tick_network();
@@ -1778,12 +1984,12 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             {10, [&] {
                 env.tick_servers();
             }}
-        }, 50'000);
+        }, 200'000);
 
         auto leader_id = co_await env.new_server(true);
 
         // Wait for the server to elect itself as a leader.
-        assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, 1000_t) == leader_id);
+        assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, 1000_t) == leader_id);
 
 
         size_t no_servers = 5;
@@ -1804,13 +2010,13 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // TODO: make it dynamic based on the current configuration
         std::unordered_set<raft::server_id>& known = servers;
 
-        raft_call<ExReg>::state_type db_call_state {
+        raft_call<AppendReg>::state_type db_call_state {
             .env = env,
             .known = known,
             .timer = timer
         };
 
-        network_majority_grudge<ExReg>::state_type network_majority_grudge_state {
+        network_majority_grudge<AppendReg>::state_type network_majority_grudge_state {
             .env = env,
             .known = known,
             .timer = timer,
@@ -1837,38 +2043,79 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 stagger(seed, timer.now() + 200_t, 1200_t, 1200_t,
                     random(seed, [] (std::mt19937& engine) {
                         static std::uniform_int_distribution<raft::logical_clock::rep> dist{400, 800};
-                        return op_type{network_majority_grudge<ExReg>{raft::logical_clock::duration{dist(engine)}}};
+                        return op_type{network_majority_grudge<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
                     })
                 ),
-                random(seed, [] (std::mt19937& engine) {
-                    return op_type{raft_call<ExReg>{ExReg::exchange{engine()}, 200_t}};
-                })
+                stagger(seed, timer.now(), 0_t, 50_t,
+                    sequence(1, [] (int32_t i) {
+                        assert(i > 0);
+                        return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                    })
+                )
             )
         );
 
-        class history_recorder {
-            history_t& _h;
+        class consistency_checker {
+            append_reg_model _model;
 
         public:
-            history_recorder(history_t& h) : _h(h) {}
+            consistency_checker() : _model{} {}
 
             void operator()(op_type o) {
-                _h.emplace_back(std::move(o));
+                tlogger.debug("invocation {}", o);
+
+                if (auto call_op = std::get_if<raft_call<AppendReg>>(&o.op)) {
+                    _model.invocation(call_op->input.x);
+                }
             }
 
-            void operator()(operation::completion<op_type> o) {
-                _h.emplace_back(std::move(o));
+            void operator()(operation::completion<op_type> c) {
+                auto res = std::get_if<op_type::result_type>(&c.result);
+                assert(res);
+
+                if (auto call_res = std::get_if<raft_call<AppendReg>::result_type>(res)) {
+                    std::visit(make_visitor(
+                    [this] (AppendReg::output_t& out) {
+                        tlogger.debug("completion x: {} prev digest: {}", out.x, out.prev.digest());
+
+                        _model.return_success(out.x, std::move(out.prev));
+                    },
+                    [] (raft::not_a_leader& e) {
+                        // TODO: this is a definite failure, mark it
+                        // _model.return_failure(...)
+                    },
+                    [] (raft::commit_status_unknown& e) {
+                        // TODO assert: only allowed if reconfigurations happen?
+                        // assert(false); TODO debug this
+                    },
+                    [] (auto&) { }
+                    ), *call_res);
+                } else {
+                    tlogger.debug("completion {}", c);
+                }
             }
         };
 
         history_t history;
-        interpreter<op_type, decltype(gen), history_recorder> interp{
+        interpreter<op_type, decltype(gen), consistency_checker> interp{
             std::move(gen), std::move(threads), 1_t, std::move(init_state), timer,
-            history_recorder(history)};
+            consistency_checker{}};
         co_await interp.run();
 
-        co_return history;
-    });
+        // All network partitions are healed, this should succeed:
+        auto last_leader = co_await wait_for_leader<AppendReg>{}(env, std::vector<raft::server_id>{servers.begin(), servers.end()}, timer, 10000_t)
+                .handle_exception_type([] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
+            tlogger.error("Failed to find a leader after 10000 ticks at the end of test (network partitions are healed).");
+            assert(false);
+        });
 
-    tlogger.debug("history: {}", history);
+        // Should also succeed
+        auto last_res = co_await env.get_server(last_leader).call(AppendReg::append{-1}, timer.now() + 10000_t, timer);
+        if (!std::holds_alternative<typename AppendReg::ret>(last_res)) {
+            tlogger.error(
+                    "Expected success on the last call in the test (after electing a leader; network partitions are healed)."
+                    " Got: {}", last_res);
+            assert(false);
+        }
+    });
 }
