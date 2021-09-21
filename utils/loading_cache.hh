@@ -263,7 +263,7 @@ public:
                 }
 
                 ts_value_lru_entry* new_lru_entry = Alloc().template allocate_object<ts_value_lru_entry>();
-                new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), _lru_list, _current_size);
+                new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), *this);
 
                 // This will "touch" the entry and add it to the LRU list - we must do this before the shrink() call.
                 value_ptr vp(new_lru_entry->timestamped_value_ptr());
@@ -364,6 +364,10 @@ private:
         return std::move(tv_ptr);
     }
 
+    lru_list_type& container_list() noexcept {
+        return _lru_list;
+    }
+
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
     timestamped_val_ptr set_find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
         return ready_entry_ptr(_loading_values.find(key, std::move(key_hasher_func), std::move(key_equal_func)));
@@ -381,6 +385,17 @@ private:
 
     static void destroy_ts_value(ts_value_lru_entry* val) {
         Alloc().delete_object(val);
+    }
+
+    /// This is the core method in the LRU implementation.
+    /// Set the given item as the most recently used item.
+    /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
+    /// \param lru_entry Cache item that has been "touched"
+    void touch_lru_entry(ts_value_lru_entry& lru_entry) {
+        if (lru_entry.is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(lru_entry));
+        }
+        _lru_list.push_front(lru_entry);
     }
 
     future<> reload(timestamped_val_ptr ts_value_ptr) {
@@ -547,38 +562,32 @@ public:
 
 private:
     timestamped_val_ptr _ts_val_ptr;
-    lru_list_type& _lru_list;
-    size_t& _cache_size;
+    loading_cache& _parent;
 
 public:
-    lru_entry(timestamped_val_ptr ts_val, lru_list_type& lru_list, size_t& cache_size)
+    lru_entry(timestamped_val_ptr ts_val, loading_cache& owner_cache)
         : _ts_val_ptr(std::move(ts_val))
-        , _lru_list(lru_list)
-        , _cache_size(cache_size)
+        , _parent(owner_cache)
     {
         _ts_val_ptr->set_anchor_back_reference(this);
-        _cache_size += _ts_val_ptr->size();
+        cache_size() += _ts_val_ptr->size();
     }
 
     ~lru_entry() {
         if (safe_link_list_hook::is_linked()) {
-            _lru_list.erase(_lru_list.iterator_to(*this));
+            lru_list_type& lru_list = _parent.container_list();
+            lru_list.erase(lru_list.iterator_to(*this));
         }
-        _cache_size -= _ts_val_ptr->size();
+        cache_size() -= _ts_val_ptr->size();
         _ts_val_ptr->set_anchor_back_reference(nullptr);
     }
 
     size_t& cache_size() noexcept {
-        return _cache_size;
+        return _parent._current_size;
     }
 
-    /// Set this item as the most recently used item.
-    /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
     void touch() noexcept {
-        if (safe_link_list_hook::is_linked()) {
-            _lru_list.erase(_lru_list.iterator_to(*this));
-        }
-        _lru_list.push_front(*this);
+        _parent.touch_lru_entry(*this);
     }
 
     const Key& key() const noexcept {
