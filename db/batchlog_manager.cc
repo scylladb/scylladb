@@ -59,6 +59,7 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "gms/failure_detector.hh"
+#include "gms/gossiper.hh"
 #include "schema_registry.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/frozen_schema.dist.hh"

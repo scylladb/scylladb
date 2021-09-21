@@ -32,6 +32,7 @@
 #include "db/extensions.hh"
 #include "service/storage_proxy.hh"
 #include "gms/versioned_value.hh"
+#include "gms/gossiper.hh"
 #include "seastarx.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "utils/disk-error-handler.hh"

@@ -42,9 +42,9 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/token_metadata.hh"
-#include "gms/gossiper.hh"
 #include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/condition-variable.hh>
 #include "dht/i_partitioner.hh"
 #include "dht/token_range_endpoints.hh"
 #include <seastar/core/sleep.hh>
@@ -90,6 +90,10 @@ class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
 }
+}
+
+namespace netw {
+class messaging_service;
 }
 
 namespace dht {

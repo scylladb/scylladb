@@ -60,6 +60,7 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/find_end.hpp>
 #include "service/storage_proxy.hh"
+#include "gms/gossiper.hh"
 
 logging::logger elogger("alternator-executor");
 

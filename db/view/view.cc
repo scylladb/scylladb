@@ -81,6 +81,7 @@
 #include "types/map.hh"
 #include "utils/error_injection.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
 
 using namespace std::chrono_literals;
