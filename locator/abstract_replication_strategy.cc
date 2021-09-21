@@ -81,10 +81,6 @@ inet_address_vector_replica_set abstract_replication_strategy::do_calculate_natu
     }
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, can_yield can_yield) {
-    return do_get_natural_endpoints(search_token, *_shared_token_metadata.get(), can_yield);
-}
-
 inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) {
     const token& key_token = tm.first_token(search_token);
     auto& cached_endpoints = get_cached_endpoints(tm);
