@@ -50,7 +50,14 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     // snapshot, references to region and alloc section) or dropped on any
     // allocation section retry (_clustering_rows).
     class lsa_partition_reader {
-        const schema& _schema;
+        // _query_schema can be used to retrieve the clustering key order which is used
+        // for result ordering. This schema is passed from the query and is reversed iff
+        // the query was reversed (i.e. `Reversing==true`).
+        const schema& _query_schema;
+        // _snapshot_schema is a schema that induces the same clustering key order as the
+        // schema from the underlying snapshot. The schemas mentioned might differ, for
+        // instance, if a query used newer version of the schema.
+        const schema_ptr _snapshot_schema;
         reader_permit _permit;
         heap_compare _heap_cmp;
 
@@ -89,14 +96,14 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             _clustering_rows.clear();
             _range_tombstones.clear();
 
-            rows_entry::tri_compare rows_cmp(_schema);
+            rows_entry::tri_compare rows_cmp(*_snapshot_schema);
             for (auto&& v : _snapshot->versions()) {
-                mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(_schema, ck_range);
+                mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(*_snapshot_schema, ck_range);
                 auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
                     if (last_row) {
                         return v.partition().clustered_rows().upper_bound(*last_row, rows_cmp);
                     } else {
-                        return v.partition().lower_bound(_schema, ck_range);
+                        return v.partition().lower_bound(*_snapshot_schema, ck_range);
                     }
                 }();
 
@@ -106,9 +113,9 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
 
                 range_tombstone_list::iterator_range rt_slice = [&] () {
                     if (last_rts) {
-                        return v.partition().row_tombstones().upper_slice(_schema, *last_rts, bound_view::from_range_end(ck_range));
+                        return v.partition().row_tombstones().upper_slice(*_snapshot_schema, *last_rts, bound_view::from_range_end(ck_range));
                     } else {
-                        return v.partition().row_tombstones().slice(_schema, ck_range);
+                        return v.partition().row_tombstones().slice(*_snapshot_schema, ck_range);
                     }
                 }();
                 if (rt_slice.begin() != rt_slice.end()) {
@@ -164,7 +171,8 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         explicit lsa_partition_reader(const schema& s, reader_permit permit, partition_snapshot_ptr snp,
                                       logalloc::region& region, logalloc::allocating_section& read_section,
                                       bool digest_requested)
-            : _schema(s)
+            : _query_schema(s)
+            , _snapshot_schema(s.shared_from_this())
             , _permit(permit)
             , _heap_cmp(s)
             , _snapshot(std::move(snp))
@@ -207,23 +215,23 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return in_alloc_section([&] () -> mutation_fragment_opt {
                 maybe_refresh_state(ck_range, last_row, last_rts);
 
-                position_in_partition::equal_compare rows_eq(_schema);
+                position_in_partition::equal_compare rows_eq(_query_schema);
                 while (has_more_rows()) {
                     const rows_entry& e = pop_clustering_row();
                     if (e.dummy()) {
                         continue;
                     }
                     if (_digest_requested) {
-                        e.row().cells().prepare_hash(_schema, column_kind::regular_column);
+                        e.row().cells().prepare_hash(_query_schema, column_kind::regular_column);
                     }
-                    auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _schema, _permit, _schema, e);
+                    auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _query_schema, _permit, _query_schema, e);
                     while (has_more_rows() && rows_eq(peek_row().position(), result.as_clustering_row().position())) {
                         const rows_entry& e = pop_clustering_row();
                         if (_digest_requested) {
-                            e.row().cells().prepare_hash(_schema, column_kind::regular_column);
+                            e.row().cells().prepare_hash(_query_schema, column_kind::regular_column);
                         }
-                        result.mutate_as_clustering_row(_schema, [&] (clustering_row& cr) mutable {
-                            cr.apply(_schema, e);
+                        result.mutate_as_clustering_row(_query_schema, [&] (clustering_row& cr) mutable {
+                            cr.apply(_query_schema, e);
                         });
                     }
                     return result;
@@ -242,12 +250,12 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return in_alloc_section([&] () -> mutation_fragment_opt {
                 maybe_refresh_state(ck_range, last_row, last_rts);
 
-                position_in_partition::less_compare rt_less(_schema);
+                position_in_partition::less_compare rt_less(_query_schema);
                 while (has_more_range_tombstones()
                         && !rt_less(pos, peek_range_tombstone().position())
                         && (_rt_stream.empty() || !rt_less(_rt_stream.peek_next().position(), peek_range_tombstone().position()))) {
                     range_tombstone rt = pop_range_tombstone();
-                    if (rt.trim(_schema,
+                    if (rt.trim(_query_schema,
                                 position_in_partition_view::for_range_start(ck_range),
                                 position_in_partition_view::for_range_end(ck_range))) {
                         _rt_stream.apply(std::move(rt));
