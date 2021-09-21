@@ -115,6 +115,7 @@ private:
     using checked_weak_ptr = typename statements::prepared_statement::checked_weak_ptr;
     using cache_type = utils::loading_cache<cache_key_type,
                                             checked_weak_ptr,
+                                            1,
                                             utils::loading_cache_reload_enabled::yes,
                                             authorized_prepared_statements_cache_size,
                                             std::hash<cache_key_type>,

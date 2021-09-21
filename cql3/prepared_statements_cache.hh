@@ -102,7 +102,14 @@ public:
 
 private:
     using cache_key_type = typename prepared_cache_key_type::cache_key_type;
-    using cache_type = utils::loading_cache<cache_key_type, prepared_cache_entry, utils::loading_cache_reload_enabled::no, prepared_cache_entry_size, utils::tuple_hash, std::equal_to<cache_key_type>, prepared_cache_stats_updater>;
+    // Keep the entry in the "new generation" partition till 2 hits because
+    // every prepared statement is accessed at least twice in the cache:
+    //  1) During PREPARE
+    //  2) During EXECUTE
+    //
+    // Therefore a typical "pollution" (when a cache entry is used only once) would involve
+    // 2 cache hits.
+    using cache_type = utils::loading_cache<cache_key_type, prepared_cache_entry, 2, utils::loading_cache_reload_enabled::no, prepared_cache_entry_size, utils::tuple_hash, std::equal_to<cache_key_type>, prepared_cache_stats_updater>;
     using cache_value_ptr = typename cache_type::value_ptr;
     using checked_weak_ptr = typename statements::prepared_statement::checked_weak_ptr;
 
