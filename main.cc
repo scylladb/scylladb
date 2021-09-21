@@ -617,10 +617,16 @@ int main(int ac, char** av) {
                 throw bad_configuration_error();
             }
 
-            ctx.api_dir = cfg->api_ui_dir();
-            ctx.api_doc = cfg->api_doc_dir();
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
+
+            auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
+            utils::fb_utilities::set_broadcast_address(broadcast_addr);
+            auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
+            utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
+
+            ctx.api_dir = cfg->api_ui_dir();
+            ctx.api_doc = cfg->api_doc_dir();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
             supervisor::notify("starting prometheus API server");
@@ -645,12 +651,6 @@ int main(int ac, char** av) {
                   });
                 }).get();
             }
-
-            auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
-            utils::fb_utilities::set_broadcast_address(broadcast_addr);
-
-            auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
-            utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
 
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
