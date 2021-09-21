@@ -266,17 +266,24 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
 SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
-        utils::loading_cache<int, sstring> loading_cache(num_loaders, 20ms, testlog);
+        utils::loading_cache<int, sstring, 1> loading_cache(num_loaders, 20ms, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
 
         loading_cache.get_ptr(0, loader).discard_result().get();
 
+        // Check new generation eviction
+        BOOST_REQUIRE(loading_cache.size() == 1);
+        sleep(20ms).get();
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+
+        // Check old generation eviction
+        loading_cache.get_ptr(0, loader).discard_result().get();
         BOOST_REQUIRE(loading_cache.find(0) != nullptr);
 
         sleep(20ms).get();
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.find(0), nullptr);
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
     });
 }
 
@@ -339,14 +346,31 @@ SEASTAR_TEST_CASE(test_loading_cache_move_item_to_mru_list_front_on_sync_op) {
     });
 }
 
-SEASTAR_TEST_CASE(test_loading_cache_loading_reloading) {
+SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_old_gen) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
-        loading_cache.get_ptr(0, loader).discard_result().get();
+        // Push the entry into the old generation partition. Make sure it's being reloaded.
+        loading_cache.get_ptr(0).discard_result().get();
+        loading_cache.get_ptr(0).discard_result().get();
+        sleep(60ms).get();
+        BOOST_REQUIRE(eventually_true([&] { return load_count >= 3; }));
+    });
+}
+
+SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_new_gen) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        load_count = 0;
+        utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+        prepare().get();
+        // Load one entry into the new generation partition.
+        // Make sure it's reloaded.
+        loading_cache.get_ptr(0).discard_result().get();
         sleep(60ms).get();
         BOOST_REQUIRE(eventually_true([&] { return load_count >= 2; }));
     });
@@ -370,11 +394,58 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction) {
     });
 }
 
+SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction_new_gen_first) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        load_count = 0;
+        utils::loading_cache<int, sstring, 1> loading_cache(4, 1h, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        // Touch the value with the key "-1" twice
+        loading_cache.get_ptr(-1, loader).discard_result().get();
+        loading_cache.find(-1);
+
+        for (int i = 0; i < num_loaders; ++i) {
+            loading_cache.get_ptr(i, loader).discard_result().get();
+        }
+
+        BOOST_REQUIRE_EQUAL(load_count, num_loaders + 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.size(), 4);
+        // Make sure that the value we touched twice is still in the cache
+        BOOST_REQUIRE(loading_cache.find(-1) != nullptr);
+    });
+}
+
+SEASTAR_TEST_CASE(test_loading_cache_eviction_new_gen) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        load_count = 0;
+        utils::loading_cache<int, sstring, 1> loading_cache(4, 10ms, testlog);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        // Touch the value with the key "-1" twice
+        loading_cache.get_ptr(-1, loader).discard_result().get();
+        loading_cache.find(-1);
+
+        for (int i = 0; i < num_loaders; ++i) {
+            loading_cache.get_ptr(i, loader).discard_result().get();
+        }
+
+        // Make sure that the value we touched twice is eventually evicted
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.find(-1), nullptr);
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(1, 100ms, 10ms, testlog, loader);
+        utils::loading_cache<int, sstring, 0, utils::loading_cache_reload_enabled::yes> loading_cache(1, 100ms, 10ms, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
