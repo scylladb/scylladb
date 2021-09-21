@@ -1849,9 +1849,13 @@ class scylla_memory(gdb.Command):
                           unused='unused', wasted_percent='wst%'))
         total_small_bytes = 0
         sc = span_checker()
+        free_object_size = gdb.parse_and_eval('sizeof(\'seastar::memory::free_object\')')
         for i in range(int(nr)):
             sp = small_pools['_u']['a'][i]
             object_size = int(sp['_object_size'])
+            # Skip pools that are smaller than sizeof(free_object), they won't have any content
+            if object_size < free_object_size:
+                continue
             span_size = int(sp['_span_sizes']['preferred']) * page_size
             free_count = int(sp['_free_count'])
             pages_in_use = 0
