@@ -88,6 +88,7 @@
 #include "service/priority_manager.hh"
 #include "utils/generation-number.hh"
 #include <seastar/core/coroutine.hh>
+#include "utils/stall_free.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -1383,13 +1384,36 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
+    std::vector<std::unordered_map<sstring, locator::mutable_effective_replication_map_ptr>> pending_effective_replication_maps;
+    pending_effective_replication_maps.resize(smp::count);
 
     try {
         auto base_shard = this_shard_id();
         pending_token_metadata_ptr[base_shard] = tmptr;
         // clone a local copy of updated token_metadata on all other shards
-        co_await smp::invoke_on_others([&, base_shard, tmptr] () -> future<> {
+        co_await smp::invoke_on_others(base_shard, [&, base_shard, tmptr] () -> future<> {
             pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tmptr->clone_async());
+        });
+
+        // Precalculate new effective_replication_map for all keyspaces
+        // and clone to all shards;
+        auto& db = _db.local();
+        auto keyspaces = db.get_non_system_keyspaces();
+        for (auto& ks_name : keyspaces) {
+            auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+            auto erm = co_await calculate_effective_replication_map(std::move(rs), tmptr);
+            pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
+        }
+        co_await container().invoke_on_others([&, base_shard] (storage_service& ss) -> future<> {
+            auto& db = ss._db.local();
+            for (auto& ks_name : keyspaces) {
+                auto local_rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+                const auto& erm0 = pending_effective_replication_maps[base_shard].at(ks_name);
+                auto local_replication_map = co_await erm0->clone_endpoints_gently();
+                auto local_tmptr = pending_token_metadata_ptr[this_shard_id()];
+                auto erm = make_effective_replication_map(std::move(local_rs), std::move(local_tmptr), std::move(local_replication_map));
+                pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
+            }
         });
     } catch (...) {
         ex = std::current_exception();
@@ -1399,9 +1423,11 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     if (ex) {
         try {
             co_await smp::invoke_on_all([&] () -> future<> {
-                if (auto tmptr = std::move(pending_token_metadata_ptr[this_shard_id()])) {
-                    co_await tmptr->clear_gently();
-                }
+                auto tmptr = std::move(pending_token_metadata_ptr[this_shard_id()]);
+                auto erms = std::move(pending_effective_replication_maps[this_shard_id()]);
+
+                co_await utils::clear_gently(erms);
+                co_await utils::clear_gently(tmptr);
             });
         } catch (...) {
             slogger.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", std::current_exception());
@@ -1414,6 +1440,14 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     try {
         co_await container().invoke_on_all([&] (storage_service& ss) {
             ss._shared_token_metadata.set(std::move(pending_token_metadata_ptr[this_shard_id()]));
+
+            auto& erms = pending_effective_replication_maps[this_shard_id()];
+            for (auto it = erms.begin(); it != erms.end(); ) {
+                auto& db = ss._db.local();
+                auto& ks = db.find_keyspace(it->first);
+                ks.update_effective_replication_map(std::move(it->second));
+                it = erms.erase(it);
+            }
         });
     } catch (...) {
         // applying the changes on all shards should never fail

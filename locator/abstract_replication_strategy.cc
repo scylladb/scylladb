@@ -24,6 +24,7 @@
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/stall_free.hh"
 
 namespace locator {
@@ -351,6 +352,17 @@ future<mutable_effective_replication_map_ptr> calculate_effective_replication_ma
     }
 
     co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map));
+}
+
+future<replication_map> effective_replication_map::clone_endpoints_gently() const {
+    replication_map cloned_endpoints;
+
+    for (auto& i : _replication_map) {
+        cloned_endpoints.emplace(i.first, i.second);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return cloned_endpoints;
 }
 
 inet_address_vector_replica_set effective_replication_map::get_natural_endpoints(const token& search_token) const {

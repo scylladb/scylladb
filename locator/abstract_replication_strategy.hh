@@ -203,6 +203,8 @@ public:
 
     future<> clear_gently() noexcept;
 
+    future<replication_map> clone_endpoints_gently() const;
+
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
 };
 

@@ -1181,6 +1181,9 @@ public:
      */
     locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
+    locator::abstract_replication_strategy::ptr_type get_replication_strategy_ptr() const {
+        return _replication_strategy;
+    }
 
     locator::effective_replication_map_ptr get_effective_replication_map() const {
         return _effective_replication_map;
