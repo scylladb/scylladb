@@ -1155,6 +1155,7 @@ public:
     };
 private:
     locator::abstract_replication_strategy::ptr_type _replication_strategy;
+    locator::mutable_effective_replication_map_ptr _effective_replication_map;
     lw_shared_ptr<keyspace_metadata> _metadata;
     shared_promise<> _populated;
     config _config;
@@ -1169,6 +1170,8 @@ public:
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
     future<> create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options);
+    void update_effective_replication_map(locator::mutable_effective_replication_map_ptr erm);
+
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.
@@ -1178,6 +1181,11 @@ public:
      */
     locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
+
+    locator::effective_replication_map_ptr get_effective_replication_map() const {
+        return _effective_replication_map;
+    }
+
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_or_update_column_family(const schema_ptr& s);

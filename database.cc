@@ -57,6 +57,7 @@
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
+#include "utils/stall_free.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -1049,7 +1050,12 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), stm, options);
 
-    return make_ready_future<>();
+    update_effective_replication_map(co_await calculate_effective_replication_map(_replication_strategy, stm.get()));
+}
+
+void
+keyspace::update_effective_replication_map(locator::mutable_effective_replication_map_ptr erm) {
+    _effective_replication_map = std::move(erm);
 }
 
 locator::abstract_replication_strategy&
