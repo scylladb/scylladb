@@ -71,7 +71,7 @@ lists::value::from_serialized(const raw_value_view& val, const list_type_impl& t
 
 cql3::raw_value
 lists::value::get(const query_options& options) {
-    return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
+    return cql3::raw_value::make_value(get_with_protocol_version(cql_serialization_format::internal()));
 }
 
 managed_bytes
