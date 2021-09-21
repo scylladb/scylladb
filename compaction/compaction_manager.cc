@@ -846,17 +846,16 @@ future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
     }
     return seastar::async([this, cf, &db] {
         auto schema = cf->schema();
-        auto& rs = db.find_keyspace(schema->ks_name()).get_replication_strategy();
-        auto sorted_owned_ranges = rs.get_ranges(utils::fb_utilities::get_broadcast_address(), utils::can_yield::yes);
+        auto sorted_owned_ranges = db.get_keyspace_local_ranges(schema->ks_name());
         auto sstables = std::vector<sstables::shared_sstable>{};
         const auto candidates = get_candidates(*cf);
         std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
             seastar::thread::maybe_yield();
             return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
         });
-        return sstables;
-    }).then([this, cf, &db] (std::vector<sstables::shared_sstable> sstables) {
-        return rewrite_sstables(cf, sstables::compaction_type_options::make_cleanup(db),
+        return std::tuple<dht::token_range_vector, std::vector<sstables::shared_sstable>>(sorted_owned_ranges, sstables);
+    }).then_unpack([this, cf, &db] (dht::token_range_vector owned_ranges, std::vector<sstables::shared_sstable> sstables) {
+        return rewrite_sstables(cf, sstables::compaction_type_options::make_cleanup(std::move(owned_ranges)),
                 [sstables = std::move(sstables)] (const table&) { return sstables; });
     });
 }
@@ -881,14 +880,16 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, column_family
                 }
             }
             return make_ready_future<>();
-        }).then([this, &db, cf, &tables] {
+        }).then([&db, cf] {
+             return db.get_keyspace_local_ranges(cf->schema()->ks_name());
+        }).then([this, &db, cf, &tables] (dht::token_range_vector owned_ranges) {
             // doing a "cleanup" is about as compacting as we need
             // to be, provided we get to decide the tables to process,
             // and ignoring any existing operations.
             // Note that we potentially could be doing multiple
             // upgrades here in parallel, but that is really the users
             // problem.
-            return rewrite_sstables(cf, sstables::compaction_type_options::make_upgrade(db), [&](auto&) mutable {
+            return rewrite_sstables(cf, sstables::compaction_type_options::make_upgrade(std::move(owned_ranges)), [&](auto&) mutable {
                 return std::exchange(tables, {});
             });
         });
