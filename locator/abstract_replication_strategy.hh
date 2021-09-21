@@ -55,6 +55,8 @@ using replication_strategy_config_options = std::map<sstring, sstring>;
 
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
 
+class effective_replication_map;
+
 class abstract_replication_strategy {
 private:
     long _last_invalidated_ring_version = 0;
@@ -63,6 +65,8 @@ private:
 
     replication_map&
     get_cached_endpoints(const token_metadata& tm);
+
+    friend class effective_replication_map;
 protected:
     replication_strategy_config_options _config_options;
     const shared_token_metadata& _shared_token_metadata;
@@ -108,6 +112,7 @@ public:
                                               const replication_strategy_config_options& config_options);
     static void validate_replication_factor(sstring rf);
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token, can_yield = can_yield::no);
+    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
@@ -134,6 +139,7 @@ public:
     dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield = can_yield::no) const {
         return do_get_ranges(ep, std::move(tmptr), can_yield);
     }
+
 private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
@@ -167,5 +173,47 @@ public:
 
     dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, can_yield) const;
 };
+
+// Holds the full replication_map resulting from applying the
+// effective replication strategy over the given token_metadata
+// and replication_strategy_config_options.
+class effective_replication_map {
+private:
+    abstract_replication_strategy::ptr_type _rs;
+    token_metadata_ptr _tmptr;
+    replication_map _replication_map;
+
+    friend class abstract_replication_strategy;
+public:
+    explicit effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map) noexcept
+        : _rs(std::move(rs))
+        , _tmptr(std::move(tmptr))
+        , _replication_map(std::move(replication_map))
+    { }
+    effective_replication_map() = delete;
+    effective_replication_map(effective_replication_map&&) = default;
+
+    const token_metadata_ptr& get_token_metadata_ptr() const noexcept {
+        return _tmptr;
+    }
+
+    const replication_map& get_replication_map() const noexcept {
+        return _replication_map;
+    }
+
+    future<> clear_gently() noexcept;
+
+    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
+};
+
+using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;
+using mutable_effective_replication_map_ptr = lw_shared_ptr<effective_replication_map>;
+
+inline mutable_effective_replication_map_ptr make_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map) {
+    return make_lw_shared<effective_replication_map>(std::move(rs), std::move(tmptr), std::move(replication_map));
+}
+
+// Apply the replication strategy over the current configuration and the given token_metadata.
+future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
 
 }

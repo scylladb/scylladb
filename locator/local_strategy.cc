@@ -54,6 +54,10 @@ size_t local_strategy::get_replication_factor() const {
     return 1;
 }
 
+inet_address_vector_replica_set local_strategy::get_natural_endpoints(const token&, const effective_replication_map&) const {
+    return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
+}
+
 using registry = class_registrator<abstract_replication_strategy, local_strategy, const shared_token_metadata&, snitch_ptr&, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
 static registry registrator_short_name("LocalStrategy");

@@ -24,6 +24,7 @@
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
+#include "utils/stall_free.hh"
 
 namespace locator {
 
@@ -96,6 +97,12 @@ inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_en
     }
 
     ++_cache_hits_count;
+    return res->second;
+}
+
+inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const {
+    const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
+    auto res = erm.get_replication_map().find(key_token);
     return res->second;
 }
 
@@ -334,6 +341,25 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
         temp.clear_gently().get();
     }
     return ret;
+}
+
+future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
+    replication_map replication_map;
+
+    for (const auto &t : tmptr->sorted_tokens()) {
+        replication_map.emplace(t, co_await rs->calculate_natural_endpoints(t, *tmptr));
+    }
+
+    co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map));
+}
+
+inet_address_vector_replica_set effective_replication_map::get_natural_endpoints(const token& search_token) const {
+    return _rs->get_natural_endpoints(search_token, *this);
+}
+
+future<> effective_replication_map::clear_gently() noexcept {
+    co_await utils::clear_gently(_replication_map);
+    co_await utils::clear_gently(_tmptr);
 }
 
 } // namespace locator
