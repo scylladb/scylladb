@@ -51,15 +51,17 @@ using can_yield = utils::can_yield;
 
 using replication_strategy_config_options = std::map<sstring, sstring>;
 
+using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
+
 class abstract_replication_strategy {
 private:
     long _last_invalidated_ring_version = 0;
-    std::unordered_map<token, inet_address_vector_replica_set> _cached_endpoints;
+    replication_map _cached_endpoints;
     uint64_t _cache_hits_count = 0;
 
     static logging::logger logger;
 
-    std::unordered_map<token, inet_address_vector_replica_set>&
+    replication_map&
     get_cached_endpoints(const token_metadata& tm);
 protected:
     replication_strategy_config_options _config_options;
