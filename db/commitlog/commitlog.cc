@@ -1499,7 +1499,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     }())
     , max_size(std::min<size_t>(std::numeric_limits<position_type>::max() / (1024 * 1024), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1)) * 1024 * 1024)
     , max_mutation_size(max_size >> 1)
-    , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024)
+    , max_disk_size(std::max(2 * max_size, size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024))
     // our threshold for trying to force a flush. needs heristics, for now max - segment_size/2.
     , disk_usage_threshold([&] {
         if (cfg.commitlog_flush_threshold_in_mb.has_value()) {
