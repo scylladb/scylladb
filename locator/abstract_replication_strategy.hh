@@ -58,14 +58,6 @@ using replication_map = std::unordered_map<token, inet_address_vector_replica_se
 class effective_replication_map;
 
 class abstract_replication_strategy {
-private:
-    long _last_invalidated_ring_version = 0;
-    replication_map _cached_endpoints;
-    uint64_t _cache_hits_count = 0;
-
-    replication_map&
-    get_cached_endpoints(const token_metadata& tm);
-
     friend class effective_replication_map;
 protected:
     replication_strategy_config_options _config_options;
@@ -121,7 +113,6 @@ public:
     // returns the node itself as the natural_endpoints and the node will not
     // appear in the pending_endpoints.
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
-    uint64_t get_cache_hits_count() const { return _cache_hits_count; }
     replication_strategy_type get_type() const { return _my_type; }
 
     // get_ranges() returns the list of ranges held by the given endpoint.

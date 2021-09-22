@@ -124,17 +124,6 @@ void abstract_replication_strategy::validate_replication_factor(sstring rf)
     }
 }
 
-inline std::unordered_map<token, inet_address_vector_replica_set>&
-abstract_replication_strategy::get_cached_endpoints(const token_metadata& tm) {
-    auto ring_version = tm.get_ring_version();
-    if (_last_invalidated_ring_version != ring_version) {
-        _cached_endpoints.clear();
-        _last_invalidated_ring_version = ring_version;
-    }
-
-    return _cached_endpoints;
-}
-
 static
 void
 insert_token_range_to_sorted_container_while_unwrapping(
