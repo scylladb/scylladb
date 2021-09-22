@@ -258,7 +258,7 @@ public:
         : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length)
     {}
 
-    ~reader_concurrency_semaphore();
+    virtual ~reader_concurrency_semaphore();
 
     reader_concurrency_semaphore(const reader_concurrency_semaphore&) = delete;
     reader_concurrency_semaphore& operator=(const reader_concurrency_semaphore&) = delete;
@@ -313,7 +313,17 @@ public:
 
     /// Clear all inactive reads.
     void clear_inactive_reads();
-
+private:
+    // The following two functions are extension points for
+    // future inheriting classes that needs to run some stop
+    // logic just before or just after the current stop logic.
+    virtual future<> stop_ext_pre() {
+        return make_ready_future<>();
+    }
+    virtual future<> stop_ext_post() {
+        return make_ready_future<>();
+    }
+public:
     /// Stop the reader_concurrency_semaphore and clear all inactive reads.
     ///
     /// Wait on all async background work to complete.
