@@ -22,10 +22,10 @@ service/storage_proxy* @gleb-cloudius
 compaction/* @raphaelsc @nyh
 
 # CQL TRANSPORT LAYER
-transport/* @penberg
+transport/*
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec @penberg @psarna
+cql3/* @tgrabiec @psarna
 
 # COUNTERS
 counters* @haaawk @jul-stas
@@ -35,7 +35,7 @@ tests/counter_test* @haaawk @jul-stas
 gms/* @tgrabiec @asias
 
 # DOCKER
-dist/docker/* @penberg
+dist/docker/*
 
 # LSA
 utils/logalloc* @tgrabiec
@@ -58,9 +58,9 @@ service/migration* @tgrabiec @nyh
 schema* @tgrabiec @nyh
 
 # SECONDARY INDEXES
-db/index/* @nyh @penberg @psarna
-cql3/statements/*index* @nyh @penberg @psarna
-test/boost/*index* @nyh @penberg @psarna
+db/index/* @nyh @psarna
+cql3/statements/*index* @nyh @psarna
+test/boost/*index* @nyh @psarna
 
 # SSTABLES
 sstables/* @tgrabiec @raphaelsc @nyh
