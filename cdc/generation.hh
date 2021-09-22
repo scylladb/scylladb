@@ -148,34 +148,6 @@ public:
  */
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
 
-/* Generate a new set of CDC streams and insert it into the internal distributed CDC generations table.
- * Returns the ID of this new generation.
- *
- * Should be called when starting the node for the first time (i.e., joining the ring).
- *
- * Assumes that the system_distributed_keyspace service is initialized.
- * `cluster_supports_generations_v2` must be `true` if and only if the `CDC_GENERATIONS_V2` feature is enabled.
- *
- * If `CDC_GENERATIONS_V2` is enabled, the new generation will be inserted into
- * `system_distributed_everywhere.cdc_generation_descriptions_v2` and the returned ID will be in the v2 format.
- * Otherwise the new generation will be limited in size, causing suboptimal stream distribution, it will be inserted
- * into `system_distributed.cdc_generation_descriptions` and the returned ID will be in the v1 format.
- * The second case should happen only when we create new generations in a mixed cluster.
- *
- * The caller of this function is expected to insert the ID into the gossiper as fast as possible,
- * so that other nodes learn about the generation before their clocks cross the generation's timestamp
- * (not guaranteed in the current implementation, but expected to be the common case;
- *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
- */
-future<cdc::generation_id> make_new_cdc_generation(
-        const db::config& cfg,
-        const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata_ptr tmptr,
-        const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
-        bool add_delay,
-        bool cluster_supports_generations_v2);
-
 /* Part of the upgrade procedure. Useful in case where the version of Scylla that we're upgrading from
  * used the "cdc_streams_descriptions" table. This procedure ensures that the new "cdc_streams_descriptions_v2"
  * table contains streams of all generations that were present in the old table and may still contain data

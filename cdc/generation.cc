@@ -332,7 +332,12 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-future<cdc::generation_id> make_new_cdc_generation(
+future<cdc::generation_id> generation_service::make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
+    return make_new_cdc_generation(_cfg, std::move(bootstrap_tokens), _token_metadata.get(), _gossiper, _sys_dist_ks.local(),
+            add_delay, _feature_service.cluster_supports_cdc_generations_v2());
+}
+
+future<cdc::generation_id> generation_service::make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
@@ -859,10 +864,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         co_return;
     }
 
-    const auto new_gen_id = co_await make_new_cdc_generation(_cfg,
-            {}, std::move(tmptr), _gossiper, *sys_dist_ks,
-            true /* add delay */,
-            _feature_service.cluster_supports_cdc_generations_v2());
+    const auto new_gen_id = co_await make_new_generation({}, true);
 
     // Need to artificially update our STATUS so other nodes handle the generation ID change
     // FIXME: after 0e0282cd nodes do not require a STATUS update to react to CDC generation changes.

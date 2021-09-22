@@ -601,11 +601,7 @@ void storage_service::join_token_ring(int delay) {
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                _cdc_gen_id = cdc::make_new_cdc_generation(_db.local().get_config(),
-                        _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                        _sys_dist_ks.local(),
-                        !_for_testing && !is_first_node() /* add_delay */,
-                        _feature_service.cluster_supports_cdc_generations_v2()).get0();
+                _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !_for_testing && !is_first_node()).get0();
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -698,11 +694,7 @@ void storage_service::bootstrap() {
         // We don't do any other generation switches (unless we crash before complecting bootstrap).
         assert(!_cdc_gen_id);
 
-        _cdc_gen_id = cdc::make_new_cdc_generation(_db.local().get_config(),
-                _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                _sys_dist_ks.local(),
-                !_for_testing && !is_first_node() /* add_delay */,
-                _feature_service.cluster_supports_cdc_generations_v2()).get0();
+        _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !_for_testing && !is_first_node()).get0();
 
       if (!bootstrap_rbno) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node

@@ -117,6 +117,27 @@ public:
 
     future<> check_and_repair_cdc_streams();
 
+    /* Generate a new set of CDC streams and insert it into the internal distributed CDC generations table.
+     * Returns the ID of this new generation.
+     *
+     * Should be called when starting the node for the first time (i.e., joining the ring).
+     *
+     * Assumes that the system_distributed_keyspace service is initialized.
+     * `cluster_supports_generations_v2` must be `true` if and only if the `CDC_GENERATIONS_V2` feature is enabled.
+     *
+     * If `CDC_GENERATIONS_V2` is enabled, the new generation will be inserted into
+     * `system_distributed_everywhere.cdc_generation_descriptions_v2` and the returned ID will be in the v2 format.
+     * Otherwise the new generation will be limited in size, causing suboptimal stream distribution, it will be inserted
+     * into `system_distributed.cdc_generation_descriptions` and the returned ID will be in the v1 format.
+     * The second case should happen only when we create new generations in a mixed cluster.
+     *
+     * The caller of this function is expected to insert the ID into the gossiper as fast as possible,
+     * so that other nodes learn about the generation before their clocks cross the generation's timestamp
+     * (not guaranteed in the current implementation, but expected to be the common case;
+     *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
+     */
+    future<cdc::generation_id> make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay);
+
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
      * and start using it for CDC log writes if it's not obsolete.
@@ -148,6 +169,15 @@ private:
      * we need to check if the instance is still there. Storing the shared pointer will keep it alive.
      */
     shared_ptr<db::system_distributed_keyspace> get_sys_dist_ks();
+
+    future<cdc::generation_id> make_new_cdc_generation(
+        const db::config& cfg,
+        const std::unordered_set<dht::token>& bootstrap_tokens,
+        const locator::token_metadata_ptr tmptr,
+        const gms::gossiper& g,
+        db::system_distributed_keyspace& sys_dist_ks,
+        bool add_delay,
+        bool cluster_supports_generations_v2);
 };
 
 } // namespace cdc
