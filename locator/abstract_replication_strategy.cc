@@ -222,31 +222,27 @@ effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     });
 }
 
-std::unordered_multimap<inet_address, dht::token_range>
-abstract_replication_strategy::get_address_ranges(const token_metadata& tm, can_yield can_yield) const {
+future<std::unordered_multimap<inet_address, dht::token_range>>
+abstract_replication_strategy::get_address_ranges(const token_metadata& tm) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector r = tm.get_primary_ranges_for(t);
-        auto eps = do_calculate_natural_endpoints(t, tm, can_yield);
+        auto eps = co_await calculate_natural_endpoints(t, tm);
         rslogger.debug("token={}, primary_range={}, address={}", t, r, eps);
         for (auto ep : eps) {
             for (auto&& rng : r) {
                 ret.emplace(ep, rng);
             }
         }
-
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
     }
-    return ret;
+    co_return ret;
 }
 
-std::unordered_multimap<inet_address, dht::token_range>
-abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint, can_yield can_yield) const {
+future<std::unordered_multimap<inet_address, dht::token_range>>
+abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
-        auto eps = do_calculate_natural_endpoints(t, tm, can_yield);
+        auto eps = co_await calculate_natural_endpoints(t, tm);
         bool found = false;
         for (auto ep : eps) {
             if (ep != endpoint) {
@@ -263,12 +259,8 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
         if (!found) {
             rslogger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
         }
-
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
     }
-    return ret;
+    co_return ret;
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
@@ -284,29 +276,22 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
     co_return ret;
 }
 
-dht::token_range_vector
-abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address, can_yield can_yield) const {
-    return get_pending_address_ranges(std::move(tmptr), std::unordered_set<token>{pending_token}, pending_address, can_yield);
+future<dht::token_range_vector>
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address) const {
+    return get_pending_address_ranges(std::move(tmptr), std::unordered_set<token>{pending_token}, pending_address);
 }
 
-dht::token_range_vector
-abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, can_yield can_yield) const {
+future<dht::token_range_vector>
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const {
     dht::token_range_vector ret;
     token_metadata temp;
-    if (can_yield) {
-        temp = tmptr->clone_only_token_map().get0();
-        temp.update_normal_tokens(pending_tokens, pending_address).get();
-    } else {
-        temp = tmptr->clone_only_token_map_sync();
-        temp.update_normal_tokens_sync(pending_tokens, pending_address);
-    }
-    for (auto& x : get_address_ranges(temp, pending_address, can_yield)) {
+    temp = co_await tmptr->clone_only_token_map();
+    co_await temp.update_normal_tokens(pending_tokens, pending_address);
+    for (auto& x : co_await get_address_ranges(temp, pending_address)) {
             ret.push_back(x.second);
     }
-    if (can_yield) {
-        temp.clear_gently().get();
-    }
-    return ret;
+    co_await temp.clear_gently();
+    co_return ret;
 }
 
 future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {

@@ -875,7 +875,7 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
         const abstract_replication_strategy& strategy,
         std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
         mutable_token_metadata_ptr all_left_metadata) const {
-    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this, can_yield::yes);
+    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this).get0();
     // get all ranges that will be affected by leaving nodes
     std::unordered_set<range<token>> affected_ranges;
     for (auto endpoint : _leaving_endpoints) {
@@ -914,7 +914,7 @@ void token_metadata_impl::calculate_pending_ranges_for_replacing(
     if (_replacing_endpoints.empty()) {
         return;
     }
-    auto address_ranges = strategy.get_address_ranges(unpimplified_this, can_yield::yes);
+    auto address_ranges = strategy.get_address_ranges(unpimplified_this).get0();
     for (const auto& node : _replacing_endpoints) {
         auto existing_node = node.first;
         auto replacing_node = node.second;
@@ -951,7 +951,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         auto& endpoint = x.first;
         auto& tokens = x.second;
         all_left_metadata->update_normal_tokens(tokens, endpoint).get();
-        for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint, can_yield::yes)) {
+        for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint).get0()) {
             new_pending_ranges.emplace(x.second, endpoint);
         }
         all_left_metadata->_impl->remove_endpoint(endpoint);
