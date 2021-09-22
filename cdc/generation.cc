@@ -29,7 +29,6 @@
 #include "keys.hh"
 #include "schema_builder.hh"
 #include "database.hh"
-#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/token-sharding.hh"
@@ -337,13 +336,12 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
     using namespace std::chrono_literals;
 
     const locator::token_metadata_ptr tmptr = _token_metadata.get();
-    auto gen = topology_description_generator(_cfg.murmur3_partitioner_ignore_msb_bits(), bootstrap_tokens, tmptr, _gossiper).generate();
-    std::chrono::milliseconds ring_delay(_cfg.ring_delay_ms());
+    auto gen = topology_description_generator(_cfg.ignore_msb_bits, bootstrap_tokens, tmptr, _gossiper).generate();
 
     // We need to call this as late in the procedure as possible.
     // In the V2 format we can do this after inserting the generation data into the table;
     // in the V1 format we must do it before (because the timestamp is the partition key in the V1 format).
-    auto new_generation_timestamp = [add_delay, ring_delay] {
+    auto new_generation_timestamp = [add_delay, ring_delay = _cfg.ring_delay] {
         auto ts = db_clock::now();
         if (add_delay && ring_delay != 0ms) {
             ts += 2 * ring_delay + duration_cast<milliseconds>(generation_leeway);
@@ -597,7 +595,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
         co_return;
     }
 
-    if (_db.get_config().cdc_dont_rewrite_streams()) {
+    if (_cfg.dont_rewrite_streams) {
         cdc_log.warn("Stream rewriting disabled. Manual administrator intervention may be required...");
         co_return;
     }
@@ -694,10 +692,10 @@ constexpr char could_not_retrieve_msg_template[]
         = "Could not retrieve CDC streams with timestamp {} upon gossip event. Reason: \"{}\". Action: {}.";
 
 generation_service::generation_service(
-            const db::config& cfg, gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            config cfg, gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
             abort_source& abort_src, const locator::shared_token_metadata& stm, gms::feature_service& f,
             database& db)
-        : _cfg(cfg)
+        : _cfg(std::move(cfg))
         , _gossiper(g)
         , _sys_dist_ks(sys_dist_ks)
         , _abort_src(abort_src)

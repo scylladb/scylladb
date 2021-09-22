@@ -693,7 +693,10 @@ public:
                 stop_raft_rpc.cancel();
             }
 
-            cdc_generation_service.start(std::ref(*cfg), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
+            cdc::generation_service::config cdc_config;
+            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
+            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            cdc_generation_service.start(std::ref(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
             auto stop_cdc_generation_service = defer([&cdc_generation_service] {
                 cdc_generation_service.stop().get();
             });

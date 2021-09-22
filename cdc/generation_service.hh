@@ -29,7 +29,6 @@
 
 namespace db {
 class system_distributed_keyspace;
-class config;
 }
 
 namespace gms {
@@ -50,13 +49,20 @@ namespace cdc {
 class generation_service : public peering_sharded_service<generation_service>
                          , public async_sharded_service<generation_service>
                          , public gms::i_endpoint_state_change_subscriber {
+public:
+    struct config {
+        unsigned ignore_msb_bits;
+        std::chrono::milliseconds ring_delay;
+        bool dont_rewrite_streams = false;
+    };
 
+private:
     bool _stopped = false;
 
     // The node has joined the token ring. Set to `true` on `after_join` call.
     bool _joined = false;
 
-    const db::config& _cfg;
+    config _cfg;
     gms::gossiper& _gossiper;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     abort_source& _abort_src;
@@ -83,7 +89,7 @@ class generation_service : public peering_sharded_service<generation_service>
      */
     std::optional<cdc::generation_id> _gen_id;
 public:
-    generation_service(const db::config&, gms::gossiper&,
+    generation_service(config cfg, gms::gossiper&,
             sharded<db::system_distributed_keyspace>&, abort_source&, const locator::shared_token_metadata&,
             gms::feature_service&, database& db);
 

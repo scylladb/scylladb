@@ -1100,7 +1100,11 @@ int main(int ac, char** av) {
              * every time it accesses it (because it may have been stopped already), then take local_shared()
              * which will prevent sys_dist_ks from being destroyed while the service operates on it.
              */
-            cdc_generation_service.start(std::ref(*cfg), std::ref(gossiper), std::ref(sys_dist_ks),
+            cdc::generation_service::config cdc_config;
+            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
+            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
+            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks),
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
