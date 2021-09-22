@@ -20,7 +20,7 @@
 import time
 import pytest
 
-from util import new_test_table, unique_name
+from util import new_test_table, unique_name, new_materialized_view
 from cassandra.protocol import InvalidRequest
 
 # Test that building a view with a large value succeeds. Regression test
@@ -72,3 +72,29 @@ def test_mv_select_stmt_bound_values(cql, test_keyspace):
                 cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p = ? PRIMARY KEY (p)")
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
+# In test_null.py::test_empty_string_key() we noticed that an empty string
+# is not allowed as a partition key. However, an empty string is a valid
+# value for a string column, so if we have a materialized view with this
+# string column becoming the view's partition key - the empty string may end
+# up being the view row's partition key! This case should be supported,
+# because the "IS NOT NULL" clause in the view's declaration does not
+# eliminate this row (an empty string is not considered NULL).
+# This reproduces issue #9375.
+@pytest.mark.xfail(reason="issue #9375")
+def test_mv_empty_string_partition_key(cql, test_keyspace):
+    schema = 'p int, v text, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES (123, '')")
+            # Note that because cql-pytest runs on a single node, view
+            # updates are synchronous, and we can read the view immediately
+            # without retrying. In a general setup, this test would require
+            # retries.
+            # The view row with the empty partition key should exist.
+            # In #9375, this failed in Scylla:
+            assert list(cql.execute(f"SELECT * FROM {mv}")) == [('', 123)]
+            # However, it is still impossible to select just this row,
+            # because Cassandra forbids an empty partition key on select
+            with pytest.raises(InvalidRequest, match='Key may not be empty'):
+                cql.execute(f"SELECT * FROM {mv} WHERE v=''")

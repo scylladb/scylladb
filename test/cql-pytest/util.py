@@ -90,6 +90,18 @@ def new_aggregate(cql, keyspace, body):
     finally:
         cql.execute(f"DROP AGGREGATE {keyspace}.{aggr}")
 
+# A utility function for creating a new temporary materialized view in
+# an existing table.
+@contextmanager
+def new_materialized_view(cql, table, select, pk, where):
+    keyspace = table.split('.')[0]
+    mv = keyspace + "." + unique_name()
+    cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk})")
+    try:
+        yield mv
+    finally:
+        cql.execute(f"DROP MATERIALIZED VIEW {mv}")
+
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""
     return [getattr(r, column_name_string) for r in rows]
