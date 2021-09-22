@@ -28,6 +28,7 @@
 #include "row_cache.hh"
 #include "database.hh"
 #include "db/config.hh"
+#include "db/commitlog/commitlog.hh"
 
 #include <boost/range/irange.hpp>
 #include <seastar/core/app-template.hh>

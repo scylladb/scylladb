@@ -27,6 +27,7 @@
 #include <seastar/core/app-template.hh>
 #include "database.hh"
 #include "db/config.hh"
+#include "db/commitlog/commitlog.hh"
 #include "partition_slice_builder.hh"
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"

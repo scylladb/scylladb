@@ -39,6 +39,7 @@
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
+#include "db/commitlog/commitlog.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/data_listeners.hh"
 #include "multishard_mutation_query.hh"

@@ -43,7 +43,6 @@
 #include <unordered_map>
 
 #include "replay_position.hh"
-#include "commitlog.hh"
 
 namespace db {
 
