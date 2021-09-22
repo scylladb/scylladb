@@ -752,6 +752,7 @@ std::runtime_error reader_concurrency_semaphore::stopped_exception() {
 future<> reader_concurrency_semaphore::stop() noexcept {
     assert(!_stopped);
     _stopped = true;
+    co_await stop_ext_pre();
     clear_inactive_reads();
     co_await _close_readers_gate.close();
     co_await _permit_gate.close();
@@ -762,6 +763,7 @@ future<> reader_concurrency_semaphore::stop() noexcept {
         co_await std::move(*_execution_loop_future);
     }
     broken(std::make_exception_ptr(stopped_exception()));
+    co_await stop_ext_post();
     co_return;
 }
 
