@@ -103,13 +103,10 @@ network_topology_strategy::network_topology_strategy(
     }
 }
 
-inet_address_vector_replica_set
-network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, const token_metadata& tm, can_yield can_yield) const {
+using endpoint_set = utils::sequenced_set<inet_address>;
+using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
 
-    using endpoint_set = utils::sequenced_set<inet_address>;
-    using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
-
+class natural_endpoints_tracker {
     /**
      * Endpoint adder applying the replication rules for a given DC.
      */
@@ -193,73 +190,101 @@ network_topology_strategy::calculate_natural_endpoints(
         }
     };
 
+    const token_metadata& _tm;
+    const topology& _tp;
+    std::unordered_map<sstring, size_t> _dc_rep_factor;
+
     //
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
     //
-    endpoint_set replicas;
+    endpoint_set _replicas;
     // tracks the racks we have already placed replicas in
-    endpoint_dc_rack_set  seen_racks;
-
-    const topology& tp = tm.get_topology();
+    endpoint_dc_rack_set _seen_racks;
 
     //
     // all endpoints in each DC, so we can check when we have exhausted all
     // the members of a DC
     //
-    const std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>&
-        all_endpoints = tp.get_datacenter_endpoints();
+    std::unordered_map<sstring, std::unordered_set<inet_address>> _all_endpoints;
+
     //
     // all racks in a DC so we can check when we have exhausted all racks in a
     // DC
     //
-    const std::unordered_map<sstring,
-                       std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
-        racks = tp.get_datacenter_racks();
-    // not aware of any cluster members
-    assert(!all_endpoints.empty() && !racks.empty());
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> _racks;
 
-    std::unordered_map<sstring_view, data_center_endpoints> dcs(_dc_rep_factor.size());
+    std::unordered_map<sstring_view, data_center_endpoints> _dcs;
 
-    auto size_for = [](auto& map, auto& k) {
-        auto i = map.find(k);
-        return i != map.end() ? i->second.size() : size_t(0);
-    };
+    size_t _dcs_to_fill;
 
-    // Create a data_center_endpoints object for each non-empty DC.
-    for (auto& p : _dc_rep_factor) {
-        auto& dc = p.first;
-        auto rf = p.second;
-        auto node_count = size_for(all_endpoints, dc);
+public:
+    natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
+        : _tm(tm)
+        , _tp(_tm.get_topology())
+        , _dc_rep_factor(dc_rep_factor)
+        , _all_endpoints(_tp.get_datacenter_endpoints())
+        , _racks(_tp.get_datacenter_racks())
+    {
+        // not aware of any cluster members
+        assert(!_all_endpoints.empty() && !_racks.empty());
 
-        if (rf == 0 || node_count == 0) {
-            continue;
+        auto size_for = [](auto& map, auto& k) {
+            auto i = map.find(k);
+            return i != map.end() ? i->second.size() : size_t(0);
+        };
+
+        // Create a data_center_endpoints object for each non-empty DC.
+        for (auto& p : _dc_rep_factor) {
+            auto& dc = p.first;
+            auto rf = p.second;
+            auto node_count = size_for(_all_endpoints, dc);
+
+            if (rf == 0 || node_count == 0) {
+                continue;
+            }
+
+            _dcs.emplace(dc, data_center_endpoints(rf, size_for(_racks, dc), node_count, _replicas, _seen_racks));
+            _dcs_to_fill = _dcs.size();
         }
-
-        dcs.emplace(dc, data_center_endpoints(rf, size_for(racks, dc), node_count, replicas, seen_racks));
     }
 
-    auto dcs_to_fill = dcs.size();
+    bool add_endpoint_and_check_if_done(inet_address ep) {
+        auto& loc = _tp.get_location(ep);
+        auto i = _dcs.find(loc.dc);
+        if (i != _dcs.end() && i->second.add_endpoint_and_check_if_done(ep, loc)) {
+            --_dcs_to_fill;
+        }
+        return done();
+    }
+
+    bool done() const noexcept {
+        return _dcs_to_fill == 0;
+    }
+
+    const endpoint_set& replicas() const noexcept {
+        return _replicas;
+    }
+};
+
+inet_address_vector_replica_set
+network_topology_strategy::calculate_natural_endpoints(
+    const token& search_token, const token_metadata& tm, can_yield can_yield) const {
+
+    natural_endpoints_tracker tracker(tm, _dc_rep_factor);
 
     for (auto& next : tm.ring_range(search_token)) {
-        if (dcs_to_fill == 0) {
-            break;
-        }
         if (can_yield) {
             seastar::thread::maybe_yield();
         }
 
         inet_address ep = *tm.get_endpoint(next);
-        auto& loc = tp.get_location(ep);
-        auto i = dcs.find(loc.dc);
-        if (i != dcs.end() && i->second.add_endpoint_and_check_if_done(ep, loc)) {
-            --dcs_to_fill;
+        if (tracker.add_endpoint_and_check_if_done(ep)) {
+            break;
         }
     }
 
-    return boost::copy_range<inet_address_vector_replica_set>(replicas.get_vector());
+    return boost::copy_range<inet_address_vector_replica_set>(tracker.replicas().get_vector());
 }
 
 void network_topology_strategy::validate_options() const {
