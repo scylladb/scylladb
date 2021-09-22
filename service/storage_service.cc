@@ -603,7 +603,7 @@ void storage_service::join_token_ring(int delay) {
             try {
                 _cdc_gen_id = cdc::make_new_cdc_generation(_db.local().get_config(),
                         _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                        _sys_dist_ks.local(), get_ring_delay(),
+                        _sys_dist_ks.local(),
                         !_for_testing && !is_first_node() /* add_delay */,
                         _feature_service.cluster_supports_cdc_generations_v2()).get0();
             } catch (...) {
@@ -700,7 +700,7 @@ void storage_service::bootstrap() {
 
         _cdc_gen_id = cdc::make_new_cdc_generation(_db.local().get_config(),
                 _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                _sys_dist_ks.local(), get_ring_delay(),
+                _sys_dist_ks.local(),
                 !_for_testing && !is_first_node() /* add_delay */,
                 _feature_service.cluster_supports_cdc_generations_v2()).get0();
 

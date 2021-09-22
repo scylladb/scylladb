@@ -338,12 +338,12 @@ future<cdc::generation_id> make_new_cdc_generation(
         const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
-        std::chrono::milliseconds ring_delay,
         bool add_delay,
         bool cluster_supports_generations_v2) {
     using namespace std::chrono;
     using namespace std::chrono_literals;
     auto gen = topology_description_generator(cfg, bootstrap_tokens, tmptr, g).generate();
+    std::chrono::milliseconds ring_delay(cfg.ring_delay_ms());
 
     // We need to call this as late in the procedure as possible.
     // In the V2 format we can do this after inserting the generation data into the table;
@@ -861,7 +861,6 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     const auto new_gen_id = co_await make_new_cdc_generation(_cfg,
             {}, std::move(tmptr), _gossiper, *sys_dist_ks,
-            std::chrono::milliseconds(_cfg.ring_delay_ms()),
             true /* add delay */,
             _feature_service.cluster_supports_cdc_generations_v2());
 

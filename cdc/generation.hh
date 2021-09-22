@@ -173,7 +173,6 @@ future<cdc::generation_id> make_new_cdc_generation(
         const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
-        std::chrono::milliseconds ring_delay,
         bool add_delay,
         bool cluster_supports_generations_v2);
 
