@@ -654,6 +654,16 @@ future<page_consume_result<ResultBuilder>> read_page(
     try {
         auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
                 cmd.partition_limit, cmd.timestamp, *cmd.max_result_size);
+        const auto& cstats = compaction_state->stats();
+        tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
+                cstats.partitions,
+                cstats.static_rows.total(),
+                cstats.static_rows.live,
+                cstats.static_rows.dead,
+                cstats.clustering_rows.total(),
+                cstats.clustering_rows.live,
+                cstats.clustering_rows.dead,
+                cstats.range_tombstones);
         auto buffer = reader.detach_buffer();
         co_await reader.close();
         // page_consume_result cannot fail so there's no risk of double-closing reader.

@@ -235,10 +235,21 @@ public:
             uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
-            query::max_result_size max_size) {
+            query::max_result_size max_size,
+            tracing::trace_state_ptr trace_ptr = {}) {
         return ::query::consume_page(std::get<flat_mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
-                partition_limit, query_time, max_size).then([this] (auto&& results) {
+                partition_limit, query_time, max_size).then([this, trace_ptr = std::move(trace_ptr)] (auto&& results) {
             _last_ckey = std::get<std::optional<clustering_key>>(std::move(results));
+            const auto& cstats = _compaction_state->stats();
+            tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
+                    cstats.partitions,
+                    cstats.static_rows.total(),
+                    cstats.static_rows.live,
+                    cstats.static_rows.dead,
+                    cstats.clustering_rows.total(),
+                    cstats.clustering_rows.live,
+                    cstats.clustering_rows.dead,
+                    cstats.range_tombstones);
             constexpr auto size = std::tuple_size<std::decay_t<decltype(results)>>::value;
             static_assert(size <= 2);
             if constexpr (size == 1) {
