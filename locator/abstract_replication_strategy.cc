@@ -73,14 +73,6 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     }
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::do_calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) const {
-    if (!can_yield) {
-        return calculate_natural_endpoints_sync(search_token, tm);
-    } else {
-        return calculate_natural_endpoints(search_token, tm).get0();
-    }
-}
-
 inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const {
     const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
     auto res = erm.get_replication_map().find(key_token);

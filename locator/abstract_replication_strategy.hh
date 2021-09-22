@@ -118,13 +118,6 @@ public:
     // Use the token_metadata provided by the caller instead of _token_metadata
     future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;
 
-private:
-    // FIXME: temporary, until all users are converted to use the async version
-    virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const = 0;
-
-protected:
-    inet_address_vector_replica_set do_calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const;
-
 public:
     future<std::unordered_multimap<inet_address, dht::token_range>> get_address_ranges(const token_metadata& tm) const;
     future<std::unordered_multimap<inet_address, dht::token_range>> get_address_ranges(const token_metadata& tm, inet_address endpoint) const;

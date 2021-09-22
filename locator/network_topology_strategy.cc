@@ -271,22 +271,6 @@ public:
     }
 };
 
-inet_address_vector_replica_set
-network_topology_strategy::calculate_natural_endpoints_sync(
-    const token& search_token, const token_metadata& tm) const {
-
-    natural_endpoints_tracker tracker(tm, _dc_rep_factor);
-
-    for (auto& next : tm.ring_range(search_token)) {
-        inet_address ep = *tm.get_endpoint(next);
-        if (tracker.add_endpoint_and_check_if_done(ep)) {
-            break;
-        }
-    }
-
-    return boost::copy_range<inet_address_vector_replica_set>(tracker.replicas().get_vector());
-}
-
 future<inet_address_vector_replica_set>
 network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata& tm) const {
