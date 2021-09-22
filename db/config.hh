@@ -41,6 +41,9 @@ struct logging_settings;
 namespace tls {
 class credentials_builder;
 }
+namespace log_cli {
+class options;
+}
 }
 
 namespace db {
@@ -373,7 +376,7 @@ public:
     named_value<tri_mode_restriction> restrict_replication_simplestrategy;
     named_value<tri_mode_restriction> restrict_dtcs;
 
-    seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
+    seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
 

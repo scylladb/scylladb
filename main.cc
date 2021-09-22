@@ -516,7 +516,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &bm, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([&app, cfg, ext, &db, &qp, &bm, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
@@ -545,7 +545,7 @@ int main(int ac, char** av) {
             });
 
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
-            logging::apply_settings(cfg->logging_settings(opts));
+            logging::apply_settings(cfg->logging_settings(app.options().log_opts));
 
             startlog.info(startup_msg, scylla_version(), get_build_id());
 
