@@ -169,15 +169,6 @@ private:
      * we need to check if the instance is still there. Storing the shared pointer will keep it alive.
      */
     shared_ptr<db::system_distributed_keyspace> get_sys_dist_ks();
-
-    future<cdc::generation_id> make_new_cdc_generation(
-        const db::config& cfg,
-        const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata_ptr tmptr,
-        const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
-        bool add_delay,
-        bool cluster_supports_generations_v2);
 };
 
 } // namespace cdc

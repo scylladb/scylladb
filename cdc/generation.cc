@@ -333,22 +333,12 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
 }
 
 future<cdc::generation_id> generation_service::make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
-    return make_new_cdc_generation(_cfg, std::move(bootstrap_tokens), _token_metadata.get(), _gossiper, _sys_dist_ks.local(),
-            add_delay, _feature_service.cluster_supports_cdc_generations_v2());
-}
-
-future<cdc::generation_id> generation_service::make_new_cdc_generation(
-        const db::config& cfg,
-        const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata_ptr tmptr,
-        const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
-        bool add_delay,
-        bool cluster_supports_generations_v2) {
     using namespace std::chrono;
     using namespace std::chrono_literals;
-    auto gen = topology_description_generator(cfg, bootstrap_tokens, tmptr, g).generate();
-    std::chrono::milliseconds ring_delay(cfg.ring_delay_ms());
+
+    const locator::token_metadata_ptr tmptr = _token_metadata.get();
+    auto gen = topology_description_generator(_cfg, bootstrap_tokens, tmptr, _gossiper).generate();
+    std::chrono::milliseconds ring_delay(_cfg.ring_delay_ms());
 
     // We need to call this as late in the procedure as possible.
     // In the V2 format we can do this after inserting the generation data into the table;
@@ -365,11 +355,11 @@ future<cdc::generation_id> generation_service::make_new_cdc_generation(
     auto normal_token_owners = tmptr->count_normal_token_owners();
     assert(normal_token_owners);
 
-    if (cluster_supports_generations_v2) {
+    if (_feature_service.cluster_supports_cdc_generations_v2()) {
         auto uuid = utils::make_random_uuid();
         cdc_log.info("Inserting new generation data at UUID {}", uuid);
         // This may take a while.
-        co_await sys_dist_ks.insert_cdc_generation(uuid, gen, { normal_token_owners });
+        co_await _sys_dist_ks.local().insert_cdc_generation(uuid, gen, { normal_token_owners });
 
         // Begin the race.
         cdc::generation_id_v2 gen_id{new_generation_timestamp(), uuid};
@@ -403,7 +393,7 @@ future<cdc::generation_id> generation_service::make_new_cdc_generation(
     // Begin the race.
     cdc::generation_id_v1 gen_id{new_generation_timestamp()};
 
-    co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { normal_token_owners });
+    co_await _sys_dist_ks.local().insert_cdc_topology_description(gen_id, std::move(gen), { normal_token_owners });
 
     cdc_log.info("New CDC generation: {}", gen_id);
     co_return gen_id;
