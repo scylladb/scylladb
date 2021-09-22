@@ -123,6 +123,26 @@ public:
     }
 };
 
+struct compaction_stats {
+    struct row_stats {
+        uint64_t live = 0;
+        uint64_t dead = 0;
+
+        void operator+=(bool is_live) {
+            live += is_live;
+            dead += !is_live;
+        }
+        uint64_t total() const {
+            return live + dead;
+        }
+    };
+
+    uint64_t partitions = 0;
+    row_stats static_rows;
+    row_stats clustering_rows;
+    uint64_t range_tombstones = 0;
+};
+
 // emit_only_live::yes will cause compact_for_query to emit only live
 // static and clustering rows. It doesn't affect the way range tombstones are
 // emitted.
@@ -153,6 +173,8 @@ class compact_mutation_state {
     std::optional<static_row> _last_static_row;
 
     std::unique_ptr<mutation_compactor_garbage_collector> _collector;
+
+    compaction_stats _stats;
 private:
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
@@ -177,6 +199,7 @@ private:
     void partition_is_not_empty(Consumer& consumer) {
         if (_empty_partition) {
             _empty_partition = false;
+            ++_stats.partitions;
             consumer.consume_new_partition(*_dk);
             auto pt = _range_tombstones.get_partition_tombstone();
             if (pt && !can_purge_tombstone(pt)) {
@@ -285,6 +308,7 @@ public:
         }
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
                 _query_time, _can_gc, _gc_before, _collector.get());
+        _stats.static_rows += is_live;
         if constexpr (sstable_compaction()) {
             _collector->consume_static_row([this, &gc_consumer, current_tombstone] (static_row&& sr_garbage) {
                 partition_is_not_empty_for_gc_consumer(gc_consumer);
@@ -330,6 +354,7 @@ public:
         bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, _gc_before, _collector.get());
         is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before, cr.marker(),
                 _collector.get());
+        _stats.clustering_rows += is_live;
 
         if constexpr (sstable_compaction()) {
             _collector->consume_clustering_row([this, &gc_consumer, t] (clustering_row&& cr_garbage) {
@@ -367,6 +392,7 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(range_tombstone&& rt, Consumer& consumer, GCConsumer& gc_consumer) {
+        ++_stats.range_tombstones;
         _range_tombstones.apply(rt);
         // FIXME: drop tombstone if it is fully covered by other range tombstones
         if (rt.tomb > _range_tombstones.get_partition_tombstone()) {
@@ -445,6 +471,7 @@ public:
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _query_time = query_time;
         _gc_before = saturating_subtract(query_time, _schema.gc_grace_seconds());
+        _stats = {};
 
         if ((next_fragment_kind == mutation_fragment::kind::clustering_row || next_fragment_kind == mutation_fragment::kind::range_tombstone)
                 && _last_static_row) {
@@ -469,6 +496,8 @@ public:
         partition_start ps(std::move(_last_dk), _range_tombstones.get_partition_tombstone());
         return {std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
     }
+
+    const compaction_stats& stats() const { return _stats; }
 };
 
 template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer, typename GCConsumer>
