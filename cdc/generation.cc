@@ -205,7 +205,7 @@ static std::vector<stream_id> create_stream_ids(
 }
 
 class topology_description_generator final {
-    const db::config& _cfg;
+    unsigned _ignore_msb_bits;
     const std::unordered_set<dht::token>& _bootstrap_tokens;
     const locator::token_metadata_ptr _tmptr;
     const gms::gossiper& _gossiper;
@@ -225,7 +225,7 @@ class topology_description_generator final {
     // Returns <shard_count, ignore_msb> pair.
     std::pair<size_t, uint8_t> get_sharding_info(dht::token end) const {
         if (_bootstrap_tokens.contains(end)) {
-            return {smp::count, _cfg.murmur3_partitioner_ignore_msb_bits()};
+            return {smp::count, _ignore_msb_bits};
         } else {
             auto endpoint = _tmptr->get_endpoint(end);
             if (!endpoint) {
@@ -250,11 +250,11 @@ class topology_description_generator final {
     }
 public:
     topology_description_generator(
-            const db::config& cfg,
+            unsigned ignore_msb_bits,
             const std::unordered_set<dht::token>& bootstrap_tokens,
             const locator::token_metadata_ptr tmptr,
             const gms::gossiper& gossiper)
-        : _cfg(cfg)
+        : _ignore_msb_bits(ignore_msb_bits)
         , _bootstrap_tokens(bootstrap_tokens)
         , _tmptr(std::move(tmptr))
         , _gossiper(gossiper)
@@ -337,7 +337,7 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
     using namespace std::chrono_literals;
 
     const locator::token_metadata_ptr tmptr = _token_metadata.get();
-    auto gen = topology_description_generator(_cfg, bootstrap_tokens, tmptr, _gossiper).generate();
+    auto gen = topology_description_generator(_cfg.murmur3_partitioner_ignore_msb_bits(), bootstrap_tokens, tmptr, _gossiper).generate();
     std::chrono::milliseconds ring_delay(_cfg.ring_delay_ms());
 
     // We need to call this as late in the procedure as possible.
