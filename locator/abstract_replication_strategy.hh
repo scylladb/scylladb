@@ -116,15 +116,9 @@ public:
     replication_strategy_type get_type() const { return _my_type; }
 
     // Use the token_metadata provided by the caller instead of _token_metadata
-    // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes
-    dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield = can_yield::no) const {
-        return do_get_ranges(ep, std::move(tmptr), can_yield);
-    }
+    future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;
 
 private:
-    // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
-    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
-
     // FIXME: temporary, until all users are converted to use the async version
     virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const = 0;
 

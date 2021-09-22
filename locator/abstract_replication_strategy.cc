@@ -181,24 +181,21 @@ effective_replication_map::get_ranges(inet_address ep) const {
 }
 
 // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
-dht::token_range_vector
-abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield) const {
+future<dht::token_range_vector>
+abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tmptr) const {
     dht::token_range_vector ret;
     const auto& tm = *tmptr;
     auto prev_tok = tm.sorted_tokens().back();
     for (auto tok : tm.sorted_tokens()) {
-        for (inet_address a : do_calculate_natural_endpoints(tok, tm, can_yield)) {
+        for (inet_address a : co_await calculate_natural_endpoints(tok, tm)) {
             if (a == ep) {
                 insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
                 break;
             }
         }
         prev_tok = tok;
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
     }
-    return ret;
+    co_return ret;
 }
 
 dht::token_range_vector

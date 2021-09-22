@@ -1691,7 +1691,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
             // Okay to yield since tm is immutable
-            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr, utils::can_yield::yes);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
             nr_ranges_total += ranges.size();
 
         }
@@ -1715,7 +1715,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr, utils::can_yield::yes);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, ranges.size());
             for (auto it = ranges.begin(); it != ranges.end();) {
