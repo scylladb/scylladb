@@ -37,6 +37,10 @@
  */
 
 #include <functional>
+
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "locator/network_topology_strategy.hh"
 #include "utils/sequenced_set.hh"
 #include <boost/algorithm/string.hpp>
@@ -268,16 +272,12 @@ public:
 };
 
 inet_address_vector_replica_set
-network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, const token_metadata& tm, can_yield can_yield) const {
+network_topology_strategy::calculate_natural_endpoints_sync(
+    const token& search_token, const token_metadata& tm) const {
 
     natural_endpoints_tracker tracker(tm, _dc_rep_factor);
 
     for (auto& next : tm.ring_range(search_token)) {
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
-
         inet_address ep = *tm.get_endpoint(next);
         if (tracker.add_endpoint_and_check_if_done(ep)) {
             break;
@@ -285,6 +285,24 @@ network_topology_strategy::calculate_natural_endpoints(
     }
 
     return boost::copy_range<inet_address_vector_replica_set>(tracker.replicas().get_vector());
+}
+
+future<inet_address_vector_replica_set>
+network_topology_strategy::calculate_natural_endpoints_async(
+    const token& search_token, const token_metadata& tm) const {
+
+    natural_endpoints_tracker tracker(tm, _dc_rep_factor);
+
+    for (auto& next : tm.ring_range(search_token)) {
+        co_await coroutine::maybe_yield();
+
+        inet_address ep = *tm.get_endpoint(next);
+        if (tracker.add_endpoint_and_check_if_done(ep)) {
+            break;
+        }
+    }
+
+    co_return boost::copy_range<inet_address_vector_replica_set>(tracker.replicas().get_vector());
 }
 
 void network_topology_strategy::validate_options() const {

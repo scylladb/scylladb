@@ -29,8 +29,6 @@
 namespace locator {
 
 class simple_strategy : public abstract_replication_strategy {
-protected:
-    virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) const override;
 public:
     simple_strategy(const shared_token_metadata& token_metadata, snitch_ptr& snitch, const replication_strategy_config_options& config_options);
     virtual ~simple_strategy() {};
@@ -40,6 +38,9 @@ public:
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
         return true;
     }
+
+    virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const override;
+    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints_async(const token& search_token, const token_metadata& tm) const override;
 private:
     size_t _replication_factor = 1;
 };

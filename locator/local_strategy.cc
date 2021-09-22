@@ -34,8 +34,12 @@ inet_address_vector_replica_set local_strategy::do_get_natural_endpoints(const t
     return calculate_natural_endpoints(t, tm, can_yield);
 }
 
-inet_address_vector_replica_set local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, can_yield) const {
+inet_address_vector_replica_set local_strategy::calculate_natural_endpoints_sync(const token& t, const token_metadata& tm) const {
     return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
+}
+
+future<inet_address_vector_replica_set> local_strategy::calculate_natural_endpoints_async(const token& t, const token_metadata& tm) const {
+    return make_ready_future<inet_address_vector_replica_set>(inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()}));
 }
 
 void local_strategy::validate_options() const {

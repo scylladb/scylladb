@@ -20,6 +20,10 @@
  */
 
 #include <algorithm>
+
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "simple_strategy.hh"
 #include "utils/class_registrator.hh"
 #include <boost/algorithm/string.hpp>
@@ -42,7 +46,7 @@ simple_strategy::simple_strategy(const shared_token_metadata& token_metadata, sn
     }
 }
 
-inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, can_yield can_yield) const {
+inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints_sync(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
@@ -57,9 +61,7 @@ inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(con
         if (endpoints.size() == replicas) {
            break;
         }
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
+
         auto ep = tm.get_endpoint(token);
         assert(ep);
 
@@ -67,6 +69,32 @@ inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(con
     }
 
     return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
+}
+
+future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpoints_async(const token& t, const token_metadata& tm) const {
+    const std::vector<token>& tokens = tm.sorted_tokens();
+
+    if (tokens.empty()) {
+        co_return inet_address_vector_replica_set();
+    }
+
+    size_t replicas = get_replication_factor();
+    utils::sequenced_set<inet_address> endpoints;
+    endpoints.reserve(replicas);
+
+    for (auto& token : tm.ring_range(t)) {
+        if (endpoints.size() == replicas) {
+           break;
+        }
+
+        auto ep = tm.get_endpoint(token);
+        assert(ep);
+
+        endpoints.push_back(*ep);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
 }
 
 size_t simple_strategy::get_replication_factor() const {
