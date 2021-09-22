@@ -175,11 +175,7 @@ private:
      * table contains streams of all generations that were present in the old table and may still contain data
      * (i.e. there exist CDC log tables that may contain rows with partition keys being the stream IDs from
      * these generations). */
-    future<> maybe_rewrite_streams_descriptions(
-            const database&,
-            shared_ptr<db::system_distributed_keyspace>,
-            noncopyable_function<unsigned()> get_num_token_owners,
-            abort_source&);
+    future<> maybe_rewrite_streams_descriptions();
 };
 
 } // namespace cdc

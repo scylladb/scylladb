@@ -586,12 +586,8 @@ static future<std::optional<cdc::generation_id_v1>> rewrite_streams_descriptions
     co_return std::nullopt;
 }
 
-future<> generation_service::maybe_rewrite_streams_descriptions(
-        const database& db,
-        shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
-        noncopyable_function<unsigned()> get_num_token_owners,
-        abort_source& abort_src) {
-    if (!db.has_schema(sys_dist_ks->NAME, sys_dist_ks->CDC_DESC_V1)) {
+future<> generation_service::maybe_rewrite_streams_descriptions() {
+    if (!_db.has_schema(_sys_dist_ks.local().NAME, _sys_dist_ks.local().CDC_DESC_V1)) {
         // This cluster never went through a Scylla version which used this table
         // or the user deleted the table. Nothing to do.
         co_return;
@@ -601,16 +597,16 @@ future<> generation_service::maybe_rewrite_streams_descriptions(
         co_return;
     }
 
-    if (db.get_config().cdc_dont_rewrite_streams()) {
+    if (_db.get_config().cdc_dont_rewrite_streams()) {
         cdc_log.warn("Stream rewriting disabled. Manual administrator intervention may be required...");
         co_return;
     }
 
     // For each CDC log table get the TTL setting (from CDC options) and the table's creation time
     std::vector<time_and_ttl> times_and_ttls;
-    for (auto& [_, cf] : db.get_column_families()) {
+    for (auto& [_, cf] : _db.get_column_families()) {
         auto& s = *cf->schema();
-        auto base = cdc::get_base_table(db, s.ks_name(), s.cf_name());
+        auto base = cdc::get_base_table(_db, s.ks_name(), s.cf_name());
         if (!base) {
             // Not a CDC log table.
             continue;
@@ -630,14 +626,16 @@ future<> generation_service::maybe_rewrite_streams_descriptions(
         co_return co_await db::system_keyspace::cdc_set_rewritten(std::nullopt);
     }
 
+    auto get_num_token_owners = [tm = _token_metadata.get()] { return tm->count_normal_token_owners(); };
+
     // It's safe to discard this future: the coroutine keeps system_distributed_keyspace alive
     // and the abort source's lifetime extends the lifetime of any other service.
-    (void)(([_times_and_ttls = std::move(times_and_ttls), _sys_dist_ks = std::move(sys_dist_ks),
-                _get_num_token_owners = std::move(get_num_token_owners), &_abort_src = abort_src] () mutable -> future<> {
+    (void)(([_times_and_ttls = std::move(times_and_ttls), _sys_dist_ks = _sys_dist_ks.local_shared(),
+                _get_num_token_owners = std::move(get_num_token_owners), &_as = _abort_src] () mutable -> future<> {
         auto times_and_ttls = std::move(_times_and_ttls);
         auto sys_dist_ks = std::move(_sys_dist_ks);
         auto get_num_token_owners = std::move(_get_num_token_owners);
-        auto& abort_src = _abort_src;
+        auto& abort_src = _as;
 
         // This code is racing with node startup. At this point, we're most likely still waiting for gossip to settle
         // and some nodes that are UP may still be marked as DOWN by us.
@@ -735,9 +733,7 @@ future<> generation_service::after_join(std::optional<cdc::generation_id>&& star
 
     // Ensure that the new CDC stream description table has all required streams.
     // See the function's comment for details.
-    co_await maybe_rewrite_streams_descriptions(_db, _sys_dist_ks.local_shared(),
-            [tm = _token_metadata.get()] { return tm->count_normal_token_owners(); },
-            _abort_src);
+    co_await maybe_rewrite_streams_descriptions();
 }
 
 void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
