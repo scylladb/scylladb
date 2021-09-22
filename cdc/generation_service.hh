@@ -62,6 +62,7 @@ class generation_service : public peering_sharded_service<generation_service>
     abort_source& _abort_src;
     const locator::shared_token_metadata& _token_metadata;
     gms::feature_service& _feature_service;
+    database& _db;
 
     /* Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
      * Updated in response to certain gossip events (see the handle_cdc_generation function).
@@ -84,7 +85,7 @@ class generation_service : public peering_sharded_service<generation_service>
 public:
     generation_service(const db::config&, gms::gossiper&,
             sharded<db::system_distributed_keyspace>&, abort_source&, const locator::shared_token_metadata&,
-            gms::feature_service&);
+            gms::feature_service&, database& db);
 
     future<> stop();
     ~generation_service();
