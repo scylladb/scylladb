@@ -715,6 +715,12 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
                     });
         }
 
+        // The following if'ed-out tests verified behavior that we
+        // no longer believe to be correct, and also turns out not to be
+        // compatible with Cassandra (see issue #9375): these tests checked
+        // that if a view row should get an empty string as a partition key,
+        // this row should not be generated. But this is not the case.
+#if 0
         auto views_not_matching = {
                 "create materialized view {} as select * from cf "
                 "where p1 is not null and p2 is not null and c is not null and v is not null "
@@ -764,5 +770,6 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
             auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows().is_empty();
         });
+#endif
     });
 }

@@ -2341,9 +2341,6 @@ void sstable::set_first_and_last_keys() {
         return;
     }
     auto decorate_key = [this] (const char *m, const bytes& value) {
-        if (value.empty()) {
-            throw malformed_sstable_exception(format("{} key of summary of {} is empty", m, get_filename()));
-        }
         auto pk = key::from_bytes(value).to_partition_key(*_schema);
         return dht::decorate_key(*_schema, std::move(pk));
     };

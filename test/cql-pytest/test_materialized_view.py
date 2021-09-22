@@ -10,6 +10,8 @@ import pytest
 from util import new_test_table, unique_name, new_materialized_view
 from cassandra.protocol import InvalidRequest
 
+import nodetool
+
 # Test that building a view with a large value succeeds. Regression test
 # for a bug where values larger than 10MB were rejected during building (#9047)
 def test_build_view_with_large_row(cql, test_keyspace):
@@ -64,11 +66,10 @@ def test_mv_select_stmt_bound_values(cql, test_keyspace):
 # is not allowed as a partition key. However, an empty string is a valid
 # value for a string column, so if we have a materialized view with this
 # string column becoming the view's partition key - the empty string may end
-# up being the view row's partition key! This case should be supported,
+# up being the view row's partition key. This case should be supported,
 # because the "IS NOT NULL" clause in the view's declaration does not
-# eliminate this row (an empty string is not considered NULL).
-# This reproduces issue #9375.
-@pytest.mark.xfail(reason="issue #9375")
+# eliminate this row (an empty string is *not* considered NULL).
+# Reproduces issue #9375.
 def test_mv_empty_string_partition_key(cql, test_keyspace):
     schema = 'p int, v text, primary key (p)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -81,10 +82,10 @@ def test_mv_empty_string_partition_key(cql, test_keyspace):
             # The view row with the empty partition key should exist.
             # In #9375, this failed in Scylla:
             assert list(cql.execute(f"SELECT * FROM {mv}")) == [('', 123)]
-            # However, it is still impossible to select just this row,
-            # because Cassandra forbids an empty partition key on select
-            with pytest.raises(InvalidRequest, match='Key may not be empty'):
-                cql.execute(f"SELECT * FROM {mv} WHERE v=''")
+            # Verify that we can flush an sstable with just an one partition
+            # with an empty-string key (in the past we had a summary-file
+            # sanity check preventing this from working).
+            nodetool.flush(cql, mv)
 
 # Reproducer for issue #9450 - when a view's key column name is a (quoted)
 # keyword, writes used to fail because they generated internally broken CQL
@@ -119,3 +120,75 @@ def test_mv_quoted_column_names_build(cql, test_keyspace):
                     if list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]:
                         break
                 assert list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]
+
+# The previous test (test_mv_empty_string_partition_key) verifies that a
+# row with an empty-string partition key can appear in the view. This was
+# checked with a full-table scan. This test is about reading this one
+# view partition individually, with WHERE v=''.
+# Surprisingly, Cassandra does NOT allow to SELECT this specific row
+# individually - "WHERE v=''" is not allowed when v is the partition key
+# (even of a view). We consider this to be a Cassandra bug - it doesn't
+# make sense to allow the user to add a row and to see it in a full-table
+# scan, but not to query it individually. This is why we mark this test as
+# a Cassandra bug and want Scylla to pass it.
+# Reproduces issue #9375 and #9352.
+def test_mv_empty_string_partition_key_individual(cassandra_bug, cql, test_keyspace):
+    schema = 'p int, v text, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            # Insert a bunch of (p,v) rows. One of the v's is the empty
+            # string, which we would like to test, but let's insert more
+            # rows to make it more likely to exercise various possibilities
+            # of token ordering (see #9352).
+            rows = [[123, ''], [1, 'dog'], [2, 'cat'], [700, 'hello'], [3, 'horse']]
+            for row in rows:
+                cql.execute(f"INSERT INTO {table} (p,v) VALUES ({row[0]}, '{row[1]}')")
+            # Note that because cql-pytest runs on a single node, view
+            # updates are synchronous, and we can read the view immediately
+            # without retrying. In a general setup, this test would require
+            # retries.
+            # Check that we can read the individual partition with the
+            # empty-string key:
+            assert list(cql.execute(f"SELECT * FROM {mv} WHERE v=''")) == [('', 123)]
+            # The SELECT above works from cache. However, empty partition
+            # keys also used to be special-cased and be buggy when reading
+            # and writing sstables, so let's verify that the empty partition
+            # key can actually be written and read from disk, by forcing a
+            # memtable flush and bypassing the cache on read.
+            # In the past Scylla used to fail this flush because the sstable
+            # layer refused to write empty partition keys to the sstable:
+            nodetool.flush(cql, mv)
+            # First try a full-table scan, and then try to read the
+            # individual partition with the empty key:
+            assert set(cql.execute(f"SELECT * FROM {mv} BYPASS CACHE")) == {
+                (x[1], x[0]) for x in rows}
+            # Issue #9352 used to prevent us finding WHERE v='' here, even
+            # when the data is known to exist (the above full-table scan
+            # saw it!) and despite the fact that WHERE v='' is parsed
+            # correctly because we tested above it works from memtables.
+            assert list(cql.execute(f"SELECT * FROM {mv} WHERE v='' BYPASS CACHE")) == [('', 123)]
+
+# Test that the "IS NOT NULL" clause in the materialized view's SELECT
+# functions as expected - namely, rows which have their would-be view
+# key column unset (aka null) do not get copied into the view.
+def test_mv_is_not_null(cql, test_keyspace):
+    schema = 'p int, v text, primary key (p)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES (123, 'dog')")
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES (17, null)")
+            # Note that because cql-pytest runs on a single node, view
+            # updates are synchronous, and we can read the view immediately
+            # without retrying. In a general setup, this test would require
+            # retries.
+            # The row with 123 should appear in the view, but the row with
+            # 17 should not, because v *is* null.
+            assert list(cql.execute(f"SELECT * FROM {mv}")) == [('dog', 123)]
+            # The view row should disappear and reappear if its key is
+            # changed to null and back in the base table:
+            cql.execute(f"UPDATE {table} SET v=null WHERE p=123")
+            assert list(cql.execute(f"SELECT * FROM {mv}")) == []
+            cql.execute(f"UPDATE {table} SET v='cat' WHERE p=123")
+            assert list(cql.execute(f"SELECT * FROM {mv}")) == [('cat', 123)]
+            cql.execute(f"DELETE v FROM {table} WHERE p=123")
+            assert list(cql.execute(f"SELECT * FROM {mv}")) == []
