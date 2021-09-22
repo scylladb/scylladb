@@ -117,3 +117,59 @@ def test_filtering_eq_null(cassandra_bug, cql, table1):
     # As explained above, none of the above-inserted rows should match -
     # not even the one with an unset v:
     assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND v=NULL ALLOW FILTERING")) == []
+
+# In test_insert_null_key() above we verified that a null value is not
+# allowed as a key column - neither as a partition key nor clustering key.
+# An *empty string*, in contrast, is NOT a null. So ideally should have been
+# allowed as a key. However, for undocumented reasons (having to do with how
+# partition keys are serialized in sstables), an empty string is NOT allowed
+# as a partition key. It is allowed as a clustering key, though. In the
+# following test we confirm those things.
+# See issue #9352.
+def test_insert_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{s}', '', 'cat')")
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('', '{s}', 'dog')")
+
+# test_update_empty_string_key() is the same as test_insert_empty_string_key()
+# just uses an UPDATE instead of INSERT. It turns out that exactly the cases
+# which are allowed by INSERT are also allowed by UPDATE.
+def test_update_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute(f"UPDATE {table1} SET v = 'cat' WHERE p='{s}' AND c=''")
+    assert list(cql.execute(f"SELECT v FROM {table1} WHERE p='{s}' AND c=''")) == [('cat',)]
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute(f"UPDATE {table1} SET v = 'dog' WHERE p='' AND c='{s}'")
+
+# ... and same for DELETE
+def test_delete_empty_string_key(cql, table1):
+    s = random_string()
+    # An empty-string clustering *is* allowed:
+    cql.execute(f"DELETE FROM {table1} WHERE p='{s}' AND c=''")
+    # But an empty-string partition key is *not* allowed, with a specific
+    # error that a "Key may not be empty":
+    with pytest.raises(InvalidRequest, match='Key may not be empty'):
+        cql.execute(f"DELETE FROM {table1} WHERE p='' AND c='{s}'")
+
+
+# Although an empty string is not allowed as a partition key (as tested
+# above by test_empty_string_key()), it turns out that in a *compound*
+# partition key (with multiple partition-key columns), any or all of them
+# may be empty strings! This inconsistency is known in Cassandra, but
+# deemed unworthy to fix - see:
+#    https://issues.apache.org/jira/browse/CASSANDRA-11487
+def test_empty_string_key2(cql, test_keyspace):
+    schema = 'p1 text, p2 text, c text, v text, primary key ((p1, p2), c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        s = random_string()
+        cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('', '', '', 'cat')")
+        cql.execute(f"INSERT INTO {table} (p1,p2,c,v) VALUES ('x', 'y', 'z', 'dog')")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE p1='' AND p2='' AND c=''")) == [('cat',)]
