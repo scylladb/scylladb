@@ -63,18 +63,18 @@ struct qos_configuration_change_suscriber_simple : public qos_configuration_chan
 
     std::vector<service_level_op> ops;
 
-    virtual future<> on_before_service_level_add(sstring name, service_level_options slo) override {
-        ops.push_back(add_op{name, slo});
+    virtual future<> on_before_service_level_add(service_level_options slo, service_level_info sl_info) override {
+        ops.push_back(add_op{sl_info.name, slo});
         return make_ready_future<>();
     }
 
-    virtual future<> on_after_service_level_remove(sstring name) override {
-        ops.push_back(remove_op{name});
+    virtual future<> on_after_service_level_remove(service_level_info sl_info) override {
+        ops.push_back(remove_op{sl_info.name});
         return make_ready_future<>();
     }
 
-    virtual future<> on_before_service_level_change(sstring name, service_level_options slo_before, service_level_options slo_after) override {
-        ops.push_back(change_op{name, slo_before, slo_after});
+    virtual future<> on_before_service_level_change(service_level_options slo_before, service_level_options slo_after, service_level_info sl_info) override {
+        ops.push_back(change_op{sl_info.name, slo_before, slo_after});
         return make_ready_future<>();
     }
 };
