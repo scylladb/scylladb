@@ -288,7 +288,7 @@ network_topology_strategy::calculate_natural_endpoints_sync(
 }
 
 future<inet_address_vector_replica_set>
-network_topology_strategy::calculate_natural_endpoints_async(
+network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata& tm) const {
 
     natural_endpoints_tracker tracker(tm, _dc_rep_factor);

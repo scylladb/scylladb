@@ -71,11 +71,11 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     }
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) const {
+inet_address_vector_replica_set abstract_replication_strategy::do_calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) const {
     if (!can_yield) {
         return calculate_natural_endpoints_sync(search_token, tm);
     } else {
-        return calculate_natural_endpoints_async(search_token, tm).get0();
+        return calculate_natural_endpoints(search_token, tm).get0();
     }
 }
 
@@ -89,7 +89,7 @@ inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_en
     auto res = cached_endpoints.find(key_token);
 
     if (res == cached_endpoints.end()) {
-        auto endpoints = calculate_natural_endpoints(search_token, tm, can_yield);
+        auto endpoints = do_calculate_natural_endpoints(search_token, tm, can_yield);
         cached_endpoints.emplace(key_token, endpoints);
 
         return endpoints;
@@ -185,7 +185,7 @@ abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metada
     const auto& tm = *tmptr;
     auto prev_tok = tm.sorted_tokens().back();
     for (auto tok : tm.sorted_tokens()) {
-        for (inet_address a : calculate_natural_endpoints(tok, tm, can_yield)) {
+        for (inet_address a : do_calculate_natural_endpoints(tok, tm, can_yield)) {
             if (a == ep) {
                 insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
                 break;
@@ -205,7 +205,7 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep, can_yield can
     token_metadata_ptr tmptr = _shared_token_metadata.get();
     auto prev_tok = tmptr->sorted_tokens().back();
     for (auto tok : tmptr->sorted_tokens()) {
-        auto&& eps = calculate_natural_endpoints(tok, *tmptr, can_yield);
+        auto&& eps = do_calculate_natural_endpoints(tok, *tmptr, can_yield);
         if (eps.size() > 0 && eps[0] == ep) {
             insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
@@ -225,7 +225,7 @@ abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep, can
     std::unordered_set<inet_address> local_dc_nodes = tmptr->get_topology().get_datacenter_endpoints().at(local_dc);
     auto prev_tok = tmptr->sorted_tokens().back();
     for (auto tok : tmptr->sorted_tokens()) {
-        auto&& eps = calculate_natural_endpoints(tok, *tmptr, can_yield);
+        auto&& eps = do_calculate_natural_endpoints(tok, *tmptr, can_yield);
         // Unlike get_primary_ranges() which checks if ep is the first
         // owner of this range, here we check if ep is the first just
         // among nodes which belong to the local dc of ep.
@@ -250,7 +250,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, can_
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector r = tm.get_primary_ranges_for(t);
-        auto eps = calculate_natural_endpoints(t, tm, can_yield);
+        auto eps = do_calculate_natural_endpoints(t, tm, can_yield);
         rslogger.debug("token={}, primary_range={}, address={}", t, r, eps);
         for (auto ep : eps) {
             for (auto&& rng : r) {
@@ -269,7 +269,7 @@ std::unordered_multimap<inet_address, dht::token_range>
 abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint, can_yield can_yield) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
-        auto eps = calculate_natural_endpoints(t, tm, can_yield);
+        auto eps = do_calculate_natural_endpoints(t, tm, can_yield);
         bool found = false;
         for (auto ep : eps) {
             if (ep != endpoint) {
@@ -299,7 +299,7 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm, can
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = calculate_natural_endpoints(t, tm, can_yield);
+        auto eps = do_calculate_natural_endpoints(t, tm, can_yield);
         for (auto& r : ranges) {
             ret.emplace(r, eps);
         }

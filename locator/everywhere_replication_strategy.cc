@@ -51,7 +51,7 @@ inet_address_vector_replica_set everywhere_replication_strategy::calculate_natur
     return boost::copy_range<inet_address_vector_replica_set>(tm.get_all_endpoints());
 }
 
-future<inet_address_vector_replica_set> everywhere_replication_strategy::calculate_natural_endpoints_async(const token& search_token, const token_metadata& tm) const {
+future<inet_address_vector_replica_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const {
     return make_ready_future<inet_address_vector_replica_set>(boost::copy_range<inet_address_vector_replica_set>(tm.get_all_endpoints()));
 }
 

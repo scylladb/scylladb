@@ -31,14 +31,14 @@ local_strategy::local_strategy(const shared_token_metadata& token_metadata, snit
         abstract_replication_strategy(token_metadata, snitch, config_options, replication_strategy_type::local) {}
 
 inet_address_vector_replica_set local_strategy::do_get_natural_endpoints(const token& t, const token_metadata& tm, can_yield can_yield) {
-    return calculate_natural_endpoints(t, tm, can_yield);
+    return do_calculate_natural_endpoints(t, tm, can_yield);
 }
 
 inet_address_vector_replica_set local_strategy::calculate_natural_endpoints_sync(const token& t, const token_metadata& tm) const {
     return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
 }
 
-future<inet_address_vector_replica_set> local_strategy::calculate_natural_endpoints_async(const token& t, const token_metadata& tm) const {
+future<inet_address_vector_replica_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     return make_ready_future<inet_address_vector_replica_set>(inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()}));
 }
 

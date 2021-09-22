@@ -96,11 +96,7 @@ public:
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
-    inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const;
-
-    // FIXME: temporary, until all users are converted to use the async version
-    virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const = 0;
-    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints_async(const token& search_token, const token_metadata& tm) const = 0;
+    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
 
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options);
@@ -140,6 +136,12 @@ private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
     virtual inet_address_vector_replica_set do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);
+
+    // FIXME: temporary, until all users are converted to use the async version
+    virtual inet_address_vector_replica_set calculate_natural_endpoints_sync(const token& search_token, const token_metadata& tm) const = 0;
+
+protected:
+    inet_address_vector_replica_set do_calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const;
 
 public:
     // get_primary_ranges() returns the list of "primary ranges" for the given

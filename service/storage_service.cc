@@ -2686,7 +2686,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes);
+        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, *tmptr).get0();
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
@@ -2713,7 +2713,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
+        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {

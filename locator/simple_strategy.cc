@@ -71,7 +71,7 @@ inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints_syn
     return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
 }
 
-future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpoints_async(const token& t, const token_metadata& tm) const {
+future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {

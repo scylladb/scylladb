@@ -1511,7 +1511,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes);
+                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr).get0();
                 current_replica_endpoints.emplace(r, std::move(eps));
             }
             auto temp = tmptr->clone_after_all_left().get0();
@@ -1530,7 +1530,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
+                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
                 const inet_address_vector_replica_set& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
                 bool skip_this_range = false;
@@ -1726,7 +1726,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes) |
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr).get0() |
                     boost::adaptors::filtered([myip, &source_dc, &snitch_ptr] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;

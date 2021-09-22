@@ -492,6 +492,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     return std::move(replicas.get_vector());
 }
 
+// Called in a seastar thread.
 static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
@@ -511,7 +512,7 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, snitch, datacenters);
-        auto actual = nts.calculate_natural_endpoints(token, tm, utils::can_yield::no);
+        auto actual = nts.calculate_natural_endpoints(token, tm).get0();
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
         // are required than there are racks in a dc, we accept different order as long as the primary
