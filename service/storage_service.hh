@@ -254,14 +254,6 @@ public:
         return *_shared_token_metadata.get();
     }
 
-    cdc::generation_service& get_cdc_generation_service() {
-        if (!_cdc_gen_service.local_is_initialized()) {
-            throw std::runtime_error("get_cdc_generation_service: not initialized yet");
-        }
-
-        return _cdc_gen_service.local();
-    }
-
 private:
     bool is_auto_bootstrap() const;
     inet_address get_broadcast_address() const {

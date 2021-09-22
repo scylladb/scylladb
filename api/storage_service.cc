@@ -489,8 +489,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 req.get_query_param("key")));
     });
 
-    ss::cdc_streams_check_and_repair.set(r, [&ctx, &ss] (std::unique_ptr<request> req) {
-        return ss.local().get_cdc_generation_service().check_and_repair_cdc_streams().then([] {
+    ss::cdc_streams_check_and_repair.set(r, [&ctx, &cdc_gs] (std::unique_ptr<request> req) {
+        if (!cdc_gs.local_is_initialized()) {
+            throw std::runtime_error("get_cdc_generation_service: not initialized yet");
+        }
+        return cdc_gs.local().check_and_repair_cdc_streams().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
