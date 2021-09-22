@@ -108,8 +108,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             std::ref(migration_manager), std::ref(token_metadata),
             std::ref(_messaging),
             std::ref(cdc_generation_service), std::ref(repair),
-            std::ref(raft_gr), std::ref(elc_notif),
-            true).get();
+            std::ref(raft_gr), std::ref(elc_notif)).get();
         auto stop_ss = defer([&] { ss.stop().get(); });
 
         sharded<semaphore> sst_dir_semaphore;

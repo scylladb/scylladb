@@ -116,8 +116,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<cdc::generation_service>& cdc_gen_service,
     sharded<repair_service>& repair,
     raft_group_registry& raft_gr,
-    endpoint_lifecycle_notifier& elc_notif,
-    bool for_testing)
+    endpoint_lifecycle_notifier& elc_notif)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -126,7 +125,6 @@ storage_service::storage_service(abort_source& abort_source,
         , _messaging(ms)
         , _migration_manager(mm)
         , _repair(repair)
-        , _for_testing(for_testing)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
         , _cdc_gen_service(cdc_gen_service)
@@ -601,7 +599,7 @@ void storage_service::join_token_ring(int delay) {
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !_for_testing && !is_first_node()).get0();
+                _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -687,7 +685,7 @@ void storage_service::bootstrap() {
         // We don't do any other generation switches (unless we crash before complecting bootstrap).
         assert(!_cdc_gen_id);
 
-        _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !_for_testing && !is_first_node()).get0();
+        _cdc_gen_id = _cdc_gen_service.local().make_new_generation(_bootstrap_tokens, !is_first_node()).get0();
 
       if (!bootstrap_rbno) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node
