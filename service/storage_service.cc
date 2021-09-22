@@ -631,13 +631,6 @@ void storage_service::join_token_ring(int delay) {
     }
 
     _cdc_gen_service.local().after_join(std::move(_cdc_gen_id)).get();
-
-    // Ensure that the new CDC stream description table has all required streams.
-    // See the function's comment for details.
-    cdc::maybe_rewrite_streams_descriptions(
-            _db.local(), _sys_dist_ks.local_shared(),
-            [tm = get_token_metadata_ptr()] { return tm->count_normal_token_owners(); },
-            _abort_source).get();
 }
 
 void storage_service::mark_existing_views_as_built() {

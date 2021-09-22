@@ -586,7 +586,7 @@ static future<std::optional<cdc::generation_id_v1>> rewrite_streams_descriptions
     co_return std::nullopt;
 }
 
-future<> maybe_rewrite_streams_descriptions(
+future<> generation_service::maybe_rewrite_streams_descriptions(
         const database& db,
         shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
         noncopyable_function<unsigned()> get_num_token_owners,
@@ -707,7 +707,6 @@ generation_service::generation_service(
         , _feature_service(f)
         , _db(db)
 {
-    (void)_db; // temporary
 }
 
 future<> generation_service::stop() {
@@ -733,6 +732,12 @@ future<> generation_service::after_join(std::optional<cdc::generation_id>&& star
 
     // Retrieve the latest CDC generation seen in gossip (if any).
     co_await scan_cdc_generations();
+
+    // Ensure that the new CDC stream description table has all required streams.
+    // See the function's comment for details.
+    co_await maybe_rewrite_streams_descriptions(_db, _sys_dist_ks.local_shared(),
+            [tm = _token_metadata.get()] { return tm->count_normal_token_owners(); },
+            _abort_src);
 }
 
 void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
