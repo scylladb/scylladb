@@ -751,6 +751,7 @@ future<> server_impl::applier_fiber() {
                    if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+                       _state_machine->drop_snapshot(snp.id);
                    }
                    _stats.snapshots_taken++;
                }
