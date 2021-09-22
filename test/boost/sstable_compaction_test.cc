@@ -1768,16 +1768,6 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
     });
 }
 
-// Must be run in a seastar thread
-static
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version, int64_t generation = 1) {
-    auto s = rd.schema();
-    auto sst = env.make_sstable(s, path.string(), generation, version, big);
-    sst->write_components(std::move(rd), 1, s, cfg, encoding_stats{}).get();
-    sst->load().get();
-    return sst;
-}
-
 SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
   return test_env::do_with([] (test_env& env) {
     column_family_for_tests cf(env.manager());
@@ -3044,8 +3034,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         sstable_writer_config sst_cfg = env.manager().configure_writer();
         sst_cfg.run_identifier = partial_sstable_run_identifier;
-        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), flat_mutation_reader_from_mutations(env.make_reader_permit(), { std::move(mut) }),
-                                                         sst_cfg, sstables::get_highest_sstable_version(), 1);
+        auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), flat_mutation_reader_from_mutations(env.make_reader_permit(), { std::move(mut) }), sst_cfg);
 
         column_family_test(cf).add_sstable(partial_sstable_run_sst);
         column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());

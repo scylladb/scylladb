@@ -5219,13 +5219,7 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
         tmpdir dir;
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = index_block_size;
-        auto sst = env.make_sstable(write_schema,
-            dir.path().string(),
-            1 /* generation */,
-            version,
-            sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(write_schema, env.make_reader_permit()), 1, write_schema, cfg, mt->get_encoding_stats()).get();
-        sst->load().get();
+        auto sst = make_sstable_easy(env, dir.path(), mt, cfg, 1, version);
 
         BOOST_REQUIRE_EXCEPTION(
             assert_that(sst->make_reader(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))

@@ -35,6 +35,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         simple_schema ss;
         auto s = ss.schema();
+        fs::path tmp(tmpdir_path);
 
         auto pk = ss.make_pkey(make_local_key(s));
         auto mut = mutation(s, pk);
@@ -42,19 +43,15 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         int gen = 1;
 
         auto mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
-        auto sst1 = env.make_sstable(s, tmpdir_path, gen++);
         sstable_writer_config cfg = env.manager().configure_writer("");
-        sst1->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
-        sst1->load().get();
+        auto sst1 = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++);
 
         auto ss1 = make_lw_shared<sstables::sstable_set>(make_sstable_set(ss.schema(), make_lw_shared<sstable_list>({sst1})));
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
 
         // Test that a random sstable_origin is stored and retrieved properly.
         mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
-        auto sst2 = env.make_sstable(s, tmpdir_path, gen++);
-        sst2->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
-        sst2->load().get();
+        auto sst2 = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++);
 
         auto ss2 = make_lw_shared<sstables::sstable_set>(*ss1);
         ss2->insert(sst2);
@@ -69,17 +66,16 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
     return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
         simple_schema ss;
         auto s = ss.schema();
+        fs::path tmp(tmpdir_path);
 
         auto pk = ss.make_pkey(make_local_key(s));
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
         int gen = 1;
+        sstable_writer_config cfg = env.manager().configure_writer("");
 
         auto mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
-        auto sst1 = env.make_sstable(s, tmpdir_path, gen++);
-        sstable_writer_config cfg = env.manager().configure_writer("");
-        sst1->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
-        sst1->load().get();
+        auto sst1 = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++);
 
         auto ss1 = make_lw_shared<time_series_sstable_set>(ss.schema());
         ss1->insert(sst1);
@@ -87,9 +83,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
 
         // Test that a random sstable_origin is stored and retrieved properly.
         mr = flat_mutation_reader_from_mutations(env.make_reader_permit(), {mut});
-        auto sst2 = env.make_sstable(s, tmpdir_path, gen++);
-        sst2->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
-        sst2->load().get();
+        auto sst2 = make_sstable_easy(env, tmp, std::move(mr), cfg, gen++);
 
         auto ss2 = make_lw_shared<time_series_sstable_set>(*ss1);
         ss2->insert(sst2);
