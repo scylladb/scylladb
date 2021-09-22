@@ -284,3 +284,30 @@ def test_multi_column_with_regular_index(cql, test_keyspace):
         cql.execute(f'INSERT INTO {tbl}(p, c1, c2, r) VALUES (1, 2, 1, 0)')
         assert_rows(cql.execute(f'SELECT c1 FROM {tbl} WHERE (c1,c2)<(2,0) AND r=0 ALLOW FILTERING'), [1])
         assert_rows(cql.execute(f'SELECT c1 FROM {tbl} WHERE p=1 AND (c1,c2)<(2,0) AND r=0 ALLOW FILTERING'), [1])
+
+# Test that indexing an *empty string* works as expected. There is nothing
+# wrong or unusual about an empty string, and it should be supported just
+# like any other string.
+# Reproduces issue #9364
+@pytest.mark.xfail(reason="issue #9364")
+def test_index_empty_string(cql, test_keyspace):
+    schema = 'p int, v text, primary key (p)'
+    # Searching for v='' without an index (with ALLOW FILTERING), works
+    # as expected:
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 'hello')")
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, '')")
+        assert_rows(cql.execute(f"SELECT p FROM {table} WHERE v='' ALLOW FILTERING"), [2])
+    # Now try the same thing with an index on v. ALLOW FILTERING should
+    # no longer be needed, and the correct row should be found (in #9364
+    # it wasn't). We create here a new table instead of adding an index to
+    # the existing table to avoid the question of how will we know when the
+    # new index is ready.
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 'hello')")
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, '')")
+        # The following assert fails in #9364:
+        # Note that on a single-node cql-pytest, index updates are
+        # synchronous so we don't have to retry the SELECT.
+        assert_rows(cql.execute(f"SELECT p FROM {table} WHERE v=''"), [2])
