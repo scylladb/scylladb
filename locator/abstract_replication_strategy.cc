@@ -271,21 +271,17 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
     return ret;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
-abstract_replication_strategy::get_range_addresses(const token_metadata& tm, can_yield can_yield) const {
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = do_calculate_natural_endpoints(t, tm, can_yield);
+        auto eps = co_await calculate_natural_endpoints(t, tm);
         for (auto& r : ranges) {
             ret.emplace(r, eps);
         }
-
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
     }
-    return ret;
+    co_return ret;
 }
 
 dht::token_range_vector

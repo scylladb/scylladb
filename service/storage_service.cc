@@ -3096,7 +3096,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
     auto my_address = get_broadcast_address();
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = strat.get_range_addresses(tm, utils::can_yield::yes);
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = strat.get_range_addresses(tm).get0();
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges

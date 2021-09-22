@@ -1326,11 +1326,11 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get0();
-            auto range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+            auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
             //Pending ranges
             metadata_clone.update_normal_tokens(tokens, myip).get();
-            auto pending_range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+            auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get0();
             metadata_clone.clear_gently().get();
 
             //Collects the source that will have its range moved to the new node

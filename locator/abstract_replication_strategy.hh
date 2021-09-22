@@ -129,7 +129,8 @@ public:
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, can_yield) const;
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, inet_address endpoint, can_yield) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_addresses(const token_metadata& tm, can_yield) const;
+    // Caller must ensure that token_metadata will not change throughout the call.
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
 
     dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address, can_yield) const;
 
