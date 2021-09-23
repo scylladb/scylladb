@@ -75,6 +75,7 @@
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
+#include "sstables_loader.hh"
 #include "cql3/cql_config.hh"
 #include "connection_notifier.hh"
 #include "transport/controller.hh"
@@ -481,6 +482,7 @@ int main(int ac, char** av) {
     sharded<service::raft_group_registry> raft_gr;
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
+    sharded<sstables_loader> sst_loader;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -510,7 +512,7 @@ int main(int ac, char** av) {
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &ss, &lifecycle_notifier] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -1133,6 +1135,13 @@ int main(int ac, char** av) {
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
             });
+
+            supervisor::notify("starting sstables loader");
+            sst_loader.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging)).get();
+            auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
+                sst_loader.stop().get();
+            });
+
 
             gossiper.local().register_(ss.local().shared_from_this());
             auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {
