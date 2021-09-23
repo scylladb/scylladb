@@ -86,11 +86,7 @@ netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
 }
 
 const sstring& gossiper::get_cluster_name() const noexcept {
-    return _cluster_name;
-}
-
-void gossiper::set_cluster_name(sstring name) {
-    _cluster_name = name;
+    return _gcfg.cluster_name;
 }
 
 const sstring& gossiper::get_partitioner_name() const noexcept {
@@ -98,11 +94,7 @@ const sstring& gossiper::get_partitioner_name() const noexcept {
 }
 
 const std::set<inet_address>& gossiper::get_seeds() const noexcept {
-    return _seeds_from_config;
-}
-
-void gossiper::set_seeds(std::set<inet_address> seeds) {
-    _seeds_from_config = std::move(seeds);
+    return _gcfg.seeds;
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
@@ -468,11 +460,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     return make_ready_future<gossip_get_endpoint_states_response>(gossip_get_endpoint_states_response{std::move(map)});
 }
 
-future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
-    if (_ms_registered) {
-        return make_ready_future<>();
-    }
-    _ms_registered = true;
+void gossiper::init_messaging_service_handler() {
     _messaging.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
@@ -521,12 +509,6 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
             return gossiper.handle_get_endpoint_states_msg(std::move(request));
         });
     });
-
-    // Start listening messaging_service after gossip message handlers are registered
-    if (do_bind) {
-        return _messaging.start_listen();
-    }
-    return make_ready_future<>();
 }
 
 future<> gossiper::uninit_messaging_service_handler() {
@@ -538,9 +520,7 @@ future<> gossiper::uninit_messaging_service_handler() {
         ms.unregister_gossip_digest_ack(),
         ms.unregister_gossip_digest_ack2(),
         ms.unregister_gossip_get_endpoint_states()
-    ).then_unpack([this] {
-        _ms_registered = false;
-    });
+    ).discard_result();
 }
 
 future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
@@ -1000,7 +980,7 @@ void gossiper::run() {
                 logger.trace("ep={}, eps={}", x.first, x.second);
             }
         }
-        if (_enabled) {
+        if (is_enabled()) {
             _scheduled_gossip_task.arm(INTERVAL);
         } else {
             logger.info("Gossip loop is not scheduled because it is disabled");
@@ -1019,7 +999,7 @@ void gossiper::check_seen_seeds() {
     });
     logger.info("Known endpoints={}, current_seeds={}, seeds_from_config={}, seen_any_seed={}",
         boost::copy_range<std::list<inet_address>>(endpoint_state_map | boost::adaptors::map_keys),
-        _seeds, _seeds_from_config, seen);
+        _seeds, _gcfg.seeds, seen);
     if (!seen) {
         dump_endpoint_state_map();
         throw std::runtime_error("Unable to contact any seeds!");
@@ -1588,7 +1568,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         _endpoints_to_talk_with.front().push_back(addr);
     }
 
-    if (!_in_shadow_round) {
+    if (!is_in_shadow_round()) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
@@ -1616,7 +1596,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
 // Runs inside seastar::async context
 void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
     auto eps_old = get_endpoint_state_for_endpoint(ep);
-    if (!is_dead_state(eps) && !_in_shadow_round) {
+    if (!is_dead_state(eps) && !is_in_shadow_round()) {
         if (endpoint_state_map.contains(ep))  {
             logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
@@ -1627,7 +1607,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     endpoint_state_map[ep] = eps;
     replicate(ep, eps).get();
 
-    if (_in_shadow_round) {
+    if (is_in_shadow_round()) {
         // In shadow round, we only interested in the peer's endpoint_state,
         // e.g., gossip features, host_id, tokens. No need to call the
         // on_restart or on_join callbacks or to go through the mark alive
@@ -1850,18 +1830,11 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(int generation_number, bind_messaging_port do_bind) {
-    return start_gossiping(generation_number, std::map<application_state, versioned_value>(), do_bind, gms::advertise_myself::yes);
-}
-
-future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind, gms::advertise_myself advertise) {
-    // Although gossiper runs on cpu0 only, we need to listen incoming gossip
-    // message on all cpus and forard them to cpu0 to process.
-    return container().invoke_on_all([do_bind, advertise] (gossiper& g) {
+future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
+    return container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
         }
-        return g.init_messaging_service_handler(do_bind);
     }).then([this, generation_nbr, preload_local_states] () mutable {
         build_seeds_list();
         if (_cfg.force_gossip_generation() > 0) {
@@ -1916,17 +1889,8 @@ future<> gossiper::advertise_to_nodes(std::unordered_map<gms::inet_address, int3
     });
 }
 
-future<> gossiper::advertise_myself() {
-    return container().invoke_on_all([] (auto& g) {
-        g._advertise_myself = true;
-    });
-}
-
-future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
-    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
-        container().invoke_on_all([do_bind] (gossiper& g) {
-            return g.init_messaging_service_handler(do_bind);
-        }).get();
+future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) {
+    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes)] () mutable {
         nodes.erase(get_broadcast_address());
         gossip_get_endpoint_states_request request{{
             gms::application_state::STATUS,
@@ -1981,8 +1945,8 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         if (fall_back_to_syn_msg) {
             logger.info("Fallback to old method for ShadowRound");
             auto t = clk::now();
-            _in_shadow_round = true;
-            while (this->_in_shadow_round) {
+            goto_shadow_round();
+            while (is_in_shadow_round()) {
                 // send a completely empty syn
                 for (const auto& node : nodes) {
                     utils::chunked_vector<gossip_digest> digests;
@@ -1995,7 +1959,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                     });
                 }
                 sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-                if (this->_in_shadow_round) {
+                if (is_in_shadow_round()) {
                     if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
                         throw std::runtime_error(format("Unable to gossip with any nodes={} (ShadowRound),", nodes));
                     }
@@ -2147,11 +2111,6 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
 future<> gossiper::do_stop_gossiping() {
     if (!is_enabled()) {
         logger.info("gossip is already stopped");
-        // Verbs might have been registered by do_shadow_round(), but
-        // gossiper itself was not enabled after it...
-        if (_ms_registered) {
-            return container().invoke_on_all(&gossiper::uninit_messaging_service_handler);
-        }
         return make_ready_future<>();
     }
     return seastar::async([this, g = this->shared_from_this()] {
@@ -2187,13 +2146,7 @@ future<> gossiper::do_stop_gossiping() {
         }).get();
         _scheduled_gossip_task.cancel();
         // Take the semaphore makes sure existing gossip loop is finished
-        seastar::with_semaphore(_callback_running, 1, [this] {
-            logger.info("Disable and wait for gossip loop finished");
-            return container().invoke_on_all([] (gossiper& g) {
-                g._features_condvar.broken();
-                return g.uninit_messaging_service_handler();
-            });
-        }).get();
+        get_units(_callback_running, 1).get0();
         container().invoke_on_all([] (auto& g) {
             return std::move(g._failure_detector_loop_done);
         }).get();
@@ -2201,17 +2154,20 @@ future<> gossiper::do_stop_gossiping() {
     });
 }
 
-future<> stop_gossiping(sharded<gossiper>& g) {
-    return smp::submit_to(0, [&g] {
-        if (g.local_is_initialized()) {
-            return g.local().do_stop_gossiping();
-        }
-        return make_ready_future<>();
-    });
+future<> gossiper::start() {
+    init_messaging_service_handler();
+    return make_ready_future();
+}
+
+future<> gossiper::shutdown() {
+    if (this_shard_id() == 0) {
+        co_await do_stop_gossiping();
+    }
 }
 
 future<> gossiper::stop() {
-    return make_ready_future();
+    co_await shutdown();
+    co_await uninit_messaging_service_handler();
 }
 
 bool gossiper::is_enabled() const {
@@ -2253,15 +2209,6 @@ void gossiper::dump_endpoint_state_map() {
         logger.info("endpoint={}, endpoint_state={}", x.first, x.second);
     }
     logger.info("=== endpoint_state_map dump ends ===");
-}
-
-void gossiper::debug_show() {
-    auto reporter = std::make_shared<timer<std::chrono::steady_clock>>();
-    reporter->set_callback ([reporter] {
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.dump_endpoint_state_map();
-    });
-    reporter->arm_periodic(std::chrono::milliseconds(1000));
 }
 
 bool gossiper::is_alive(inet_address ep) const {
@@ -2623,7 +2570,6 @@ void gossiper::maybe_enable_features() {
         for (auto&& name : features) {
             g._feature_service.enable(name);
         }
-        g._features_condvar.broadcast();
     }).get();
 }
 

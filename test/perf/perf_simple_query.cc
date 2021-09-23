@@ -40,6 +40,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "alternator/tags_extension.hh"
+#include "gms/gossiper.hh"
 
 static const sstring table_name = "cf";
 

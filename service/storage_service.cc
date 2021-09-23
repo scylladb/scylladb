@@ -267,8 +267,7 @@ future<> storage_service::snitch_reconfigured() {
 void storage_service::prepare_to_join(
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
-        std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-        bind_messaging_port do_bind) {
+        std::unordered_map<gms::inet_address, sstring> loaded_peer_features) {
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (db::system_keyspace::was_decommissioned()) {
         if (_db.local().get_config().override_decommission()) {
@@ -292,7 +291,7 @@ void storage_service::prepare_to_join(
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features, do_bind).get0();
+        _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features).get0();
         auto replace_address = _db.local().get_replace_address();
         replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
@@ -302,11 +301,11 @@ void storage_service::prepare_to_join(
             get_broadcast_address(), *replace_address);
         tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address).get();
     } else if (should_bootstrap()) {
-        check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features, do_bind).get();
+        check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features).get();
     } else {
         auto local_features = _feature_service.known_feature_set();
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
-        _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).get();
+        _gossiper.do_shadow_round(initial_contact_nodes).get();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         _gossiper.check_snitch_name_matches();
         _gossiper.reset_endpoint_state_map().get();
@@ -385,24 +384,16 @@ void storage_service::prepare_to_join(
     }
     const auto& snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch_name));
+    app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
+    app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
 
     slogger.info("Starting up server gossip");
 
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
-    _gossiper.start_gossiping(generation_number, app_states, gms::bind_messaging_port(bool(do_bind)), advertise).get();
+    _gossiper.start_gossiping(generation_number, app_states, advertise).get();
 
     install_schema_version_change_listener();
-
-    // gossip local partitioner information (shard count and ignore_msb_bits)
-    gossip_sharder().get();
-
-    // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-
-    // Wait for gossip to settle so that the fetures will be enabled
-    if (do_bind) {
-        _gossiper.wait_for_gossip_to_settle().get();
-    }
 }
 
 void storage_service::maybe_start_sys_dist_ks() {
@@ -1340,7 +1331,7 @@ future<> storage_service::stop_transport() {
             shutdown_client_servers();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
-            gms::stop_gossiping(_gossiper.container()).get();
+            _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
             slogger.info("Stop transport: stop_gossiping done");
 
             do_stop_ms().get();
@@ -1376,10 +1367,10 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::init_server(bind_messaging_port do_bind) {
+future<> storage_service::init_server() {
     assert(this_shard_id() == 0);
 
-    return seastar::async([this, do_bind] {
+    return seastar::async([this] {
         _initialized = true;
 
         std::unordered_set<inet_address> loaded_endpoints;
@@ -1430,7 +1421,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), do_bind);
+        prepare_to_join(std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features));
     });
 }
 
@@ -1477,13 +1468,6 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     });
 }
 
-future<> storage_service::gossip_sharder() {
-    return _gossiper.add_local_application_state({
-        { gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count) },
-        { gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()) },
-    });
-}
-
 future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
@@ -1493,16 +1477,16 @@ future<> storage_service::stop() {
     });
 }
 
-future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
+future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     slogger.debug("Starting shadow gossip round to check for endpoint collision");
 
-    return seastar::async([this, initial_contact_nodes, loaded_peer_features, do_bind] {
+    return seastar::async([this, initial_contact_nodes, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
         auto local_features = _feature_service.known_feature_set();
         do {
             slogger.info("Checking remote features with gossip");
-            _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).get();
+            _gossiper.do_shadow_round(initial_contact_nodes).get();
             _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
             _gossiper.check_snitch_name_matches();
             auto addr = get_broadcast_address();
@@ -1557,7 +1541,7 @@ void storage_service::remove_endpoint(inet_address endpoint) {
 }
 
 future<storage_service::replacement_info>
-storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
+storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!_db.local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
@@ -1573,7 +1557,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // make magic happen
     slogger.info("Checking remote features with gossip");
-    return _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).then([this, loaded_peer_features, replace_address] {
+    return _gossiper.do_shadow_round(initial_contact_nodes).then([this, loaded_peer_features, replace_address] {
         auto local_features = _feature_service.known_feature_set();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
@@ -1801,11 +1785,13 @@ future<bool> storage_service::is_gossip_running() {
     });
 }
 
-future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
-    return run_with_api_lock(sstring("start_gossiping"), [do_bind] (storage_service& ss) {
-        return seastar::async([&ss, do_bind] {
+future<> storage_service::start_gossiping() {
+    return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) {
+        return seastar::async([&ss] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
+                ss._gossiper.container().invoke_on_all(&gms::gossiper::start).get();
+                auto undo = defer([&ss] { ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).get(); });
                 auto cdc_gen_ts = db::system_keyspace::get_cdc_generation_id().get0();
                 if (!cdc_gen_ts) {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
@@ -1814,9 +1800,10 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
                         db::system_keyspace::get_local_tokens().get0(),
                         cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
-                ss._gossiper.start_gossiping(utils::get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
+                ss._gossiper.start_gossiping(utils::get_generation_number()).then([&ss] {
                     ss._initialized = true;
                 }).get();
+                undo.cancel();
             }
         });
     });
@@ -1826,7 +1813,7 @@ future<> storage_service::stop_gossiping() {
     return run_with_api_lock(sstring("stop_gossiping"), [] (storage_service& ss) {
         if (ss._initialized) {
             slogger.warn("Stopping gossip by operator request");
-            return gms::stop_gossiping(ss._gossiper.container()).then([&ss] {
+            return ss._gossiper.container().invoke_on_all(&gms::gossiper::stop).then([&ss] {
                 ss._initialized = false;
             });
         }

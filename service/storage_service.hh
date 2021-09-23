@@ -42,9 +42,9 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/token_metadata.hh"
-#include "gms/gossiper.hh"
 #include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/condition-variable.hh>
 #include "dht/i_partitioner.hh"
 #include "dht/token_range_endpoints.hh"
 #include <seastar/core/sleep.hh>
@@ -92,6 +92,10 @@ class view_update_generator;
 }
 }
 
+namespace netw {
+class messaging_service;
+}
+
 namespace dht {
 class boot_strapper;
 class range_streamer;
@@ -108,9 +112,6 @@ class storage_service;
 class migration_manager;
 
 enum class disk_error { regular, commit };
-
-struct bind_messaging_port_tag {};
-using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
 struct storage_service_config {
     size_t available_memory;
@@ -263,8 +264,6 @@ public:
         return *_shared_token_metadata.get();
     }
 
-    future<> gossip_sharder();
-
     cdc::generation_service& get_cdc_generation_service() {
         if (!_cdc_gen_service.local_is_initialized()) {
             throw std::runtime_error("get_cdc_generation_service: not initialized yet");
@@ -347,7 +346,7 @@ public:
     future<> stop_gossiping();
 
     // should only be called via JMX
-    future<> start_gossiping(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> start_gossiping();
 
     // should only be called via JMX
     future<bool> is_gossip_running();
@@ -371,7 +370,7 @@ private:
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::unordered_set<token>;
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
-            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
+            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
     void run_replace_ops();
     void run_bootstrap_ops();
@@ -383,7 +382,7 @@ public:
     future<bool> is_initialized();
 
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
-            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
+            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
     /*!
      * \brief Init the messaging service part of the service.
@@ -416,7 +415,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> init_server(bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> init_server();
 
     future<> join_cluster();
 
@@ -432,8 +431,7 @@ private:
     void prepare_to_join(
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
-            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-            bind_messaging_port do_bind = bind_messaging_port::yes);
+            std::unordered_map<gms::inet_address, sstring> loaded_peer_features);
     void join_token_ring(int delay);
     void maybe_start_sys_dist_ks();
 public:

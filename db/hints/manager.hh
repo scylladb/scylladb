@@ -34,7 +34,6 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/abort_source.hh>
-#include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
 #include "db/commitlog/commitlog.hh"
@@ -47,6 +46,10 @@ class fragmented_temporary_buffer;
 
 namespace utils {
 class directories;
+}
+
+namespace gms {
+class gossiper;
 }
 
 namespace db {

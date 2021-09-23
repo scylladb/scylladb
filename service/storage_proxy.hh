@@ -91,6 +91,11 @@ namespace cdc {
     class cdc_service;    
 }
 
+namespace gms {
+class gossiper;
+class feature_service;
+}
+
 namespace service {
 
 namespace paxos {

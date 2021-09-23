@@ -82,9 +82,6 @@ class gossip_get_endpoint_states_response;
 
 class feature_service;
 
-struct bind_messaging_port_tag {};
-using bind_messaging_port = bool_class<bind_messaging_port_tag>;
-
 using advertise_myself = bool_class<class advertise_myself_tag>;
 
 struct syn_msg_pending {
@@ -99,6 +96,8 @@ struct ack_msg_pending {
 
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
+    sstring cluster_name;
+    std::set<inet_address> seeds;
 };
 
 /**
@@ -122,7 +121,7 @@ private:
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
 
-    future<> init_messaging_service_handler(bind_messaging_port do_bind = bind_messaging_port::yes);
+    void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
@@ -137,8 +136,6 @@ private:
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
-    std::set<inet_address> _seeds_from_config;
-    sstring _cluster_name;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
@@ -148,7 +145,6 @@ private:
     std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
 public:
-    future<> advertise_myself();
     // Get current generation number for the given nodes
     future<std::unordered_map<gms::inet_address, int32_t>>
     get_generation_for_nodes(std::list<gms::inet_address> nodes);
@@ -159,9 +155,7 @@ public:
     inet_address get_broadcast_address() const noexcept {
         return utils::fb_utilities::get_broadcast_address();
     }
-    void set_cluster_name(sstring name);
     const std::set<inet_address>& get_seeds() const noexcept;
-    void set_seeds(std::set<inet_address> _seeds);
 
     netw::messaging_service& get_local_messaging() const noexcept { return _messaging; }
 public:
@@ -249,7 +243,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg = gossip_config());
+    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg);
 
     void check_seen_seeds();
 
@@ -475,9 +469,6 @@ public:
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
-    future<> start_gossiping(int generation_number,
-            bind_messaging_port do_bind = bind_messaging_port::yes);
-
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      *
@@ -515,15 +506,14 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states,
-            bind_messaging_port do_bind = bind_messaging_port::yes, gms::advertise_myself advertise = gms::advertise_myself::yes);
+    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
+            gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:
     /**
      *  Do a single 'shadow' round of gossip, where we do not modify any state
-     *  Only used when replacing a node, to get and assume its states
      */
-    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes = {}, bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes = {});
 
 private:
     void build_seeds_list();
@@ -550,6 +540,8 @@ public:
      */
     future<> add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>>);
 
+    future<> start();
+    future<> shutdown();
     // Needed by seastar::sharded
     future<> stop();
     future<> do_stop_gossiping();
@@ -569,7 +561,6 @@ public:
     static clk::time_point compute_expire_time();
 public:
     void dump_endpoint_state_map();
-    void debug_show();
 public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
@@ -593,19 +584,16 @@ private:
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
-    bool _ms_registered = false;
     bool _gossip_settled = false;
 
     class msg_proc_guard;
 private:
     abort_source& _abort_source;
-    condition_variable _features_condvar;
     feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
     db::config& _cfg;
     gossip_config _gcfg;
-    friend class feature;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about
@@ -645,8 +633,6 @@ inline gossiper& get_local_gossiper() {
 inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
-
-future<> stop_gossiping(sharded<gossiper>& g);
 
 inline future<sstring> get_all_endpoint_states(gossiper& g) {
     return g.container().invoke_on(0, [] (gossiper& g) {

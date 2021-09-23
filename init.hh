@@ -38,18 +38,14 @@ class view_update_generator;
 
 namespace gms {
 class feature_service;
-class gossiper;
+class inet_address;
 }
 
 extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-void init_gossiper(sharded<gms::gossiper>& gossiper
-                , db::config& cfg
-                , sstring listen_address
-                , db::seed_provider_type seed_provider
-                , sstring cluster_name = "Test Cluster");
+std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg);
 
 /**
  * Very simplistic config registry. Allows hooking in a config object

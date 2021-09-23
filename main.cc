@@ -837,12 +837,24 @@ int main(int ac, char** av) {
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
             auto stop_cql_config_updater = deferred_stop(cql_config_updater);
 
+            supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
+            gcfg.seeds = get_seeds_from_db_config(*cfg);
+            gcfg.cluster_name = cfg->cluster_name();
+            if (gcfg.cluster_name.empty()) {
+                gcfg.cluster_name = "Test Cluster";
+                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
+            }
+
             auto& gossiper = gms::get_gossiper();
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
-            // #293 - do not stop anything
-            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
+            auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
+                // call stop on each instance, but leave the sharded<> pointers alive
+                gossiper.invoke_on_all(&gms::gossiper::stop).get();
+            });
+            gossiper.invoke_on_all(&gms::gossiper::start).get();
+
             supervisor::notify("starting Raft service");
             raft_gr.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
@@ -909,18 +921,6 @@ int main(int ac, char** av) {
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             distributed_loader::init_system_keyspace(db, ss).get();
-
-            supervisor::notify("starting gossip");
-            // Moved local parameters here, esp since with the
-            // ssl stuff it gets to be a lot.
-            auto seed_provider= cfg->seed_provider();
-            sstring cluster_name = cfg->cluster_name();
-            if (cluster_name.empty()) {
-                cluster_name = "Test Cluster";
-                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
-            }
-
-            init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
@@ -1158,15 +1158,6 @@ int main(int ac, char** av) {
                 gossiper.local().unregister_(ss.local().shared_from_this()).get();
             });
 
-            /*
-             * This fuse prevents gossiper from staying active in case the
-             * drain_on_shutdown below is not registered. When we fix the
-             * start-stop sequence it will be removed.
-             */
-            auto gossiping_fuse = defer_verbose_shutdown("gossiping", [&gossiper] {
-                gms::stop_gossiping(gossiper).get();
-            });
-
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
@@ -1180,9 +1171,14 @@ int main(int ac, char** av) {
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
+                return messaging.invoke_on_all(&netw::messaging_service::start_listen);
+            }).get();
+
+            with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().init_server();
             }).get();
 
+            gossiper.local().wait_for_gossip_to_settle().get();
             sst_format_selector.sync();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
