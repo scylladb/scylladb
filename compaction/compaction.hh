@@ -63,8 +63,6 @@ namespace sstables {
         uint64_t end_size = 0;
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
-        int64_t ended_at;
-        std::vector<shared_sstable> new_sstables;
         sstring stop_requested;
         utils::UUID compaction_uuid;
         struct replacement {
@@ -82,6 +80,11 @@ namespace sstables {
         }
     };
 
+    struct compaction_result {
+        std::vector<sstables::shared_sstable> new_sstables;
+        std::chrono::time_point<db_clock> ended_at;
+    };
+
     // Compact a list of N sstables into M sstables.
     // Returns info about the finished compaction, which includes vector to new sstables.
     //
@@ -94,7 +97,7 @@ namespace sstables {
     // If descriptor.cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf);
+    future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_info& info, column_family& cf);
 
     // Return list of expired sstables for column family cf.
     // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

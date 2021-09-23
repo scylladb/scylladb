@@ -187,14 +187,17 @@ public:
                     return sst_gen();
                 };
                 descriptor.replacer = sstables::replacer_fn_no_op();
-                auto ret = sstables::compact_sstables(std::move(descriptor), *cf).get0();
+                auto info = compaction_manager::create_compaction_info(*cf, sstables::compaction_type::Compaction);
+                auto ret = sstables::compact_sstables(std::move(descriptor), *info, *cf).get0();
                 auto end = perf_sstable_test_env::now();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
-                assert(ret.total_keys_written == partitions_per_sstable);
+                assert(ret.new_sstables.size() == 1);
+                auto total_keys_written = ret.new_sstables.front()->get_estimated_key_count();
+                assert(total_keys_written >= partitions_per_sstable);
 
                 auto duration = std::chrono::duration<double>(end - start).count();
-                return ret.total_keys_written / duration;
+                return total_keys_written / duration;
             });
         });
     }
