@@ -953,7 +953,13 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
 
 flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment> fragments,
-        const dht::partition_range& pr, const query::partition_slice& slice) {
+        const dht::partition_range& pr, const query::partition_slice& query_slice) {
+    const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+    if (reversed) {
+        schema = schema->make_reversed();
+    }
+    auto slice = reversed ? query::half_reverse_slice(*schema, query_slice) : query_slice;
+
     std::optional<clustering_ranges_walker> ranges_walker;
     std::optional<range_tombstone_splitter> splitter;
     std::deque<mutation_fragment> filtered;
@@ -988,7 +994,11 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
                 break;
         }
     }
-    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
+    auto rd = make_flat_mutation_reader_from_fragments(std::move(schema), permit, std::move(filtered), pr);
+    if (reversed) {
+        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+    }
+    return rd;
 }
 
 flat_mutation_reader
