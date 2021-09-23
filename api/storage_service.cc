@@ -55,6 +55,7 @@
 #include "cdc/generation_service.hh"
 #include "service/storage_proxy.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "sstables_loader.hh"
 
 extern logging::logger apilog;
 
@@ -297,7 +298,7 @@ void unset_repair(http_context& ctx, routes& r) {
 }
 
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader, sharded<service::storage_service>& ss) {
-    ss::load_new_ss_tables.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<request> req) {
         auto ks = validate_keyspace(ctx, req->param);
         auto cf = req->get_query_param("cf");
         auto stream = req->get_query_param("load_and_stream");
@@ -309,10 +310,10 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         // No need to add the keyspace, since all we want is to avoid always sending this to the same
         // CPU. Even then I am being overzealous here. This is not something that happens all the time.
         auto coordinator = std::hash<sstring>()(cf) % smp::count;
-        return ss.invoke_on(coordinator,
+        return sst_loader.invoke_on(coordinator,
                 [ks = std::move(ks), cf = std::move(cf),
-                load_and_stream, primary_replica_only] (service::storage_service& s) {
-            return s.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
+                load_and_stream, primary_replica_only] (sstables_loader& loader) {
+            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
                 auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());

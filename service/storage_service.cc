@@ -143,6 +143,7 @@ storage_service::storage_service(abort_source& abort_source,
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
     (void) _raft_gr;
+    (void) _view_update_generator; // temporary
 }
 
 enum class node_external_status {

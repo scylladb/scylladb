@@ -30,11 +30,9 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 
-#include "service/storage_service.hh" // temporary
-
 static logging::logger llog("sstables_loader");
 
-namespace service {
+namespace {
 
 class send_meta_data {
     gms::inet_address _node;
@@ -122,7 +120,9 @@ public:
     }
 };
 
-future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
+} // anonymous namespace
+
+future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         utils::UUID table_id, std::vector<sstables::shared_sstable> sstables, bool primary_replica_only) {
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
     const auto full_token_range = dht::token_range::make_open_ended_both_sides();
@@ -165,7 +165,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
         std::exception_ptr eptr;
         bool failed = false;
         try {
-            netw::messaging_service& ms = _messaging.local();
+            netw::messaging_service& ms = _messaging;
             while (auto mf = co_await reader()) {
                 bool is_partition_start = mf->is_partition_start();
                 if (is_partition_start) {
@@ -247,7 +247,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
 // For more details, see the commends on column_family::load_new_sstables
 // All the global operations are going to happen here, and just the reloading happens
 // in there.
-future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name,
+future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     bool load_and_stream, bool primary_replica_only) {
     if (_loading_new_sstables) {
         throw std::runtime_error("Already loading SSTables. Try again later");
@@ -261,8 +261,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name,
             utils::UUID table_id;
             std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards;
             std::tie(table_id, sstables_on_shards) = co_await distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name);
-            co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary_replica_only] (storage_service& ss) mutable -> future<> {
-                co_await ss.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only);
+            co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary_replica_only] (sstables_loader& loader) mutable -> future<> {
+                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only);
             });
         } else {
             co_await distributed_loader::process_upload_dir(_db, _sys_dist_ks, _view_update_generator, ks_name, cf_name);
@@ -278,5 +278,3 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name,
     _loading_new_sstables = false;
     co_return;
 }
-
-} // namespace service

@@ -172,13 +172,6 @@ private:
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
-    // Note that this is obviously only valid for the current shard. Users of
-    // this facility should elect a shard to be the coordinator based on any
-    // given objective criteria
-    //
-    // It shouldn't be impossible to actively serialize two callers if the need
-    // ever arise.
-    bool _loading_new_sstables = false;
     sstring _operation_in_progress;
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
@@ -818,24 +811,6 @@ private:
 
 public:
     int32_t get_exception_count();
-
-    /**
-     * Load new SSTables not currently tracked by the system
-     *
-     * This can be called, for instance, after copying a batch of SSTables to a CF directory.
-     *
-     * This should not be called in parallel for the same keyspace / column family, and doing
-     * so will throw an std::runtime_exception.
-     *
-     * @param ks_name the keyspace in which to search for new SSTables.
-     * @param cf_name the column family in which to search for new SSTables.
-     * @return a future<> when the operation finishes.
-     */
-    future<> load_new_sstables(sstring ks_name, sstring cf_name,
-            bool load_and_stream, bool primary_replica_only);
-    future<> load_and_stream(sstring ks_name, sstring cf_name,
-            utils::UUID table_id, std::vector<sstables::shared_sstable> sstables,
-            bool primary_replica_only);
 
     future<> set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled);
 
