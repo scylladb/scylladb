@@ -1297,6 +1297,11 @@ int main(int ac, char** av) {
                 }
             });
 
+            api::set_server_view_builder(ctx, view_builder, ss).get();
+            auto stop_vb_api = defer_verbose_shutdown("view builder API", [&ctx] {
+                api::unset_server_view_builder(ctx).get();
+            });
+
             // Truncate `clients' CF - this table should not persist between server restarts.
             clear_clientlist().get();
 

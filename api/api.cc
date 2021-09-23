@@ -123,6 +123,14 @@ future<> unset_server_sstables_loader(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_sstables_loader(ctx, r); });
 }
 
+future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb, sharded<service::storage_service>& ss) {
+    return ctx.http_server.set_routes([&ctx, &vb, &ss] (routes& r) { set_view_builder(ctx, r, vb, ss); });
+}
+
+future<> unset_server_view_builder(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_view_builder(ctx, r); });
+}
+
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair) {
     return ctx.http_server.set_routes([&ctx, &repair] (routes& r) { set_repair(ctx, r, repair); });
 }
