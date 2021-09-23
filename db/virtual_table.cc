@@ -110,11 +110,19 @@ mutation_source streaming_virtual_table::as_mutation_source() {
     return mutation_source([this] (schema_ptr s,
         reader_permit permit,
         const dht::partition_range& pr,
-        const query::partition_slice& slice,
+        const query::partition_slice& query_slice,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) {
+
+        std::unique_ptr<query::partition_slice> unreversed_slice;
+        const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+        if (reversed) {
+            s = s->make_reversed();
+            unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));
+        }
+        const auto& slice = reversed ? *unreversed_slice : query_slice;
 
         // We cannot pass the partition_range directly to execute()
         // because it is not guaranteed to be alive until execute() resolves.
@@ -170,6 +178,10 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
                 return this_shard_owns(dk);
             });
+        }
+
+        if (reversed) {
+            rd = make_reversing_reader(std::move(rd), permit.max_result_size(), std::move(unreversed_slice));
         }
 
         if (fwd == streamed_mutation::forwarding::yes) {

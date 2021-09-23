@@ -177,6 +177,8 @@ private:
     void remove_flushed_memory(uint64_t);
     void clear() noexcept;
     uint64_t dirty_size() const;
+    flat_mutation_reader do_make_flat_reader(schema_ptr, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
+            const io_priority_class& pc, tracing::trace_state_ptr trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr);
 public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&, table_stats& table_stats, memtable_list *memtable_list = nullptr,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());

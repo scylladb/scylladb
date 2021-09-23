@@ -725,7 +725,7 @@ row_cache::make_scanning_reader(const dht::partition_range& range, std::unique_p
 }
 
 flat_mutation_reader
-row_cache::make_reader(schema_ptr s,
+row_cache::do_make_reader(schema_ptr s,
                        reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
@@ -741,7 +741,7 @@ row_cache::make_reader(schema_ptr s,
     if (query::is_single_partition(range) && !fwd_mr) {
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
-        auto mr = _read_section(_tracker.region(), [&] {
+        return _read_section(_tracker.region(), [&] {
             dht::ring_position_comparator cmp(*_schema);
             auto&& pos = range.start()->value();
             partitions_type::bound_hint hint;
@@ -759,24 +759,41 @@ row_cache::make_reader(schema_ptr s,
                 return make_flat_mutation_reader<single_partition_populating_reader>(*this, make_context());
             }
         });
-
-        if (fwd == streamed_mutation::forwarding::yes) {
-            return make_forwardable(std::move(mr));
-        } else {
-            return mr;
-        }
     }
 
     tracing::trace(trace_state, "Scanning cache for range {} and slice {}",
             range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
-    auto mr = make_scanning_reader(range, make_context());
-    if (fwd == streamed_mutation::forwarding::yes) {
-        return make_forwardable(std::move(mr));
-    } else {
-        return mr;
-    }
+    return make_scanning_reader(range, make_context());
 }
 
+flat_mutation_reader
+row_cache::make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& query_slice,
+        const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
+
+    // We want to do the reversing on top of the cache reader so we have to
+    // un-reverse the slice so that underlying mutation sources don't try to
+    // reverse themselves. Once the cache supports reading in reverse itself,
+    // we can pass on the reverse slice.
+    std::unique_ptr<query::partition_slice> unreversed_slice;
+    const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+    if (reversed) {
+        s = s->make_reversed();
+        unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));
+    }
+    const auto& slice = reversed ? *unreversed_slice : query_slice;
+
+    auto rd = do_make_reader(std::move(s), permit, range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+
+    if (reversed) {
+        rd = make_reversing_reader(std::move(rd), permit.max_result_size(), std::move(unreversed_slice));
+    }
+
+    if (fwd == streamed_mutation::forwarding::yes) {
+        rd = make_forwardable(std::move(rd));
+    }
+
+    return rd;
+}
 
 row_cache::~row_cache() {
     with_allocator(_tracker.allocator(), [this] {

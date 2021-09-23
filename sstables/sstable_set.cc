@@ -875,12 +875,13 @@ time_series_sstable_set::create_single_key_sstable_reader(
             return false;
     };
 
+    auto reversed = slice.options.contains(query::partition_slice::option::reversed);
     // Note that `sstable_position_reader_queue` always includes a reader which emits a `partition_start` fragment,
     // guaranteeing that the reader we return emits it as well; this helps us avoid the problem from #3552.
     return make_clustering_combined_reader(
             schema, permit, fwd_sm,
             make_position_reader_queue(
-                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, false));
+                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, reversed));
 }
 
 compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets)
