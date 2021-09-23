@@ -3147,7 +3147,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
                          sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
     };
     desc.replacer = replacer_fn_no_op();
-    auto info = compaction_manager::create_compaction_info(*cf, sstables::compaction_type::Compaction);
+    auto info = compaction_manager::create_compaction_data(*cf, sstables::compaction_type::Compaction);
     sstables::compact_sstables(std::move(desc), *info, *cf).get();
 
     auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);

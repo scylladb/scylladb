@@ -2263,7 +2263,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
                 clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r)));
     };
 
-    auto info = make_lw_shared<compaction_info>();
+    auto info = make_lw_shared<compaction_data>();
 
     BOOST_TEST_MESSAGE("valid");
     {
@@ -3049,10 +3049,12 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        auto info = compaction_manager::create_compaction_info(*cf, sstables::compaction_type::Compaction);
+        auto info = compaction_manager::create_compaction_data(*cf, sstables::compaction_type::Compaction);
         compaction_manager_test(*cm).register_compaction(info, partial_sstable_run_identifier);
 
         cf->compact_all_sstables().get();
+
+        compaction_manager_test(*cm).deregister_compaction(info);
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
@@ -3858,7 +3860,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            auto info = make_lw_shared<sstables::compaction_info>();
+            auto info = make_lw_shared<sstables::compaction_data>();
             cf->run_offstrategy_compaction(*info).get();
 
             // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
