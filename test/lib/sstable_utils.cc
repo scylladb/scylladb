@@ -175,9 +175,8 @@ future<compaction_result> compact_sstables(sstables::compaction_descriptor descr
     };
     descriptor.replacer = std::move(replacer);
     auto info = make_lw_shared<sstables::compaction_info>();
-    info->cf = &cf;
     auto& cm = cf.get_compaction_manager();
-    compaction_manager_test(cm).register_compaction(info);
+    compaction_manager_test(cm).register_compaction(info, descriptor.run_identifier, &cf);
     return sstables::compact_sstables(std::move(descriptor), *info, cf).then([info, &cm] (sstables::compaction_result res) {
         compaction_manager_test(cm).deregister_compaction(info);
         return res;

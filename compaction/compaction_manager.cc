@@ -85,7 +85,6 @@ lw_shared_ptr<sstables::compaction_info> compaction_manager::create_compaction_i
     info->ks_name = cf.schema()->ks_name();
     info->cf_name = cf.schema()->cf_name();
     info->type = type;
-    info->cf = &cf;
     info->compaction_uuid = utils::UUID_gen::get_time_UUID();
     return info;
 }
@@ -971,9 +970,9 @@ void compaction_manager::stop_compaction(sstring type) {
 
 void compaction_manager::propagate_replacement(column_family* cf,
         const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
-    for (auto& info : get_compactions()) {
-        if (info->cf == cf) {
-            info->pending_replacements.push_back({ removed, added });
+    for (auto& task : _tasks) {
+        if (task->compacting_cf == cf && task->compaction_running) {
+            task->compaction_info->pending_replacements.push_back({ removed, added });
         }
     }
 }
