@@ -3051,12 +3051,9 @@ future<>
 storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
     slogger.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
     return do_with(keyspace, std::move(tables), [this, enabled] (const sstring &keyspace, const std::vector<sstring>& tables) {
-        return run_with_api_lock(sstring("set_tables_autocompaction"), [&keyspace, &tables, enabled] (auto&& ss) {
-            if (!ss._initialized) {
-                return make_exception_future<>(std::runtime_error("Too early: storage service not initialized yet"));
-            }
-
-            return ss._db.invoke_on_all([&keyspace, &tables, enabled] (database& db) {
+        return _db.invoke_on(0, [this, &keyspace, &tables, enabled] (database& db) {
+            auto g = database::autocompaction_toggle_guard(db);
+            return _db.invoke_on_all([&keyspace, &tables, enabled] (database& db) {
                 return parallel_for_each(tables, [&db, &keyspace, enabled] (const sstring& table) {
                     column_family& cf = db.find_column_family(keyspace, table);
                     if (enabled) {
@@ -3066,7 +3063,7 @@ storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<
                     }
                     return make_ready_future<>();
                 });
-            });
+            }).finally([g = std::move(g)] {});
         });
     });
 }

@@ -1325,6 +1325,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
     bool _shutdown = false;
+    bool _enable_autocompaction_toggle = false;
     query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -1387,6 +1388,25 @@ public:
     }
 
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
+
+    void enable_autocompaction_toggle() noexcept { _enable_autocompaction_toggle = true; }
+    class autocompaction_toggle_guard {
+        database& _db;
+    public:
+        autocompaction_toggle_guard(database& db) : _db(db) {
+            assert(this_shard_id() == 0);
+            if (!_db._enable_autocompaction_toggle) {
+                throw std::runtime_error("Autocompaction toggle is busy");
+            }
+            _db._enable_autocompaction_toggle = false;
+        }
+        autocompaction_toggle_guard(const autocompaction_toggle_guard&) = delete;
+        autocompaction_toggle_guard(autocompaction_toggle_guard&&) = default;
+        ~autocompaction_toggle_guard() {
+            assert(this_shard_id() == 0);
+            _db._enable_autocompaction_toggle = true;
+        }
+    };
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,

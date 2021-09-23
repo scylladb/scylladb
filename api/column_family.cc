@@ -862,19 +862,25 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+      return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (database& db) {
+        auto g = database::autocompaction_toggle_guard(db);
         return foreach_column_family(ctx, req->param["name"], [](column_family &cf) {
             cf.enable_auto_compaction();
-        }).then([] {
+        }).then([g = std::move(g)] {
             return make_ready_future<json::json_return_type>(json_void());
         });
+      });
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+      return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (database& db) {
+        auto g = database::autocompaction_toggle_guard(db);
         return foreach_column_family(ctx, req->param["name"], [](column_family &cf) {
             cf.disable_auto_compaction();
-        }).then([] {
+        }).then([g = std::move(g)] {
             return make_ready_future<json::json_return_type>(json_void());
         });
+      });
     });
 
     cf::get_built_indexes.set(r, [&ctx](std::unique_ptr<request> req) {

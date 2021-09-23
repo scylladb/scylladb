@@ -1164,6 +1164,15 @@ int main(int ac, char** av) {
                 mm_notifier.local().unregister_listener(&ss.local()).get();
             });
 
+            /*
+             * FIXME. In bb07678346 commit the API toggle for autocompaction was
+             * (partially) delayed until system prepared to join the ring. Probably
+             * it was an overkill and it can be enabled earlier, even as early as
+             * 'by default'. E.g. the per-table toggle was 'enabled' right after
+             * the system keyspace started and nobody seemed to have any troubles.
+             */
+            db.local().enable_autocompaction_toggle();
+
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen);
             }).get();
