@@ -433,15 +433,26 @@ flat_mutation_reader
 flat_mutation_reader_from_mutations(reader_permit permit,
                                     std::vector<mutation> ms,
                                     const dht::partition_range& pr,
-                                    const query::partition_slice& slice,
+                                    const query::partition_slice& query_slice,
                                     streamed_mutation::forwarding fwd) {
+    const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+    auto slice = reversed
+            ? query::half_reverse_slice(*ms.front().schema(), query_slice)
+            : query_slice;
     std::vector<mutation> sliced_ms;
     for (auto& m : ms) {
         auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*m.schema(), slice, m.key());
         auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
         sliced_ms.emplace_back(m.schema(), m.decorated_key(), std::move(mp));
     }
-    return flat_mutation_reader_from_mutations(std::move(permit), sliced_ms, pr, fwd);
+    auto rd = flat_mutation_reader_from_mutations(permit, sliced_ms, pr, reversed ? streamed_mutation::forwarding::no : fwd);
+    if (reversed) {
+        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+        if (fwd) {
+            rd = make_forwardable(std::move(rd));
+        }
+    }
+    return rd;
 }
 
 flat_mutation_reader
