@@ -1606,7 +1606,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
 }
 
 future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
-    return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable {
+    return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
         if (keyspace_name != "") {
             //find throws no such keyspace if it is missing
             const keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
@@ -1636,53 +1636,40 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         //
         // The call for get_range_for_endpoint is done once per endpoint
         const auto& tm = ss.get_token_metadata();
-        return do_with(dht::token::describe_ownership(tm.sorted_tokens()),
-                tm.get_topology().get_datacenter_endpoints(),
-                std::map<gms::inet_address, float>(),
-                std::move(keyspace_name),
-                [&ss](const std::map<token, float>& token_ownership, std::unordered_map<sstring,
-                        std::unordered_set<gms::inet_address>>& datacenter_endpoints,
-                        std::map<gms::inet_address, float>& final_ownership,
-                        sstring& keyspace_name) {
-            return do_for_each(datacenter_endpoints, [&ss, &keyspace_name, &final_ownership, &token_ownership](std::pair<sstring,std::unordered_set<inet_address>>&& endpoints) mutable {
-                return do_with(std::unordered_set<inet_address>(endpoints.second), [&ss, &keyspace_name, &final_ownership, &token_ownership](const std::unordered_set<inet_address>& endpoints_map) mutable {
-                    return do_for_each(endpoints_map, [&ss, &keyspace_name, &final_ownership, &token_ownership](const gms::inet_address& endpoint) mutable {
+        const auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
+        const auto datacenter_endpoints = tm.get_topology().get_datacenter_endpoints();
+        std::map<gms::inet_address, float> final_ownership;
+
+            for (const auto& [dc, endpoints_map] : datacenter_endpoints) {
+                    for (auto endpoint : endpoints_map) {
                         // calculate the ownership with replication and add the endpoint to the final ownership map
                         try {
-                            return do_with(float(0.0f), dht::token_range_vector(ss.get_ranges_for_endpoint(keyspace_name, endpoint)),
-                                    [&final_ownership, &token_ownership, &endpoint](float& ownership, const dht::token_range_vector& ranges) mutable {
-                                ownership = 0.0f;
-                                return do_for_each(ranges, [&token_ownership,&ownership](const dht::token_range& r) mutable {
+                                float ownership = 0.0f;
+                                auto ranges = ss.get_ranges_for_endpoint(keyspace_name, endpoint);
+                                for (auto& r : ranges) {
                                     // get_ranges_for_endpoint will unwrap the first range.
                                     // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
                                     // as (min,t0] and (t3,max]. Skippping the range (t3,max]
                                     // we will get the correct ownership number as if the first
                                     // range were not splitted.
                                     if (!r.end()) {
-                                        return make_ready_future<>();
+                                        continue;
                                     }
                                     auto end_token = r.end()->value();
                                     auto loc = token_ownership.find(end_token);
                                     if (loc != token_ownership.end()) {
                                         ownership += loc->second;
                                     }
-                                    return make_ready_future<>();
-                                }).then([&final_ownership, &ownership, &endpoint]() mutable {
+                                }
                                     final_ownership[endpoint] = ownership;
-                                });
-                            });
                         }  catch (no_such_keyspace&) {
                             // In case ss.get_ranges_for_endpoint(keyspace_name, endpoint) is not found, just mark it as zero and continue
                             final_ownership[endpoint] = 0;
-                            return make_ready_future<>();
                         }
 
-                    });
-                });
-            }).then([&final_ownership] {
-                return final_ownership;
-            });
-        });
+                    }
+            }
+        co_return final_ownership;
     });
 }
 
