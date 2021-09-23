@@ -25,6 +25,7 @@
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
 #include "service/raft/raft_address_map.hh"
+#include "service/raft/raft_state_machine.hh"
 
 namespace service {
 
@@ -43,6 +44,7 @@ inet_addr_to_raft_addr(gms::inet_address addr) {
 // Uses `netw::messaging_service` as an underlying implementation for
 // actually sending RPC messages.
 class raft_rpc : public raft::rpc {
+    raft_state_machine& _sm;
     raft::group_id _group_id;
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
@@ -54,7 +56,7 @@ class raft_rpc : public raft::rpc {
     }
 
 public:
-    explicit raft_rpc(netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id);
+    explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;

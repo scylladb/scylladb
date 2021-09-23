@@ -62,6 +62,10 @@ future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
     return make_ready_future<>();
 }
 
+future<> schema_raft_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_id snp) {
+    return make_ready_future<>();
+}
+
 future<> schema_raft_state_machine::abort() {
     return make_ready_future<>();
 }
