@@ -863,6 +863,410 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
     });
 }
 
+SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor_reversed) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        auto& r = tracker.region();
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
+            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+
+            int ck_0 = 10;
+            int ck_1 = 9;
+            int ck_2 = 8;
+            int ck_3 = 7;
+            int ck_4 = 6;
+            int ck_5 = 5;
+            int ck_6 = 4;
+
+            {
+                auto&& p1 = snap1->version()->partition();
+                p1.clustered_row(s, table.make_ckey(ck_0), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(ck_1), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(ck_2), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(ck_3), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(ck_6), is_dummy::no, is_continuous::no);
+                p1.ensure_last_dummy(s);
+            }
+
+            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap2, false, true);
+            position_in_partition::equal_compare eq(s);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(ck_0)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_0)));
+                BOOST_REQUIRE(cur.continuous());
+            }
+
+            r.full_compaction();
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_0)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_1)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_2)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_2)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_2)));
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_3)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(ck_4), is_dummy::no, is_continuous::no);
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_3)));
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_4)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_6)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(!cur.next());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+
+                BOOST_REQUIRE(cur.advance_to(position_in_partition::before_all_clustered_rows()));
+                BOOST_REQUIRE(cur.continuous());
+                BOOST_REQUIRE(cur.next());
+
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_0)));
+                BOOST_REQUIRE(cur.continuous());
+                BOOST_REQUIRE(cur.next());
+
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_1)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(ck_3)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_3)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(ck_5), is_dummy::no, is_continuous::yes);
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_3)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_4)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_5)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_6)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(!cur.next());
+            }
+
+            // Test refresh after eviction
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(ck_3)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_3)));
+            }
+
+            e.evict(tracker.cleaner());
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(ck_5), is_dummy::no, is_continuous::yes);
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_3)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(ck_4)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_4)));
+                BOOST_REQUIRE(!cur.continuous());
+                BOOST_REQUIRE(cur.next());
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(ck_5)));
+                BOOST_REQUIRE(!cur.continuous());
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        auto& r = tracker.region();
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
+            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+
+            {
+                auto&& p1 = snap1->version()->partition();
+                p1.clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+                p1.ensure_last_dummy(s);
+            }
+
+            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::yes);
+                p2.clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+                p2.ensure_last_dummy(s);
+            }
+
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap2, false, true);
+            position_in_partition::equal_compare eq(s);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(4)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(4)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(3)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(0)));
+                BOOST_REQUIRE(cur.continuous());
+            }
+
+            r.full_compaction();
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(0)));
+                BOOST_REQUIRE(cur.continuous());
+            }
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(1), is_dummy::no, is_continuous::yes);
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_refresh());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(0)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(eq(cur.get_iterator_in_latest_version()->position(), table.make_ckey(1)));
+
+                {
+                    auto res = cur.ensure_entry_in_latest();
+                    BOOST_REQUIRE(res.inserted);
+                    BOOST_REQUIRE(eq(res.row.position(), table.make_ckey(0)));
+                }
+            }
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(position_in_partition::before_all_clustered_rows()));
+                BOOST_REQUIRE(eq(cur.table_position(), position_in_partition::after_all_clustered_rows()));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(5)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(4)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(3)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(1)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(0)));
+                BOOST_REQUIRE(cur.continuous());
+
+                BOOST_REQUIRE(!cur.next());
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        auto& r = tracker.region();
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
+            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+
+            {
+                auto&& p1 = snap1->version()->partition();
+                p1.clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+                p1.ensure_last_dummy(s);
+            }
+
+            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(1), is_dummy::no, is_continuous::yes);
+                p2.clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+                p2.ensure_last_dummy(s);
+            }
+
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap2, false, true);
+            position_in_partition::equal_compare eq(s);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(3)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(3)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                {
+                    auto res = cur.ensure_entry_in_latest();
+                    BOOST_REQUIRE(res.inserted);
+                    BOOST_REQUIRE(eq(res.row.position(), table.make_ckey(3)));
+                }
+
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(3)));
+                BOOST_REQUIRE(!cur.continuous());
+
+                {
+                    auto res = cur.ensure_entry_in_latest();
+                    BOOST_REQUIRE(!res.inserted);
+                }
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reversed_mode) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        auto& r = tracker.region();
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
+            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+
+            {
+                auto&& p1 = snap1->version()->partition();
+                p1.clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(1), is_dummy::no, is_continuous::no);
+                p1.clustered_row(s, table.make_ckey(2), is_dummy::no, is_continuous::yes);
+                p1.ensure_last_dummy(s);
+            }
+
+            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                p2.clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+                p2.ensure_last_dummy(s);
+            }
+
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap2, false, true);
+            position_in_partition::equal_compare eq(s);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(2)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(2)));
+                BOOST_REQUIRE(cur.continuous());
+
+                {
+                    auto res = cur.ensure_entry_in_latest();
+                    BOOST_REQUIRE(res.inserted);
+                    BOOST_REQUIRE(eq(res.row.position(), table.make_ckey(2)));
+                }
+
+                BOOST_REQUIRE(cur.advance_to(table.make_ckey(0)));
+                // the entry for ckey 2 in latest version should not be marked as continuous.
+                BOOST_REQUIRE(!cur.continuous());
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_apply_is_atomic) {
     auto do_test = [](auto&& gen) {
         failure_injecting_allocation_strategy alloc(standard_allocator());
