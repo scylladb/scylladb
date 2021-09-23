@@ -74,7 +74,7 @@ private:
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
         utils::UUID output_run_identifier;
-        lw_shared_ptr<sstables::compaction_info> compaction_info = make_lw_shared<sstables::compaction_info>();
+        lw_shared_ptr<sstables::compaction_data> compaction_data = make_lw_shared<sstables::compaction_data>();
 
         explicit task(column_family* cf, sstables::compaction_type type) : compacting_cf(cf), type(type) {}
 
@@ -240,7 +240,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_info&)> job);
+    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
@@ -250,7 +250,7 @@ public:
         return _stats;
     }
 
-    const std::vector<lw_shared_ptr<sstables::compaction_info>> get_compactions() const;
+    const std::vector<sstables::compaction_info> get_compactions() const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(column_family* cf) const {
@@ -273,7 +273,7 @@ public:
     // Propagate replacement of sstables to all ongoing compaction of a given column family
     void propagate_replacement(column_family*cf, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
-    static lw_shared_ptr<sstables::compaction_info> create_compaction_info(column_family& cf, sstables::compaction_type type);
+    static lw_shared_ptr<sstables::compaction_data> create_compaction_data(column_family& cf, sstables::compaction_type type);
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;

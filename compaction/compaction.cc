@@ -504,9 +504,10 @@ protected:
     std::vector<shared_sstable> _new_unused_sstables;
     std::vector<shared_sstable> _all_new_sstables;
     lw_shared_ptr<sstable_set> _compacting;
+    sstables::compaction_type _type;
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
-    compaction_info& _info;
+    compaction_data& _info;
     uint64_t _start_size = 0;
     uint64_t _end_size = 0;
     uint64_t _estimated_partitions = 0;
@@ -525,13 +526,14 @@ protected:
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
 protected:
-    compaction(column_family& cf, compaction_descriptor descriptor, compaction_info& info)
+    compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
         : _cf(cf)
         , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
         , _permit(_cf.compaction_concurrency_semaphore().make_tracking_only_permit(_cf.schema().get(), "compaction", db::no_timeout))
         , _sstables(std::move(descriptor.sstables))
         , _total_input_sstables(_sstables.size())
+        , _type(descriptor.options.type())
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
         , _info(info)
@@ -771,7 +773,7 @@ private:
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
         for (auto& sst : _new_unused_sstables) {
-            log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _info.ks_name, _info.cf_name);
+            log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
             sst->mark_for_deletion();
         }
     }
@@ -780,7 +782,7 @@ protected:
     void log(log_level level, std::string_view fmt, const Args&... args) const {
         if (clogger.is_enabled(level)) {
             auto msg = fmt::format(fmt, args...);
-            clogger.log(level, "[{} {}.{} {}] {}", _info.type, _info.ks_name, _info.cf_name, _info.compaction_uuid, msg);
+            clogger.log(level, "[{} {}.{} {}] {}", _type, _schema->ks_name(), _schema->cf_name(), _info.compaction_uuid, msg);
         }
     }
 
@@ -831,7 +833,7 @@ public:
 void compacting_sstable_writer::maybe_abort_compaction() {
     if (_c._info.is_stop_requested()) [[unlikely]] {
         // Compaction manager will catch this exception and re-schedule the compaction.
-        throw compaction_stop_exception(_c._info.ks_name, _c._info.cf_name, _c._info.stop_requested);
+        throw compaction_stop_exception(_c._schema->ks_name(), _c._schema->cf_name(), _c._info.stop_requested);
     }
 }
 
@@ -889,7 +891,7 @@ void garbage_collected_sstable_writer::data::finish_sstable_writer() {
 
 class reshape_compaction : public compaction {
 public:
-    reshape_compaction(column_family& cf, compaction_descriptor descriptor, compaction_info& info)
+    reshape_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
         : compaction(cf, std::move(descriptor), info) {
     }
 
@@ -936,7 +938,7 @@ class regular_compaction : public compaction {
     // sstable being currently written.
     mutable compaction_read_monitor_generator _monitor_generator;
 public:
-    regular_compaction(column_family& cf, compaction_descriptor descriptor, compaction_info& info)
+    regular_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
         : compaction(cf, std::move(descriptor), info)
         , _monitor_generator(_cf)
     {
@@ -967,7 +969,7 @@ public:
         setup_new_sstable(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _cf, maximum_timestamp(), _sstable_level);
-        sstable_writer_config cfg = make_sstable_writer_config(_info.type);
+        sstable_writer_config cfg = make_sstable_writer_config(_type);
         cfg.monitor = monitor.get();
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
@@ -1105,7 +1107,7 @@ protected:
     }
 
 private:
-    cleanup_compaction(database& db, column_family& cf, compaction_descriptor descriptor, compaction_info& info)
+    cleanup_compaction(database& db, column_family& cf, compaction_descriptor descriptor, compaction_data& info)
         : regular_compaction(cf, std::move(descriptor), info)
         , _owned_ranges(db.get_keyspace_local_ranges(_schema->ks_name()))
         , _owned_ranges_checker(_owned_ranges)
@@ -1113,9 +1115,9 @@ private:
     }
 
 public:
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_info& info, compaction_type_options::cleanup opts)
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::cleanup opts)
         : cleanup_compaction(opts.db, cf, std::move(descriptor), info) {}
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_info& info, compaction_type_options::upgrade opts)
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::upgrade opts)
         : cleanup_compaction(opts.db, cf, std::move(descriptor), info) {}
 
     flat_mutation_reader make_sstable_reader() const override {
@@ -1393,7 +1395,7 @@ private:
     std::string _scrub_finish_description;
 
 public:
-    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_info& info, compaction_type_options::scrub options)
+    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::scrub options)
         : regular_compaction(cf, std::move(descriptor), info)
         , _options(options)
         , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
@@ -1454,7 +1456,7 @@ private:
                 _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions));
     }
 public:
-    resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_info& info)
+    resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_data& info)
         : compaction(cf, std::move(descriptor), info)
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
@@ -1560,11 +1562,11 @@ compaction_type compaction_type_options::type() const {
     return index_to_type[_options.index()];
 }
 
-static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_info& info) {
+static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_data& info) {
     struct {
         column_family& cf;
         sstables::compaction_descriptor&& descriptor;
-        compaction_info& info;
+        compaction_data& info;
 
         std::unique_ptr<compaction> operator()(compaction_type_options::reshape) {
             return std::make_unique<reshape_compaction>(cf, std::move(descriptor), info);
@@ -1589,7 +1591,7 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
     return descriptor.options.visit(visitor_factory);
 }
 
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_info& info) {
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_data& info) {
     auto schema = reader.schema();
 
     bool valid = true;
@@ -1601,7 +1603,7 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
         while (auto mf_opt = co_await reader()) {
             if (info.is_stop_requested()) [[unlikely]] {
                 // Compaction manager will catch this exception and re-schedule the compaction.
-                co_return coroutine::make_exception(compaction_stop_exception(info.ks_name, info.cf_name, info.stop_requested));
+                co_return coroutine::make_exception(compaction_stop_exception(schema->ks_name(), schema->cf_name(), info.stop_requested));
             }
 
             const auto& mf = *mf_opt;
@@ -1643,7 +1645,7 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
     co_return valid;
 }
 
-static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_info& info, column_family& cf) {
+static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& info, column_family& cf) {
     auto schema = cf.schema();
 
     formatted_sstables_list sstables_list_msg;
@@ -1669,7 +1671,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 }
 
 future<compaction_result>
-compact_sstables(sstables::compaction_descriptor descriptor, compaction_info& info, column_family& cf) {
+compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& info, column_family& cf) {
     if (descriptor.sstables.empty()) {
         return make_exception_future<compaction_result>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
                 compaction_name(descriptor.options.type()), cf.schema()->ks_name(), cf.schema()->cf_name())));

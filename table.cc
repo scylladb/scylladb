@@ -899,7 +899,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 }
 
 future<>
-table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_info& info) {
+table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& info) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         return make_ready_future<>();
@@ -976,7 +976,7 @@ void table::trigger_offstrategy_compaction() {
     _compaction_manager.submit_offstrategy(this);
 }
 
-future<> table::run_offstrategy_compaction(sstables::compaction_info& info) {
+future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
     // This procedure will reshape sstables in maintenance set until it's ready for
     // integration into main set.
     // It may require N reshape rounds before the set satisfies the strategy invariant.

@@ -187,7 +187,7 @@ public:
                     return sst_gen();
                 };
                 descriptor.replacer = sstables::replacer_fn_no_op();
-                auto info = compaction_manager::create_compaction_info(*cf, sstables::compaction_type::Compaction);
+                auto info = compaction_manager::create_compaction_data(*cf, sstables::compaction_type::Compaction);
                 auto ret = sstables::compact_sstables(std::move(descriptor), *info, *cf).get0();
                 auto end = perf_sstable_test_env::now();
 
