@@ -847,22 +847,22 @@ database::shard_of(const frozen_mutation& m) {
 
 future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
     auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
-        auto& ks = find_keyspace(name);
+    auto& ks = find_keyspace(name);
 
-        auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v);
-        auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
-                        boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
+    auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v);
+    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
+                    boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
 
-        bool old_durable_writes = ks.metadata()->durable_writes();
-        bool new_durable_writes = new_ksm->durable_writes();
-        if (old_durable_writes != new_durable_writes) {
-            for (auto& [cf_name, cf_schema] : new_ksm->cf_meta_data()) {
-                auto& cf = find_column_family(cf_schema);
-                cf.set_durable_writes(new_durable_writes);
-            }
+    bool old_durable_writes = ks.metadata()->durable_writes();
+    bool new_durable_writes = new_ksm->durable_writes();
+    if (old_durable_writes != new_durable_writes) {
+        for (auto& [cf_name, cf_schema] : new_ksm->cf_meta_data()) {
+            auto& cf = find_column_family(cf_schema);
+            cf.set_durable_writes(new_durable_writes);
         }
+    }
 
-        ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
+    ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
     co_await get_notifier().update_keyspace(ks.metadata());
 }
 
