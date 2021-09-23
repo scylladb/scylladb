@@ -805,8 +805,6 @@ private:
 public:
     int32_t get_exception_count();
 
-    future<> set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled);
-
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
         return container().invoke_on(0, [operation = std::move(operation),

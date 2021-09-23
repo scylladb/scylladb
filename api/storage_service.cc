@@ -143,7 +143,23 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, serv
         tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
     }
 
-    return ss.set_tables_autocompaction(keyspace, tables, enabled).then([]{
+    apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
+    return do_with(keyspace, std::move(tables), [&ctx, enabled] (const sstring &keyspace, const std::vector<sstring>& tables) {
+        return ctx.db.invoke_on(0, [&ctx, &keyspace, &tables, enabled] (database& db) {
+            auto g = database::autocompaction_toggle_guard(db);
+            return ctx.db.invoke_on_all([&keyspace, &tables, enabled] (database& db) {
+                return parallel_for_each(tables, [&db, &keyspace, enabled] (const sstring& table) {
+                    column_family& cf = db.find_column_family(keyspace, table);
+                    if (enabled) {
+                        cf.enable_auto_compaction();
+                    } else {
+                        cf.disable_auto_compaction();
+                    }
+                    return make_ready_future<>();
+                });
+            }).finally([g = std::move(g)] {});
+        });
+    }).then([] {
         return make_ready_future<json::json_return_type>(json_void());
     });
 }
