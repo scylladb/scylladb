@@ -1288,7 +1288,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_bootstrap, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
-        return make_ready_future<>();
+        co_return;
     }
 
     create_in_memory_keyspace(ksm, system);
@@ -1302,9 +1302,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_b
     }
 
     if (datadir != "") {
-        return io_check([&datadir] { return touch_directory(datadir); });
-    } else {
-        return make_ready_future<>();
+        co_await io_check([&datadir] { return touch_directory(datadir); });
     }
 }
 
