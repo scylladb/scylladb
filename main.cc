@@ -1141,6 +1141,10 @@ int main(int ac, char** av) {
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });
+            api::set_server_sstables_loader(ctx, sst_loader, ss).get();
+            auto stop_sstl_api = defer_verbose_shutdown("sstables loader API", [&ctx] {
+                api::unset_server_sstables_loader(ctx).get();
+            });
 
 
             gossiper.local().register_(ss.local().shared_from_this());

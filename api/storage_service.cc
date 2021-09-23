@@ -296,6 +296,37 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
+void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader, sharded<service::storage_service>& ss) {
+    ss::load_new_ss_tables.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+        auto ks = validate_keyspace(ctx, req->param);
+        auto cf = req->get_query_param("cf");
+        auto stream = req->get_query_param("load_and_stream");
+        auto primary_replica = req->get_query_param("primary_replica_only");
+        boost::algorithm::to_lower(stream);
+        boost::algorithm::to_lower(primary_replica);
+        bool load_and_stream = stream == "true" || stream == "1";
+        bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
+        // No need to add the keyspace, since all we want is to avoid always sending this to the same
+        // CPU. Even then I am being overzealous here. This is not something that happens all the time.
+        auto coordinator = std::hash<sstring>()(cf) % smp::count;
+        return ss.invoke_on(coordinator,
+                [ks = std::move(ks), cf = std::move(cf),
+                load_and_stream, primary_replica_only] (service::storage_service& s) {
+            return s.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
+        }).then_wrapped([] (auto&& f) {
+            if (f.failed()) {
+                auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
+                return make_exception_future<json::json_return_type>(httpd::server_error_exception(msg));
+            }
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+}
+
+void unset_sstables_loader(http_context& ctx, routes& r) {
+    ss::load_new_ss_tables.unset(r);
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::load_local_host_id().then([](const utils::UUID& id) {
@@ -826,31 +857,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
-    });
-
-    ss::load_new_ss_tables.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        auto ks = validate_keyspace(ctx, req->param);
-        auto cf = req->get_query_param("cf");
-        auto stream = req->get_query_param("load_and_stream");
-        auto primary_replica = req->get_query_param("primary_replica_only");
-        boost::algorithm::to_lower(stream);
-        boost::algorithm::to_lower(primary_replica);
-        bool load_and_stream = stream == "true" || stream == "1";
-        bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
-        // No need to add the keyspace, since all we want is to avoid always sending this to the same
-        // CPU. Even then I am being overzealous here. This is not something that happens all the time.
-        auto coordinator = std::hash<sstring>()(cf) % smp::count;
-        return ss.invoke_on(coordinator,
-                [ks = std::move(ks), cf = std::move(cf),
-                load_and_stream, primary_replica_only] (service::storage_service& s) {
-            return s.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
-        }).then_wrapped([] (auto&& f) {
-            if (f.failed()) {
-                auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
-                return make_exception_future<json::json_return_type>(httpd::server_error_exception(msg));
-            }
-            return make_ready_future<json::json_return_type>(json_void());
-        });
     });
 
     ss::sample_key_range.set(r, [](std::unique_ptr<request> req) {
