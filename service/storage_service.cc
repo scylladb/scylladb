@@ -2728,10 +2728,11 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
+    auto& ks = _db.local().find_keyspace(keyspace_name);
+    auto erm = ks.get_effective_replication_map();
     for (auto& r : ranges) {
-        auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto eps = ks.get_effective_replication_map()->get_natural_endpoints(end_token);
+        auto eps = erm->get_natural_endpoints(end_token);
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
@@ -2750,10 +2751,10 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // is gone. Whoever is present in newReplicaEndpoints list, but
     // not in the currentReplicaEndpoints list, will be needing the
     // range.
+    auto& rs = ks.get_replication_strategy();
     for (auto& r : ranges) {
-        auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
+        auto new_replica_endpoints = rs.calculate_natural_endpoints(end_token, temp).get0();
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
@@ -3184,8 +3185,9 @@ storage_service::construct_range_to_endpoint_map(
         const sstring& keyspace,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
+    auto erm = _db.local().find_keyspace(keyspace).get_effective_replication_map();
     for (auto r : ranges) {
-        res[r] = _db.local().find_keyspace(keyspace).get_effective_replication_map()->get_natural_endpoints(
+        res[r] = erm->get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
     }
     return res;
