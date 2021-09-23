@@ -3049,7 +3049,8 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        compaction_manager_test(*cm).register_compaction(*cf, partial_sstable_run_identifier);
+        auto info = compaction_manager::create_compaction_info(*cf, sstables::compaction_type::Compaction);
+        compaction_manager_test(*cm).register_compaction(info, partial_sstable_run_identifier);
 
         cf->compact_all_sstables().get();
 

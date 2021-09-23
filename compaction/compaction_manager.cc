@@ -39,15 +39,12 @@ using namespace std::chrono_literals;
 class compacting_sstable_registration {
     compaction_manager* _cm;
     std::vector<sstables::shared_sstable> _compacting;
-    lw_shared_ptr<sstables::compaction_info> _info;
 public:
-    compacting_sstable_registration(compaction_manager* cm, std::vector<sstables::shared_sstable> compacting, lw_shared_ptr<sstables::compaction_info> info)
+    compacting_sstable_registration(compaction_manager* cm, std::vector<sstables::shared_sstable> compacting)
         : _cm(cm)
         , _compacting(std::move(compacting))
-        , _info(std::move(info))
     {
         _cm->register_compacting_sstables(_compacting);
-        _cm->register_compaction(_info);
     }
 
     compacting_sstable_registration& operator=(const compacting_sstable_registration&) = delete;
@@ -71,7 +68,6 @@ public:
     ~compacting_sstable_registration() {
         if (_cm) {
             _cm->deregister_compacting_sstables(_compacting);
-            _cm->deregister_compaction(_info);
         }
     }
 
@@ -81,10 +77,6 @@ public:
         for (auto& sst : sstables) {
             _compacting.erase(boost::remove(_compacting, sst), _compacting.end());
         }
-    }
-
-    sstables::compaction_info& compaction_info() {
-        return *_info;
     }
 };
 
@@ -273,18 +265,20 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             // those are eligible for major compaction.
             sstables::compaction_strategy cs = cf->get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(*cf, get_candidates(*cf));
-            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables, create_compaction_info(*cf, descriptor.options.type()));
+            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
             };
+            task->compaction_info = create_compaction_info(*cf, task->type);
+            task->compaction_running = true;
             task->output_run_identifier = descriptor.run_identifier;
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-            return do_with(std::move(user_initiated), [this, cf, descriptor = std::move(descriptor), compacting] (compaction_backlog_tracker& bt) mutable {
+            return do_with(std::move(user_initiated), [this, cf, descriptor = std::move(descriptor), task] (compaction_backlog_tracker& bt) mutable {
                 register_backlog_tracker(bt);
-                return with_scheduling_group(_compaction_controller.sg(), [this, cf, descriptor = std::move(descriptor), compacting] () mutable {
-                    return cf->compact_sstables(std::move(descriptor), compacting->compaction_info());
+                return with_scheduling_group(_compaction_controller.sg(), [this, cf, descriptor = std::move(descriptor), task] () mutable {
+                    return cf->compact_sstables(std::move(descriptor), *task->compaction_info);
                 });
             }).then([compacting = std::move(compacting)] {});
         });
@@ -324,12 +318,13 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
             if (!can_proceed(task)) {
                 return make_ready_future<>();
             }
-            auto compacting = make_lw_shared<compacting_sstable_registration>(this, std::vector<sstables::shared_sstable>{}, create_compaction_info(*cf, task->type));
+            task->compaction_running = true;
+            task->compaction_info = create_compaction_info(*cf, task->type);
 
             // NOTE:
             // no need to register shared sstables because they're excluded from non-resharding
             // compaction and some of them may not even belong to current shard.
-            return job(compacting->compaction_info()).then([compacting] {});
+            return job(*task->compaction_info);
         });
     }).then_wrapped([this, task, job_ptr = std::move(job_ptr)] (future<> f) {
         _stats.active_tasks--;
@@ -347,8 +342,9 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
     return task->compaction_done.get_future().then([task] {});
 }
 
-future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
+future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task, sstring reason) {
     task->stopping = true;
+    task->compaction_info->stop(reason);
     auto f = task->compaction_done.get_future();
     return f.then([task] {
         task->stopping = false;
@@ -470,19 +466,14 @@ void compaction_manager::postpone_compaction_for_column_family(column_family* cf
 }
 
 future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
-    cmlog.info("Stopping {} ongoing compactions due to {}", _compactions.size(), reason);
-
-    // Stop all ongoing compaction.
-    for (auto& info : _compactions) {
-        info->stop(reason);
-    }
+    cmlog.info("Stopping {} ongoing compactions due to {}", get_compactions().size(), reason);
 
     // Wait for each task handler to stop. Copy list because task remove itself
     // from the list when done.
     auto tasks = _tasks;
-    return do_with(std::move(tasks), [this] (std::list<lw_shared_ptr<task>>& tasks) {
-        return parallel_for_each(tasks, [this] (auto& task) {
-            return this->task_stop(task).then_wrapped([](future <> f) {
+    return do_with(std::move(tasks), [this, reason] (std::list<lw_shared_ptr<task>>& tasks) {
+        return parallel_for_each(tasks, [this, reason] (auto& task) {
+            return this->task_stop(task, reason).then_wrapped([](future <> f) {
                 try {
                     f.get();
                 } catch (sstables::compaction_stop_exception& e) {
@@ -615,7 +606,8 @@ void compaction_manager::submit(column_family* cf) {
                 postpone_compaction_for_column_family(&cf);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables, create_compaction_info(cf, descriptor.options.type()));
+            task->compaction_info = create_compaction_info(cf, descriptor.options.type());
+            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
             auto weight_r = compaction_weight_registration(this, weight);
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
@@ -626,7 +618,7 @@ void compaction_manager::submit(column_family* cf) {
             _stats.pending_tasks--;
             _stats.active_tasks++;
             task->compaction_running = true;
-            return cf.compact_sstables(std::move(descriptor), compacting->compaction_info()).then_wrapped([this, task, compacting = std::move(compacting), weight_r = std::move(weight_r)] (future<> f) mutable {
+            return cf.compact_sstables(std::move(descriptor), *task->compaction_info).then_wrapped([this, task, compacting = std::move(compacting), weight_r = std::move(weight_r)] (future<> f) mutable {
                 _stats.active_tasks--;
                 task->compaction_running = false;
 
@@ -674,10 +666,9 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                 }
                 _stats.active_tasks++;
                 task->compaction_running = true;
+                task->compaction_info = create_compaction_info(*cf, task->type);
 
-                auto compacting = make_lw_shared<compacting_sstable_registration>(this, std::vector<sstables::shared_sstable>{}, create_compaction_info(*cf, task->type));
-
-                return cf->run_offstrategy_compaction(compacting->compaction_info()).then_wrapped([this, task, compacting] (future<> f) mutable {
+                return cf->run_offstrategy_compaction(*task->compaction_info).then_wrapped([this, task] (future<> f) mutable {
                     _stats.active_tasks--;
                     task->compaction_running = false;
                     try {
@@ -724,7 +715,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
         return a->data_size() > b->data_size();
     });
 
-    auto compacting = make_lw_shared<compacting_sstable_registration>(this, *sstables, create_compaction_info(*cf, task->type));
+    auto compacting = make_lw_shared<compacting_sstable_registration>(this, *sstables);
     auto sstables_ptr = sstables.get();
     _stats.pending_tasks += sstables->size();
 
@@ -758,10 +749,11 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 _stats.pending_tasks--;
                 _stats.active_tasks++;
                 task->compaction_running = true;
+                task->compaction_info = create_compaction_info(cf, task->type);
                 compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-                return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor), compacting] (compaction_backlog_tracker& bt) mutable {
-                    return with_scheduling_group(_maintenance_sg.cpu, [this, &cf, descriptor = std::move(descriptor), compacting]() mutable {
-                        return cf.compact_sstables(std::move(descriptor), compacting->compaction_info());
+                return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor), task] (compaction_backlog_tracker& bt) mutable {
+                    return with_scheduling_group(_maintenance_sg.cpu, [this, &cf, descriptor = std::move(descriptor), task]() mutable {
+                        return cf.compact_sstables(std::move(descriptor), *task->compaction_info);
                     });
                 });
               });
@@ -938,14 +930,6 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
 }
 
 future<> compaction_manager::remove(column_family* cf) {
-    // FIXME: better way to iterate through compaction info for a given column family,
-    // although this path isn't performance sensitive.
-    for (auto& info : _compactions) {
-        if (info->cf == cf) {
-            info->stop("column family removal");
-        }
-    }
-
     // We need to guarantee that a task being stopped will not retry to compact
     // a column family being removed.
     auto tasks_to_stop = make_lw_shared<std::vector<lw_shared_ptr<task>>>();
@@ -958,11 +942,16 @@ future<> compaction_manager::remove(column_family* cf) {
     _postponed.erase(boost::remove(_postponed, cf), _postponed.end());
 
     // Wait for the termination of an ongoing compaction on cf, if any.
-    return do_for_each(*tasks_to_stop, [this, cf] (auto& task) {
-        return this->task_stop(task);
+    return parallel_for_each(*tasks_to_stop, [this, cf] (auto& task) {
+        return this->task_stop(task, "column family removal");
     }).then([this, cf, tasks_to_stop] {
         _compaction_locks.erase(cf);
     });
+}
+
+const std::vector<lw_shared_ptr<sstables::compaction_info>> compaction_manager::get_compactions() const {
+    using ret = std::vector<lw_shared_ptr<sstables::compaction_info>>;
+    return boost::copy_range<ret>(_tasks | boost::adaptors::filtered(std::mem_fn(&task::compaction_running)) | boost::adaptors::transformed(std::mem_fn(&task::compaction_info)));
 }
 
 void compaction_manager::stop_compaction(sstring type) {
@@ -972,7 +961,8 @@ void compaction_manager::stop_compaction(sstring type) {
     } catch (...) {
         throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
     }
-    for (auto& info : _compactions) {
+    // FIXME: switch to task_stop(), and wait for their termination, so API user can know when compactions actually stopped.
+    for (auto& info : get_compactions()) {
         if (target_type == info->type) {
             info->stop("user request");
         }
@@ -981,7 +971,7 @@ void compaction_manager::stop_compaction(sstring type) {
 
 void compaction_manager::propagate_replacement(column_family* cf,
         const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
-    for (auto& info : _compactions) {
+    for (auto& info : get_compactions()) {
         if (info->cf == cf) {
             info->pending_replacements.push_back({ removed, added });
         }
