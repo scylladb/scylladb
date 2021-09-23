@@ -24,6 +24,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
@@ -618,7 +619,7 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             }
 
             if (need_preempt()) {
-                co_await make_ready_future<>();
+                co_await coroutine::maybe_yield();
             }
         }
     }

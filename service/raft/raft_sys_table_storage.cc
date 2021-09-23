@@ -37,6 +37,7 @@
 
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 namespace service {
 
@@ -97,7 +98,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
         log.emplace_back(make_lw_shared<const raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(data)}));
 
-        co_await make_ready_future<>();
+        co_await coroutine::maybe_yield();
     }
     co_return log;
 }
@@ -227,7 +228,7 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
                 fragmented_temporary_buffer::view(stmt_data_views.back())));
         stmt_value_views.emplace_back(std::move(value_views));
 
-        co_await make_ready_future<>();
+        co_await coroutine::maybe_yield();
     }
 
     auto batch_options = cql3::query_options::make_batch_options(

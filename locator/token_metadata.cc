@@ -31,6 +31,7 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/adaptors.hpp>
 #include "utils/stall_free.hh"
 
@@ -481,7 +482,7 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
         }
 
         for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
-            co_await make_ready_future<>(); // maybe yield
+            co_await coroutine::maybe_yield();
             if(it->second == endpoint) {
                 it = _token_to_endpoint_map.erase(it);
             } else {
@@ -495,7 +496,7 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
         invalidate_cached_rings();
         for (const token& t : tokens)
         {
-            co_await make_ready_future<>(); // maybe yield
+            co_await coroutine::maybe_yield();
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
             if (prev.first->second != endpoint) {

@@ -35,6 +35,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/backtrace.hh>
@@ -413,7 +414,7 @@ private:
                 break;
             }
             _reclaim(free_memory_threshold - memory::stats().free_memory());
-            co_await make_ready_future<>();
+            co_await coroutine::maybe_yield();
         }
         llogger.debug("background_reclaimer::main_loop: exit");
     }

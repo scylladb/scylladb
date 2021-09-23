@@ -37,6 +37,7 @@
 #include <seastar/util/closeable.hh>
 #include <iterator>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "dht/sharder.hh"
 #include "types.hh"
@@ -521,7 +522,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     while (s.positions.size() != s.header.size) {
         s.positions.push_back(seastar::read_le<pos_type>(b));
         b += sizeof(pos_type);
-        co_await make_ready_future<>(); // yield
+        co_await coroutine::maybe_yield();
     }
     // Since the keys in the index are not sized, we need to calculate
     // the start position of the index i+1 to determine the boundaries
@@ -682,7 +683,7 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
             eh.bucket_offsets.push_back(offset);
         }
         eh.buckets.push_back(bucket);
-        co_await make_ready_future<>(); // yield
+        co_await coroutine::maybe_yield();
     }
 }
 

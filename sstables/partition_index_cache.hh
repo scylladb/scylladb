@@ -26,6 +26,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/loading_shared_values.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/bptree.hh"
@@ -274,7 +275,7 @@ public:
             });
             if (need_preempt() && i != _cache.end()) {
                 auto key = i->key();
-                co_await make_ready_future<>();
+                co_await coroutine::maybe_yield();
                 i = _cache.lower_bound(key);
             }
         }
