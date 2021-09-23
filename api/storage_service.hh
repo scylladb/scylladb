@@ -47,9 +47,9 @@ class gossiper;
 namespace api {
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs);
-void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader, sharded<service::storage_service>& ss);
+void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, routes& r);
-void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<service::storage_service>& ss);
+void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb);
 void unset_view_builder(http_context& ctx, routes& r);
 void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair);
 void unset_repair(http_context& ctx, routes& r);

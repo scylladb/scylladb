@@ -1141,7 +1141,7 @@ int main(int ac, char** av) {
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });
-            api::set_server_sstables_loader(ctx, sst_loader, ss).get();
+            api::set_server_sstables_loader(ctx, sst_loader).get();
             auto stop_sstl_api = defer_verbose_shutdown("sstables loader API", [&ctx] {
                 api::unset_server_sstables_loader(ctx).get();
             });
@@ -1297,7 +1297,7 @@ int main(int ac, char** av) {
                 }
             });
 
-            api::set_server_view_builder(ctx, view_builder, ss).get();
+            api::set_server_view_builder(ctx, view_builder).get();
             auto stop_vb_api = defer_verbose_shutdown("view builder API", [&ctx] {
                 api::unset_server_view_builder(ctx).get();
             });

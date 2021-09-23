@@ -298,7 +298,7 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
-void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader, sharded<service::storage_service>& ss) {
+void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
     ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<request> req) {
         auto ks = validate_keyspace(ctx, req->param);
         auto cf = req->get_query_param("cf");
@@ -329,7 +329,7 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
     ss::load_new_ss_tables.unset(r);
 }
 
-void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<service::storage_service>& ss) {
+void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb) {
     ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto view = req->param["view"];
