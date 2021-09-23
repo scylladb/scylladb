@@ -55,6 +55,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "database.hh"
 #include "clustering_bounds_comparator.hh"
@@ -1138,7 +1139,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
             }
             for (auto&& r : v.view->view_info()->partition_slice().default_row_ranges()) {
                 view_row_ranges.push_back(r.transform(std::mem_fn(&clustering_key_prefix::view)));
-                co_await make_ready_future<>(); // yield if needed
+                co_await coroutine::maybe_yield();
             }
         }
     }
@@ -1155,7 +1156,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
                 if (overlap) {
                     row_ranges.push_back(std::move(overlap).value());
                 }
-                co_await make_ready_future<>(); // yield if needed
+                co_await coroutine::maybe_yield();
             }
         }
     }
@@ -1164,7 +1165,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const 
         if (update_requires_read_before_write(base, views, key, row)) {
             row_ranges.emplace_back(row.key());
         }
-        co_await make_ready_future<>(); // yield if needed
+        co_await coroutine::maybe_yield();
     }
 
     // Note that the views could have restrictions on regular columns,

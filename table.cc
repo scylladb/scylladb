@@ -21,6 +21,7 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/closeable.hh>
 
 #include "database.hh"
@@ -762,7 +763,7 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
         if (!s.contains(tab)) {
             new_sstable_list.insert(tab);
         }
-        co_await make_ready_future<>(); // yield if needed.
+        co_await coroutine::maybe_yield();
     }
     co_return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
 }

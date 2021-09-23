@@ -23,6 +23,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/future-util.hh>
@@ -146,7 +147,7 @@ public:
                     // In any case we simply drop the output.
                 }
 
-                co_await make_ready_future<>(); // maybe yield
+                co_await coroutine::maybe_yield();
             }
         });
     }

@@ -29,6 +29,7 @@
 
 #include <seastar/core/file.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <map>
 
@@ -460,7 +461,7 @@ public:
             }
             if (need_preempt() && i != _cache.end()) {
                 auto key = i->idx;
-                co_await make_ready_future<>();
+                co_await coroutine::maybe_yield();
                 i = _cache.lower_bound(key);
             }
         }

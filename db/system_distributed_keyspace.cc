@@ -39,6 +39,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <boost/range/adaptor/transformed.hpp>
 
@@ -480,7 +481,7 @@ static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
         res.back().set_cell(ckey, to_bytes("streams"), make_set_value(cdc_streams_set_type, std::move(streams)), ts);
         res.back().set_cell(ckey, to_bytes("ignore_msb"), int8_t(e.sharding_ignore_msb), ts);
 
-        co_await make_ready_future<>(); // maybe yield
+        co_await coroutine::maybe_yield();
     }
 
     co_return res;
@@ -577,7 +578,7 @@ static future<std::vector<mutation>> get_cdc_streams_descriptions_v2_mutation(
         res.back().set_cell(clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end)),
                 to_bytes("streams"), make_set_value(cdc_streams_set_type, std::move(streams)), ts);
 
-        co_await make_ready_future<>(); // maybe yield
+        co_await coroutine::maybe_yield();
     }
 
     co_return res;
@@ -694,7 +695,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
         utils::chunked_vector<cdc::stream_id> ids;
         for (auto& row : *streams_cql) {
             row.get_list_data<bytes>("streams", std::back_inserter(ids));
-            co_await make_ready_future<>(); // maybe yield
+            co_await coroutine::maybe_yield();
         }
 
         result.emplace(ts, cdc::streams_version{std::move(ids), ts});
