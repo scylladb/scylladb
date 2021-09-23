@@ -437,13 +437,30 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t
     return make_ready_future<>();
 }
 
-future<> gossiper::handle_shutdown_msg(inet_address from) {
+future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt) {
     if (!is_enabled()) {
         logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
         return make_ready_future<>();
     }
-    return seastar::async([this, from] {
+    return seastar::async([this, from, generation_number_opt] {
         auto permit = this->lock_endpoint(from).get0();
+        if (generation_number_opt) {
+            auto es = this->get_endpoint_state_for_endpoint_ptr(from);
+            if (es) {
+                int local_generation = es->get_heart_beat_state().get_generation();
+                logger.info("Got shutdown message from {}, received_generation={}, local_generation={}",
+                        from, generation_number_opt.value(), local_generation);
+                if (local_generation != generation_number_opt.value()) {
+                    logger.warn("Ignoring shutdown message from {} because generation number does not match, received_generation={}, local_generation={}",
+                            from, generation_number_opt.value(), local_generation);
+                    return;
+                }
+            } else {
+                logger.warn("Ignoring shutdown message from {} because generation number does not match, received_generation={}, local_generation=not found",
+                        from, generation_number_opt.value());
+                return;
+            }
+        }
         this->mark_as_shutdown(from);
     });
 }
@@ -507,10 +524,10 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return handle_echo_msg(from, generation_number_opt);
     });
-    _messaging.register_gossip_shutdown([this] (inet_address from) {
+    _messaging.register_gossip_shutdown([this] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
         // In a new fiber.
-        (void)container().invoke_on(0, [from] (gms::gossiper& gossiper) {
-            return gossiper.handle_shutdown_msg(from);
+        (void)container().invoke_on(0, [from, generation_number_opt] (gms::gossiper& gossiper) {
+            return gossiper.handle_shutdown_msg(from, generation_number_opt);
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
@@ -2160,13 +2177,14 @@ future<> gossiper::do_stop_gossiping() {
             logger.info("My status = {}", get_gossip_status(*my_ep_state));
         }
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
+            int local_generation = my_ep_state->get_heart_beat_state().get_generation();
             logger.info("Announcing shutdown");
             add_local_application_state(application_state::STATUS, versioned_value::shutdown(true)).get();
             auto live_endpoints = _live_endpoints;
             for (inet_address addr : live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
-                logger.trace("Sending a GossipShutdown to {}", id);
-                _messaging.send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
+                logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
+                _messaging.send_gossip_shutdown(id, get_broadcast_address(), local_generation).then_wrapped([id] (auto&&f) {
                     try {
                         f.get();
                         logger.trace("Got GossipShutdown Reply");
