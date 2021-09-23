@@ -2685,11 +2685,11 @@ future<> storage_service::do_drain(bool on_shutdown) {
 }
 
 future<> storage_service::rebuild(sstring source_dc) {
-    return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
+    return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) -> future<> {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
         auto tmptr = ss.get_token_metadata_ptr();
         if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-            return ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+            co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, tmptr, ss._abort_source,
                     ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
@@ -2697,18 +2697,19 @@ future<> storage_service::rebuild(sstring source_dc) {
             if (source_dc != "") {
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
             }
-            auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
-            return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
-                return streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()));
-            }).then([streamer] {
-                return streamer->stream_async().then([streamer] {
+            auto keyspaces = ss._db.local().get_non_system_keyspaces();
+            for (auto& keyspace_name : keyspaces) {
+                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()));
+            }
+            try {
+                co_await streamer->stream_async();
                     slogger.info("Streaming for rebuild successful");
-                }).handle_exception([] (auto ep) {
+            } catch (...) {
+                auto ep = std::current_exception();
                     // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
                     slogger.warn("Error while rebuilding node: {}", ep);
-                    return make_exception_future<>(std::move(ep));
-                });
-            });
+                std::rethrow_exception(std::move(ep));
+            }
         }
     });
 }
