@@ -918,8 +918,9 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
         }
     };
     auto compaction_type = descriptor.options.type();
+    auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 
-    return sstables::compact_sstables(std::move(descriptor), info, *this).then([this, &info, compaction_type] (sstables::compaction_result res) {
+    return sstables::compact_sstables(std::move(descriptor), info, *this).then([this, &info, compaction_type, start_size] (sstables::compaction_result res) {
         if (compaction_type != sstables::compaction_type::Compaction) {
             return make_ready_future<>();
         }
@@ -934,7 +935,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
         return db::system_keyspace::update_compaction_history(info.compaction_uuid, _schema->ks_name(), _schema->cf_name(), ended_at,
-            info.start_size, info.end_size, std::unordered_map<int32_t, int64_t>{});
+            start_size, res.end_size, std::unordered_map<int32_t, int64_t>{});
     });
 }
 

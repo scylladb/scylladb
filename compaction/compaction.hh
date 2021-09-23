@@ -57,8 +57,6 @@ namespace sstables {
         compaction_type type = compaction_type::Compaction;
         sstring ks_name;
         sstring cf_name;
-        uint64_t start_size = 0;
-        uint64_t end_size = 0;
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
         sstring stop_requested;
@@ -81,6 +79,7 @@ namespace sstables {
     struct compaction_result {
         std::vector<sstables::shared_sstable> new_sstables;
         std::chrono::time_point<db_clock> ended_at;
+        uint64_t end_size = 0;
     };
 
     // Compact a list of N sstables into M sstables.

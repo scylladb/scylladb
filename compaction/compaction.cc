@@ -507,6 +507,8 @@ protected:
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
     compaction_info& _info;
+    uint64_t _start_size = 0;
+    uint64_t _end_size = 0;
     uint64_t _estimated_partitions = 0;
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
@@ -553,7 +555,7 @@ protected:
     uint64_t partitions_per_sstable() const {
         // some tests use _max_sstable_size == 0 for force many one partition per sstable
         auto max_sstable_size = std::max<uint64_t>(_max_sstable_size, 1);
-        uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_info.start_size) / max_sstable_size)));
+        uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_start_size) / max_sstable_size)));
         return std::min(uint64_t(ceil(double(_estimated_partitions) / estimated_sstables)),
                         _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions));
     }
@@ -569,7 +571,7 @@ protected:
     void finish_new_sstable(compaction_writer* writer) {
         writer->writer.consume_end_of_stream();
         writer->sst->open_data().get0();
-        _info.end_size += writer->sst->bytes_on_disk();
+        _end_size += writer->sst->bytes_on_disk();
     }
 
     sstable_writer_config make_sstable_writer_config(compaction_type type) {
@@ -639,7 +641,7 @@ private:
 
             // Compacted sstable keeps track of its ancestors.
             _ancestors.push_back(sst->generation());
-            _info.start_size += sst->bytes_on_disk();
+            _start_size += sst->bytes_on_disk();
             _info.total_partitions += sst->get_estimated_key_count();
             formatted_msg += sst;
 
@@ -705,9 +707,10 @@ private:
         compaction_result ret {
             .new_sstables = std::move(_all_new_sstables),
             .ended_at = ended_at,
+            .end_size = _end_size,
         };
 
-        auto ratio = double(_info.end_size) / double(_info.start_size);
+        auto ratio = double(_end_size) / double(_start_size);
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         // Don't report NaN or negative number.
 
@@ -722,8 +725,8 @@ private:
         // By the time being, using estimated key count.
         log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
-                _total_input_sstables, new_sstables_msg, pretty_printed_data_size(_info.start_size), pretty_printed_data_size(_info.end_size), int(ratio * 100),
-                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info.end_size, duration),
+                _total_input_sstables, new_sstables_msg, pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
+                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_end_size, duration),
                 _info.total_partitions, _info.total_keys_written);
 
         return ret;
