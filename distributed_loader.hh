@@ -58,32 +58,33 @@ class storage_service;
 }
 
 class distributed_loader {
-public:
+    friend class distributed_loader_for_tests;
+
     static future<> reshape(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstables::reshape_mode mode,
             sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator);
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator);
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, bool sort_sstables_according_to_owner = true);
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring cf_name);
-
-    static future<> verify_owner_and_mode(std::filesystem::path path);
-
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
             sharded<database>& db, sharded<db::view::view_update_generator>& view_update_generator,
             std::filesystem::path datadir, sstring ks, sstring cf);
-    static future<> process_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-            distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);
+    static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
+    static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
+    static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
+    static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
+
+public:
+    static future<> init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss);
+    static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
+    static future<> ensure_system_table_directories(distributed<database>& db);
+
+    static future<> verify_owner_and_mode(std::filesystem::path path);
     // Scan sstables under upload directory. Return a vector with smp::count entries.
     // Each entry with index of idx should be accessed on shard idx only.
     // Each entry contains a vector of sstables for this shard.
     // The table UUID is returned too.
     static future<std::tuple<utils::UUID, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_upload_dir(distributed<database>& db, sstring ks, sstring cf);
-    static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
-    static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
-    static future<> init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss);
-    static future<> ensure_system_table_directories(distributed<database>& db);
-    static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
-private:
-    static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
-    static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
+    static future<> process_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+            distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);
 };
