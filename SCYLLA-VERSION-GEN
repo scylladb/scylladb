@@ -1,7 +1,7 @@
 #!/bin/sh
 
 PRODUCT=scylla
-VERSION=4.4.4
+VERSION=4.4.5
 
 if test -f version
 then
