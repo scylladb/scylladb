@@ -790,8 +790,6 @@ public:
 
     future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
 
-    future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
-
 private:
     promise<> _drain_finished;
     std::optional<shared_promise<>> _transport_stopped;

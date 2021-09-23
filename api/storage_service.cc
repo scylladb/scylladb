@@ -56,6 +56,7 @@
 #include "service/storage_proxy.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
+#include "db/view/view_builder.hh"
 
 extern logging::logger apilog;
 
@@ -329,10 +330,10 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<service::storage_service>& ss) {
-    ss::view_build_statuses.set(r, [&ctx, &ss] (std::unique_ptr<request> req) {
+    ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto view = req->param["view"];
-        return ss.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
+        return vb.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
         });
