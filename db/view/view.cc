@@ -85,6 +85,8 @@
 #include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
 
+#include "service/storage_service.hh" // temporary
+
 using namespace std::chrono_literals;
 
 static logging::logger vlogger("view");
@@ -1724,6 +1726,26 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         });
     });
 }
+
+}} // temporary break db::view
+namespace service {
+
+future<std::unordered_map<sstring, sstring>>
+storage_service::view_build_statuses(sstring keyspace, sstring view_name) const {
+    return _sys_dist_ks.local().view_status(std::move(keyspace), std::move(view_name)).then([this] (std::unordered_map<utils::UUID, sstring> status) {
+        auto& endpoint_to_host_id = get_token_metadata().get_endpoint_to_host_id_map_for_reading();
+        return boost::copy_range<std::unordered_map<sstring, sstring>>(endpoint_to_host_id
+                | boost::adaptors::transformed([&status] (const std::pair<inet_address, utils::UUID>& p) {
+                    auto it = status.find(p.second);
+                    auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
+                    return std::pair(p.first.to_sstring(), std::move(s));
+                }));
+    });
+}
+
+}
+namespace db {
+namespace view { // temporary break
 
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
