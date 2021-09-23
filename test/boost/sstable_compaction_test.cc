@@ -126,7 +126,7 @@ static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, rea
     return sst->as_mutation_source().make_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
 }
 
-SEASTAR_TEST_CASE(compaction_manager_test) {
+SEASTAR_TEST_CASE(compaction_manager_basic_test) {
   return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
@@ -3048,9 +3048,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        auto c_info = make_lw_shared<compaction_info>();
-        c_info->run_identifier = partial_sstable_run_identifier;
-        cm->register_compaction(c_info);
+        compaction_manager_test(*cm).register_compaction(*cf, partial_sstable_run_identifier);
 
         cf->compact_all_sstables().get();
 

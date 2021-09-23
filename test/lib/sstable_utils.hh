@@ -343,6 +343,20 @@ public:
 
 } // namespace sstables
 
+class compaction_manager_test {
+    compaction_manager& _cm;
+public:
+    explicit compaction_manager_test(compaction_manager& cm) : _cm(cm) {}
+
+    void register_compaction(column_family& cf, utils::UUID output_run_id) {
+        auto task = make_lw_shared<compaction_manager::task>();
+        task->compacting_cf = &cf;
+        task->compaction_running = true;
+        task->output_run_identifier = std::move(output_run_id);
+        _cm._tasks.push_back(task);
+    }
+};
+
 future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf,
         std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op());
 

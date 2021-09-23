@@ -66,7 +66,6 @@ namespace sstables {
         int64_t ended_at;
         std::vector<shared_sstable> new_sstables;
         sstring stop_requested;
-        utils::UUID run_identifier;
         utils::UUID compaction_uuid;
         struct replacement {
             const std::vector<shared_sstable> removed;

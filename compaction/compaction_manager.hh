@@ -73,6 +73,7 @@ private:
         bool stopping = false;
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
+        utils::UUID output_run_identifier;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
@@ -280,6 +281,7 @@ public:
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
+    friend class compaction_manager_test;
 };
 
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);

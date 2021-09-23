@@ -526,7 +526,6 @@ public:
         info->ks_name = cf.schema()->ks_name();
         info->cf_name = cf.schema()->cf_name();
         info->type = descriptor.options.type();
-        info->run_identifier = descriptor.run_identifier;
         info->cf = &cf;
         info->compaction_uuid = utils::UUID_gen::get_time_UUID();
         return info;
