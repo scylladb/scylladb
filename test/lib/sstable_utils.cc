@@ -169,12 +169,18 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
     return key_and_token_pair;
 }
 
-future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer) {
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer) {
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
     descriptor.replacer = std::move(replacer);
-    return sstables::compact_sstables(std::move(descriptor), cf);
+    auto info = make_lw_shared<sstables::compaction_data>();
+    auto& cm = cf.get_compaction_manager();
+    compaction_manager_test(cm).register_compaction(info, descriptor.run_identifier, &cf);
+    return sstables::compact_sstables(std::move(descriptor), *info, cf).then([info, &cm] (sstables::compaction_result res) {
+        compaction_manager_test(cm).deregister_compaction(info);
+        return res;
+    });
 }
 
 std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
