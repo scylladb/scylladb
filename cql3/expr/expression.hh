@@ -83,14 +83,15 @@ class field_selection;
 struct null;
 struct bind_variable;
 struct untyped_constant;
+struct constant;
 struct tuple_constructor;
 struct collection_constructor;
 struct usertype_constructor;
 
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
-using expression = std::variant<bool, conjunction, binary_operator, column_value, token,
+using expression = std::variant<conjunction, binary_operator, column_value, token,
                                 unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection, null, bind_variable, untyped_constant,
+                                field_selection, null, bind_variable, untyped_constant, constant,
                                 tuple_constructor, collection_constructor, usertype_constructor>;
 
 template <typename T>
@@ -106,6 +107,7 @@ concept LeafExpression
         || std::same_as<null, E> 
         || std::same_as<bind_variable, E> 
         || std::same_as<untyped_constant, E> 
+        || std::same_as<constant, E>
         ;
 
 // An expression variant element can't contain an expression by value, since the size of the variant
@@ -215,6 +217,26 @@ struct untyped_constant {
     sstring raw_text;
 };
 
+// Represents a constant value with known value and type
+// For null and unset the type can sometimes be set to empty_type
+struct constant {
+    // A value serialized using the internal (latest) cql_serialization_format
+    cql3::raw_value value;
+
+    // Never nullptr, for NULL and UNSET might be empty_type
+    data_type type;
+
+    constant(cql3::raw_value value, data_type type);
+    static constant make_null(data_type val_type = empty_type);
+    static constant make_unset_value(data_type val_type = empty_type);
+    static constant make_bool(bool bool_val);
+
+    bool is_null() const;
+    bool is_unset_value() const;
+    bool is_null_or_unset() const;
+    bool has_empty_value_bytes() const;
+};
+
 // Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
 struct tuple_constructor {
     std::vector<expression> elements;
@@ -292,7 +314,7 @@ requires std::regular_invocable<Fn, const binary_operator&>
 const binary_operator* find_atom(const expression& e, Fn f) {
     return std::visit(overloaded_functor{
             [&] (const binary_operator& op) { return f(op) ? &op : nullptr; },
-            [] (bool) -> const binary_operator* { return nullptr; },
+            [] (const constant&) -> const binary_operator* { return nullptr; },
             [&] (const conjunction& conj) -> const binary_operator* {
                 for (auto& child : conj.children) {
                     if (auto found = find_atom(child, f)) {
@@ -365,7 +387,7 @@ size_t count_if(const expression& e, Fn f) {
                 return std::accumulate(conj.children.cbegin(), conj.children.cend(), size_t{0},
                                        [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
             },
-            [] (bool) -> size_t { return 0; },
+            [] (const constant&) -> size_t { return 0; },
             [] (const column_value&) -> size_t { return 0; },
             [] (const token&) -> size_t { return 0; },
             [] (const unresolved_identifier&) -> size_t { return 0; },
@@ -516,6 +538,36 @@ nested_expression::nested_expression(ExpressionElement auto e)
 // For example "WHERE c = 1 AND (a, c) = (2, 1) AND token(p) < 2 AND FALSE" will return {"c = 1"}.
 std::vector<expression> extract_single_column_restrictions_for_column(const expression&, const column_definition&);
 
+std::optional<bool> get_bool_value(const constant&);
+
+// Takes a prepared expression and calculates its value.
+// Later term will be replaced with expression.
+constant evaluate(const ::shared_ptr<term>&, const query_options&);
+constant evaluate(term*, const query_options&);
+constant evaluate(term&, const query_options&);
+
+// Similar to evaluate(), but ignores any NULL values in the final list value.
+// In an IN restriction nulls can be ignored, because nothing equals NULL.
+constant evaluate_IN_list(const ::shared_ptr<term>&, const query_options&);
+constant evaluate_IN_list(term*, const query_options&);
+constant evaluate_IN_list(term&, const query_options&);
+
+// Calls evaluate() on the term and then converts the constant to raw_value_view
+cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
+cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
+
+utils::chunked_vector<managed_bytes> get_list_elements(const constant&);
+utils::chunked_vector<managed_bytes> get_set_elements(const constant&);
+std::vector<managed_bytes_opt> get_tuple_elements(const constant&);
+std::vector<managed_bytes_opt> get_user_type_elements(const constant&);
+std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant&);
+
+// Gets the elements of a constant which can be a list, set, tuple or user type
+std::vector<managed_bytes_opt> get_elements(const constant&);
+
+// Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>
+// It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
+utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
 } // namespace expr
 
 } // namespace cql3

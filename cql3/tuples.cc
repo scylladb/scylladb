@@ -23,6 +23,7 @@
 
 #include "tuples.hh"
 #include "types/list.hh"
+#include "cql3/lists.hh"
 
 namespace cql3 {
 
@@ -41,10 +42,28 @@ tuples::in_value::from_serialized(const raw_value_view& value_view, const list_t
             // FIXME: Avoid useless copies.
             elements.emplace_back(ttype->split_fragmented(single_fragmented_view(ttype->decompose(e))));
         }
-        return tuples::in_value(elements);
+        return tuples::in_value(elements, type.shared_from_this());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
+}
+
+cql3::raw_value tuples::in_value::get(const query_options& options) {
+    const list_type_impl& my_list_type = dynamic_cast<const list_type_impl&>(get_value_type()->without_reversed());
+    data_type element_tuple_type = my_list_type.get_elements_type();
+
+    utils::chunked_vector<managed_bytes_opt> list_elements;
+    list_elements.reserve(_elements.size());
+    for (const std::vector<managed_bytes_opt>& tuple_elements : _elements) {
+        ::shared_ptr<tuples::value> tvalue =
+            ::make_shared<tuples::value>(tuples::value(tuple_elements, element_tuple_type));
+
+        expr::constant tuple_val = expr::evaluate(tvalue, options);
+        list_elements.emplace_back(std::move(tuple_val.value).to_managed_bytes());
+    }
+
+    ::shared_ptr<lists::value> list_value = ::make_shared<lists::value>(std::move(list_elements), get_value_type());
+    return list_value->get(options);
 }
 
 tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)

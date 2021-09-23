@@ -463,17 +463,17 @@ function_call::fill_prepare_context(prepare_context& ctx) const {
 
 shared_ptr<terminal>
 function_call::bind(const query_options& options) {
-    return make_terminal(_fun, cql3::raw_value::make_value(bind_and_get(options)), options.get_cql_serialization_format());
+    return make_terminal(_fun, cql3::raw_value::make_value(bind_and_get_internal(options)), options.get_cql_serialization_format());
 }
 
 cql3::raw_value_view
-function_call::bind_and_get(const query_options& options) {
+function_call::bind_and_get_internal(const query_options& options) {
     std::vector<bytes_opt> buffers;
     buffers.reserve(_terms.size());
     for (auto&& t : _terms) {
         // For now, we don't allow nulls as argument as no existing function needs it and it
         // simplify things.
-        auto val = t->bind_and_get(options);
+        auto val = expr::evaluate_to_raw_view(t, options);
         if (!val) {
             throw exceptions::invalid_request_exception(format("Invalid null value for argument to {}", *_fun));
         }
@@ -550,7 +550,7 @@ make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serializatio
         if (type.is_collection()) {
             throw std::runtime_error(format("function_call::make_terminal: unhandled collection type {}", type.name()));
         }
-        return make_shared<constants::value>(std::move(result));
+        return make_shared<constants::value>(std::move(result), fun->return_type());
     }
     ));
 }

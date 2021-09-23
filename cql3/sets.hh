@@ -62,8 +62,8 @@ public:
     public:
         std::set<managed_bytes, serialized_compare> _elements;
     public:
-        value(std::set<managed_bytes, serialized_compare> elements)
-                : _elements(std::move(elements)) {
+        value(std::set<managed_bytes, serialized_compare> elements, data_type my_type)
+                : terminal(std::move(my_type)), _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& v, const set_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
@@ -74,11 +74,11 @@ public:
 
     // See Lists.DelayedValue
     class delayed_value : public non_terminal {
-        serialized_compare _comparator;
         std::vector<shared_ptr<term>> _elements;
+        data_type _my_type;
     public:
-        delayed_value(serialized_compare comparator, std::vector<shared_ptr<term>> elements)
-            : _comparator(std::move(comparator)), _elements(std::move(elements)) {
+        delayed_value(std::vector<shared_ptr<term>> elements, data_type my_type)
+            : _elements(std::move(elements)), _my_type(std::move(my_type)) {
         }
         virtual bool contains_bind_marker() const override;
         virtual void fill_prepare_context(prepare_context& ctx) const override;
@@ -97,7 +97,7 @@ public:
                 : operation(column, std::move(t)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
+        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value);
     };
 
     class adder : public operation {
@@ -107,7 +107,7 @@ public:
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
-                shared_ptr<term> value, const column_definition& column);
+                const expr::constant& value, const column_definition& column);
     };
 
     // Note that this is reused for Map subtraction too (we subtract a set from a map)

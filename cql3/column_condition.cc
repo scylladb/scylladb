@@ -155,7 +155,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         assert(cell_value->type()->is_collection());
         const collection_type_impl& cell_type = static_cast<const collection_type_impl&>(*cell_value->type());
 
-        cql3::raw_value_view key = _collection_element->bind_and_get(options);
+        cql3::raw_value_view key = expr::evaluate_to_raw_view(_collection_element, options);
         if (key.is_unset_value()) {
             throw exceptions::invalid_request_exception(
                     format("Invalid 'unset' value in {} element access", cell_type.cql3_type_name()));
@@ -211,7 +211,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
     if (is_compare(_op)) {
         // <, >, >=, <=, !=
-        cql3::raw_value_view param = _value->bind_and_get(options);
+        cql3::raw_value_view param = expr::evaluate_to_raw_view(_value, options);
 
         if (param.is_unset_value()) {
             throw exceptions::invalid_request_exception("Invalid 'unset' value in condition");
@@ -228,7 +228,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
             // The condition parameter is not null, so only NEQ can return true
             return _op == expr::oper_t::NEQ;
         }
-        // type::validate() is called by bind_and_get(), so it's safe to pass to_bytes() result
+        // type::validate() is called earlier when creating the value, so it's safe to pass to_bytes() result
         // directly to compare.
         return is_satisfied_by(_op, *cell_value->type(), *column.type, *cell_value, to_bytes(param));
     }
@@ -240,7 +240,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         if (_matcher) {
             return (*_matcher)(bytes_view(cell_value->serialize_nonnull()));
         } else {
-            auto param = _value->bind_and_get(options);  // LIKE pattern
+            auto param = expr::evaluate_to_raw_view(_value, options);  // LIKE pattern
             if (param.is_unset_value()) {
                 throw exceptions::invalid_request_exception("Invalid 'unset' value in LIKE pattern");
             }
@@ -258,11 +258,11 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     std::vector<bytes_opt> in_values;
 
     if (_value) {
-        auto&& lval = dynamic_pointer_cast<multi_item_terminal>(_value->bind(options));
-        if (!lval) {
+        expr::constant lval = expr::evaluate(_value, options);
+        if (lval.is_null()) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
-        for (const managed_bytes_opt& v : lval->copy_elements()) {
+        for (const managed_bytes_opt& v : expr::get_elements(lval)) {
             if (v) {
                 in_values.push_back(to_bytes(*v));
             } else {
@@ -271,7 +271,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         }
     } else {
         for (auto&& v : _in_values) {
-            in_values.emplace_back(to_bytes_opt(v->bind_and_get(options)));
+            in_values.emplace_back(to_bytes_opt(expr::evaluate_to_raw_view(v, options)));
         }
     }
     // If cell value is NULL, IN list must contain NULL or an empty set/list. Otherwise it must contain cell value.

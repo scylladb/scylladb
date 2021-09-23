@@ -76,9 +76,10 @@ public:
         _id = id;
     }
     virtual shared_ptr<terminal> bind(const query_options& options) override;
-    virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 public:
     virtual bool contains_bind_marker() const override;
+private:
+    cql3::raw_value_view bind_and_get_internal(const query_options& options);
 };
 
 ::shared_ptr<term> prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);

@@ -43,6 +43,7 @@
 #include "types/set.hh"
 #include "utils/like_matcher.hh"
 #include "query-result-reader.hh"
+#include "types/user.hh"
 
 namespace cql3 {
 namespace expr {
@@ -119,7 +120,7 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
         }
         const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[data.sel.index_of(*cdef)]));
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
-        const auto key = col.sub->bind_and_get(options);
+        const auto key = evaluate_to_raw_view(col.sub, options);
         auto&& key_type = col_type->name_comparator();
         const auto found = key.with_linearized([&] (bytes_view key_bv) {
             using entry = std::pair<data_value, data_value>;
@@ -154,14 +155,6 @@ const abstract_type* get_value_comparator(const column_value& cv) {
             : get_value_comparator(cv.col);
 }
 
-/// If t represents a tuple value, returns that value.  Otherwise, null.
-///
-/// Useful for checking binary_operator::rhs, which packs multiple values into a single term when lhs is itself
-/// a tuple.  NOT useful for the IN operator, whose rhs is either a list or tuples::in_value.
-::shared_ptr<tuples::value> get_tuple(term& t, const query_options& opts) {
-    return dynamic_pointer_cast<tuples::value>(t.bind(opts));
-}
-
 /// True iff lhs's value equals rhs.
 bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
     if (!rhs) {
@@ -176,16 +169,16 @@ bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_v
 
 /// Convenience overload for term.
 bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
-    return equal(to_managed_bytes_opt(rhs.bind_and_get(bag.options)), lhs, bag);
+    return equal(to_managed_bytes_opt(evaluate_to_raw_view(rhs, bag.options)), lhs, bag);
 }
 
 /// True iff columns' values equal t.
 bool equal(term& t, const tuple_constructor& columns_tuple, const column_value_eval_bag& bag) {
-    const auto tup = get_tuple(t, bag.options);
-    if (!tup) {
+    const constant tup = evaluate(t, bag.options);
+    if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
     }
-    const auto& rhs = tup->get_elements();
+    const auto& rhs = get_tuple_elements(tup);
     if (rhs.size() != columns_tuple.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
@@ -227,7 +220,7 @@ bool limits(const column_value& col, oper_t op, term& rhs, const column_value_ev
     if (!lhs) {
         return false;
     }
-    const auto b = to_managed_bytes_opt(rhs.bind_and_get(bag.options));
+    const auto b = to_managed_bytes_opt(evaluate_to_raw_view(rhs, bag.options));
     return b ? limits(*lhs, op, *b, *get_value_comparator(col)) : false;
 }
 
@@ -237,12 +230,12 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, term& t,
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    const auto tup = get_tuple(t, bag.options);
-    if (!tup) {
+    const constant tup = evaluate(t, bag.options);
+    if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception(
                 "multi-column comparison has right-hand side that isn't a tuple");
     }
-    const auto& rhs = tup->get_elements();
+    const auto& rhs = get_tuple_elements(tup);
     if (rhs.size() != columns_tuple.elements.size()) {
         throw exceptions::invalid_request_exception(
                 format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
@@ -405,42 +398,29 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 
 /// True iff the column value is in the set defined by rhs.
 bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& bag) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
-        // This is `a IN (1,2,3)`.  RHS elements are themselves terms.
-        return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
-                return equal(*t, col, bag);
-            });
-    } else if (auto mkr = dynamic_cast<lists::marker*>(&rhs)) {
-        // This is `a IN ?`.  RHS elements are values representable as bytes_opt.
-        const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
-        statements::request_validations::check_not_null(
-                values, "Invalid null value for column %s", col.col->name_as_text());
-        return boost::algorithm::any_of(values->get_elements(), [&] (const managed_bytes_opt& b) {
-            return equal(b, col, bag);
-        });
+    const constant in_list = evaluate_IN_list(rhs, bag.options);
+    statements::request_validations::check_false(
+            in_list.is_null(), "Invalid null value for column %s", col.col->name_as_text());
+
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error("unexpected term type in is_one_of(single column)");
     }
-    throw std::logic_error("unexpected term type in is_one_of(single column)");
+    return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
+        return equal(b, col, bag);
+    });
 }
 
 /// True iff the tuple of column values is in the set defined by rhs.
 bool is_one_of(const tuple_constructor& tuple, term& rhs, const column_value_eval_bag& bag) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
-        // This is `(a,b) IN ((1,1),(2,2),(3,3))`.  RHS elements are themselves terms.
-        return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
-                return equal(*t, tuple, bag);
-            });
-    } else if (auto mkr = dynamic_cast<tuples::in_marker*>(&rhs)) {
-        // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<managed_bytes_opt>.
-        const auto marker_value = static_pointer_cast<tuples::in_value>(mkr->bind(bag.options));
-        return boost::algorithm::any_of(marker_value->get_split_values(), [&] (const std::vector<managed_bytes_opt>& el) {
-                return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-                    return equal(b, std::get<column_value>(c), bag);
-                });
-            });
+    constant in_list = evaluate_IN_list(rhs, bag.options);
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error("unexpected term type in is_one_of(multi-column)");
     }
-    throw std::logic_error("unexpected term type in is_one_of(multi-column)");
+    return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
+        return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
+            return equal(b, std::get<column_value>(c), bag);
+        });
+    });
 }
 
 const value_set empty_value_set = value_list{};
@@ -484,11 +464,11 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                 } else if (is_slice(opr.op)) {
                     return limits(col, opr.op, *opr.rhs, bag);
                 } else if (opr.op == oper_t::CONTAINS) {
-                    return contains(col, opr.rhs->bind_and_get(bag.options), bag);
+                    return contains(col, evaluate_to_raw_view(opr.rhs, bag.options), bag);
                 } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    return contains_key(col, opr.rhs->bind_and_get(bag.options), bag);
+                    return contains_key(col, evaluate_to_raw_view(opr.rhs, bag.options), bag);
                 } else if (opr.op == oper_t::LIKE) {
-                    return like(col, opr.rhs->bind_and_get(bag.options), bag);
+                    return like(col, evaluate_to_raw_view(opr.rhs, bag.options), bag);
                 } else if (opr.op == oper_t::IN) {
                     return is_one_of(col, *opr.rhs, bag);
                 } else {
@@ -512,7 +492,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                 // token range.  It is impossible for any fetched row not to match now.
                 return true;
             },
-            [] (bool) -> bool {
+            [] (const constant&) -> bool {
                 on_internal_error(expr_logger, "is_satisfied_by: A constant cannot serve as the LHS of a binary expression");
             },
             [] (const conjunction&) -> bool {
@@ -556,7 +536,15 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
 
 bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
     return std::visit(overloaded_functor{
-            [&] (bool v) { return v; },
+            [] (const constant& constant_val) {
+                std::optional<bool> bool_val = get_bool_value(constant_val);
+                if (bool_val.has_value()) {
+                    return *bool_val;
+                }
+
+                on_internal_error(expr_logger,
+                    "is_satisfied_by: a constant that is not a bool value cannot serve as a restriction by itself");
+            },
             [&] (const conjunction& conj) {
                 return boost::algorithm::all_of(conj.children, [&] (const expression& c) {
                     return is_satisfied_by(c, bag);
@@ -605,16 +593,6 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
         }, restr);
 }
 
-/// If t is a tuple, binds and gets its k-th element.  Otherwise, binds and gets t's whole value.
-managed_bytes_opt get_kth(size_t k, const query_options& options, const ::shared_ptr<term>& t) {
-    auto bound = t->bind(options);
-    if (auto tup = dynamic_pointer_cast<tuples::value>(bound)) {
-        return tup->get_elements()[k];
-    } else {
-        throw std::logic_error("non-tuple RHS for multi-column IN");
-    }
-}
-
 template<typename Range>
 value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
     BOOST_CONCEPT_ASSERT((boost::ForwardRangeConcept<Range>));
@@ -631,43 +609,29 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 value_list get_IN_values(
         const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator,
         sstring_view column_name) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
-        // Case `a IN (1,2,3)`.
-        const auto result_range = dv->get_elements()
-                | boost::adaptors::transformed([&] (const ::shared_ptr<term>& t) { return to_managed_bytes_opt(t->bind_and_get(options)); })
-                | non_null | deref;
-        return to_sorted_vector(std::move(result_range), comparator);
-    } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
-        // Case `a IN ?`.  Collect all list-element values.
-        const auto val = mkr->bind(options);
-        if (val == constants::UNSET_VALUE) {
-            throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
-        }
-        statements::request_validations::check_not_null(val, "Invalid null value for column %s", column_name);
-        return to_sorted_vector(static_pointer_cast<lists::value>(val)->get_elements() | non_null | deref, comparator);
+    const constant in_list = evaluate_IN_list(t, options);
+    if (in_list.is_unset_value()) {
+        throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
-    throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
+    statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column %s", column_name);
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error(format("get_IN_values(single-column) on invalid term {}", *t));
+    }
+    utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
+    return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
 
 /// Returns possible values for k-th column from t, which must be RHS of IN.
 value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
-    if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
-        // Case `(a,b) in ((1,1),(2,2),(3,3))`.  Get kth value from each term element.
-        const auto result_range = dv->get_elements()
-                | boost::adaptors::transformed(std::bind_front(get_kth, k, options)) | non_null | deref;
-        return to_sorted_vector(std::move(result_range), comparator);
-    } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(t)) {
-        // Case `(a,b) IN ?`.  Get kth value from each vector<bytes> element.
-        const auto val = static_pointer_cast<tuples::in_value>(mkr->bind(options));
-        const auto split_values = val->get_split_values(); // Need lvalue from which to make std::view.
-        const auto result_range = split_values
-                | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
-        return to_sorted_vector(std::move(result_range), comparator);
+        const constant in_list = evaluate_IN_list(t, options);
+    if (!in_list.type->without_reversed().is_list()) {
+        throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
     }
-    throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
+    const auto split_values = get_list_of_tuples_elements(in_list); // Need lvalue from which to make std::view.
+    const auto result_range = split_values
+            | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
+    return to_sorted_vector(std::move(result_range), comparator);
 }
 
 static constexpr bool inclusive = true, exclusive = false;
@@ -717,8 +681,14 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
 value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
     const auto type = cdef ? get_value_comparator(cdef) : long_type.get();
     return std::visit(overloaded_functor{
-            [] (bool b) {
-                return b ? unbounded_value_set : empty_value_set;
+            [] (const constant& constant_val) {
+                std::optional<bool> bool_val = get_bool_value(constant_val);
+                if (bool_val.has_value()) {
+                    return *bool_val ? unbounded_value_set : empty_value_set;
+                }
+
+                on_internal_error(expr_logger,
+                    "possible_lhs_values: a constant that is not a bool value cannot serve as a restriction by itself");
             },
             [&] (const conjunction& conj) {
                 return boost::accumulate(conj.children, unbounded_value_set,
@@ -734,7 +704,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return unbounded_value_set;
                             }
                             if (is_compare(oper.op)) {
-                                managed_bytes_opt val = to_managed_bytes_opt(oper.rhs->bind_and_get(options));
+                                managed_bytes_opt val = to_managed_bytes_opt(evaluate_to_raw_view(oper.rhs, options));
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -757,7 +727,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             const auto column_index_on_lhs = std::distance(tuple.elements.begin(), found);
                             if (is_compare(oper.op)) {
                                 // RHS must be a tuple due to upstream checks.
-                                managed_bytes_opt val = get_tuple(*oper.rhs, options)->get_elements()[column_index_on_lhs];
+                                managed_bytes_opt val = get_tuple_elements(evaluate(*oper.rhs, options)).at(column_index_on_lhs);
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -779,7 +749,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             if (cdef) {
                                 return unbounded_value_set;
                             }
-                            const auto val = to_managed_bytes_opt(oper.rhs->bind_and_get(options));
+                            const auto val = to_managed_bytes_opt(evaluate_to_raw_view(oper.rhs, options));
                             if (!val) {
                                 return empty_value_set; // All NULL comparisons fail; no token values match.
                             }
@@ -808,7 +778,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [&] (const conjunction&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: conjunctions are not supported as the LHS of a binary expression");
                         },
-                        [&] (bool) -> value_set {
+                        [] (const constant&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
                         },
                         [] (const unresolved_identifier&) -> value_set {
@@ -924,7 +894,7 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (const conjunction&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: conjunctions are not supported as the LHS of a binary expression");
                         },
-                        [&] (bool) -> bool {
+                        [] (const constant&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: constants are not supported as the LHS of a binary expression");
                         },
                         [] (const unresolved_identifier&) -> bool {
@@ -985,7 +955,7 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
     std::visit(overloaded_functor{
-            [&] (bool b) { os << (b ? "TRUE" : "FALSE"); },
+            [&] (const constant& v) { os << v.value.to_view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
                 os << "(" << *opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
@@ -1224,7 +1194,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         const column_definition& column;
         const binary_operator* current_binary_operator;
 
-        void operator()(bool) {}
+        void operator()(const constant&) {}
 
         void operator()(const conjunction& conj) {
             for (const expression& child : conj.children) {
@@ -1275,5 +1245,228 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 }
 
 
+constant::constant(cql3::raw_value val, data_type typ)
+    : value(std::move(val)), type(std::move(typ)) {
+}
+
+constant constant::make_null(data_type val_type) {
+    return constant(cql3::raw_value::make_null(), std::move(val_type));
+}
+
+constant constant::make_unset_value(data_type val_type) {
+    return constant(cql3::raw_value::make_unset_value(), std::move(val_type));
+}
+
+constant constant::make_bool(bool bool_val) {
+    return constant(raw_value::make_value(boolean_type->decompose(bool_val)), boolean_type);
+}
+
+bool constant::is_null() const {
+    return value.is_null();
+}
+
+bool constant::is_unset_value() const {
+    return value.is_unset_value();
+}
+
+bool constant::has_empty_value_bytes() const {
+    if (is_null_or_unset()) {
+        return false;
+    }
+
+    return value.to_view().size_bytes() == 0;
+}
+
+bool constant::is_null_or_unset() const {
+    return is_null() || is_unset_value();
+}
+
+std::optional<bool> get_bool_value(const constant& constant_val) {
+    if (constant_val.type->get_kind() != abstract_type::kind::boolean) {
+        return std::nullopt;
+    }
+
+    if (constant_val.is_null_or_unset()) {
+        return std::nullopt;
+    }
+
+    if (constant_val.has_empty_value_bytes()) {
+        return std::nullopt;
+    }
+
+    return constant_val.value.to_view().deserialize<bool>(*boolean_type);
+}
+
+constant evaluate(term* term_ptr, const query_options& options) {
+    if (term_ptr == nullptr) {
+        return constant::make_null();
+    }
+
+    ::shared_ptr<terminal> bound = term_ptr->bind(options);
+    if (bound.get() == nullptr) {
+        return constant::make_null();
+    }
+
+    raw_value raw_val = bound->get(options);
+    data_type val_type = bound->get_value_type();
+    return constant(std::move(raw_val), std::move(val_type));
+}
+
+constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& options) {
+    return evaluate(term_ptr.get(), options);
+}
+
+constant evaluate(term& term_ref, const query_options& options) {
+    return evaluate(&term_ref, options);
+}
+
+constant evaluate_IN_list(term* term_ptr, const query_options& options) {
+    if (term_ptr == nullptr) {
+        return constant::make_null();
+    }
+
+    ::shared_ptr<terminal> bound;
+    lists::delayed_value* delayed_list = dynamic_cast<lists::delayed_value*>(term_ptr);
+    if (delayed_list != nullptr) {
+        bound = delayed_list->bind_ignore_null(options);
+    } else {
+        bound = term_ptr->bind(options);
+    }
+
+    if (bound.get() == nullptr) {
+        return constant::make_null();
+    }
+
+    lists::value* list_value = dynamic_cast<lists::value*>(bound.get());
+    if (list_value != nullptr) {
+        // Remove NULL elements from the list
+        std::remove_if(list_value->_elements.begin(), list_value->_elements.end(),
+                       [](const managed_bytes_opt& element) { return !element.has_value(); });
+    }
+
+    raw_value raw_val = bound->get(options);
+    data_type val_type = bound->get_value_type();
+    return constant(std::move(raw_val), std::move(val_type));
+}
+
+constant evaluate_IN_list(const ::shared_ptr<term>& term_ptr, const query_options& options) {
+    return evaluate_IN_list(term_ptr.get(), options);
+}
+
+constant evaluate_IN_list(term& term_ref, const query_options& options) {
+    return evaluate_IN_list(&term_ref, options);
+}
+
+cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, const query_options& options) {
+    constant value = evaluate(term_ptr, options);
+    return cql3::raw_value_view::make_temporary(std::move(value.value));
+}
+
+cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& options) {
+    constant value = evaluate(term_ref, options);
+    return cql3::raw_value_view::make_temporary(std::move(value.value));
+}
+
+static void ensure_can_get_value_elements(const constant& val,
+                                          abstract_type::kind expected_type_kind,
+                                          const char* caller_name) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    if (val_type.get_kind() != expected_type_kind) {
+        on_internal_error(expr_logger, fmt::format("{} called with wrong type: {}", caller_name, val_type.name()));
+    }
+
+    if (val.is_null()) {
+        on_internal_error(expr_logger, fmt::format("{} called with null value", caller_name));
+    }
+
+    if (val.is_unset_value()) {
+        on_internal_error(expr_logger, fmt::format("{} called with unset value", caller_name));
+    }
+}
+
+utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
+    ensure_can_get_value_elements(val, abstract_type::kind::list, "expr::get_list_elements");
+
+    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+        return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
+    });
+}
+
+utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
+    ensure_can_get_value_elements(val, abstract_type::kind::set, "expr::get_set_elements");
+
+    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+        return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
+    });
+}
+
+std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant& val) {
+    ensure_can_get_value_elements(val, abstract_type::kind::map, "expr::get_map_elements");
+
+    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+        return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
+    });
+}
+
+std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
+    ensure_can_get_value_elements(val, abstract_type::kind::tuple, "expr::get_tuple_elements");
+
+    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+        const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val.type->without_reversed());
+        return ttype.split_fragmented(value_bytes);
+    });
+}
+
+std::vector<managed_bytes_opt> get_user_type_elements(const constant& val) {
+    ensure_can_get_value_elements(val, abstract_type::kind::user, "expr::get_user_type_elements");
+
+    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+        const user_type_impl& utype = static_cast<const user_type_impl&>(val.type->without_reversed());
+        return utype.split_fragmented(value_bytes);
+    });
+}
+
+static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<managed_bytes>&& elements) {
+    return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
+                                          std::make_move_iterator(elements.end()));
+}
+
+std::vector<managed_bytes_opt> get_elements(const constant& val) {
+    const abstract_type& val_type = val.type->without_reversed();
+
+    switch (val_type.get_kind()) {
+        case abstract_type::kind::list:
+            return convert_listlike(get_list_elements(val));
+
+        case abstract_type::kind::set:
+            return convert_listlike(get_set_elements(val));
+
+        case abstract_type::kind::tuple:
+            return get_tuple_elements(val);
+
+        case abstract_type::kind::user:
+            return get_user_type_elements(val);
+
+        default:
+            on_internal_error(expr_logger, fmt::format("expr::get_elements called on bad type: {}", val_type.name()));
+    }
+}
+
+utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant& val) {
+    utils::chunked_vector<managed_bytes> elements = get_list_elements(val);
+    const list_type_impl& list_typ = dynamic_cast<const list_type_impl&>(val.type->without_reversed());
+    const tuple_type_impl& tuple_typ = dynamic_cast<const tuple_type_impl&>(*list_typ.get_elements_type());
+
+    utils::chunked_vector<std::vector<managed_bytes_opt>> tuples_list;
+    tuples_list.reserve(elements.size());
+
+    for (managed_bytes& element : elements) {
+        std::vector<managed_bytes_opt> cur_tuple = tuple_typ.split_fragmented(managed_bytes_view(element));
+        tuples_list.emplace_back(std::move(cur_tuple));
+    }
+
+    return tuples_list;
+}
 } // namespace expr
 } // namespace cql3
