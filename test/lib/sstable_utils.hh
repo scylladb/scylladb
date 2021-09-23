@@ -357,7 +357,7 @@ public:
     }
 };
 
-future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf,
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf,
         std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op());
 
 shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader rd, sstable_writer_config cfg,

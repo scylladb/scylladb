@@ -899,7 +899,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 }
 
 future<>
-table::compact_sstables(sstables::compaction_descriptor descriptor) {
+table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_info& info) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         return make_ready_future<>();
@@ -917,20 +917,23 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
             release_exhausted(desc.old_sstables);
         }
     };
+    auto compaction_type = descriptor.options.type();
 
-    return sstables::compact_sstables(std::move(descriptor), *this).then([this] (auto info) {
-        if (info.type != sstables::compaction_type::Compaction) {
+    return sstables::compact_sstables(std::move(descriptor), info, *this).then([this, &info, compaction_type] (sstables::compaction_result res) {
+        if (compaction_type != sstables::compaction_type::Compaction) {
             return make_ready_future<>();
         }
         // skip update if running without a query context, for example, when running a test case.
         if (!db::qctx) {
             return make_ready_future<>();
         }
+        auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.ended_at.time_since_epoch()).count();
+
         // FIXME: add support to merged_rows. merged_rows is a histogram that
         // shows how many sstables each row is merged from. This information
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
-        return db::system_keyspace::update_compaction_history(info.compaction_uuid, info.ks_name, info.cf_name, info.ended_at,
+        return db::system_keyspace::update_compaction_history(info.compaction_uuid, _schema->ks_name(), _schema->cf_name(), ended_at,
             info.start_size, info.end_size, std::unordered_map<int32_t, int64_t>{});
     });
 }
@@ -972,7 +975,7 @@ void table::trigger_offstrategy_compaction() {
     _compaction_manager.submit_offstrategy(this);
 }
 
-future<> table::run_offstrategy_compaction() {
+future<> table::run_offstrategy_compaction(sstables::compaction_info& info) {
     // This procedure will reshape sstables in maintenance set until it's ready for
     // integration into main set.
     // It may require N reshape rounds before the set satisfies the strategy invariant.
@@ -1015,7 +1018,7 @@ future<> table::run_offstrategy_compaction() {
         };
         auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
 
-        auto ret = co_await sstables::compact_sstables(std::move(desc), *this);
+        auto ret = co_await sstables::compact_sstables(std::move(desc), info, *this);
 
         // update list of reshape candidates without input but with output added to it
         auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });

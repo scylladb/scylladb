@@ -356,8 +356,8 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table
 
             desc.creator = creator;
 
-            return cm.run_custom_job(&table, compaction_type::Reshape, [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] () mutable {
-                return sstables::compact_sstables(std::move(desc), table).then([this, sstlist = std::move(sstlist)] (sstables::compaction_info result) mutable {
+            return cm.run_custom_job(&table, compaction_type::Reshape, [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_info& info) mutable {
+                return sstables::compact_sstables(std::move(desc), info, table).then([this, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
                     return remove_input_sstables_from_reshaping(std::move(sstlist)).then([this, new_sstables = std::move(result.new_sstables)] () mutable {
                         return collect_output_sstables_from_reshaping(std::move(new_sstables));
                     });
@@ -408,12 +408,12 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
             // parallel_for_each so the statistics about pending jobs are updated to reflect all
             // jobs. But only one will run in parallel at a time
             return parallel_for_each(buckets, [this, iop, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-                return cm.run_custom_job(&table, compaction_type::Reshard, [this, iop, &cm, &table, creator, &sstlist] () {
+                return cm.run_custom_job(&table, compaction_type::Reshard, [this, iop, &cm, &table, creator, &sstlist] (sstables::compaction_info& info) {
                     sstables::compaction_descriptor desc(sstlist, {}, iop);
                     desc.options = sstables::compaction_type_options::make_reshard();
                     desc.creator = std::move(creator);
 
-                    return sstables::compact_sstables(std::move(desc), table).then([this, &sstlist] (sstables::compaction_info result) {
+                    return sstables::compact_sstables(std::move(desc), info, table).then([this, &sstlist] (sstables::compaction_result result) {
                         // input sstables are moved, to guarantee their resources are released once we're done
                         // resharding them.
                         return when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(std::move(sstlist))).discard_result();

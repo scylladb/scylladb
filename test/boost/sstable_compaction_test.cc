@@ -2039,8 +2039,9 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
                 compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(db));
             auto ret = compact_sstables(std::move(descriptor), *cf, sst_gen).get0();
 
-            BOOST_REQUIRE(ret.total_keys_written == total_partitions);
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
+            BOOST_REQUIRE(ret.new_sstables.front()->get_estimated_key_count() >= total_partitions);
+            BOOST_REQUIRE((ret.new_sstables.front()->get_estimated_key_count() - total_partitions) <= s->min_index_interval());
             BOOST_REQUIRE(ret.new_sstables.front()->run_identifier() == run_identifier);
         });
     });
@@ -3856,7 +3857,8 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            cf->run_offstrategy_compaction().get();
+            auto info = make_lw_shared<sstables::compaction_info>();
+            cf->run_offstrategy_compaction(*info).get();
 
             // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
             cf->stop().get();

@@ -236,7 +236,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>()> job);
+    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_info&)> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
@@ -278,6 +278,8 @@ public:
 
     // Propagate replacement of sstables to all ongoing compaction of a given column family
     void propagate_replacement(column_family*cf, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
+
+    static lw_shared_ptr<sstables::compaction_info> create_compaction_info(column_family& cf, sstables::compaction_type type);
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
