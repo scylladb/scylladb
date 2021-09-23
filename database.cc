@@ -846,7 +846,7 @@ database::shard_of(const frozen_mutation& m) {
 }
 
 future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
-    return db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name).then([this, name](db::schema_tables::schema_result_value_type&& v) {
+    auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
         auto& ks = find_keyspace(name);
 
         auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v);
@@ -863,8 +863,7 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
         }
 
         ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
-        return get_notifier().update_keyspace(ks.metadata());
-    });
+    co_await get_notifier().update_keyspace(ks.metadata());
 }
 
 void database::drop_keyspace(const sstring& name) {
