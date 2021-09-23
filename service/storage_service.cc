@@ -105,7 +105,6 @@ static logging::logger slogger("storage_service");
 storage_service::storage_service(abort_source& abort_source,
     distributed<database>& db, gms::gossiper& gossiper,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
-    sharded<db::view::view_update_generator>& view_update_generator,
     gms::feature_service& feature_service,
     storage_service_config config,
     sharded<service::migration_manager>& mm,
@@ -128,7 +127,6 @@ storage_service::storage_service(abort_source& abort_source,
         , _cdc_gen_service(cdc_gen_service)
         , _lifecycle_notifier(elc_notif)
         , _sys_dist_ks(sys_dist_ks)
-        , _view_update_generator(view_update_generator)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
         , _schema_version_publisher([this] { return publish_schema_version(); }) {
     register_metrics();
@@ -143,7 +141,6 @@ storage_service::storage_service(abort_source& abort_source,
         _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
     (void) _raft_gr;
-    (void) _view_update_generator; // temporary
 }
 
 enum class node_external_status {

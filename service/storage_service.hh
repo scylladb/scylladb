@@ -87,9 +87,6 @@ class generation_service;
 
 namespace db {
 class system_distributed_keyspace;
-namespace view {
-class view_update_generator;
-}
 }
 
 namespace netw {
@@ -194,7 +191,6 @@ public:
     storage_service(abort_source& as, distributed<database>& db,
         gms::gossiper& gossiper,
         sharded<db::system_distributed_keyspace>&,
-        sharded<db::view::view_update_generator>&,
         gms::feature_service& feature_service,
         storage_service_config config,
         sharded<service::migration_manager>& mm,
@@ -552,7 +548,6 @@ private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
-    sharded<db::view::view_update_generator>& _view_update_generator;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     serialized_action _schema_version_publisher;
     std::unordered_set<gms::inet_address> _replacing_nodes_pending_ranges_updater;

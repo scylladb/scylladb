@@ -844,7 +844,7 @@ int main(int ac, char** av) {
             sscfg.available_memory = memory::stats().total_memory();
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
-                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator),
+                std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata),
                 std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
                 std::ref(raft_gr), std::ref(lifecycle_notifier)).get();
