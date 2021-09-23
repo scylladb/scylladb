@@ -55,6 +55,12 @@ public:
     // Returns true iff the pointer is pointing at a row.
     explicit operator bool() const { return _change_mark != partition_snapshot::change_mark(); }
 public:
+    // Sets the iterator in latest version for the current position.
+    void set_latest(mutation_partition::rows_type::iterator it) {
+        _it = std::move(it);
+        _in_latest = true;
+    }
+public:
     // Returns the position of the row.
     // Call only when pointing at a row.
     const position_in_partition& position() const { return _pos; }
