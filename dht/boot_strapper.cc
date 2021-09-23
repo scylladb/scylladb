@@ -36,6 +36,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
+
 #include "dht/boot_strapper.hh"
 #include "dht/range_streamer.hh"
 #include "gms/failure_detector.hh"
@@ -58,8 +60,9 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
     } else if (reason == streaming::stream_reason::replace) {
         description = "Replace";
     } else {
-        return make_exception_future<>(std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap"));
+        throw std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap");
     }
+    try {
     auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata_ptr, _abort_source, _tokens, _address, description, reason);
     auto nodes_to_filter = gms::get_local_gossiper().get_unreachable_members();
     if (reason == streaming::stream_reason::replace && _db.local().get_replace_address()) {
@@ -67,21 +70,20 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
     }
     blogger.debug("nodes_to_filter={}", nodes_to_filter);
     streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(nodes_to_filter));
-    auto keyspaces = make_lw_shared<std::vector<sstring>>(_db.local().get_non_system_keyspaces());
-    return do_for_each(*keyspaces, [this, keyspaces, streamer] (sstring& keyspace_name) {
+    auto keyspaces = _db.local().get_non_system_keyspaces();
+    for (auto& keyspace_name : keyspaces) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
         dht::token_range_vector ranges = strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address, utils::can_yield::no);
         blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
-        return streamer->add_ranges(keyspace_name, ranges);
-    }).then([this, streamer] {
+        co_await streamer->add_ranges(keyspace_name, ranges);
+    }
         _abort_source.check();
-        return streamer->stream_async().handle_exception([streamer] (std::exception_ptr eptr) {
-            blogger.warn("Error during bootstrap: {}", eptr);
-            return make_exception_future<>(std::move(eptr));
-        });
-    });
-
+        co_await streamer->stream_async();
+    } catch (...) {
+        blogger.warn("Error during bootstrap: {}", std::current_exception());
+        throw;
+    }
 }
 
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, database& db) {
