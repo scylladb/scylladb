@@ -78,7 +78,6 @@ public:
     static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
     static future<> ensure_system_table_directories(distributed<database>& db);
 
-    static future<> verify_owner_and_mode(std::filesystem::path path);
     // Scan sstables under upload directory. Return a vector with smp::count entries.
     // Each entry with index of idx should be accessed on shard idx only.
     // Each entry contains a vector of sstables for this shard.
