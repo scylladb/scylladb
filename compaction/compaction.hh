@@ -55,7 +55,6 @@ namespace sstables {
 
     struct compaction_info {
         compaction_type type = compaction_type::Compaction;
-        table* cf = nullptr;
         sstring ks_name;
         sstring cf_name;
         size_t sstables = 0;

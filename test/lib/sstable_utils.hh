@@ -348,9 +348,9 @@ class compaction_manager_test {
 public:
     explicit compaction_manager_test(compaction_manager& cm) : _cm(cm) {}
 
-    void register_compaction(lw_shared_ptr<sstables::compaction_info> c, utils::UUID output_run_id = {}) {
+    void register_compaction(lw_shared_ptr<sstables::compaction_info> c, utils::UUID output_run_id = {}, column_family* cf = nullptr) {
         auto task = make_lw_shared<compaction_manager::task>();
-        task->compacting_cf = c->cf;
+        task->compacting_cf = cf;
         task->compaction_running = true;
         task->compaction_info = c;
         task->output_run_identifier = std::move(output_run_id);
