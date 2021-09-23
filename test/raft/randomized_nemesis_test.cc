@@ -1590,10 +1590,10 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
 // The maximum number of calls until we give up is specified by `bounces`.
 // The initial `raft::server_id` argument provided to `F` is specified as an argument
 // to this function (`srv_id`). If the initial call returns `not_a_leader`, then:
-// - if the result contained a different leader ID, we will use it in the next call,
-//   sleeping for `known_leader_delay` first,
+// - if the result contained a different leader ID and we didn't already try that ID,
+//   we will use it in the next call, sleeping for `known_leader_delay` first,
 // - otherwise we will take the next ID from the `known` set, sleeping for
-//   `unknown_leader_delay` first.
+//   `unknown_leader_delay` first; no ID will be tried twice.
 // The returned result contains the result of the last call to `F` and the last
 // server ID passed to `F`.
 template <typename F>
@@ -1616,25 +1616,35 @@ struct bouncing {
             raft::logical_clock::duration known_leader_delay,
             raft::logical_clock::duration unknown_leader_delay
             ) {
-        auto it = known.find(srv_id);
+        tlogger.trace("bouncing call: starting with {}", srv_id);
+        std::unordered_set<raft::server_id> tried;
         while (true) {
             auto res = co_await _f(srv_id);
+            tried.insert(srv_id);
+            known.erase(srv_id);
 
             if (auto n_a_l = std::get_if<raft::not_a_leader>(&res); n_a_l && bounces) {
                 --bounces;
+
                 if (n_a_l->leader) {
                     assert(n_a_l->leader != srv_id);
-                    co_await timer.sleep(known_leader_delay);
-                    srv_id = n_a_l->leader;
-                } else {
-                    co_await timer.sleep(unknown_leader_delay);
-                    assert(!known.empty());
-                    if (it == known.end() || ++it == known.end()) {
-                        it = known.begin();
+                    if (!tried.contains(n_a_l->leader)) {
+                        co_await timer.sleep(known_leader_delay);
+                        srv_id = n_a_l->leader;
+                        tlogger.trace("bouncing call: got `not_a_leader`, rerouted to {}", srv_id);
+                        continue;
                     }
-                    srv_id = *it;
                 }
-                continue;
+
+                if (!known.empty()) {
+                    srv_id = *known.begin();
+                    if (n_a_l->leader) {
+                        tlogger.trace("bouncing call: got `not_a_leader`, rerouted to {}, but already tried it; trying {}", n_a_l->leader, srv_id);
+                    } else {
+                        tlogger.trace("bouncing call: got `not_a_leader`, no reroute, trying {}", srv_id);
+                    }
+                    continue;
+                }
             }
 
             co_return std::pair{res, srv_id};
