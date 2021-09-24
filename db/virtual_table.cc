@@ -149,8 +149,8 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         };
 
-        auto reader_and_handle = make_queue_reader(_s, permit);
-        auto consumer = std::make_unique<my_result_collector>(_s, permit, &pr, std::move(reader_and_handle.second));
+        auto reader_and_handle = make_queue_reader(s, permit);
+        auto consumer = std::make_unique<my_result_collector>(s, permit, &pr, std::move(reader_and_handle.second));
         auto f = execute(permit, *consumer, *consumer);
 
         // It is safe to discard this future because:
