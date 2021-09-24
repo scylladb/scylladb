@@ -4024,10 +4024,11 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                     bad->apply(std::move(mf));
                 } else {
                     if (!mf.is_partition_start() && !mf.is_end_of_partition()) {
+                        auto upper = mf.is_range_tombstone() ? mf.as_range_tombstone().end : mf.position();
                         if (!bounds) {
-                            bounds = std::pair{mf.position(), mf.position()};
+                            bounds = std::pair{mf.position(), upper};
                         } else {
-                            bounds->second = mf.position();
+                            bounds->second = upper;
                         }
                     }
                     good.apply(std::move(mf));
@@ -4062,12 +4063,22 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
+            auto reversed = slice.options.contains(query::partition_slice::option::reversed);
             std::map<dht::decorated_key, flat_mutation_reader, dht::decorated_key::less_comparator>
                 good_readers{dht::decorated_key::less_comparator(s)};
             for (auto& [k, ms]: good) {
-                auto rs = boost::copy_range<std::vector<reader_bounds>>(std::move(ms)
+                auto rs = boost::copy_range<std::vector<reader_bounds>>(ms
                         | boost::adaptors::transformed([&] (auto&& mb) {
-                            return make_reader_bounds(s, permit, std::move(mb), fwd_sm, &slice);
+                            auto rb = make_reader_bounds(s, permit, std::move(mb), fwd_sm, &slice);
+                            if (reversed) {
+                                // The bounds are calculated in 'table order' (using the mutation and its schema),
+                                // but we need them in 'query order' (using the query schema), so for reversed queries
+                                // we need to swap and reverse them.
+                                std::swap(rb.lower, rb.upper);
+                                rb.lower = std::move(rb.lower).reversed();
+                                rb.upper = std::move(rb.upper).reversed();
+                            }
+                            return rb;
                         }));
                 std::sort(rs.begin(), rs.end(), [less = position_in_partition::less_compare(*s)]
                         (const reader_bounds& a, const reader_bounds& b) { return less(a.lower, b.lower); });
