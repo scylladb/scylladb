@@ -2731,14 +2731,15 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
     public:
         maybe_pausing_reader(
                 memtable& mt,
+                schema_ptr query_schema,
                 reader_permit permit,
                 const dht::partition_range& pr,
                 const query::partition_slice& ps,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr)
-            : impl(mt.schema(), std::move(permit)), _reader(nullptr) {
-            std::tie(_reader, _handle) = make_manually_paused_evictable_reader(mt.as_data_source(), mt.schema(), _permit, pr, ps, pc,
+            : impl(std::move(query_schema), std::move(permit)), _reader(nullptr) {
+            std::tie(_reader, _handle) = make_manually_paused_evictable_reader(mt.as_data_source(), _schema, _permit, pr, ps, pc,
                     std::move(trace_state), fwd_mr);
         }
         virtual future<> fill_buffer() override {
@@ -2786,7 +2787,7 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
-            auto mr = make_flat_mutation_reader<maybe_pausing_reader>(*mt, std::move(permit), range, slice, pc, std::move(trace_state), fwd_mr);
+            auto mr = make_flat_mutation_reader<maybe_pausing_reader>(*mt, s, std::move(permit), range, slice, pc, std::move(trace_state), fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));
             }
