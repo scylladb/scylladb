@@ -2044,8 +2044,8 @@ future<> database::start() {
     co_await init_commitlog();
 }
 
-future<>
-database::stop() {
+future<> database::shutdown() {
+    _shutdown = true;
     co_await _compaction_manager->stop();
     co_await _stop_barrier.arrive_and_wait();
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
@@ -2053,6 +2053,12 @@ database::stop() {
     co_await close_tables(database::table_kind::user);
     co_await close_tables(database::table_kind::system);
     co_await _large_data_handler->stop();
+}
+
+future<> database::stop() {
+    if (!_shutdown) {
+        co_await shutdown();
+    }
 
     // try to ensure that CL has done disk flushing
     if (_commitlog) {

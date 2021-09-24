@@ -671,6 +671,10 @@ public:
 
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
 
+            auto shutdown_db = defer([&db] {
+                db.invoke_on_all(&database::shutdown).get();
+            });
+
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 

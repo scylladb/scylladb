@@ -1320,6 +1320,7 @@ private:
     std::unique_ptr<compaction_manager> _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
+    bool _shutdown = false;
     utils::UUID _local_host_id;
 
     query::querier_cache _querier_cache;
@@ -1464,6 +1465,7 @@ public:
     /// the normal concurrency.
     void revert_initial_system_read_concurrency_boost();
     future<> start();
+    future<> shutdown();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);
 
