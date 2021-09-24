@@ -916,11 +916,23 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
                 tracing::trace_state_ptr trace_ptr,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
-            reversed_slices.emplace_back(query::reverse_slice(*schema, slice));
-            // We don't want the memtable reader to read in reverse.
-            reversed_slices.back().options.remove(query::partition_slice::option::reversed);
-            auto rd = make_reversing_reader(reverse_mt->make_flat_reader(schema->make_reversed(), std::move(permit), range, reversed_slices.back(), pc,
-                        std::move(trace_ptr), streamed_mutation::forwarding::no, fwd_mr), query::max_result_size(1 << 20));
+            flat_mutation_reader rd(nullptr);
+
+            schema = schema->make_reversed();
+            const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+            if (reversed) {
+                reversed_slices.emplace_back(query::half_reverse_slice(*schema, slice));
+                rd = flat_mutation_reader_from_mutations(std::move(permit), squash_mutations(muts), range, reversed_slices.back());
+            } else {
+                reversed_slices.emplace_back(query::reverse_slice(*schema, slice));
+                // We don't want the memtable reader to read in reverse.
+                reversed_slices.back().options.remove(query::partition_slice::option::reversed);
+                rd = reverse_mt->make_flat_reader(schema, std::move(permit), range, reversed_slices.back(), pc, std::move(trace_ptr),
+                        streamed_mutation::forwarding::no, fwd_mr);
+            }
+
+            rd = make_reversing_reader(std::move(rd), query::max_result_size(1 << 20));
+
             if (fwd_sm) {
                 return make_forwardable(std::move(rd));
             }
