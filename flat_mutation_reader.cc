@@ -95,7 +95,7 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
-flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size) {
+flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice) {
     class partition_reversing_mutation_reader final : public flat_mutation_reader::impl {
         flat_mutation_reader _source;
         range_tombstone_list _range_tombstones;
@@ -104,6 +104,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
         size_t _stack_size = 0;
         const query::max_result_size _max_size;
         bool _below_soft_limit = true;
+        std::unique_ptr<query::partition_slice> _slice; // only stored, not used
     private:
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
@@ -184,11 +185,12 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
             return make_ready_future<stop_iteration>(is_buffer_full());
         }
     public:
-        explicit partition_reversing_mutation_reader(flat_mutation_reader mr, query::max_result_size max_size)
+        explicit partition_reversing_mutation_reader(flat_mutation_reader mr, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice)
             : flat_mutation_reader::impl(mr.schema()->make_reversed(), mr.permit())
             , _source(std::move(mr))
             , _range_tombstones(*_schema)
             , _max_size(max_size)
+            , _slice(std::move(slice))
         { }
 
         virtual future<> fill_buffer() override {
@@ -239,7 +241,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
         }
     };
 
-    return make_flat_mutation_reader<partition_reversing_mutation_reader>(std::move(original), max_size);
+    return make_flat_mutation_reader<partition_reversing_mutation_reader>(std::move(original), max_size, std::move(slice));
 }
 
 template<typename Source>
