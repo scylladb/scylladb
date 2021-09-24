@@ -1045,6 +1045,7 @@ map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cel
         : concrete_type(kind::map, make_map_type_name(keys, values, is_multi_cell), is_multi_cell)
         , _keys(std::move(keys))
         , _values(std::move(values)) {
+    _contains_set_or_map = true;
 }
 
 data_type
@@ -1254,7 +1255,9 @@ sstring make_set_type_name(data_type elements, bool is_multi_cell)
 }
 
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-    : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell), elements, is_multi_cell) {}
+    : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell), elements, is_multi_cell) {
+        _contains_set_or_map = true;
+    }
 
 data_type
 set_type_impl::value_comparator() const {
@@ -1387,7 +1390,9 @@ sstring make_list_type_name(data_type elements, bool is_multi_cell)
 }
 
 list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
-    : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell), elements, is_multi_cell) {}
+    : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell), elements, is_multi_cell) {
+        _contains_set_or_map = _elements->contains_set_or_map();
+    }
 
 data_type
 list_type_impl::name_comparator() const {
@@ -1487,14 +1492,39 @@ tuple_type_impl::tuple_type_impl(kind k, sstring name, std::vector<data_type> ty
             t = t->freeze();
         }
     }
+
+    set_contains_collections();
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types, bool freeze_inner)
         : tuple_type_impl{kind::tuple, make_name(types), std::move(types), freeze_inner} {
+    set_contains_collections();
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
         : tuple_type_impl(std::move(types), true) {
+    set_contains_collections();
+}
+
+void tuple_type_impl::set_contains_collections() {
+    for (const data_type& t : _types) {
+        if (t->contains_set_or_map()) {
+            _contains_set_or_map = true;
+            break;
+        }
+    }
+
+    if (_contains_set_or_map) {
+        _contains_collection = true;
+        return;
+    }
+
+    for (const data_type& t : _types) {
+        if (t->contains_collection()) {
+            _contains_collection = true;
+            break;
+        }
+    }
 }
 
 shared_ptr<const tuple_type_impl>
@@ -3457,55 +3487,12 @@ data_type reversed(data_type type) {
     }
 }
 
-// A visitor that checks whether the type contains a collection type somewhere inside.
-// Has a parameter exclude_list which if set to true makes the visitor ignore lists.
-namespace {
-struct contains_collection_visitor {
-    bool exclude_list = false;
-
-    bool operator()(const set_type_impl&) const {
-        return true;
-    }
-
-    bool operator()(const map_type_impl&) const {
-        return true;
-    }
-
-    bool operator()(const list_type_impl& ltype) const {
-        if (exclude_list) {
-            return visit(*ltype.get_elements_type(), *this);
-        }
-
-        return true;
-    }
-
-    // This also handles user_type_impl
-    bool operator()(const tuple_type_impl& ttype) const {
-        for (const data_type& element_type : ttype.all_types()) {
-            if (visit(*element_type, *this)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    bool operator()(const reversed_type_impl& rtype) const {
-        return visit(rtype.without_reversed(), *this);
-    }
-
-    bool operator()(const abstract_type&) const {
-        return false;
-    }
-};
-}
-
 bool abstract_type::contains_set_or_map() const {
-    return visit(*this, contains_collection_visitor{.exclude_list = true});
+    return _contains_set_or_map;
 }
 
 bool abstract_type::contains_collection() const {
-    return visit(*this, contains_collection_visitor{});
+    return _contains_collection;
 }
 
 bool abstract_type::bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const {

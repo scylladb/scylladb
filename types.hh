@@ -614,6 +614,9 @@ public:
 private:
     mutable sstring _cql3_type_name;
 protected:
+    bool _contains_set_or_map = false;
+    bool _contains_collection = false;
+
     // native_value_* methods are virualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
     void* native_value_clone(const void* from) const;
@@ -829,7 +832,10 @@ class reversed_type_impl : public abstract_type {
         : abstract_type(kind::reversed, "org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
                         t->value_length_if_fixed())
         , _underlying_type(t)
-    {}
+    {
+        _contains_set_or_map = _underlying_type->contains_set_or_map();
+        _contains_collection = _underlying_type->contains_collection();
+    }
 public:
     const data_type& underlying_type() const {
         return _underlying_type;
