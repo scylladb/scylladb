@@ -146,6 +146,29 @@ this:
   not sepately for each Raft instance. The library expects an accurate
   `failure_detector` instance from a complying implementation.
 
+### Pre-voting and protection against disruptive leaders
+
+tl;dr: do not turn pre-voting OFF
+
+The library implements the pre-voting algorithm described in Raft PHD.
+This algorithms adds an extra voting step, requiring each candidate to
+collect votes from followers before updating its term. This prevents
+"term races" and unnecessary leader step downs when e.g. a follower that
+has been isolated from the cluster increases its term, becomes a candidate
+and then disrupts an existing leader.
+The pre-voting extension is ON by default. Do not turn it OFF unless
+testing or debugging the library itself.
+
+Another extension suggested in the PhD is protection against disruptive
+leaders. It requires followers to withhold their vote within an election
+timeout of hearing from a valid leader. With pre-voting ON and use of shared
+failure detector we found this extension unnecessary, and even leading to
+reduced liveness. It was thus removed from the implementation.
+
+As a downside, with pre-voting *OFF* servers outside the current
+configuration can disrupt cluster liveness if they stay around after having
+been removed.
+
 ### RPC module address mappings
 
 Raft instance needs to update RPC subsystem on changes in
