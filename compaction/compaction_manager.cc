@@ -940,6 +940,14 @@ future<> compaction_manager::remove(column_family* cf) {
     });
 }
 
+void compaction_manager::stop_tracking_ongoing_compactions(column_family* cf) {
+    for (auto& info : _compactions) {
+        if (info->cf == cf) {
+            info->stop_tracking();
+        }
+    }
+}
+
 void compaction_manager::stop_compaction(sstring type) {
     sstables::compaction_type target_type;
     try {

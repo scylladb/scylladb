@@ -2945,11 +2945,11 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
     });
 }
 
-SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy) {
+SEASTAR_TEST_CASE(backlog_tracker_correctness_after_stop_tracking_compaction) {
     return test_env::do_with_async([] (test_env& env) {
         cell_locker_stats cl_stats;
 
-        auto builder = schema_builder("tests", "backlog_tracker_correctness_after_changing_compaction_strategy")
+        auto builder = schema_builder("tests", "backlog_correctness_after_stop_tracking_compaction")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
         auto s = builder.build();
@@ -2991,7 +2991,15 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
 
             auto fut = compact_sstables(sstables::compaction_descriptor(ssts, cf->get_sstable_set(), default_priority_class()), *cf, sst_gen);
 
-            // set_compaction_strategy() itself is responsible for transferring charges from old to new backlog tracker.
+            bool stopped_tracking = false;
+            for (auto& info : cf._data->cm.get_compactions()) {
+                if (info->cf == &*cf) {
+                    info->stop_tracking();
+                    stopped_tracking = true;
+                }
+            }
+            BOOST_REQUIRE(stopped_tracking);
+
             cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
             for (auto& sst : ssts) {
                 cf->get_compaction_strategy().get_backlog_tracker().add_sstable(sst);
@@ -2999,6 +3007,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
 
             auto ret = fut.get0();
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
+            BOOST_REQUIRE(ret.tracking == false);
         }
         // triggers code that iterates through registered compactions.
         cf._data->cm.backlog();
