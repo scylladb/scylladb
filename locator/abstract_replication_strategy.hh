@@ -61,7 +61,6 @@ class abstract_replication_strategy {
     friend class effective_replication_map;
 protected:
     replication_strategy_config_options _config_options;
-    const shared_token_metadata& _shared_token_metadata;
     snitch_ptr& _snitch;
     replication_strategy_type _my_type;
 
@@ -84,7 +83,6 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     abstract_replication_strategy(
-        const shared_token_metadata& stm,
         snitch_ptr& snitch,
         const replication_strategy_config_options& config_options,
         replication_strategy_type my_type);
@@ -97,11 +95,11 @@ public:
     virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
 
     virtual ~abstract_replication_strategy() {}
-    static ptr_type create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options);
+    static ptr_type create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
-                                              const shared_token_metadata& stm,
-                                              const replication_strategy_config_options& config_options);
+                                              const replication_strategy_config_options& config_options,
+                                              const topology& topology);
     static void validate_replication_factor(sstring rf);
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
     virtual void validate_options() const = 0;

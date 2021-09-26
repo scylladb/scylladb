@@ -32,23 +32,20 @@ namespace locator {
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
-    const shared_token_metadata& stm,
     snitch_ptr& snitch,
     const replication_strategy_config_options& config_options,
     replication_strategy_type my_type)
         : _config_options(config_options)
-        , _shared_token_metadata(stm)
         , _snitch(snitch)
         , _my_type(my_type) {}
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
     try {
         return create_object<abstract_replication_strategy,
-                             const shared_token_metadata&,
                              snitch_ptr&,
                              const replication_strategy_config_options&>
-            (strategy_name, stm,
+            (strategy_name,
              locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
@@ -57,12 +54,12 @@ abstract_replication_strategy::ptr_type abstract_replication_strategy::create_re
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
-                                                                  const shared_token_metadata& stm,
-                                                                  const replication_strategy_config_options& config_options)
+                                                                  const replication_strategy_config_options& config_options,
+                                                                  const topology& topology)
 {
-    auto strategy = create_replication_strategy(strategy_name, stm, config_options);
+    auto strategy = create_replication_strategy(strategy_name, config_options);
     strategy->validate_options();
-    auto expected = strategy->recognized_options(stm.get()->get_topology());
+    auto expected = strategy->recognized_options(topology);
     if (expected) {
         for (auto&& item : config_options) {
             sstring key = item.first;

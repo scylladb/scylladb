@@ -1048,7 +1048,7 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
 
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
-                _metadata->strategy_name(), stm, options);
+                _metadata->strategy_name(), options);
 
     update_effective_replication_map(co_await calculate_effective_replication_map(_replication_strategy, stm.get()));
 }
@@ -1190,7 +1190,6 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    const locator::shared_token_metadata&,
     locator::snitch_ptr&,
     const locator::replication_strategy_config_options&>;
 
@@ -1223,20 +1222,20 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     }
 }
 
-void keyspace_metadata::validate(const locator::shared_token_metadata& stm) const {
+void keyspace_metadata::validate(const locator::topology& topology) const {
     using namespace locator;
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), stm, strategy_options());
+    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), strategy_options(), topology);
 }
 
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
-    ksm.validate(get_shared_token_metadata());
+    ksm.validate(get_token_metadata().get_topology());
     if (!has_keyspace(ksm.name())) {
         throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm.name()));
     }
 }
 
 void database::validate_new_keyspace(keyspace_metadata& ksm) {
-    ksm.validate(get_shared_token_metadata());
+    ksm.validate(get_token_metadata().get_topology());
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }

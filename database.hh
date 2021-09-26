@@ -1092,7 +1092,7 @@ public:
                  locator::replication_strategy_config_options options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    void validate(const locator::shared_token_metadata& stm) const;
+    void validate(const locator::topology&) const;
     const sstring& name() const {
         return _name;
     }

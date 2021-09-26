@@ -48,7 +48,6 @@ namespace locator {
 class network_topology_strategy : public abstract_replication_strategy {
 public:
     network_topology_strategy(
-        const shared_token_metadata& token_metadata,
         snitch_ptr& snitch,
         const replication_strategy_config_options& config_options);
 

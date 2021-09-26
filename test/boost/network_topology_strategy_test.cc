@@ -226,7 +226,7 @@ void simple_test() {
     };
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", stm, options323);
+        "NetworkTopologyStrategy", options323);
 
 
     full_ring_check(ring_points, options323, ars_ptr, stm.get());
@@ -240,7 +240,7 @@ void simple_test() {
     };
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", stm, options320);
+        "NetworkTopologyStrategy", options320);
 
     full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
@@ -319,7 +319,7 @@ void heavy_origin_test() {
     }).get();
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", stm, config_options);
+        "NetworkTopologyStrategy", config_options);
 
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
@@ -494,7 +494,7 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts(stm, snitch,
+    my_network_topology_strategy nts(snitch,
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(
