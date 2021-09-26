@@ -1378,37 +1378,45 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     assert(this_shard_id() == 0);
 
     slogger.debug("Replicating token_metadata to all cores");
-    _pending_token_metadata_ptr = tmptr;
-    // clone a local copy of updated token_metadata on all other shards
-    return container().invoke_on_others([tmptr] (storage_service& ss) {
-      return tmptr->clone_async().then([&ss] (token_metadata tm) {
-        ss._pending_token_metadata_ptr = make_token_metadata_ptr(std::move(tm));
-      });
-    }).then_wrapped([this] (future<> f) {
-        if (f.failed()) {
-            return container().invoke_on_all([] (storage_service& ss) {
-                if (auto tmptr = std::move(ss._pending_token_metadata_ptr)) {
-                    return tmptr->clear_gently().then_wrapped([tmptr = std::move(tmptr)] (future<> f) {
-                        if (f.failed()) {
-                            slogger.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", f.get_exception());
-                        }
-                    });
-                } else {
-                    return make_ready_future<>();
-                }
-            }).finally([ep = f.get_exception()] () mutable {
-                return make_exception_future<>(std::move(ep));
-            });
-        }
-        return container().invoke_on_all([] (storage_service& ss) {
-            ss._shared_token_metadata.set(std::move(ss._pending_token_metadata_ptr));
-        }).handle_exception([] (auto e) noexcept {
-            // applying the changes on all shards should never fail
-            // it will end up in an inconsistent state that we can't recover from.
-            slogger.error("Failed to replicate token_metadata: {}. Aborting.", e);
-            abort();
+    std::exception_ptr ex;
+
+    try {
+        _pending_token_metadata_ptr = tmptr;
+        // clone a local copy of updated token_metadata on all other shards
+        co_await container().invoke_on_others([tmptr] (storage_service& ss) -> future<> {
+            auto tm = co_await tmptr->clone_async();
+            ss._pending_token_metadata_ptr = make_token_metadata_ptr(std::move(tm));
         });
-    });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    // Rollback on metadata replication error
+    if (ex) {
+        try {
+            co_await container().invoke_on_all([] (storage_service& ss) -> future<> {
+                if (auto tmptr = std::move(ss._pending_token_metadata_ptr)) {
+                    co_await tmptr->clear_gently();
+                }
+            });
+        } catch (...) {
+            slogger.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", std::current_exception());
+        }
+
+        std::rethrow_exception(std::move(ex));
+    }
+
+    // Apply changes on all shards
+    try {
+        co_await container().invoke_on_all([] (storage_service& ss) {
+            ss._shared_token_metadata.set(std::move(ss._pending_token_metadata_ptr));
+        });
+    } catch (...) {
+        // applying the changes on all shards should never fail
+        // it will end up in an inconsistent state that we can't recover from.
+        slogger.error("Failed to apply token_metadata changes: {}. Aborting.", std::current_exception());
+        abort();
+    }
 }
 
 future<> storage_service::stop() {
