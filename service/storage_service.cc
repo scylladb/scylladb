@@ -1411,10 +1411,12 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             for (auto& ks_name : keyspaces) {
                 auto local_rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
                 const auto& erm0 = pending_effective_replication_maps[base_shard].at(ks_name);
+                auto rf = erm0->get_replication_factor();
                 auto local_replication_map = co_await erm0->clone_endpoints_gently();
                 auto local_tmptr = pending_token_metadata_ptr[this_shard_id()];
-                auto erm = make_effective_replication_map(std::move(local_rs), std::move(local_tmptr), std::move(local_replication_map));
+                auto erm = make_effective_replication_map(std::move(local_rs), std::move(local_tmptr), std::move(local_replication_map), rf);
                 pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
+
             }
         });
     } catch (...) {

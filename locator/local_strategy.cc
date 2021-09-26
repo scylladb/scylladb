@@ -42,7 +42,7 @@ std::optional<std::set<sstring>> local_strategy::recognized_options() const {
     return {};
 }
 
-size_t local_strategy::get_replication_factor() const {
+size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
 

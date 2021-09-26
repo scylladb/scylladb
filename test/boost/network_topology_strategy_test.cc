@@ -79,6 +79,7 @@ static void check_ranges_are_sorted(effective_replication_map_ptr erm, gms::inet
 
 void strategy_sanity_check(
     abstract_replication_strategy::ptr_type ars_ptr,
+    const token_metadata& tm,
     const std::map<sstring, sstring>& options) {
 
     network_topology_strategy* nts_ptr =
@@ -96,15 +97,16 @@ void strategy_sanity_check(
         total_rf += rf;
     }
 
-    BOOST_CHECK(ars_ptr->get_replication_factor() == total_rf);
+    BOOST_CHECK(ars_ptr->get_replication_factor(tm) == total_rf);
 }
 
 void endpoints_check(
     abstract_replication_strategy::ptr_type ars_ptr,
+    const token_metadata& tm,
     inet_address_vector_replica_set& endpoints) {
 
     // Check the total RF
-    BOOST_CHECK(endpoints.size() == ars_ptr->get_replication_factor());
+    BOOST_CHECK(endpoints.size() == ars_ptr->get_replication_factor(tm));
 
     // Check the uniqueness
     std::unordered_set<inet_address> ep_set(endpoints.begin(), endpoints.end());
@@ -151,7 +153,8 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
                      const std::map<sstring, sstring>& options,
                      abstract_replication_strategy::ptr_type ars_ptr,
                      locator::token_metadata_ptr tmptr) {
-    strategy_sanity_check(ars_ptr, options);
+    auto& tm = *tmptr;
+    strategy_sanity_check(ars_ptr, tm, options);
 
     auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get0();
 
@@ -160,7 +163,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
         auto endpoints1 = erm->get_natural_endpoints(t1);
 
-        endpoints_check(ars_ptr, endpoints1);
+        endpoints_check(ars_ptr, tm, endpoints1);
 
         print_natural_endpoints(cur_point1, endpoints1);
 
@@ -173,7 +176,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
         auto endpoints2 = erm->get_natural_endpoints(t2);
 
-        endpoints_check(ars_ptr, endpoints2);
+        endpoints_check(ars_ptr, tm, endpoints2);
         check_ranges_are_sorted(erm, rp.host);
         BOOST_CHECK(endpoints1 == endpoints2);
     }

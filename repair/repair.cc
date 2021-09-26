@@ -1323,6 +1323,8 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip).get0();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
+            auto erm = ks.get_effective_replication_map();
+            auto replication_factor = erm->get_replication_factor();
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get0();
@@ -1380,7 +1382,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             return nodes;
                         };
                         auto get_rf_in_local_dc = [&] () {
-                            size_t rf_in_local_dc = strat.get_replication_factor();
+                            size_t rf_in_local_dc = replication_factor;
                             if (strat.get_type() == locator::replication_strategy_type::network_topology) {
                                 auto nts = dynamic_cast<locator::network_topology_strategy*>(&strat);
                                 if (!nts) {
@@ -1402,7 +1404,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                         auto rf_in_local_dc = get_rf_in_local_dc();
                         if (everywhere_topology) {
                             neighbors = old_endpoints_in_local_dc;
-                        } else if (old_endpoints.size() == strat.get_replication_factor()) {
+                        } else if (old_endpoints.size() == replication_factor) {
                             // For example, with RF = 3 and 3 nodes n1, n2, n3
                             // in the cluster, n4 is bootstrapped, old_replicas
                             // = {n1, n2, n3}, new_replicas = {n1, n2, n4}, n3
@@ -1411,7 +1413,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             // losing the range n3
                             mandatory_neighbors = get_node_losing_the_ranges(old_endpoints, new_endpoints);
                             neighbors = mandatory_neighbors;
-                        } else if (old_endpoints.size() < strat.get_replication_factor()) {
+                        } else if (old_endpoints.size() < replication_factor) {
                           if (!find_node_in_local_dc_only) {
                             neighbors = old_endpoints;
                           } else {
@@ -1445,7 +1447,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                           }
                         } else {
                             throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints={}, rf={}",
-                                        keyspace_name, desired_range, old_endpoints, strat.get_replication_factor()));
+                                        keyspace_name, desired_range, old_endpoints, replication_factor));
                         }
                         rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, neighbors={}, mandatory_neighbors={}",
                                 keyspace_name, desired_range, neighbors, mandatory_neighbors);

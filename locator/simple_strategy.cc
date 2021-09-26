@@ -53,7 +53,7 @@ future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpo
         co_return inet_address_vector_replica_set();
     }
 
-    size_t replicas = get_replication_factor();
+    size_t replicas = _replication_factor;
     utils::sequenced_set<inet_address> endpoints;
     endpoints.reserve(replicas);
 
@@ -72,7 +72,7 @@ future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpo
     co_return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
 }
 
-size_t simple_strategy::get_replication_factor() const {
+size_t simple_strategy::get_replication_factor(const token_metadata&) const {
     return _replication_factor;
 }
 

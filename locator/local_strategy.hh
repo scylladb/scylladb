@@ -38,7 +38,7 @@ class local_strategy : public abstract_replication_strategy {
 public:
     local_strategy(const shared_token_metadata& token_metadata, snitch_ptr& snitch, const replication_strategy_config_options& config_options);
     virtual ~local_strategy() {};
-    virtual size_t get_replication_factor() const override;
+    virtual size_t get_replication_factor(const token_metadata&) const override;
 
     virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 

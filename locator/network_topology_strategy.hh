@@ -52,7 +52,7 @@ public:
         snitch_ptr& snitch,
         const replication_strategy_config_options& config_options);
 
-    virtual size_t get_replication_factor() const override {
+    virtual size_t get_replication_factor(const token_metadata&) const override {
         return _rep_factor;
     }
 

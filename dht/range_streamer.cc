@@ -93,7 +93,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
 
         if (!found_source) {
             auto& ks = _db.local().find_keyspace(keyspace);
-            auto rf = ks.get_replication_strategy().get_replication_factor();
+            auto rf = ks.get_effective_replication_map()->get_replication_factor();
             // When a replacing node replaces a dead node with keyspace of RF
             // 1, it is expected that replacing node could not find a peer node
             // that contains data to stream from.
@@ -157,6 +157,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
+    auto erm = ks.get_effective_replication_map();
 
     //Active ranges
     auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
@@ -188,7 +189,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                 std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
                 //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                 //So we need to be careful to only be strict when endpoints == RF
-                if (old_endpoints.size() == strat.get_replication_factor()) {
+                if (old_endpoints.size() == erm->get_replication_factor()) {
                     std::erase_if(old_endpoints,
                         [&new_endpoints] (inet_address ep) { return new_endpoints.contains(ep); });
                     if (old_endpoints.size() != 1) {
@@ -222,10 +223,10 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 
 bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name) {
     auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto& strat = ks.get_replication_strategy();
-    auto rf = strat.get_replication_factor();
+    auto erm = ks.get_effective_replication_map();
+    auto rf = erm->get_replication_factor();
     auto nr_nodes_in_ring = get_token_metadata().get_all_endpoints().size();
-    bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
+    bool everywhere_topology = ks.get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF
     auto strict = !_db.local().is_replacing()
            && _db.local().get_config().consistent_rangemovement()

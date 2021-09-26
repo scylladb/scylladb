@@ -106,7 +106,7 @@ public:
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
-    virtual size_t get_replication_factor() const = 0;
+    virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
     // Decide if the replication strategy allow removing the node being
     // replaced from the natural endpoints when a node is being replaced in the
     // cluster. LocalStrategy is the not allowed to do so because it always
@@ -138,13 +138,15 @@ private:
     abstract_replication_strategy::ptr_type _rs;
     token_metadata_ptr _tmptr;
     replication_map _replication_map;
+    size_t _replication_factor;
 
     friend class abstract_replication_strategy;
 public:
-    explicit effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map) noexcept
+    explicit effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
         : _rs(std::move(rs))
         , _tmptr(std::move(tmptr))
         , _replication_map(std::move(replication_map))
+        , _replication_factor(replication_factor)
     { }
     effective_replication_map() = delete;
     effective_replication_map(effective_replication_map&&) = default;
@@ -155,6 +157,10 @@ public:
 
     const replication_map& get_replication_map() const noexcept {
         return _replication_map;
+    }
+
+    const size_t get_replication_factor() const noexcept {
+        return _replication_factor;
     }
 
     future<> clear_gently() noexcept;
@@ -190,8 +196,8 @@ private:
 using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;
 using mutable_effective_replication_map_ptr = lw_shared_ptr<effective_replication_map>;
 
-inline mutable_effective_replication_map_ptr make_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map) {
-    return make_lw_shared<effective_replication_map>(std::move(rs), std::move(tmptr), std::move(replication_map));
+inline mutable_effective_replication_map_ptr make_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) {
+    return make_lw_shared<effective_replication_map>(std::move(rs), std::move(tmptr), std::move(replication_map), replication_factor);
 }
 
 // Apply the replication strategy over the current configuration and the given token_metadata.

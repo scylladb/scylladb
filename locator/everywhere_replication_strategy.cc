@@ -51,8 +51,8 @@ future<inet_address_vector_replica_set> everywhere_replication_strategy::calcula
     return make_ready_future<inet_address_vector_replica_set>(boost::copy_range<inet_address_vector_replica_set>(tm.get_all_endpoints()));
 }
 
-size_t everywhere_replication_strategy::get_replication_factor() const {
-    return _shared_token_metadata.get()->count_normal_token_owners();
+size_t everywhere_replication_strategy::get_replication_factor(const token_metadata& tm) const {
+    return tm.sorted_tokens().empty() ? 1 : tm.count_normal_token_owners();
 }
 
 inet_address_vector_replica_set everywhere_replication_strategy::get_natural_endpoints(const token&, const effective_replication_map& erm) const {
