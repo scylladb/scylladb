@@ -73,13 +73,6 @@ private:
         bool stopping = false;
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
-        utils::UUID output_run_identifier;
-        lw_shared_ptr<sstables::compaction_data> compaction_data = make_lw_shared<sstables::compaction_data>();
-
-        explicit task(column_family* cf, sstables::compaction_type type) : compacting_cf(cf), type(type) {}
-
-        void setup_new_compaction();
-        void finish_compaction();
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
@@ -105,6 +98,8 @@ private:
     stats _stats;
     seastar::metrics::metric_groups _metrics;
     double _last_backlog = 0.0f;
+
+    std::list<lw_shared_ptr<sstables::compaction_info>> _compactions;
 
     // Store sstables that are being compacted at the moment. That's needed to prevent
     // a sstable from being compacted twice.
@@ -133,7 +128,7 @@ private:
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 private:
-    future<> task_stop(lw_shared_ptr<task> task, sstring reason);
+    future<> task_stop(lw_shared_ptr<task> task);
 
     // Return true if weight is not registered.
     bool can_register_weight(column_family* cf, int weight) const;
@@ -240,7 +235,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>()> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
@@ -250,7 +245,17 @@ public:
         return _stats;
     }
 
-    const std::vector<sstables::compaction_info> get_compactions() const;
+    void register_compaction(lw_shared_ptr<sstables::compaction_info> c) {
+        _compactions.push_back(c);
+    }
+
+    void deregister_compaction(lw_shared_ptr<sstables::compaction_info> c) {
+        _compactions.remove(c);
+    }
+
+    const std::list<lw_shared_ptr<sstables::compaction_info>>& get_compactions() const {
+        return _compactions;
+    }
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(column_family* cf) const {
@@ -273,11 +278,8 @@ public:
     // Propagate replacement of sstables to all ongoing compaction of a given column family
     void propagate_replacement(column_family*cf, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
-    static lw_shared_ptr<sstables::compaction_data> create_compaction_data(column_family& cf, sstables::compaction_type type);
-
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
-    friend class compaction_manager_test;
 };
 
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);

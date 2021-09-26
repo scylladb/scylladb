@@ -101,7 +101,6 @@ class sstable;
 class compaction_descriptor;
 class compaction_completion_desc;
 class sstables_manager;
-class compaction_data;
 
 }
 
@@ -801,7 +800,7 @@ public:
     // not a real compaction policy.
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
-    future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& info);
+    future<> compact_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
 
@@ -875,7 +874,7 @@ public:
     void trigger_compaction();
     void try_trigger_compaction() noexcept;
     void trigger_offstrategy_compaction();
-    future<> run_offstrategy_compaction(sstables::compaction_data& info);
+    future<> run_offstrategy_compaction();
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;

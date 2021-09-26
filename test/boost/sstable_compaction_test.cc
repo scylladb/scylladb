@@ -126,7 +126,7 @@ static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, rea
     return sst->as_mutation_source().make_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
 }
 
-SEASTAR_TEST_CASE(compaction_manager_basic_test) {
+SEASTAR_TEST_CASE(compaction_manager_test) {
   return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
@@ -2039,9 +2039,8 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
                 compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(db));
             auto ret = compact_sstables(std::move(descriptor), *cf, sst_gen).get0();
 
+            BOOST_REQUIRE(ret.total_keys_written == total_partitions);
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
-            BOOST_REQUIRE(ret.new_sstables.front()->get_estimated_key_count() >= total_partitions);
-            BOOST_REQUIRE((ret.new_sstables.front()->get_estimated_key_count() - total_partitions) <= s->min_index_interval());
             BOOST_REQUIRE(ret.new_sstables.front()->run_identifier() == run_identifier);
         });
     });
@@ -2263,7 +2262,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
                 clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r)));
     };
 
-    auto info = make_lw_shared<compaction_data>();
+    auto info = make_lw_shared<compaction_info>();
 
     BOOST_TEST_MESSAGE("valid");
     {
@@ -3049,12 +3048,11 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        auto info = compaction_manager::create_compaction_data(*cf, sstables::compaction_type::Compaction);
-        compaction_manager_test(*cm).register_compaction(info, partial_sstable_run_identifier);
+        auto c_info = make_lw_shared<compaction_info>();
+        c_info->run_identifier = partial_sstable_run_identifier;
+        cm->register_compaction(c_info);
 
         cf->compact_all_sstables().get();
-
-        compaction_manager_test(*cm).deregister_compaction(info);
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
@@ -3860,8 +3858,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            auto info = make_lw_shared<sstables::compaction_data>();
-            cf->run_offstrategy_compaction(*info).get();
+            cf->run_offstrategy_compaction().get();
 
             // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
             cf->stop().get();

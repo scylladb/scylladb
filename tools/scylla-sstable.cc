@@ -602,7 +602,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     if (!partitions.empty()) {
         sst_log.warn("partition-filter is not supported for validate, ignoring");
     }
-    sstables::compaction_data info;
+    sstables::compaction_info info;
     consume_sstables(schema, permit, sstables, opts.merge, true, [&info] (flat_mutation_reader& rd, sstables::sstable* sst) {
         if (sst) {
             sst_log.info("validating {}", sst->get_filename());
