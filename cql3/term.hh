@@ -44,6 +44,7 @@
 #include "cql3/assignment_testable.hh"
 #include "cql3/query_options.hh"
 #include "cql3/values.hh"
+#include "cql3/expr/expression.hh"
 
 #include <variant>
 #include <vector>
@@ -100,6 +101,8 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const term& t) {
         return out << t.to_string();
     }
+
+    virtual expr::expression to_expression() = 0;
 };
 
 /**
@@ -145,6 +148,11 @@ public:
 
     data_type get_value_type() const {
         return _my_type;
+    }
+
+    virtual expr::expression to_expression() override {
+        cql3::raw_value raw_val = get(query_options::DEFAULT);
+        return expr::constant(std::move(raw_val), get_value_type());
     }
 };
 

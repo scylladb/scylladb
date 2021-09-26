@@ -46,7 +46,9 @@ public:
 protected:
     bool _is_multi_cell;
     explicit collection_type_impl(kind k, sstring name, bool is_multi_cell)
-            : abstract_type(k, std::move(name), {}), _is_multi_cell(is_multi_cell) {}
+            : abstract_type(k, std::move(name), {}), _is_multi_cell(is_multi_cell) {
+                _contains_collection = true;
+            }
 public:
     bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type name_comparator() const = 0;

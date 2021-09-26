@@ -44,6 +44,12 @@
 #include "utils/like_matcher.hh"
 #include "query-result-reader.hh"
 #include "types/user.hh"
+#include "cql3/lists.hh"
+#include "cql3/sets.hh"
+#include "cql3/maps.hh"
+#include "cql3/user_types.hh"
+#include "cql3/functions/scalar_function.hh"
+#include "cql3/functions/function_call.hh"
 
 namespace cql3 {
 namespace expr {
@@ -1120,7 +1126,8 @@ expression search_and_replace(const expression& e,
                     return tuple_constructor{
                         boost::copy_range<std::vector<expression>>(
                             tc.elements | boost::adaptors::transformed(recurse)
-                        )
+                        ),
+                        tc.type
                     };
                 },
                 [&] (const collection_constructor& c) -> expression {
@@ -1128,7 +1135,8 @@ expression search_and_replace(const expression& e,
                         c.style,
                         boost::copy_range<std::vector<expression>>(
                             c.elements | boost::adaptors::transformed(recurse)
-                        )
+                        ),
+                        c.type
                     };
                 },
                 [&] (const usertype_constructor& uc) -> expression {
@@ -1136,7 +1144,7 @@ expression search_and_replace(const expression& e,
                     for (auto& [k, v] : uc.elements) {
                         m.emplace(k, recurse(*v));
                     }
-                    return usertype_constructor{std::move(m)};
+                    return usertype_constructor{std::move(m), uc.type};
                 },
                 [&] (const function_call& fc) -> expression {
                     return function_call{
@@ -1302,14 +1310,7 @@ constant evaluate(term* term_ptr, const query_options& options) {
         return constant::make_null();
     }
 
-    ::shared_ptr<terminal> bound = term_ptr->bind(options);
-    if (bound.get() == nullptr) {
-        return constant::make_null();
-    }
-
-    raw_value raw_val = bound->get(options);
-    data_type val_type = bound->get_value_type();
-    return constant(std::move(raw_val), std::move(val_type));
+    return evaluate(term_ptr->to_expression(), options);
 }
 
 constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& options) {
@@ -1318,35 +1319,6 @@ constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& optio
 
 constant evaluate(term& term_ref, const query_options& options) {
     return evaluate(&term_ref, options);
-}
-
-constant evaluate_IN_list(term* term_ptr, const query_options& options) {
-    if (term_ptr == nullptr) {
-        return constant::make_null();
-    }
-
-    ::shared_ptr<terminal> bound;
-    lists::delayed_value* delayed_list = dynamic_cast<lists::delayed_value*>(term_ptr);
-    if (delayed_list != nullptr) {
-        bound = delayed_list->bind_ignore_null(options);
-    } else {
-        bound = term_ptr->bind(options);
-    }
-
-    if (bound.get() == nullptr) {
-        return constant::make_null();
-    }
-
-    lists::value* list_value = dynamic_cast<lists::value*>(bound.get());
-    if (list_value != nullptr) {
-        // Remove NULL elements from the list
-        std::remove_if(list_value->_elements.begin(), list_value->_elements.end(),
-                       [](const managed_bytes_opt& element) { return !element.has_value(); });
-    }
-
-    raw_value raw_val = bound->get(options);
-    data_type val_type = bound->get_value_type();
-    return constant(std::move(raw_val), std::move(val_type));
 }
 
 constant evaluate_IN_list(const ::shared_ptr<term>& term_ptr, const query_options& options) {
@@ -1365,6 +1337,483 @@ cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, co
 cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& options) {
     constant value = evaluate(term_ref, options);
     return cql3::raw_value_view::make_temporary(std::move(value.value));
+}
+
+constant evaluate(const expression& e, const query_options& options) {
+    return std::visit(overloaded_functor {
+        [](const binary_operator&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a binary_operator");
+        },
+        [](const conjunction&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a conjunction");
+        },
+        [](const token&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate token");
+        },
+        [](const unresolved_identifier&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
+        },
+        [](const column_mutation_attribute&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
+        },
+        [](const cast&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a cast");
+        },
+        [](const field_selection&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a field_selection");
+        },
+
+        // TODO Should these be evaluable?
+        [](const column_value&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a column_value");
+        },
+        [](const untyped_constant&) -> constant {
+            on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
+        },
+
+        [](const null&) { return constant::make_null(); },
+        [](const constant& c) { return c; },
+        [&](const bind_variable& bind_var) { return evaluate(bind_var, options); },
+        [&](const tuple_constructor& tup) { return evaluate(tup, options); },
+        [&](const collection_constructor& col) { return evaluate(col, options); },
+        [&](const usertype_constructor& user_val) { return evaluate(user_val, options); },
+        [&](const function_call& fun_call) { return evaluate(fun_call, options); }
+    }, e);
+}
+
+// Serializes a map using the internal cql serialization format
+// Takes a range of pair<managed_bytes, managed_bytes>
+template <std::ranges::range Range>
+requires std::convertible_to<std::ranges::range_value_t<Range>, std::pair<const managed_bytes, managed_bytes>>
+static managed_bytes serialize_map(const Range& map_range) {
+    size_t serialized_len = 4;
+    size_t map_size = 0;
+    for (const std::pair<managed_bytes, managed_bytes>& elem : map_range) {
+        serialized_len += 4 + elem.first.size() + 4 + elem.second.size();
+        map_size += 1;
+    }
+
+    if (map_size > std::numeric_limits<int32_t>::max()) {
+        throw exceptions::invalid_request_exception(
+            fmt::format("Map size too large: {} > {}", map_size, std::numeric_limits<int32_t>::max()));
+    }
+
+    managed_bytes result(managed_bytes::initialized_later(), serialized_len);
+    managed_bytes_mutable_view out(result);
+
+    write_collection_size(out, map_size, cql_serialization_format::internal());
+    for (const std::pair<managed_bytes, managed_bytes>& elem : map_range) {
+        if (elem.first.size() > std::numeric_limits<int32_t>::max()) {
+            throw exceptions::invalid_request_exception(
+                fmt::format("Map key size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
+        }
+
+        if (elem.second.size() > std::numeric_limits<int32_t>::max()) {
+            throw exceptions::invalid_request_exception(
+                fmt::format("Map value size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
+        }
+
+        write_collection_value(out, cql_serialization_format::internal(), elem.first);
+        write_collection_value(out, cql_serialization_format::internal(), elem.second);
+    }
+
+    return result;
+}
+
+// Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
+template <FragmentedView View>
+static managed_bytes reserialize_value(View value_bytes,
+                                       const abstract_type& type,
+                                       const cql_serialization_format& sf) {
+    if (type.is_list()) {
+        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes, sf);
+
+        const abstract_type& element_type = dynamic_cast<const list_type_impl&>(type).get_elements_type()->without_reversed();
+        if (element_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (managed_bytes& element : elements) {
+                element = reserialize_value(managed_bytes_view(element), element_type, sf);
+            }
+        }
+
+        return collection_type_impl::pack_fragmented(
+            elements.begin(),
+            elements.end(),
+            elements.size(), cql_serialization_format::internal()
+        );
+    }
+
+    if (type.is_set()) {
+        utils::chunked_vector<managed_bytes> elements = partially_deserialize_listlike(value_bytes, sf);
+
+        const abstract_type& element_type = dynamic_cast<const set_type_impl&>(type).get_elements_type()->without_reversed();
+        if (element_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (managed_bytes& element : elements) {
+                element = reserialize_value(managed_bytes_view(element), element_type, sf);
+            }
+        }
+
+        std::set<managed_bytes, serialized_compare> values_set(element_type.as_less_comparator());
+        for (managed_bytes& element : elements) {
+            values_set.emplace(std::move(element));
+        }
+
+        return collection_type_impl::pack_fragmented(
+            values_set.begin(),
+            values_set.end(),
+            values_set.size(), cql_serialization_format::internal()
+        );
+    }
+
+    if (type.is_map()) {
+        std::vector<std::pair<managed_bytes, managed_bytes>> elements = partially_deserialize_map(value_bytes, sf);
+
+        const map_type_impl mapt = dynamic_cast<const map_type_impl&>(type);
+        const abstract_type& key_type = mapt.get_keys_type()->without_reversed();
+        const abstract_type& value_type = mapt.get_values_type()->without_reversed();
+
+        if (key_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (std::pair<managed_bytes, managed_bytes>& element : elements) {
+                element.first = reserialize_value(managed_bytes_view(element.first), key_type, sf);
+            }
+        }
+
+        if (value_type.bound_value_needs_to_be_reserialized(sf)) {
+            for (std::pair<managed_bytes, managed_bytes>& element : elements) {
+                element.second = reserialize_value(managed_bytes_view(element.second), value_type, sf);
+            }
+        }
+
+        std::map<managed_bytes, managed_bytes, serialized_compare> values_map(key_type.as_less_comparator());
+        for (std::pair<managed_bytes, managed_bytes>& element : elements) {
+            values_map.emplace(std::move(element));
+        }
+
+       return serialize_map(values_map);
+    }
+
+    if (type.is_tuple() || type.is_user_type()) {
+        const tuple_type_impl& ttype = dynamic_cast<const tuple_type_impl&>(type);
+        std::vector<managed_bytes_opt> elements = ttype.split_fragmented(value_bytes);
+
+        for (std::size_t i = 0; i < elements.size(); i++) {
+            const abstract_type& element_type = ttype.all_types().at(i)->without_reversed();
+            if (elements[i].has_value() && element_type.bound_value_needs_to_be_reserialized(sf)) {
+                elements[i] = reserialize_value(managed_bytes_view(*elements[i]), element_type, sf);
+            }
+        }
+
+        return tuple_type_impl::build_value_fragmented(std::move(elements));
+    }
+
+    on_internal_error(expr_logger,
+        fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
+}
+
+constant evaluate(const bind_variable& bind_var, const query_options& options) {
+    if (bind_var.value_type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(bind_variable) called with nullptr type, should be prepared first");
+    }
+
+    cql3::raw_value_view value = options.get_value_at(bind_var.bind_index);
+
+    if (value.is_null()) {
+        return constant::make_null(bind_var.value_type);
+    }
+
+    if (value.is_unset_value()) {
+        return constant::make_unset_value(bind_var.value_type);
+    }
+
+    const abstract_type& value_type = bind_var.value_type->without_reversed();
+    try {
+        value.validate(value_type, options.get_cql_serialization_format());
+    } catch (const marshal_exception& e) {
+        throw exceptions::invalid_request_exception(
+                format("Exception while binding value of type {}: {}",
+                       bind_var.value_type->name(), e.what()));
+    }
+
+    if (value_type.bound_value_needs_to_be_reserialized(options.get_cql_serialization_format())) {
+        managed_bytes new_value = value.with_value([&] (const FragmentedView auto& value_bytes) {
+            return reserialize_value(value_bytes, value_type, options.get_cql_serialization_format());
+        });
+
+        return constant(raw_value::make_value(std::move(new_value)), bind_var.value_type);
+    }
+
+    return constant(raw_value::make_value(value), bind_var.value_type);
+}
+
+constant evaluate(const tuple_constructor& tuple, const query_options& options) {
+    if (tuple.type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(tuple_constructor) called with nullptr type, should be prepared first");
+    }
+
+    std::vector<managed_bytes_opt> tuple_elements;
+    tuple_elements.reserve(tuple.elements.size());
+
+    for (size_t i = 0; i < tuple.elements.size(); i++) {
+        constant elem_val = evaluate(tuple.elements[i], options);
+        if (elem_val.is_unset_value()) {
+            throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
+        }
+
+        tuple_elements.emplace_back(std::move(elem_val.value).to_managed_bytes_opt());
+    }
+
+    cql3::raw_value raw_val =
+        cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(std::move(tuple_elements)));
+
+    return constant(std::move(raw_val), tuple.type);
+}
+
+// Range of managed_bytes
+template <typename Range>
+requires requires (Range listlike_range) { {*listlike_range.begin()} -> std::convertible_to<const managed_bytes&>; }
+static managed_bytes serialize_listlike(const Range& elements, const char* collection_name) {
+    if (elements.size() > std::numeric_limits<int32_t>::max()) {
+        throw exceptions::invalid_request_exception(fmt::format("{} size too large: {} > {}",
+            collection_name, elements.size(), std::numeric_limits<int32_t>::max()));
+    }
+
+    for (const managed_bytes& element : elements) {
+        if (element.size() > std::numeric_limits<int32_t>::max()) {
+            throw exceptions::invalid_request_exception(fmt::format("{} element size too large: {} bytes > {}",
+                collection_name, elements.size(), std::numeric_limits<int32_t>::max()));
+        }
+    }
+
+    return collection_type_impl::pack_fragmented(
+        elements.begin(),
+        elements.end(),
+        elements.size(),
+        cql_serialization_format::internal()
+    );
+}
+
+static constant evaluate_list(const collection_constructor& collection,
+                              const query_options& options,
+                              bool skip_null = false) {
+    std::vector<managed_bytes> evaluated_elements;
+    evaluated_elements.reserve(collection.elements.size());
+
+    for (const expression& element : collection.elements) {
+        constant evaluated_element = evaluate(element, options);
+
+        if (evaluated_element.is_null()) {
+            if (skip_null) {
+                continue;
+            }
+
+            throw exceptions::invalid_request_exception("null is not supported inside collections");
+        }
+
+        if (evaluated_element.is_unset_value()) {
+            return constant::make_unset_value(collection.type);
+        }
+
+        evaluated_elements.emplace_back(std::move(evaluated_element).value.to_managed_bytes());
+    }
+
+    managed_bytes collection_bytes = serialize_listlike(evaluated_elements, "List");
+    return constant(raw_value::make_value(std::move(collection_bytes)), collection.type);
+}
+
+static constant evaluate_set(const collection_constructor& collection, const query_options& options) {
+    const set_type_impl& stype = dynamic_cast<const set_type_impl&>(collection.type->without_reversed());
+    std::set<managed_bytes, serialized_compare> evaluated_elements(stype.get_elements_type()->as_less_comparator());
+
+    for (const expression& element : collection.elements) {
+        constant evaluated_element = evaluate(element, options);
+
+        if (evaluated_element.is_null()) {
+            throw exceptions::invalid_request_exception("null is not supported inside collections");
+        }
+
+        if (evaluated_element.is_unset_value()) {
+            return constant::make_unset_value(collection.type);
+        }
+
+        evaluated_elements.emplace(std::move(evaluated_element).value.to_managed_bytes());
+    }
+
+    managed_bytes collection_bytes = serialize_listlike(evaluated_elements, "Set");
+    return constant(raw_value::make_value(std::move(collection_bytes)), collection.type);
+}
+
+static constant evaluate_map(const collection_constructor& collection, const query_options& options) {
+    const map_type_impl& mtype = dynamic_cast<const map_type_impl&>(collection.type->without_reversed());
+    std::map<managed_bytes, managed_bytes, serialized_compare> evaluated_elements(mtype.get_keys_type()->as_less_comparator());
+
+    for (const expression& element : collection.elements) {
+        if (auto tuple = std::get_if<tuple_constructor>(&element)) {
+            constant key = evaluate(tuple->elements.at(0), options);
+            constant value = evaluate(tuple->elements.at(1), options);
+
+            if (key.is_null() || value.is_null()) {
+                throw exceptions::invalid_request_exception("null is not supported inside collections");
+            }
+
+            if (key.is_unset_value()) {
+                throw exceptions::invalid_request_exception("unset value is not supported inside collections");
+            }
+
+            if (value.is_unset_value()) {
+                return constant::make_unset_value(collection.type);
+            }
+
+            if (key.value.to_view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
+                // TODO: Behaviour copied from maps::delayed_value::bind(), but this seems incorrect
+                // The original reasoning is:
+                // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
+                // but CQL uses int32_t to encode length of a map key
+                throw exceptions::invalid_request_exception(format("Map key is too long. Map keys are limited to {:d} bytes but {:d} bytes keys provided",
+                                                   std::numeric_limits<uint16_t>::max(),
+                                                   key.value.to_view().size_bytes()));
+            }
+
+            evaluated_elements.emplace(std::move(key.value).to_managed_bytes(),
+                                       std::move(value.value).to_managed_bytes());
+        } else {
+            constant pair = evaluate(element, options);
+            std::vector<managed_bytes_opt> map_pair = get_tuple_elements(pair);
+
+            if (!map_pair.at(0).has_value() || !map_pair.at(1).has_value()) {
+                throw exceptions::invalid_request_exception("null is not supported inside collections");
+            }
+
+            evaluated_elements.emplace(std::move(*map_pair.at(0)), std::move(*map_pair.at(1)));
+        }
+    }
+
+    return constant(raw_value::make_value(serialize_map(evaluated_elements)), collection.type);
+}
+
+constant evaluate(const collection_constructor& collection, const query_options& options) {
+    if (collection.type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(collection_constructor) called with nullptr type, should be prepared first");
+    }
+
+    switch (collection.style) {
+        case collection_constructor::style_type::list:
+            return evaluate_list(collection, options);
+
+        case collection_constructor::style_type::set:
+            return evaluate_set(collection, options);
+
+        case collection_constructor::style_type::map:
+            return evaluate_map(collection, options);
+    }
+}
+
+constant evaluate(const usertype_constructor& user_val, const query_options& options) {
+    if (user_val.type.get() == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(usertype_constructor) called with nullptr type, should be prepared first");
+    }
+
+    const user_type_impl& utype = dynamic_cast<const user_type_impl&>(user_val.type->without_reversed());
+    if (user_val.elements.size() != utype.size()) {
+        on_internal_error(expr_logger,
+            "evaluate(usertype_constructor) called with bad number of elements, should be prepared first");
+    }
+
+    std::vector<managed_bytes_opt> field_values;
+    field_values.reserve(utype.size());
+
+    for (std::size_t i = 0; i < utype.size(); i++) {
+        column_identifier field_id(to_bytes(utype.field_name(i)), utf8_type);
+        auto cur_field = user_val.elements.find(field_id);
+
+        if (cur_field == user_val.elements.end()) {
+            on_internal_error(expr_logger, fmt::format(
+                "evaluate(usertype_constructor) called without a value for field {}, should be prepared first",
+                utype.field_name_as_string(i)));
+        }
+
+        constant field_val = evaluate(*cur_field->second, options);
+        if (field_val.is_unset_value()) {
+            // TODO: Behaviour copied from user_types::delayed_value::bind(), but this seems incorrect
+            field_val.value = raw_value::make_null();
+        }
+
+        field_values.emplace_back(std::move(field_val.value).to_managed_bytes_opt());
+    }
+
+    raw_value val_bytes = cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(field_values));
+    return constant(std::move(val_bytes), std::move(user_val.type));
+}
+
+constant evaluate(const function_call& fun_call, const query_options& options) {
+    const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
+    if (fun == nullptr) {
+        throw std::runtime_error("Can't evaluate function call with name only, should be prepared earlier");
+    }
+
+    // Can't use static_cast<> because function is a virtual base class of scalar_function
+    functions::scalar_function* scalar_fun = dynamic_cast<functions::scalar_function*>(fun->get());
+    if (scalar_fun == nullptr) {
+        throw std::runtime_error("Only scalar functions can be evaluated using evaluate()");
+    }
+
+    std::vector<bytes_opt> arguments;
+    arguments.reserve(fun_call.args.size());
+
+    for (const expression& arg : fun_call.args) {
+        constant arg_val = evaluate(arg, options);
+        if (arg_val.is_null_or_unset()) {
+            throw exceptions::invalid_request_exception(format("Invalid null or unset value for argument to {}", *scalar_fun));
+        }
+
+        arguments.emplace_back(to_bytes_opt(std::move(arg_val.value)));
+    }
+
+    if (fun_call.lwt_cache_id.has_value()) {
+        computed_function_values::mapped_type* cached_value = options.find_cached_pk_function_call(*fun_call.lwt_cache_id);
+        if (cached_value != nullptr) {
+            return constant(raw_value::make_value(*cached_value), scalar_fun->return_type());
+        }
+    }
+
+    bytes_opt result = scalar_fun->execute(cql_serialization_format::internal(), arguments);
+
+    if (fun_call.lwt_cache_id.has_value()) {
+        options.cache_pk_function_call(*fun_call.lwt_cache_id, result);
+    }
+
+    if (!result.has_value()) {
+        return constant::make_null(scalar_fun->return_type());
+    }
+
+    try {
+        scalar_fun->return_type()->validate(*result, cql_serialization_format::internal());
+    } catch (marshal_exception&) {
+        throw runtime_exception(format("Return of function {} ({}) is not a valid value for its declared return type {}",
+                                       *scalar_fun, to_hex(result),
+                                       scalar_fun->return_type()->as_cql3_type()
+                                       ));
+    }
+
+    return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
+}
+
+constant evaluate_IN_list(term* term_ptr, const query_options& options) {
+    if (term_ptr == nullptr) {
+        return constant::make_null();
+    }
+
+    expression e = term_ptr->to_expression();
+
+    if (auto collection = std::get_if<collection_constructor>(&e)) {
+        if (collection->style == collection_constructor::style_type::list) {
+            return evaluate_list(*collection, options, true);
+        }
+    }
+
+    return evaluate(e, options);
 }
 
 static void ensure_can_get_value_elements(const constant& val,
@@ -1467,6 +1916,14 @@ utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_element
     }
 
     return tuples_list;
+}
+
+expression to_expression(const ::shared_ptr<term>& term_ptr) {
+    if (term_ptr.get() == nullptr) {
+        return constant::make_null();
+    }
+
+    return term_ptr->to_expression();
 }
 } // namespace expr
 } // namespace cql3

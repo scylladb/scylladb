@@ -29,7 +29,6 @@
 
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
-#include "cql3/term.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
@@ -39,6 +38,7 @@
 #include "seastarx.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/variant_element.hh"
+#include "cql3/values.hh"
 
 class row;
 
@@ -52,6 +52,7 @@ namespace query {
 } // namespace query
 
 namespace cql3 {
+struct term;
 
 class column_identifier_raw;
 class query_options;
@@ -187,6 +188,21 @@ struct column_mutation_attribute {
 struct function_call {
     std::variant<functions::function_name, shared_ptr<functions::function>> func;
     std::vector<expression> args;
+
+    // 0-based index of the function call within a CQL statement.
+    // Used to populate the cache of execution results while passing to
+    // another shard (handling `bounce_to_shard` messages) in LWT statements.
+    //
+    // The id is set only for the function calls that are a part of LWT
+    // statement restrictions for the partition key. Otherwise, the id is not
+    // set and the call is not considered when using or populating the cache.
+    //
+    // For example in a query like:
+    // INSERT INTO t (pk) VALUES (uuid()) IF NOT EXISTS
+    // The query should be executed on a shard that has the pk partition,
+    // but it changes with each uuid() call.
+    // uuid() call result is cached and sent to the proper shard.
+    std::optional<uint8_t> lwt_cache_id;
 };
 
 struct cast {
@@ -207,6 +223,11 @@ struct bind_variable {
     // FIXME: infer shape from expression rather than from grammar
     shape_type shape;
     int32_t bind_index;
+
+    // Type of the bound value.
+    // Before preparing can be nullptr.
+    // After preparing always holds a valid type.
+    data_type value_type;
 };
 
 // A constant which does not yet have a date type. It is partially typed
@@ -240,6 +261,10 @@ struct constant {
 // Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
 struct tuple_constructor {
     std::vector<expression> elements;
+
+    // Might be nullptr before prepare.
+    // After prepare always holds a valid type, although it might be reversed_type(tuple_type).
+    data_type type;
 };
 
 // Constructs a collection of same-typed elements
@@ -247,12 +272,20 @@ struct collection_constructor {
     enum class style_type { list, set, map };
     style_type style;
     std::vector<expression> elements;
+
+    // Might be nullptr before prepare.
+    // After prepare always holds a valid type, although it might be reversed_type(collection_type).
+    data_type type;
 };
 
 // Constructs an object of a user-defined type
 struct usertype_constructor {
     using elements_map_type = std::unordered_map<column_identifier, nested_expression>;
     elements_map_type elements;
+
+    // Might be nullptr before prepare.
+    // After prepare always holds a valid type, although it might be reversed_type(user_type).
+    data_type type;
 };
 
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
@@ -556,6 +589,15 @@ constant evaluate_IN_list(term&, const query_options&);
 cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
 cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
 
+// Takes a prepared expression and calculates its value.
+// Evaluates bound values, calls functions and returns just the bytes and type.
+constant evaluate(const expression& e, const query_options&);
+constant evaluate(const bind_variable&, const query_options&);
+constant evaluate(const tuple_constructor&, const query_options&);
+constant evaluate(const collection_constructor&, const query_options&);
+constant evaluate(const usertype_constructor&, const query_options&);
+constant evaluate(const function_call&, const query_options&);
+
 utils::chunked_vector<managed_bytes> get_list_elements(const constant&);
 utils::chunked_vector<managed_bytes> get_set_elements(const constant&);
 std::vector<managed_bytes_opt> get_tuple_elements(const constant&);
@@ -568,6 +610,8 @@ std::vector<managed_bytes_opt> get_elements(const constant&);
 // Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>
 // It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
 utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
+
+expression to_expression(const ::shared_ptr<term>&);
 } // namespace expr
 
 } // namespace cql3

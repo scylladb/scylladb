@@ -118,6 +118,20 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
     return ::make_shared<user_types::value>(bind_internal(options), _type);
 }
 
+expr::expression user_types::delayed_value::to_expression() {
+    expr::usertype_constructor::elements_map_type new_elements;
+    for (size_t i = 0; i < _values.size(); i++) {
+        column_identifier field_name(_type->field_names().at(i), _type->string_field_names().at(i));
+        expr::nested_expression field_value(expr::to_expression(_values[i]));
+        new_elements.emplace(std::move(field_name), std::move(field_value));
+    }
+
+    return expr::usertype_constructor {
+        .elements = std::move(new_elements),
+        .type = _type
+    };
+}
+
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
     auto value = options.get_value_at(_bind_index);
     if (value.is_null()) {
@@ -127,6 +141,14 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     }
     return make_shared<user_types::value>(value::from_serialized(value, static_cast<const user_type_impl&>(*_receiver->type)));
+}
+
+expr::expression user_types::marker::to_expression() {
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::scalar,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {

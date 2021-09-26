@@ -131,6 +131,8 @@ public:
         virtual shared_ptr<terminal> bind(const query_options& options) override {
             return ::make_shared<value>(bind_internal(options), _type);
         }
+
+        virtual expr::expression to_expression() override;
     };
 
     /**
@@ -185,6 +187,8 @@ public:
                 return make_shared<tuples::value>(value::from_serialized(value, type));
             }
         }
+
+        virtual expr::expression to_expression() override;
     };
 
     /**
@@ -195,6 +199,7 @@ public:
         in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver);
 
         virtual shared_ptr<terminal> bind(const query_options& options) override;
+        virtual expr::expression to_expression() override;
     };
 
     template <typename T>

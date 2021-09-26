@@ -262,6 +262,18 @@ public:
             }
         }, std::move(_data));
     }
+    managed_bytes_opt to_managed_bytes_opt() && {
+        return std::visit(overloaded_functor{
+            [](bytes&& bytes_val) { return managed_bytes_opt(bytes_val); },
+            [](managed_bytes&& managed_bytes_val) { return managed_bytes_opt(std::move(managed_bytes_val)); },
+            [](null_value&&) -> managed_bytes_opt {
+                return std::nullopt;
+            },
+            [](unset_value&&) -> managed_bytes_opt {
+                return std::nullopt;
+            }
+        }, std::move(_data));
+    }
     raw_value_view to_view() const;
     friend class raw_value_view;
 };

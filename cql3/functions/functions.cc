@@ -501,6 +501,21 @@ function_call::bind_and_get_internal(const query_options& options) {
     return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(result));
 }
 
+expr::expression function_call::to_expression() {
+    std::vector<expr::expression> args;
+    args.reserve(_terms.size());
+
+    for (const ::shared_ptr<term>& t : _terms) {
+        args.emplace_back(expr::to_expression(t));
+    }
+
+    return expr::function_call {
+        .func = _fun,
+        .args = std::move(args),
+        .lwt_cache_id = _id,
+    };
+}
+
 static
 bytes_opt
 execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {

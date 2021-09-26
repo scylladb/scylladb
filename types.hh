@@ -600,10 +600,23 @@ public:
         return is_reversed() ? *underlying_type() : *this;
     }
 
+    // Checks whether there can be a set or map somewhere inside a value of this type.
+    bool contains_set_or_map() const;
+
+    // Checks whether there can be a collection somewhere inside a value of this type.
+    bool contains_collection() const;
+
+    // Checks whether a bound value of this type has to be reserialized.
+    // This can be for example because there is a set inside that needs to be sorted.
+    bool bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const;
+
     friend class list_type_impl;
 private:
     mutable sstring _cql3_type_name;
 protected:
+    bool _contains_set_or_map = false;
+    bool _contains_collection = false;
+
     // native_value_* methods are virualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
     void* native_value_clone(const void* from) const;
@@ -819,7 +832,10 @@ class reversed_type_impl : public abstract_type {
         : abstract_type(kind::reversed, "org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
                         t->value_length_if_fixed())
         , _underlying_type(t)
-    {}
+    {
+        _contains_set_or_map = _underlying_type->contains_set_or_map();
+        _contains_collection = _underlying_type->contains_collection();
+    }
 public:
     const data_type& underlying_type() const {
         return _underlying_type;

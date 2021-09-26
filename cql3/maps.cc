@@ -48,6 +48,7 @@
 #include "cql3/cql3_type.hh"
 #include "constants.hh"
 #include "types/map.hh"
+#include "cql3/tuples.hh"
 
 namespace cql3 {
 
@@ -163,6 +164,26 @@ maps::delayed_value::bind(const query_options& options) {
     return ::make_shared<value>(std::move(buffers), _my_type);
 }
 
+expr::expression maps::delayed_value::to_expression() {
+    std::vector<expr::expression> new_elements;
+    new_elements.reserve(_elements.size());
+
+    const map_type_impl& mtype = dynamic_cast<const map_type_impl&>(_my_type->without_reversed());
+    data_type ttype = tuple_type_impl::get_instance({mtype.get_keys_type(), mtype.get_values_type()});
+
+    for (auto&& [key, value] : _elements) {
+        expr::expression key_expr = expr::to_expression(key);
+        expr::expression value_expr = expr::to_expression(value);
+        new_elements.emplace_back(expr::tuple_constructor{{std::move(key_expr), std::move(value_expr)}, std::move(ttype)});
+    }
+
+    return expr::collection_constructor {
+        .style = expr::collection_constructor::style_type::map,
+        .elements = std::move(new_elements),
+        .type = _my_type
+    };
+}
+
 ::shared_ptr<terminal>
 maps::marker::bind(const query_options& options) {
     auto val = options.get_value_at(_bind_index);
@@ -183,6 +204,14 @@ maps::marker::bind(const query_options& options) {
                     val,
                     dynamic_cast<const map_type_impl&>(_receiver->type->without_reversed()),
                     options.get_cql_serialization_format()));
+}
+
+expr::expression maps::marker::to_expression() {
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::scalar,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 void

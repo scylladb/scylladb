@@ -27,6 +27,20 @@
 
 namespace cql3 {
 
+expr::expression tuples::delayed_value::to_expression() {
+    std::vector<expr::expression> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (shared_ptr<term>& e : _elements) {
+        new_elements.emplace_back(expr::to_expression(e));
+    }
+
+    return expr::tuple_constructor {
+        .elements = std::move(new_elements),
+        .type = _type,
+    };
+}
+
 tuples::in_value
 tuples::in_value::from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options) {
     try {
@@ -64,6 +78,22 @@ cql3::raw_value tuples::in_value::get(const query_options& options) {
 
     ::shared_ptr<lists::value> list_value = ::make_shared<lists::value>(std::move(list_elements), get_value_type());
     return list_value->get(options);
+}
+
+expr::expression tuples::marker::to_expression() {
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::tuple,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
+}
+
+expr::expression tuples::in_marker::to_expression() {
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::tuple_in,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)

@@ -58,4 +58,12 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
     }
 }
 
+expr::expression constants::marker::to_expression() {
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::scalar,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
+}
+
 }

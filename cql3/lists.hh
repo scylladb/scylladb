@@ -98,6 +98,8 @@ public:
         const std::vector<shared_ptr<term>>& get_elements() const {
             return _elements;
         }
+
+        virtual expr::expression to_expression() override;
     };
 
     /**
@@ -109,6 +111,8 @@ public:
             : abstract_marker{bind_index, std::move(receiver)}
         { }
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
+
+        virtual expr::expression to_expression() override;
     };
 
 public:

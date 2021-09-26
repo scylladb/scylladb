@@ -124,6 +124,20 @@ sets::delayed_value::bind(const query_options& options) {
     return ::make_shared<value>(std::move(buffers), _my_type);
 }
 
+expr::expression sets::delayed_value::to_expression() {
+    std::vector<expr::expression> new_elements;
+    new_elements.reserve(_elements.size());
+
+    for (shared_ptr<term>& e : _elements) {
+        new_elements.emplace_back(expr::to_expression(e));
+    }
+
+    return expr::collection_constructor {
+        .style = expr::collection_constructor::style_type::set,
+        .elements = std::move(new_elements),
+        .type = _my_type,
+    };
+}
 
 sets::marker::marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
     : abstract_marker{bind_index, std::move(receiver)} {
@@ -150,6 +164,14 @@ sets::marker::bind(const query_options& options) {
         }
         return make_shared<cql3::sets::value>(value::from_serialized(value, type, options.get_cql_serialization_format()));
     }
+}
+
+expr::expression sets::marker::to_expression() {
+    return expr::bind_variable {
+        .shape = expr::bind_variable::shape_type::scalar,
+        .bind_index = _bind_index,
+        .value_type = _receiver->type
+    };
 }
 
 void

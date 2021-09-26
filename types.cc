@@ -1045,6 +1045,7 @@ map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cel
         : concrete_type(kind::map, make_map_type_name(keys, values, is_multi_cell), is_multi_cell)
         , _keys(std::move(keys))
         , _values(std::move(values)) {
+    _contains_set_or_map = true;
 }
 
 data_type
@@ -1254,7 +1255,9 @@ sstring make_set_type_name(data_type elements, bool is_multi_cell)
 }
 
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-    : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell), elements, is_multi_cell) {}
+    : concrete_type(kind::set, make_set_type_name(elements, is_multi_cell), elements, is_multi_cell) {
+        _contains_set_or_map = true;
+    }
 
 data_type
 set_type_impl::value_comparator() const {
@@ -1387,7 +1390,9 @@ sstring make_list_type_name(data_type elements, bool is_multi_cell)
 }
 
 list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
-    : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell), elements, is_multi_cell) {}
+    : concrete_type(kind::list, make_list_type_name(elements, is_multi_cell), elements, is_multi_cell) {
+        _contains_set_or_map = _elements->contains_set_or_map();
+    }
 
 data_type
 list_type_impl::name_comparator() const {
@@ -1487,14 +1492,39 @@ tuple_type_impl::tuple_type_impl(kind k, sstring name, std::vector<data_type> ty
             t = t->freeze();
         }
     }
+
+    set_contains_collections();
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types, bool freeze_inner)
         : tuple_type_impl{kind::tuple, make_name(types), std::move(types), freeze_inner} {
+    set_contains_collections();
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
         : tuple_type_impl(std::move(types), true) {
+    set_contains_collections();
+}
+
+void tuple_type_impl::set_contains_collections() {
+    for (const data_type& t : _types) {
+        if (t->contains_set_or_map()) {
+            _contains_set_or_map = true;
+            break;
+        }
+    }
+
+    if (_contains_set_or_map) {
+        _contains_collection = true;
+        return;
+    }
+
+    for (const data_type& t : _types) {
+        if (t->contains_collection()) {
+            _contains_collection = true;
+            break;
+        }
+    }
 }
 
 shared_ptr<const tuple_type_impl>
@@ -1511,6 +1541,18 @@ static void validate_aux(const tuple_type_impl& t, View v, cql_serialization_for
             (*ti)->validate(*e, sf);
         }
         ++ti;
+    }
+
+    size_t extra_elements = 0;
+    while (!v.empty()) {
+        read_tuple_element(v);
+        extra_elements += 1;
+    }
+
+    if (extra_elements > 0) {
+        // This function is called for both tuple and user_type, print the name too
+        throw marshal_exception(format("Value of type {} contained too many fields (expected {}, got {})",
+                                t.name(), t.size(), t.size() + extra_elements));
     }
 }
 
@@ -3443,4 +3485,28 @@ data_type reversed(data_type type) {
     } else {
         return reversed_type_impl::get_instance(type);
     }
+}
+
+bool abstract_type::contains_set_or_map() const {
+    return _contains_set_or_map;
+}
+
+bool abstract_type::contains_collection() const {
+    return _contains_collection;
+}
+
+bool abstract_type::bound_value_needs_to_be_reserialized(const cql_serialization_format& sf) const {
+    // If a value contains set or map, then this collection can be sent in the wrong order
+    // or there could be duplicates inside. We need to reserialize it into proper set or map.
+    if (contains_set_or_map()) {
+        return true;
+    }
+
+    // If a value contains a collection and it's serialized using the old serialization format,
+    // then we need to reserialize the collection to the current serialization format.
+    if (!sf.using_32_bits_for_collections() && contains_collection()) {
+        return true;
+    }
+
+    return false;
 }

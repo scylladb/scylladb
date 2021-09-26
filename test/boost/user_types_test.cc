@@ -580,7 +580,7 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
         BOOST_REQUIRE_EXCEPTION(
             execute_prepared("insert into cf (a, b) values (?, ?)", {mk_int(4), mk_longer_tuple({4, "text4", int64_t(4), 5})}),
             exceptions::invalid_request_exception,
-            exception_predicate::message_equals("User Defined Type value contained too many fields (expected 3, got 4)"));
+            exception_predicate::message_contains("contained too many fields (expected 3, got 4)"));
     });
 }
 
