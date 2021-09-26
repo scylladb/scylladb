@@ -300,9 +300,9 @@ void network_topology_strategy::validate_options() const {
     }
 }
 
-std::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
+std::optional<std::set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
     std::set<sstring> datacenters;
-    for (const auto& [dc_name, endpoints] : _shared_token_metadata.get()->get_topology().get_datacenter_endpoints()) {
+    for (const auto& [dc_name, endpoints] : topology.get_datacenter_endpoints()) {
         datacenters.insert(dc_name);
     }
     // We only allow datacenter names as options

@@ -62,7 +62,7 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 {
     auto strategy = create_replication_strategy(strategy_name, stm, config_options);
     strategy->validate_options();
-    auto expected = strategy->recognized_options();
+    auto expected = strategy->recognized_options(stm.get()->get_topology());
     if (expected) {
         for (auto&& item : config_options) {
             sstring key = item.first;

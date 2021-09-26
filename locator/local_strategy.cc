@@ -37,7 +37,7 @@ future<inet_address_vector_replica_set> local_strategy::calculate_natural_endpoi
 void local_strategy::validate_options() const {
 }
 
-std::optional<std::set<sstring>> local_strategy::recognized_options() const {
+std::optional<std::set<sstring>> local_strategy::recognized_options(const topology&) const {
     // LocalStrategy doesn't expect any options.
     return {};
 }
