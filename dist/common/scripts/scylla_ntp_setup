@@ -90,12 +90,12 @@ if __name__ == '__main__':
             with open('/etc/ntp.conf') as f:
                 conf = f.read()
             if args.subdomain:
-                conf2 = re.sub(r'server\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'server \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
+                conf2 = re.sub(r'(server|pool)\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', '\\1 \\2.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
                 with open('/etc/ntp.conf', 'w') as f:
                     f.write(conf2)
                 conf = conf2
-            match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
-            server = match.group(1)
+            match = re.search(r'^(server|pool)\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
+            server = match.group(2)
             ntpd = systemd_unit('ntpd.service')
             ntpd.stop()
             # ignore error, ntpd may able to adjust clock later
