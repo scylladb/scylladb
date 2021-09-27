@@ -114,13 +114,15 @@ public:
 };
 
 class time_series_sstable_set : public sstable_set_impl {
-public:
-    // s.min_position() -> s
+private:
     using container_t = std::multimap<position_in_partition, shared_sstable, position_in_partition::less_compare>;
 
-private:
     schema_ptr _schema;
+    schema_ptr _reversed_schema; // == _schema->make_reversed();
+    // s.min_position() -> s, ordered using _schema
     lw_shared_ptr<container_t> _sstables;
+    // s.max_position().reversed() -> s, ordered using _reversed_schema; the set of values is the same as in _sstables
+    lw_shared_ptr<container_t> _sstables_reversed;
 
 public:
     time_series_sstable_set(schema_ptr schema);
@@ -134,11 +136,12 @@ public:
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
-    std::unique_ptr<position_reader_queue> make_min_position_reader_queue(
+    std::unique_ptr<position_reader_queue> make_position_reader_queue(
         std::function<flat_mutation_reader(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr schema, reader_permit permit,
-        streamed_mutation::forwarding fwd_sm) const;
+        streamed_mutation::forwarding fwd_sm,
+        bool reversed) const;
 
     virtual flat_mutation_reader create_single_key_sstable_reader(
         column_family*,
@@ -151,6 +154,8 @@ public:
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding) const override;
+
+    friend class sstable_position_reader_queue;
 };
 
 // this compound set holds reference to N sstable sets and allow their operations to be combined.

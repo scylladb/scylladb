@@ -363,11 +363,17 @@ public:
 
 time_series_sstable_set::time_series_sstable_set(schema_ptr schema)
     : _schema(std::move(schema))
-    , _sstables(make_lw_shared<container_t>(position_in_partition::less_compare(*_schema))) {}
+    , _reversed_schema(_schema->make_reversed())
+    , _sstables(make_lw_shared<container_t>(position_in_partition::less_compare(*_schema)))
+    , _sstables_reversed(make_lw_shared<container_t>(position_in_partition::less_compare(*_reversed_schema)))
+{}
 
 time_series_sstable_set::time_series_sstable_set(const time_series_sstable_set& s)
     : _schema(s._schema)
-    , _sstables(make_lw_shared(*s._sstables)) {}
+    , _reversed_schema(s._reversed_schema)
+    , _sstables(make_lw_shared(*s._sstables))
+    , _sstables_reversed(make_lw_shared(*s._sstables_reversed))
+{}
 
 std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
     return std::make_unique<time_series_sstable_set>(*this);
@@ -389,17 +395,28 @@ void time_series_sstable_set::for_each_sstable(std::function<void(const shared_s
 
 // O(log n)
 void time_series_sstable_set::insert(shared_sstable sst) {
-    auto pos = sst->min_position();
-    _sstables->emplace(pos, std::move(sst));
+    auto min_pos = sst->min_position();
+    auto max_pos_reversed = sst->max_position().reversed();
+    _sstables->emplace(std::move(min_pos), sst);
+    _sstables_reversed->emplace(std::move(max_pos_reversed), std::move(sst));
 }
 
 // O(n) worst case, but should be close to O(log n) most of the time
 void time_series_sstable_set::erase(shared_sstable sst) {
-    auto [first, last] = _sstables->equal_range(sst->min_position());
+    {
+        auto [first, last] = _sstables->equal_range(sst->min_position());
+        auto it = std::find_if(first, last,
+                [&sst] (const std::pair<position_in_partition, shared_sstable>& p) { return sst == p.second; });
+        if (it != last) {
+            _sstables->erase(it);
+        }
+    }
+
+    auto [first, last] = _sstables_reversed->equal_range(sst->max_position().reversed());
     auto it = std::find_if(first, last,
             [&sst] (const std::pair<position_in_partition, shared_sstable>& p) { return sst == p.second; });
     if (it != last) {
-        _sstables->erase(it);
+        _sstables_reversed->erase(it);
     }
 }
 
@@ -419,7 +436,12 @@ std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_increme
 }
 
 // Queue of readers of sstables in a time_series_sstable_set,
-// returning readers in order of the sstables' min_position()s.
+// returning readers in order of the sstables' clustering key lower bounds.
+//
+// For sstable `s` we take `s.min_position()` as the lower bound for non-reversed reads,
+// and `s.max_position().reversed()` for reversed reads (in reversed reads comparisons
+// are performed using a reversed schema). Let `lower_bound(s)` denote this lower bound
+// in the comments below.
 //
 // Skips sstables that don't pass the supplied filter.
 // Guarantees that the filter will be called at most once for each sstable;
@@ -431,14 +453,14 @@ std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_increme
 // that contains only the partition_start/end markers. This dummy reader is always
 // returned as the first on the first `pop(b)` call for any `b`. Its upper bound
 // is `before_all_clustered_rows`.
-class min_position_reader_queue : public position_reader_queue {
+class sstable_position_reader_queue : public position_reader_queue {
     using container_t = time_series_sstable_set::container_t;
     using value_t = container_t::value_type;
 
-    schema_ptr _schema;
+    schema_ptr _query_schema;
     lw_shared_ptr<const container_t> _sstables;
 
-    // Iterates over sstables in order of min_position().
+    // Iterates over sstables in order of their lower bounds.
     // Invariant: _it == _end or filter(it->second) == true
     container_t::const_iterator _it;
     const container_t::const_iterator _end;
@@ -453,6 +475,8 @@ class min_position_reader_queue : public position_reader_queue {
     // returned reader.
     std::optional<flat_mutation_reader> _dummy_reader;
 
+    bool _reversed;
+
     flat_mutation_reader create_reader(sstable& sst) {
         return _create_reader(sst);
     }
@@ -463,40 +487,44 @@ class min_position_reader_queue : public position_reader_queue {
 
 public:
     // Assumes that `create_reader` returns readers that emit only fragments from partition `pk`.
-    min_position_reader_queue(schema_ptr schema,
-            lw_shared_ptr<const time_series_sstable_set::container_t> sstables,
+    //
+    // For reversed reads `query_schema` must be reversed (see docs/design-notes/reverse-reads.md).
+    sstable_position_reader_queue(const time_series_sstable_set& set,
+            schema_ptr query_schema,
             std::function<flat_mutation_reader(sstable&)> create_reader,
             std::function<bool(const sstable&)> filter,
             partition_key pk,
             reader_permit permit,
-            streamed_mutation::forwarding fwd_sm)
-        : _schema(std::move(schema))
-        , _sstables(std::move(sstables))
+            streamed_mutation::forwarding fwd_sm,
+            bool reversed)
+        : _query_schema(std::move(query_schema))
+        , _sstables(reversed ? set._sstables_reversed : set._sstables)
         , _it(_sstables->begin())
         , _end(_sstables->end())
-        , _cmp(*_schema)
+        , _cmp(*_query_schema)
         , _create_reader(std::move(create_reader))
         , _filter(std::move(filter))
         , _dummy_reader(flat_mutation_reader_from_mutations(
-                std::move(permit), {mutation(_schema, std::move(pk))}, _schema->full_slice(), fwd_sm))
+                std::move(permit), {mutation(_query_schema, std::move(pk))}, _query_schema->full_slice(), fwd_sm))
+        , _reversed(reversed)
     {
         while (_it != _end && !this->filter(*_it->second)) {
             ++_it;
         }
     }
 
-    virtual ~min_position_reader_queue() override = default;
+    virtual ~sstable_position_reader_queue() override = default;
 
     // If the dummy reader was not yet returned, return the dummy reader.
-    // Otherwise, open sstable readers to all sstables with smallest min_position() from the set
-    // {S: filter(S) and prev_min_pos < S.min_position() <= bound}, where `prev_min_pos` is the min_position()
+    // Otherwise, open sstable readers to all sstables with smallest lower_bound() from the set
+    // {S: filter(S) and prev_min_pos < lower_bound(S) <= bound}, where `prev_min_pos` is the lower_bound()
     // of the sstables returned from last non-empty pop() or -infinity if no sstables were previously returned,
     // and `filter` is the filtering function provided when creating the queue.
     //
     // Note that there may be multiple returned sstables (all with the same position) or none.
     //
-    // Note that S.min_position() is global for sstable S; if the readers are used to inspect specific partitions,
-    // the minimal positions in these partitions might actually all be greater than S.min_position().
+    // Note that lower_bound(S) is global for sstable S; if the readers are used to inspect specific partitions,
+    // the minimal positions in these partitions might actually all be greater than lower_bound(S).
     virtual std::vector<reader_and_upper_bound> pop(position_in_partition_view bound) override {
         if (empty(bound)) {
             return {};
@@ -520,7 +548,8 @@ public:
         std::vector<reader_and_upper_bound> ret;
         do {
             // loop invariant: filter(*_it->second) == true
-            ret.emplace_back(create_reader(*_it->second), _it->second->max_position());
+            auto upper_bound = _reversed ? _it->second->min_position().reversed() : _it->second->max_position();
+            ret.emplace_back(create_reader(*_it->second), std::move(upper_bound));
             // restore loop invariant
             do {
                 ++_it;
@@ -537,7 +566,7 @@ public:
     }
 
     // If the dummy reader was not returned yet, returns false.
-    // Otherwise checks if the set of sstables {S: filter(S) and prev_min_pos < S.min_position() <= bound}
+    // Otherwise checks if the set of sstables {S: filter(S) and prev_min_pos < lower_bound(S) <= bound}
     // is empty (see pop() for definition of `prev_min_pos`).
     virtual bool empty(position_in_partition_view bound) const override {
         return !_dummy_reader && (_it == _end || _cmp(_it->first, bound) > 0);
@@ -549,14 +578,14 @@ public:
     }
 };
 
-std::unique_ptr<position_reader_queue> time_series_sstable_set::make_min_position_reader_queue(
+std::unique_ptr<position_reader_queue> time_series_sstable_set::make_position_reader_queue(
         std::function<flat_mutation_reader(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
-        partition_key pk, schema_ptr schema, reader_permit permit,
-        streamed_mutation::forwarding fwd_sm) const {
-    return std::make_unique<min_position_reader_queue>(
-            std::move(schema), _sstables, std::move(create_reader), std::move(filter),
-            std::move(pk), std::move(permit), fwd_sm);
+        partition_key pk, schema_ptr query_schema, reader_permit permit,
+        streamed_mutation::forwarding fwd_sm, bool reversed) const {
+    return std::make_unique<sstable_position_reader_queue>(*this,
+            std::move(query_schema), std::move(create_reader), std::move(filter),
+            std::move(pk), std::move(permit), fwd_sm, reversed);
 }
 
 std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_incremental_selector() const {
@@ -828,7 +857,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
 
     auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };
 
-    // We're going to pass this filter into min_position_reader_queue. The queue guarantees that
+    // We're going to pass this filter into sstable_position_reader_queue. The queue guarantees that
     // the filter is going to be called at most once for each sstable and exactly once after
     // the queue is exhausted. We use that fact to gather statistics.
     auto filter = [pk_filter = std::move(pk_filter), ck_filter = std::move(ck_filter), &stats]
@@ -846,12 +875,12 @@ time_series_sstable_set::create_single_key_sstable_reader(
             return false;
     };
 
-    // Note that `min_position_reader_queue` always includes a reader which emits a `partition_start` fragment,
+    // Note that `sstable_position_reader_queue` always includes a reader which emits a `partition_start` fragment,
     // guaranteeing that the reader we return emits it as well; this helps us avoid the problem from #3552.
     return make_clustering_combined_reader(
             schema, permit, fwd_sm,
-            make_min_position_reader_queue(
-                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm));
+            make_position_reader_queue(
+                std::move(create_reader), std::move(filter), *pos.key(), schema, permit, fwd_sm, false));
 }
 
 compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets)

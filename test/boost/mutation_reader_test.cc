@@ -3811,13 +3811,13 @@ SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
             (const time_series_sstable_set& sst_set,
                 const std::unordered_set<int64_t>& included_gens, streamed_mutation::forwarding fwd) {
         auto permit = env.make_reader_permit();
-        auto q = sst_set.make_min_position_reader_queue(
+        auto q = sst_set.make_position_reader_queue(
             [s, &pr, fwd, permit] (sstable& sst) {
                 return sst.make_reader_v1(s, permit, pr,
                                           s->full_slice(), seastar::default_priority_class(), nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
-            pk, s, permit, fwd);
+            pk, s, permit, fwd, false);
         return make_clustering_combined_reader(s, permit, fwd, std::move(q));
     };
 
