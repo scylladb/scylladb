@@ -37,6 +37,8 @@ class keyspace;
 
 namespace locator {
 
+extern logging::logger rslogger;
+
 using inet_address = gms::inet_address;
 using token = dht::token;
 
@@ -59,8 +61,6 @@ private:
     replication_map _cached_endpoints;
     uint64_t _cache_hits_count = 0;
 
-    static logging::logger logger;
-
     replication_map&
     get_cached_endpoints(const token_metadata& tm);
 protected:
@@ -71,17 +71,17 @@ protected:
 
     template <typename... Args>
     void err(const char* fmt, Args&&... args) const {
-        logger.error(fmt, std::forward<Args>(args)...);
+        rslogger.error(fmt, std::forward<Args>(args)...);
     }
 
     template <typename... Args>
     void warn(const char* fmt, Args&&... args) const {
-        logger.warn(fmt, std::forward<Args>(args)...);
+        rslogger.warn(fmt, std::forward<Args>(args)...);
     }
 
     template <typename... Args>
     void debug(const char* fmt, Args&&... args) const {
-        logger.debug(fmt, std::forward<Args>(args)...);
+        rslogger.debug(fmt, std::forward<Args>(args)...);
     }
 
 public:

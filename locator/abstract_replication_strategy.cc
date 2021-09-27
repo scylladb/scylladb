@@ -27,7 +27,7 @@
 
 namespace locator {
 
-logging::logger abstract_replication_strategy::logger("replication_strategy");
+logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
     const shared_token_metadata& stm,
@@ -243,7 +243,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, can_
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector r = tm.get_primary_ranges_for(t);
         auto eps = calculate_natural_endpoints(t, tm, can_yield);
-        logger.debug("token={}, primary_range={}, address={}", t, r, eps);
+        rslogger.debug("token={}, primary_range={}, address={}", t, r, eps);
         for (auto ep : eps) {
             for (auto&& rng : r) {
                 ret.emplace(ep, rng);
@@ -268,7 +268,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
                 continue;
             }
             dht::token_range_vector r = tm.get_primary_ranges_for(t);
-            logger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
+            rslogger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
             for (auto&& rng : r) {
                 ret.emplace(ep, rng);
             }
@@ -276,7 +276,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
             break;
         }
         if (!found) {
-            logger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
+            rslogger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
         }
 
         if (can_yield) {
