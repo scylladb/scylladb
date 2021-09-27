@@ -344,11 +344,9 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
             return _last_position_seen;
         }
 
-        void remove_sstable(bool is_tracking) {
-            if (is_tracking && _sst) {
+        void remove_sstable() {
+            if (_sst) {
                 _cf.get_compaction_strategy().get_backlog_tracker().remove_sstable(_sst);
-            } else if (_sst) {
-                _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
             }
             _sst = {};
         }
@@ -375,17 +373,17 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     explicit compaction_read_monitor_generator(column_family& cf)
         : _cf(cf) {}
 
-    void remove_sstables(bool is_tracking) {
+    void remove_sstables() {
         for (auto& rm : _generated_monitors | boost::adaptors::map_values) {
-            rm.remove_sstable(is_tracking);
+            rm.remove_sstable();
         }
     }
 
-    void remove_exhausted_sstables(bool is_tracking, const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+    void remove_exhausted_sstables(const std::vector<sstables::shared_sstable>& exhausted_sstables) {
         for (auto& sst : exhausted_sstables) {
             auto it = _generated_monitors.find(sst->generation());
             if (it != _generated_monitors.end()) {
-                it->second.remove_sstable(is_tracking);
+                it->second.remove_sstable();
             }
         }
     }
@@ -991,7 +989,7 @@ public:
     }
 
     void backlog_tracker_adjust_charges() override {
-        _monitor_generator.remove_sstables(_info->tracking);
+        _monitor_generator.remove_sstables();
         auto& tracker = _cf.get_compaction_strategy().get_backlog_tracker();
         for (auto& sst : _unused_sstables) {
             tracker.add_sstable(sst);
@@ -1041,7 +1039,7 @@ private:
         // an early sstable replacement.
         //
 
-        _monitor_generator.remove_exhausted_sstables(_info->tracking, exhausted_sstables);
+        _monitor_generator.remove_exhausted_sstables(exhausted_sstables);
         auto& tracker = _cf.get_compaction_strategy().get_backlog_tracker();
         for (auto& sst : _unused_sstables) {
             tracker.add_sstable(sst);
