@@ -367,25 +367,6 @@ void print_starting_message(int ac, char** av, const bpo::parsed_options& opts) 
     fmt::print("parsed command line options: {}\n", format_parsed_options(opts.options));
 }
 
-// Glue logic between db::config and cql3::cql_config
-class cql_config_updater {
-    cql3::cql_config& _cql_config;
-    const db::config& _cfg;
-    std::vector<std::any> _observers;
-private:
-    template <typename T>
-    void tie(T& dest, const db::config::named_value<T>& src) {
-        dest = src();
-        _observers.emplace_back(make_lw_shared<utils::observer<T>>(src.observe([&dest] (const T& value) { dest = value; })));
-    }
-public:
-    cql_config_updater(cql3::cql_config& cql_config, const db::config& cfg)
-            : _cql_config(cql_config), _cfg(cfg) {
-        tie(_cql_config.restrictions.partition_key_restrictions_max_cartesian_product_size, _cfg.max_partition_key_restrictions_per_query);
-        tie(_cql_config.restrictions.clustering_key_restrictions_max_cartesian_product_size, _cfg.max_clustering_key_restrictions_per_query);
-    }
-};
-
 template <typename Func>
 static auto defer_verbose_shutdown(const char* what, Func&& func) {
     auto vfunc = [what, func = std::forward<Func>(func)] () mutable {
@@ -830,12 +811,8 @@ int main(int ac, char** av) {
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
-            static sharded<::cql_config_updater> cql_config_updater;
             static sharded<cdc::generation_service> cdc_generation_service;
-            cql_config.start().get();
-            //FIXME: discarded future
-            (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
-            auto stop_cql_config_updater = deferred_stop(cql_config_updater);
+            cql_config.start(std::ref(*cfg)).get();
 
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;

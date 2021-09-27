@@ -60,7 +60,7 @@ void require_rows(cql_test_env& e,
                   const std::experimental::source_location& loc = source_location::current()) {
     // This helps compiler pick the right overload for make_value:
     const auto rvals = values | transformed([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
-    cql3::cql_config cfg;
+    cql3::cql_config cfg(cql3::cql_config::default_tag{});
     auto opts = to_options(cfg, std::move(names), std::vector(rvals.begin(), rvals.end()));
     try {
         assert_that(e.execute_prepared_with_qo(id, std::move(opts)).get0()).is_rows().with_rows_ignore_order(expected);

@@ -556,7 +556,7 @@ public:
             distributed<service::migration_manager> mm;
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
             sharded<cql3::cql_config> cql_config;
-            cql_config.start().get();
+            cql_config.start(cql3::cql_config::default_tag{}).get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
             sharded<db::view::view_update_generator> view_update_generator;
