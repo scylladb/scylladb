@@ -83,8 +83,7 @@ auto consume_page(flat_mutation_reader& reader,
         Consumer&& consumer,
         uint64_t row_limit,
         uint32_t partition_limit,
-        gc_clock::time_point query_time,
-        query::max_result_size max_size) {
+        gc_clock::time_point query_time) {
     return reader.peek().then([=, &reader, consumer = std::move(consumer), &slice] (
                 mutation_fragment* next_fragment) mutable {
         const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
@@ -217,10 +216,9 @@ public:
             uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
-            query::max_result_size max_size,
             tracing::trace_state_ptr trace_ptr = {}) {
         return ::query::consume_page(std::get<flat_mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
-                partition_limit, query_time, max_size).then([this, trace_ptr = std::move(trace_ptr)] (auto&& results) {
+                partition_limit, query_time).then([this, trace_ptr = std::move(trace_ptr)] (auto&& results) {
             _last_ckey = std::get<std::optional<clustering_key>>(std::move(results));
             const auto& cstats = _compaction_state->stats();
             tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",

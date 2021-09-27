@@ -2002,7 +2002,7 @@ table::query(schema_ptr s,
 
         std::exception_ptr ex;
       try {
-        co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, permit.max_result_size(), trace_state);
+        co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
       } catch (...) {
         ex = std::current_exception();
       }
@@ -2055,7 +2055,7 @@ table::mutation_query(schema_ptr s,
     // legacy format.
     auto result_schema = cmd.slice.options.contains(query::partition_slice::option::reversed) ? s->make_reversed() : s;
     auto rrb = reconcilable_result_builder(*result_schema, cmd.slice, std::move(accounter));
-    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, permit.max_result_size(), trace_state);
+    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
         co_await q.close();

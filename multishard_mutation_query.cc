@@ -661,7 +661,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     std::exception_ptr ex;
     try {
         auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
-                cmd.partition_limit, cmd.timestamp, *cmd.max_result_size);
+                cmd.partition_limit, cmd.timestamp);
         const auto& cstats = compaction_state->stats();
         tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                 cstats.partitions,
