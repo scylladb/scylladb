@@ -42,6 +42,7 @@
 #include "db/config.hh"
 #include "compaction/compaction_manager.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "db/schema_tables.hh"
 
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
@@ -63,7 +64,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<service::raft_group_registry> raft_gr;
         sharded<service::endpoint_lifecycle_notifier> elc_notif;
 
-        token_metadata.start().get();
+        token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
 
         mm_notif.start().get();

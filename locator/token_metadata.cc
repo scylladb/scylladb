@@ -1432,10 +1432,6 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 
 /////////////////// class topology end /////////////////////////////////////////
 
-future<token_metadata_lock> shared_token_metadata::get_lock() noexcept {
-    return get_units(_sem, 1);
-}
-
 future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
     auto lk = co_await get_lock();
     auto tm = co_await _shared->clone_async();

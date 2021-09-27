@@ -354,7 +354,8 @@ public:
 
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
 using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
-using token_metadata_lock = semaphore_units<semaphore_default_exception_factory>;
+using token_metadata_lock = semaphore_units<>;
+using token_metadata_lock_func = noncopyable_function<future<token_metadata_lock>() noexcept>;
 
 template <typename... Args>
 mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
@@ -363,14 +364,17 @@ mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
 
 class shared_token_metadata {
     mutable_token_metadata_ptr _shared;
-    semaphore _sem = { 1 };
+    token_metadata_lock_func _lock_func;
+
 public:
     // used to construct the shared object as a sharded<> instance
-    shared_token_metadata()
+    // lock_func returns semaphore_units<>
+    explicit shared_token_metadata(token_metadata_lock_func lock_func)
         : _shared(make_token_metadata_ptr())
+        , _lock_func(std::move(lock_func))
     { }
 
-    shared_token_metadata(const shared_token_metadata& x) = default;
+    shared_token_metadata(const shared_token_metadata& x) = delete;
     shared_token_metadata(shared_token_metadata&& x) = default;
 
     token_metadata_ptr get() const noexcept {
@@ -381,7 +385,13 @@ public:
         _shared = std::move(tmptr);
     }
 
-    future<token_metadata_lock> get_lock() noexcept;
+    // Token metadata changes are serialized
+    // using the schema_tables merge_lock.
+    //
+    // Must be called on shard 0.
+    future<token_metadata_lock> get_lock() noexcept {
+        return _lock_func();
+    }
 
     // mutate_token_metadata acquires the shared_token_metadata lock,
     // clones the token_metadata (using clone_async)

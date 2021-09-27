@@ -188,6 +188,9 @@ future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name);
 future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, const sstring& keyspace_name);
 
+// Must be called on shard 0.
+future<semaphore_units<>> hold_merge_lock() noexcept;
+
 future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations);
 
 // Recalculates the local schema version.

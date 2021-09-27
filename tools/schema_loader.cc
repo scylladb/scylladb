@@ -60,7 +60,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     service::migration_notifier migration_notifier;
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.known_feature_set());
-    locator::shared_token_metadata token_metadata;
+    locator::shared_token_metadata token_metadata([] () noexcept { return db::schema_tables::hold_merge_lock(); });
     abort_source as;
     sharded<semaphore> sst_dir_sem;
 

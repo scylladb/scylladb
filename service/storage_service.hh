@@ -207,19 +207,31 @@ public:
     future<> uninit_messaging_service();
 
 private:
+    using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
+
+    // Token metadata changes are serialized
+    // using the schema_tables merge_lock.
+    //
+    // Must be called on shard 0.
     future<token_metadata_lock> get_token_metadata_lock() noexcept;
 
     // Acquire the token_metadata lock and get a mutable_token_metadata_ptr.
     // Pass that ptr to \c func, and when successfully done,
     // replicate it to all cores.
+    //
+    // By default the merge_lock (that is unified with the token_metadata_lock)
+    // is acquired for mutating the token_metadata.  Pass acquire_merge_lock::no
+    // when called from paths that already acquire the merge_lock, like
+    // db::schema_tables::do_merge_schema.
+    //
     // Note: must be called on shard 0.
-    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept;
+    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
     future<> update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason);
-    future<> update_pending_ranges(sstring reason);
+    future<> update_pending_ranges(sstring reason, acquire_merge_lock aml = acquire_merge_lock::yes);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();

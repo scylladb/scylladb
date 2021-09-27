@@ -40,6 +40,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
 #include <seastar/core/coroutine.hh>
+#include "db/schema_tables.hh"
 
 using namespace locator;
 
@@ -194,7 +195,7 @@ void simple_test() {
         i_endpoint_snitch::stop_snitch().get();
     });
 
-    locator::shared_token_metadata stm;
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
 
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
@@ -269,7 +270,7 @@ void heavy_origin_test() {
         i_endpoint_snitch::stop_snitch().get();
     });
 
-    locator::shared_token_metadata stm;
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); });
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
@@ -604,7 +605,8 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
 
     for (size_t run = 0; run < RUNS; ++run) {
-        shared_token_metadata stm;
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); });
         // not doing anything sharded. We can just play fast and loose with the snitch.
         (void)snitch.stop();
         snitch = generate_snitch(datacenters, nodes);
