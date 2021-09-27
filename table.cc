@@ -337,6 +337,16 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.remove_sstable(std::move(sstable));
 }
 
+void table::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
+    auto& tracker = _compaction_strategy.get_backlog_tracker();
+    for (auto& sst : new_sstables) {
+        tracker.add_sstable(sst);
+    }
+    for (auto& sst : old_sstables) {
+        tracker.remove_sstable(sst);
+    }
+}
+
 lw_shared_ptr<sstables::sstable_set>
 table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker) {
@@ -784,6 +794,8 @@ table::update_sstable_lists_on_off_strategy_completion(const std::vector<sstable
             _t._main_sstables = std::move(_new_main_list);
             _t._maintenance_sstables = std::move(_new_maintenance_list);
             _t.refresh_compound_sstable_set();
+            // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
+            _t.backlog_tracker_adjust_charges({}, _new_main);
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
             return std::make_unique<sstable_lists_updater>(t, std::move(permit), old_maintenance, new_main);
@@ -855,6 +867,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
         virtual void execute() override {
             _t._main_sstables = std::move(_new_sstables);
             _t.refresh_compound_sstable_set();
+            _t.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(t, std::move(permit), d);
