@@ -148,3 +148,107 @@ return address of the peer to the address map with a TTL. Should
 we need to respond to the peer, its address will be known.
 
 An outgoing communication to an unconfigured peer is impossible.
+
+## Snapshot API
+
+A snapshot is a compact representation of the user state machine
+state. The structure of the snapshot and details of taking
+a snapshot are not known to the library. It uses instances
+of class `snapshot_id` (essentially UUIDs) to identify
+state machine snapshots.
+
+The snapshots are used in two ways:
+- to manage Raft log length, i.e. be able to truncate
+  the log when it grows too big; to truncate a log,
+  the library takes a new state machine snapshot and
+  erases most log entries older than the snapshot;
+- to bootstrap a new member of the cluster or
+  catch up a follower that has fallen too much behind
+  the leader and can't use the leader's log alone; in
+  this case the library instructs the user state machine
+  on the leader to transfer its own snapshot (identified by snapshot
+  id) to the specific follower, identified by `raft::server_id`.
+  It's then the responsibility of the user state machine
+  to transfer its compact state to the peer in full.
+
+`snapshot_descriptor` is a library container for snapshot id
+and associated metadata. This class has the following structure:
+
+```
+struct snapshot_descriptor {
+    // Index and term of last entry in the snapshot
+    index_t idx = index_t(0);
+    term_t term = term_t(0);
+    // The committed configuration in the snapshot
+    configuration config;
+    // Id of the snapshot.
+    snapshot_id id;
+};
+
+// The APIs in which the snapshot descriptor is used:
+
+future<snapshot_id> state_machine::take_snapshot()
+void state_machine::drop_snapshot(snapshot_id id)
+future<> state_machine::load_snapshot(snapshot_id id)
+
+future<snpashot_reply> rpc::send_snapshot(server_id server_id, const install_snapshot& snap, seastar::abort_source& as)
+
+future<> persistence::store_snapshot_descriptor(const snapshot& snap, size_t preserve_log_entries);
+future<> persistence::load_snapshot_descriptor()
+```
+
+The state machine must save its snapshot either
+when the library calls `state_machine::take_snapshot()`, intending
+to truncate Raft log length afterwards, or when the snapshot
+transfer from the leader is initiated via `rpc::send_snapshot()`.
+
+In the latter case the leader's state machine is expected
+to contact the follower's state machine and send its snaphsot to
+it.
+
+When Raft wants to initialize a state machine with a snapshot
+state it calls `state_machine::load_snapshot()` with appropriate
+snapshot id.
+
+When raft no longer needs a snapshot it uses
+`state_machine::drop_snapshot()` to inform the state machine it
+can drop the snapshot with a given id.
+
+Raft persists the currently used snapshot descriptor by calling
+`persistence::store_snapshot_descriptor()`. There is no separate
+API to explicitly drop the previous stored descriptor, the
+call is allowed to overwrite it. On success, this call is followed
+by `state_machine::drop_snapshot()` to drop the snapshot referenced
+by the previous descriptor in the state machine.
+
+The snapshot state must survive restarts, so it should be put to
+disk either in `take_snapshot()` or when with persisting the
+snapshot descriptor, in `persistence::store_snapshot_descriptor()`.
+
+
+It is possible that a crash or stop happens soon after creating a
+new snapshot and before dropping the old one. In that case
+`persistence` contains only the latest snapshot descriptor.
+The library never uses more than one snapshot, so when the state
+machine is later restarted all snapshots except the one with its
+id persisted in the snapshot descriptor can be
+safely dropped.
+
+Calls to `state_machine::take_snapshot()` and snapshot transfers are not
+expected to run instantly. Indeed, respective API returns
+`future<>`, so these calls may take a while.  Imagine the
+state machine has a snapshot and is asked by the library to
+take a new one. A leader change happens while snapshot-taking is in
+progress and the new leader starts a snapshot transfer to the
+follower. Even less likely, but still possible, that a yet another
+leader is elected and it also starts an own snapshot transfer to the
+follower. And another one. Thus a single server may be taking a
+local state machine snapshot and running multiple transfers. When
+all of this is done, the library will automatically select the
+snapshot with the latest term and index, persist its id in the
+snapshot descriptor and call `state_machine::load_snapshot()` with this
+id. All the extraneous snapshots will be dropped
+by the library, unless the server crashes.
+Once again, to cleanup any garbage after a crash, the complying
+implementation is expected to delete all snapshots except the one
+which id is persisted in the snapshot descriptor upon restart.
