@@ -304,6 +304,7 @@ public:
     }
 
     flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf) {
+        testlog.trace("Expect {}", mutation_fragment::printer(s, mf));
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected {}, but got end of stream", mutation_fragment::printer(*_reader.schema(), mf)));
