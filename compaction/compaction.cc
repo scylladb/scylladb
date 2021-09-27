@@ -381,10 +381,12 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         }
     }
 
-    void remove_sstable(bool is_tracking, sstables::shared_sstable& sst) {
-        auto it = _generated_monitors.find(sst->generation());
-        if (it != _generated_monitors.end()) {
-            it->second.remove_sstable(is_tracking);
+    void remove_exhausted_sstables(bool is_tracking, const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+        for (auto& sst : exhausted_sstables) {
+            auto it = _generated_monitors.find(sst->generation());
+            if (it != _generated_monitors.end()) {
+                it->second.remove_sstable(is_tracking);
+            }
         }
     }
 private:
@@ -1039,9 +1041,7 @@ private:
         // an early sstable replacement.
         //
 
-        for (auto& sst : exhausted_sstables) {
-            _monitor_generator.remove_sstable(_info->tracking, sst);
-        }
+        _monitor_generator.remove_exhausted_sstables(_info->tracking, exhausted_sstables);
         auto& tracker = _cf.get_compaction_strategy().get_backlog_tracker();
         for (auto& sst : _unused_sstables) {
             tracker.add_sstable(sst);
