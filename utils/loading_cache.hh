@@ -55,6 +55,10 @@ struct simple_entry_size {
     }
 };
 
+struct do_nothing_loading_cache_stats {
+    static void inc_new_gen_on_cache_size_eviction() noexcept {};
+};
+
 /// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
 ///
 /// Each cached value if reloading is enabled (\tparam ReloadEnabled == loading_cache_reload_enabled::yes) is reloaded after
@@ -101,6 +105,7 @@ template<typename Key,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
          typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
+         typename LoadingCacheStats = utils::do_nothing_loading_cache_stats,
          typename Alloc = std::pmr::polymorphic_allocator<>>
 class loading_cache {
 
@@ -202,6 +207,8 @@ private:
         , _logger(logger)
         , _timer([this] { on_timer(); })
     {
+        static_assert(noexcept(LoadingCacheStats::inc_new_gen_on_cache_size_eviction()), "LoadingCacheStats::inc_new_gen_on_cache_size_eviction must be non-throwing");
+
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
         if (caching_enabled() && (_refresh == std::chrono::milliseconds(0) || _max_size == 0)) {
             throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
@@ -488,6 +495,7 @@ private:
             ts_value_lru_entry& lru_entry = *_new_gen_list.rbegin();
             _logger.trace("shrink(): {}: dropping the new generation entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
+            LoadingCacheStats::inc_new_gen_on_cache_size_eviction();
         }
 
         while (_current_size > _max_size) {
@@ -557,8 +565,8 @@ private:
     seastar::gate _timer_reads_gate;
 };
 
-template<typename Key, typename Tp, int PartitionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
-class loading_cache<Key, Tp, PartitionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::value_ptr {
+template<typename Key, typename Tp, int PartitionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename LoadingCacheStats, typename Alloc>
+class loading_cache<Key, Tp, PartitionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, LoadingCacheStats, Alloc>::timestamped_val::value_ptr {
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
 
@@ -588,8 +596,8 @@ public:
 };
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
-template<typename Key, typename Tp, int PartitionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename Alloc>
-class loading_cache<Key, Tp, PartitionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
+template<typename Key, typename Tp, int PartitionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename  LoadingCacheStats, typename Alloc>
+class loading_cache<Key, Tp, PartitionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, LoadingCacheStats, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
 
