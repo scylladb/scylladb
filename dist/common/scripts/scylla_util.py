@@ -16,6 +16,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 import configparser
+import glob
 import io
 import json
 import logging
@@ -124,6 +125,7 @@ class gcp_instance:
     """Describe several aspects of the current GCP instance"""
 
     EPHEMERAL = "ephemeral"
+    PERSISTENT = "persistent"
     ROOT = "root"
     GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-google/"
     META_DATA_BASE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/"
@@ -173,6 +175,17 @@ class gcp_instance:
         nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
         return {self.ROOT: root_devs, self.EPHEMERAL: [x for x in nvmes_present if not self.is_in_root_devs(x, root_devs)]}
 
+    def _non_root_disks(self):
+        """get list of disks from os, filter away if one of them is root"""
+        disk_re = re.compile(r"/dev/sd[b-z]+$")
+
+        root_dev_candidates = [x for x in psutil.disk_partitions() if x.mountpoint == "/"]
+
+        root_devs = [x.device for x in root_dev_candidates]
+
+        disks_present = list(filter(disk_re.match, glob.glob("/dev/sd*")))
+        return {self.PERSISTENT: [x.lstrip('/dev/') for x in disks_present if not self.is_in_root_devs(x.lstrip('/dev/'), root_devs)]}
+
     @property
     def os_disks(self):
         """populate disks from /dev/ and root mountpoint"""
@@ -181,12 +194,19 @@ class gcp_instance:
             nvmes_present = self._non_root_nvmes()
             for k, v in nvmes_present.items():
                 __osDisks[k] = v
+            disks_present = self._non_root_disks()
+            for k, v in disks_present.items():
+                __osDisks[k] = v
             self.__osDisks = __osDisks
         return self.__osDisks
 
     def getEphemeralOsDisks(self):
         """return just transient disks"""
         return self.os_disks[self.EPHEMERAL]
+
+    def getPersistentOsDisks(self):
+        """return just persistent disks"""
+        return self.os_disks[self.PERSISTENT]
 
     @staticmethod
     def isNVME(gcpdiskobj):
