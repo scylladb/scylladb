@@ -3798,28 +3798,38 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
     }
 }
 
-SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
-  return sstables::test_env::do_with_async([] (sstables::test_env& env) {
+
+static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
+  return sstables::test_env::do_with_async([reversed] (sstables::test_env& env) {
     auto pkeys = make_local_keys(2, clustering_order_merger_test_generator::make_schema());
     clustering_order_merger_test_generator g(pkeys[0]);
+    auto query_schema = g._s;
+    auto table_schema = g._s;
 
-    auto make_authority = [&env, s = g._s] (mutation mut, streamed_mutation::forwarding fwd) {
-        return flat_mutation_reader_from_mutations(env.make_reader_permit(), {std::move(mut)}, fwd);
+    auto query_slice = query_schema->full_slice();
+    if (reversed) {
+        table_schema = table_schema->make_reversed();
+        query_slice.options.set(query::partition_slice::option::reversed);
+        query_slice = query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, std::move(query_slice));
+    }
+
+    auto make_authority = [&env, &query_slice] (mutation mut, streamed_mutation::forwarding fwd) {
+        return flat_mutation_reader_from_mutations(env.make_reader_permit(), {std::move(mut)}, query_slice, fwd);
     };
 
-    auto pr = dht::partition_range::make_singular(dht::ring_position(dht::decorate_key(*g._s, g._pk)));
-    auto make_tested = [&env, s = g._s, pk = g._pk, &pr]
+    auto pr = dht::partition_range::make_singular(dht::ring_position(dht::decorate_key(*query_schema, g._pk)));
+    auto make_tested = [&env, query_schema, pk = g._pk, &pr, &query_slice, reversed]
             (const time_series_sstable_set& sst_set,
                 const std::unordered_set<int64_t>& included_gens, streamed_mutation::forwarding fwd) {
         auto permit = env.make_reader_permit();
         auto q = sst_set.make_position_reader_queue(
-            [s, &pr, fwd, permit] (sstable& sst) {
-                return sst.make_reader_v1(s, permit, pr,
-                                          s->full_slice(), seastar::default_priority_class(), nullptr, fwd);
+            [query_schema, &pr, &query_slice, fwd, permit] (sstable& sst) {
+                return sst.make_reader_v1(query_schema, permit, pr,
+                                          query_slice, seastar::default_priority_class(), nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
-            pk, s, permit, fwd, false);
-        return make_clustering_combined_reader(s, permit, fwd, std::move(q));
+            pk, query_schema, permit, fwd, reversed);
+        return make_clustering_combined_reader(query_schema, permit, fwd, std::move(q));
     };
 
     auto seed = tests::random::get_int<uint32_t>();
@@ -3830,14 +3840,22 @@ SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
     for (int run = 0; run < 100; ++run) {
         auto scenario = g.generate_scenario(engine);
 
+        if (reversed) {
+            for (auto& mb: scenario.readers_data) {
+                if (mb.m) {
+                    mb.m = reverse(std::move(*mb.m));
+                }
+            }
+        }
+
         auto tmp = tmpdir();
-        time_series_sstable_set sst_set(g._s);
-        mutation merged(g._s, g._pk);
+        time_series_sstable_set sst_set(table_schema);
+        mutation merged(table_schema, g._pk);
         std::unordered_set<int64_t> included_gens;
         int64_t gen = 0;
         for (auto& mb: scenario.readers_data) {
-            auto sst_factory = [s = g._s, &env, &tmp, gen = ++gen] () {
-                return env.make_sstable(std::move(s), tmp.path().string(), gen,
+            auto sst_factory = [table_schema, &env, &tmp, gen = ++gen] () {
+                return env.make_sstable(std::move(table_schema), tmp.path().string(), gen,
                     sstables::sstable::version_types::md, sstables::sstable::format_types::big);
             };
 
@@ -3847,10 +3865,10 @@ SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
                 // We want to have an sstable that won't return any fragments when we query it
                 // for our partition (not even `partition_start`). For that we create an sstable
                 // with a different partition.
-                auto pk = partition_key::from_single_value(*g._s, utf8_type->decompose(pkeys[1]));
+                auto pk = partition_key::from_single_value(*table_schema, utf8_type->decompose(pkeys[1]));
                 assert(pk != g._pk);
 
-                sst_set.insert(make_sstable_containing(std::move(sst_factory), {mutation(g._s, pk)}));
+                sst_set.insert(make_sstable_containing(std::move(sst_factory), {mutation(table_schema, pk)}));
             }
 
             if (dist(engine)) {
@@ -3863,15 +3881,23 @@ SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
 
         {
             auto fwd = streamed_mutation::forwarding::no;
-            compare_readers(*g._s, make_authority(merged, fwd), make_tested(sst_set, included_gens, fwd));
+            compare_readers(*query_schema, make_authority(merged, fwd), make_tested(sst_set, included_gens, fwd));
         }
 
         auto fwd = streamed_mutation::forwarding::yes;
-        compare_readers(*g._s, make_authority(std::move(merged), fwd),
+        compare_readers(*query_schema, make_authority(std::move(merged), fwd),
                 make_tested(sst_set, included_gens, fwd), scenario.fwd_ranges);
     }
 
   });
+}
+
+SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
+    return do_test_clustering_order_merger_sstable_set(false);
+}
+
+SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set_reversed) {
+    return do_test_clustering_order_merger_sstable_set(true);
 }
 
 SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
