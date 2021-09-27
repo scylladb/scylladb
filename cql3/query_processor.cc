@@ -348,6 +348,11 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                             [] { return prepared_statements_cache::shard_stats().prepared_cache_evictions; },
                             sm::description("Counts the number of prepared statements cache entries evictions.")),
 
+                    sm::make_derive(
+                            "new_gen_on_cache_size_evictions",
+                            [] { return prepared_statements_cache::shard_stats().new_gen_on_cache_size_evictions; },
+                            sm::description("Counts the number of prepared statements cache entries evictions from the new generation partition due to a cache size restrictions. This is usually a sign of a cache pollution.")),
+
                     sm::make_gauge(
                             "prepared_cache_size",
                             [this] { return _prepared_cache.size(); },
@@ -428,6 +433,11 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
                             sm::description("Counts the number of authenticated prepared statements cache entries evictions.")),
+
+                    sm::make_derive(
+                            "authorized_prepared_statements_new_gen_on_cache_size_evictions",
+                            [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_new_gen_on_cache_size_evictions; },
+                            sm::description("Counts the number of authenticated prepared statements cache entries evictions from the new generation partition due to a cache size restrictions. This is usually a sign of a cache pollution.")),
 
                     sm::make_gauge(
                             "authorized_prepared_statements_cache_size",
