@@ -3188,3 +3188,35 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
         std::move(mut).consume(consumer, consume_in_reverse::yes);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_position_in_partition_reversal) {
+    using p_i_p = position_in_partition;
+
+    simple_schema ss;
+    auto pk = ss.make_pkey();
+
+    position_in_partition::tri_compare fwd_cmp(*ss.schema());
+    auto rev_s = ss.schema()->make_reversed();
+    position_in_partition::tri_compare rev_cmp(*rev_s);
+
+    BOOST_REQUIRE(fwd_cmp(p_i_p::before_key(ss.make_ckey(1)), p_i_p::after_key(ss.make_ckey(1))) < 0);
+    BOOST_REQUIRE(fwd_cmp(p_i_p::before_key(ss.make_ckey(1)), ss.make_ckey(0)) > 0);
+    BOOST_REQUIRE(fwd_cmp(p_i_p::after_key(ss.make_ckey(1)), p_i_p::before_key(ss.make_ckey(1))) > 0);
+    BOOST_REQUIRE(fwd_cmp(p_i_p::after_key(ss.make_ckey(1)), ss.make_ckey(2)) < 0);
+
+    BOOST_REQUIRE(rev_cmp(p_i_p::before_key(ss.make_ckey(1)).reversed(), p_i_p::after_key(ss.make_ckey(1)).reversed()) > 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p::before_key(ss.make_ckey(1)).reversed(), ss.make_ckey(0)) < 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p::after_key(ss.make_ckey(1)).reversed(), p_i_p::before_key(ss.make_ckey(1)).reversed()) < 0);
+    BOOST_REQUIRE(rev_cmp(p_i_p::after_key(ss.make_ckey(1)).reversed(), ss.make_ckey(2)) > 0);
+
+    // Test reversal-invariant positions
+
+    BOOST_REQUIRE(rev_cmp(p_i_p::for_partition_start().reversed(),
+                          p_i_p::for_partition_start()) == 0);
+
+    BOOST_REQUIRE(rev_cmp(p_i_p(p_i_p::end_of_partition_tag_t()).reversed(),
+                          p_i_p(p_i_p::end_of_partition_tag_t())) == 0);
+
+    BOOST_REQUIRE(rev_cmp(p_i_p::for_static_row().reversed(),
+                          p_i_p::for_static_row()) == 0);
+}
