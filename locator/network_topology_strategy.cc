@@ -94,9 +94,12 @@ network_topology_strategy::network_topology_strategy(
         _rep_factor += one_dc_rep_factor.second;
     }
 
-    debug("Configured datacenter replicas are:");
-    for (auto& p : _dc_rep_factor) {
-        debug("{}: {}", p.first, p.second);
+    if (rslogger.is_enabled(log_level::debug)) {
+        sstring cfg;
+        for (auto& p : _dc_rep_factor) {
+            cfg += format(" {}:{}", p.first, p.second);
+        }
+        rslogger.debug("Configured datacenter replicas are: {}", cfg);
     }
 }
 
