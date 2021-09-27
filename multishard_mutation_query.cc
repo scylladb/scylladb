@@ -229,6 +229,7 @@ public:
             , _trace_state(std::move(trace_state))
             , _semaphores(smp::count, nullptr) {
         _readers.resize(smp::count);
+        _permit.set_max_result_size(get_max_result_size());
     }
 
     read_context(read_context&&) = delete;
@@ -243,6 +244,10 @@ public:
 
     reader_permit permit() const {
         return _permit;
+    }
+
+    query::max_result_size get_max_result_size() {
+        return _cmd.max_result_size ? *_cmd.max_result_size : _db.local().get_unlimited_query_max_result_size();
     }
 
     virtual flat_mutation_reader create_reader(
@@ -268,9 +273,12 @@ public:
         const auto shard = this_shard_id();
         auto& rm = _readers[shard];
         if (rm.state == reader_state::successful_lookup) {
-            return make_ready_future<reader_permit>(rm.rparts->permit);
+            rm.rparts->permit.set_max_result_size(get_max_result_size());
+            co_return rm.rparts->permit;
         }
-        return _db.local().obtain_reader_permit(std::move(schema), description, timeout);
+        auto permit = co_await _db.local().obtain_reader_permit(std::move(schema), description, timeout);
+        permit.set_max_result_size(get_max_result_size());
+        co_return permit;
     }
 
     future<> lookup_readers(db::timeout_clock::time_point timeout);
