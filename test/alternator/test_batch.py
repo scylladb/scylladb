@@ -221,6 +221,13 @@ def test_empty_batch_write(test_table):
         batch.put_item({'p': p, 'c': c})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c}
 
+# Test that BatchWriteItem writes more than 25 requests in the batch
+def test_batch_write_too_many_items(test_table):
+    with pytest.raises(ClientError, match='ValidationException.*less than'):
+        test_table.meta.client.batch_write_item(RequestItems = {
+            test_table.name: [ {'PutRequest': {'Item': {'p': 'batch_pk{}'.format(i), 'a': 'batch_ck{}'.format(i) }}} for i in range(26) ]
+        })
+
 # Test that BatchWriteItems allows writing to multiple tables in one operation
 def test_batch_write_multiple_tables(test_table_s, test_table):
     p1 = random_string()

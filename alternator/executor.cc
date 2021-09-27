@@ -1871,6 +1871,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         }
     }
 
+    if (mutation_builders.size() < 1 || mutation_builders.size() > 25) {
+        return make_ready_future<request_return_type>(api_error::validation(
+            format("The number of requested items must be non-negative and less than or equal to 25")));
+    }
+
     return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
