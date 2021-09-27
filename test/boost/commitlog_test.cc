@@ -588,8 +588,24 @@ SEASTAR_TEST_CASE(test_allocation_failure){
                 }
             } catch (std::bad_alloc&) {
             }
-            auto last = junk->end();
-            junk->erase(--last);
+            auto last = --junk->end();
+            // available memory < (fragmented_temporary_buffer::default_fragment_size)
+            // exhaust all remaining memory.
+            size_t max_available_memory = fragmented_temporary_buffer::default_fragment_size - 1;
+            size_t mem_to_allocate = max_available_memory;
+            while (mem_to_allocate > 0) {
+                try {
+                    junk->emplace_back(new char[mem_to_allocate]);
+                } catch (std::bad_alloc&) {
+                    mem_to_allocate--;
+                    continue;
+                }
+                max_available_memory -= mem_to_allocate;
+                mem_to_allocate = max_available_memory;
+            }
+            last->reset();
+            // available memory ~= fragmented_temporary_buffer::default_fragment_size
+
             return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
                         dst.fill(char(1), size);
                     }).then_wrapped([junk, size](future<db::rp_handle> f) {
