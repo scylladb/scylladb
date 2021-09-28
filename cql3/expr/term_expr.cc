@@ -784,7 +784,7 @@ cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_share
 
 ::shared_ptr<term>
 prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [] (const constant&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
@@ -849,7 +849,7 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_s
 
 ::shared_ptr<term>
 prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [&] (const bind_variable& bv) -> ::shared_ptr<term> {
             switch (bv.shape) {
             case expr::bind_variable::shape_type::scalar: on_internal_error(expr_logger, "prepare_term_multi_column(bind_variable(scalar))");
@@ -871,7 +871,7 @@ prepare_term_multi_column(const expression& expr, database& db, const sstring& k
 assignment_testable::test_result
 test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [&] (const constant&) -> test_result {
             // constants shouldn't appear in parser output, only untyped_constants
             on_internal_error(expr_logger, "constants are not yet reachable via term_raw_expr::test_assignment()");

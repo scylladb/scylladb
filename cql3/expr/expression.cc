@@ -91,7 +91,7 @@ namespace {
 using children_t = std::vector<expression>; // conjunction's children.
 
 children_t explode_conjunction(expression e) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [] (const conjunction& c) { return std::move(c.children); },
             [&] (const auto&) { return children_t{std::move(e)}; },
         }, e);
@@ -461,7 +461,7 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
 }
 
 bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& bag) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
                     return equal(*opr.rhs, col, bag);
@@ -541,7 +541,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
 }
 
 bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
                 if (bool_val.has_value()) {
@@ -686,7 +686,7 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
 
 value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
     const auto type = cdef ? get_value_comparator(cdef) : long_type.get();
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
                 if (bool_val.has_value()) {
@@ -704,7 +704,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         });
             },
             [&] (const binary_operator& oper) -> value_set {
-                return std::visit(overloaded_functor{
+                return expr::visit(overloaded_functor{
                         [&] (const column_value& col) -> value_set {
                             if (!cdef || cdef != col.col) {
                                 return unbounded_value_set;
@@ -875,12 +875,12 @@ nonwrapping_range<managed_bytes> to_range(const value_set& s) {
 
 bool is_supported_by(const expression& expr, const secondary_index::index& idx) {
     using std::placeholders::_1;
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [&] (const conjunction& conj) {
                 return boost::algorithm::all_of(conj.children, std::bind(is_supported_by, _1, idx));
             },
             [&] (const binary_operator& oper) {
-                return std::visit(overloaded_functor{
+                return expr::visit(overloaded_functor{
                         [&] (const column_value& col) {
                             return idx.supports_expression(*col.col, oper.op);
                         },
@@ -960,7 +960,7 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 }
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
-    std::visit(overloaded_functor{
+    expr::visit(overloaded_functor{
             [&] (const constant& v) { os << v.value.to_view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
@@ -1107,7 +1107,7 @@ expression search_and_replace(const expression& e,
     if (replace_result) {
         return std::move(*replace_result);
     } else {
-        return std::visit(
+        return expr::visit(
             overloaded_functor{
                 [&] (const conjunction& conj) -> expression {
                     return conjunction{
@@ -1206,7 +1206,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 
         void operator()(const conjunction& conj) {
             for (const expression& child : conj.children) {
-                std::visit(*this, child);
+                expr::visit(*this, child);
             }
         }
 
@@ -1217,7 +1217,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
 
             current_binary_operator = &oper;
-            std::visit(*this, *oper.lhs);
+            expr::visit(*this, *oper.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -1247,7 +1247,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         .current_binary_operator = nullptr,
     };
 
-    std::visit(v, expr);
+    expr::visit(v, expr);
 
     return std::move(v.restrictions);
 }
@@ -1340,7 +1340,7 @@ cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& o
 }
 
 constant evaluate(const expression& e, const query_options& options) {
-    return std::visit(overloaded_functor {
+    return expr::visit(overloaded_functor {
         [](const binary_operator&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a binary_operator");
         },

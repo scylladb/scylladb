@@ -204,7 +204,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
 
         auto& selectable = selector->selectable_;
         shared_ptr<column_identifier::raw> identifier;
-        std::visit(overloaded_functor{
+        expr::visit(overloaded_functor{
             [&] (const expr::unresolved_identifier& ui) { identifier = ui.ident; },
             [] (const auto& default_case) -> void { throw exceptions::invalid_request_exception(format("Cannot use general expressions when defining a materialized view")); },
         }, selectable);

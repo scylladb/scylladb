@@ -98,6 +98,30 @@ using expression = std::variant<conjunction, binary_operator, column_value, toke
 template <typename T>
 concept ExpressionElement = utils::VariantElement<T, expression>;
 
+template <typename Func>
+concept invocable_on_expression
+        = std::invocable<Func, conjunction>
+        && std::invocable<Func, binary_operator>
+        && std::invocable<Func, column_value>
+        && std::invocable<Func, token>
+        && std::invocable<Func, unresolved_identifier>
+        && std::invocable<Func, column_mutation_attribute>
+        && std::invocable<Func, function_call>
+        && std::invocable<Func, cast>
+        && std::invocable<Func, field_selection>
+        && std::invocable<Func, null>
+        && std::invocable<Func, bind_variable>
+        && std::invocable<Func, untyped_constant>
+        && std::invocable<Func, constant>
+        && std::invocable<Func, tuple_constructor>
+        && std::invocable<Func, collection_constructor>
+        && std::invocable<Func, usertype_constructor>
+        ;
+
+auto visit(invocable_on_expression auto&& visitor, const expression& expr) {
+    return std::visit(visitor, expr);
+}
+
 // An expression that doesn't contain subexpressions
 template <typename E>
 concept LeafExpression
@@ -345,7 +369,7 @@ extern std::ostream& operator<<(std::ostream&, const expression&);
 template<typename Fn>
 requires std::regular_invocable<Fn, const binary_operator&>
 const binary_operator* find_atom(const expression& e, Fn f) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [&] (const binary_operator& op) { return f(op) ? &op : nullptr; },
             [] (const constant&) -> const binary_operator* { return nullptr; },
             [&] (const conjunction& conj) -> const binary_operator* {
@@ -414,7 +438,7 @@ const binary_operator* find_atom(const expression& e, Fn f) {
 template<typename Fn>
 requires std::regular_invocable<Fn, const binary_operator&>
 size_t count_if(const expression& e, Fn f) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [&] (const binary_operator& op) -> size_t { return f(op) ? 1 : 0; },
             [&] (const conjunction& conj) {
                 return std::accumulate(conj.children.cbegin(), conj.children.cend(), size_t{0},

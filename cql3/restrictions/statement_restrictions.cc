@@ -164,7 +164,7 @@ static std::vector<expr::expression> extract_partition_range(
         const binary_operator* current_binary_operator = nullptr;
 
         void operator()(const conjunction& c) {
-            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+            std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
         }
 
         void operator()(const binary_operator& b) {
@@ -172,7 +172,7 @@ static std::vector<expr::expression> extract_partition_range(
                 throw std::logic_error("Nested binary operators are not supported");
             }
             current_binary_operator = &b;
-            std::visit(*this, *b.lhs);
+            expr::visit(*this, *b.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -246,7 +246,7 @@ static std::vector<expr::expression> extract_partition_range(
             on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
         }
     } v;
-    std::visit(v, where_clause);
+    expr::visit(v, where_clause);
     if (v.tokens) {
         return {std::move(*v.tokens)};
     }
@@ -273,7 +273,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         const binary_operator* current_binary_operator = nullptr;
 
         void operator()(const conjunction& c) {
-            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+            std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
         }
 
         void operator()(const binary_operator& b) {
@@ -281,7 +281,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
                 throw std::logic_error("Nested binary operators are not supported");
             }
             current_binary_operator = &b;
-            std::visit(*this, *b.lhs);
+            expr::visit(*this, *b.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -356,7 +356,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
         }
     } v;
-    std::visit(v, where_clause);
+    expr::visit(v, where_clause);
 
     if (!v.multi.empty()) {
         return move(v.multi);
@@ -996,7 +996,7 @@ struct multi_column_range_accumulator {
     }
 
     void operator()(const conjunction& c) {
-        std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+        std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
     }
 
     void operator()(const constant& v) {
@@ -1103,7 +1103,7 @@ std::vector<query::clustering_range> get_multi_column_clustering_bounds(
         const std::vector<expression>& multi_column_restrictions) {
     multi_column_range_accumulator acc{options, schema};
     for (const auto& restr : multi_column_restrictions) {
-        std::visit(acc, restr);
+        expr::visit(acc, restr);
     }
     return acc.ranges;
 }

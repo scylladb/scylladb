@@ -141,7 +141,7 @@ selectable::with_cast::to_string() const {
 
 shared_ptr<selectable>
 prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [&] (const expr::constant&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "no way to express SELECT constant in the grammar yet");
         },
@@ -228,7 +228,7 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
 
 bool
 selectable_processes_selection(const expr::expression& raw_selectable) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [&] (const expr::constant&) -> bool {
             on_internal_error(slogger, "no way to express SELECT constant in the grammar yet");
         },
