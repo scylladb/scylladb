@@ -454,10 +454,44 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     input_mutations.emplace_back(*input_mutations.begin()); // Have a duplicate partition as well.
     std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
 
-    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), [] (flat_mutation_reader rd) {
+    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), 10000, [] (flat_mutation_reader rd) {
         testlog.info("Checking segregated output stream");
         return async([rd = std::move(rd)] () mutable {
             assert_that(std::move(rd)).has_monotonic_positions();
+        });
+    }).get();
+}
+
+// Check that the partition_based_splitting_mutation_writer limits the number of live buckets
+SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer_bucket_limit) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(0, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(0, 1));
+
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+
+    const auto max_buckets = 10u;
+
+    auto input_mutations = tests::generate_random_mutations(random_schema).get();
+    std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
+    while (input_mutations.size() < max_buckets * 4) {
+        input_mutations.push_back(input_mutations.at(tests::random::get_int<uint32_t>(input_mutations.size() - 1)));
+    }
+
+    unsigned num_buckets = 0;
+
+    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), max_buckets,
+            [&num_buckets] (flat_mutation_reader rd) {
+        ++num_buckets;
+        BOOST_REQUIRE(num_buckets <= max_buckets);
+        return async([&num_buckets, rd = std::move(rd)] () mutable {
+            assert_that(std::move(rd)).has_monotonic_positions();
+            BOOST_REQUIRE(num_buckets);
+            --num_buckets;
         });
     }).get();
 }

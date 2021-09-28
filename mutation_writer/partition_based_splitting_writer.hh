@@ -34,6 +34,10 @@ namespace mutation_writer {
 // streams that honor it.
 // This is useful for scrub compaction to split sstables containing out-of-order
 // and/or duplicate partitions into sstables that honor the partition ordering.
-future<> segregate_by_partition(flat_mutation_reader producer, reader_consumer consumer);
+//
+// The parameter max_buckets limits the number of live buckets. When reaching the
+// limit, an existing (the largest) bucket will be closed before a new one is
+// created.
+future<> segregate_by_partition(flat_mutation_reader producer, unsigned max_buckets, reader_consumer consumer);
 
 } // namespace mutation_writer
