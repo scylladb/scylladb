@@ -150,6 +150,7 @@ class reconcilable_result_builder {
     // make this the last member so it is destroyed first. #7240
     utils::chunked_vector<partition> _result;
 public:
+    // Expects table schema (non-reversed) and half-reversed (legacy) slice when building results for reverse query.
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter) noexcept
         : _schema(s), _slice(slice), _reversed(_slice.options.contains(query::partition_slice::option::reversed))
