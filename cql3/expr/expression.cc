@@ -59,6 +59,15 @@ logging::logger expr_logger("cql_expression");
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
+expression::expression(const expression& o)
+        : _v(std::make_unique<impl>(*o._v)) {
+}
+
+expression&
+expression::operator=(const expression& o) {
+    *this = expression(o);
+    return *this;
+}
 
 nested_expression::nested_expression(expression e)
         : _e(std::make_unique<expression>(std::move(e))) {

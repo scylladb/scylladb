@@ -89,14 +89,25 @@ struct tuple_constructor;
 struct collection_constructor;
 struct usertype_constructor;
 
-/// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
-using expression = std::variant<conjunction, binary_operator, column_value, token,
-                                unresolved_identifier, column_mutation_attribute, function_call, cast,
-                                field_selection, null, bind_variable, untyped_constant, constant,
-                                tuple_constructor, collection_constructor, usertype_constructor>;
-
 template <typename T>
-concept ExpressionElement = utils::VariantElement<T, expression>;
+concept ExpressionElement
+        = std::same_as<T, conjunction>
+        || std::same_as<T, binary_operator>
+        || std::same_as<T, column_value>
+        || std::same_as<T, token>
+        || std::same_as<T, unresolved_identifier>
+        || std::same_as<T, column_mutation_attribute>
+        || std::same_as<T, function_call>
+        || std::same_as<T, cast>
+        || std::same_as<T, field_selection>
+        || std::same_as<T, null>
+        || std::same_as<T, bind_variable>
+        || std::same_as<T, untyped_constant>
+        || std::same_as<T, constant>
+        || std::same_as<T, tuple_constructor>
+        || std::same_as<T, collection_constructor>
+        || std::same_as<T, usertype_constructor>
+        ;
 
 template <typename Func>
 concept invocable_on_expression
@@ -118,26 +129,33 @@ concept invocable_on_expression
         && std::invocable<Func, usertype_constructor>
         ;
 
-auto visit(invocable_on_expression auto&& visitor, const expression& expr) {
-    return std::visit(visitor, expr);
-}
+/// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
+class expression final {
+    // 'impl' holds a variant of all expression types, but since 
+    // variants of incomplete types are not allowed, we forward declare it
+    // here and fully define it later.
+    struct impl;                 
+    std::unique_ptr<impl> _v;
+public:
+    expression(); // FIXME: remove
+    expression(ExpressionElement auto e);
 
-template <ExpressionElement E>
-bool is(const expression& e) {
-    return expr::is<E>(e);
-}
+    expression(const expression&);
+    expression(expression&&) noexcept = default;
+    expression& operator=(const expression&);
+    expression& operator=(expression&&) noexcept = default;
 
-template <ExpressionElement E>
-const E&
-as(const expression& e) {
-    return expr::as<E>(e);
-}
+    friend auto visit(invocable_on_expression auto&& visitor, const expression& e);
 
-template <ExpressionElement E>
-const E*
-as_if(const expression* e) {
-    return std::get_if<E>(e);
-}
+    template <ExpressionElement E>
+    friend bool is(const expression& e);
+
+    template <ExpressionElement E>
+    friend const E& as(const expression& e);
+
+    template <ExpressionElement E>
+    friend const E* as_if(const expression* e);
+};
 
 // An expression that doesn't contain subexpressions
 template <typename E>
@@ -328,6 +346,44 @@ struct usertype_constructor {
     // After prepare always holds a valid type, although it might be reversed_type(user_type).
     data_type type;
 };
+
+// now that all expression types are fully defined, we can define expression::impl
+struct expression::impl final {
+    using variant_type = std::variant<
+            conjunction, binary_operator, column_value, token, unresolved_identifier,
+            column_mutation_attribute, function_call, cast, field_selection, null,
+            bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
+            usertype_constructor>;
+    variant_type v;
+    impl(variant_type v) : v(std::move(v)) {}
+};
+
+expression::expression(ExpressionElement auto e)
+        : _v(std::make_unique<impl>(std::move(e))) {
+}
+
+inline expression::expression()
+        : expression(conjunction{}) {
+}
+
+auto visit(invocable_on_expression auto&& visitor, const expression& e) {
+    return std::visit(visitor, e._v->v);
+}
+
+template <ExpressionElement E>
+bool is(const expression& e) {
+    return std::holds_alternative<E>(e._v->v);
+}
+
+template <ExpressionElement E>
+const E& as(const expression& e) {
+    return std::get<E>(e._v->v);
+}
+
+template <ExpressionElement E>
+const E* as_if(const expression* e) {
+    return std::get_if<E>(&e->_v->v);
+}
 
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
