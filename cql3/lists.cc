@@ -196,7 +196,7 @@ expr::expression lists::marker::to_expression() {
     return expr::bind_variable {
         .shape = expr::bind_variable::shape_type::scalar,
         .bind_index = _bind_index,
-        .value_type = _receiver->type
+        .receiver = _receiver
     };
 }
 

@@ -84,7 +84,7 @@ expr::expression tuples::marker::to_expression() {
     return expr::bind_variable {
         .shape = expr::bind_variable::shape_type::tuple,
         .bind_index = _bind_index,
-        .value_type = _receiver->type
+        .receiver = _receiver
     };
 }
 
@@ -92,7 +92,7 @@ expr::expression tuples::in_marker::to_expression() {
     return expr::bind_variable {
         .shape = expr::bind_variable::shape_type::tuple_in,
         .bind_index = _bind_index,
-        .value_type = _receiver->type
+        .receiver = _receiver
     };
 }
 

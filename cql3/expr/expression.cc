@@ -1503,28 +1503,27 @@ static managed_bytes reserialize_value(View value_bytes,
 }
 
 constant evaluate(const bind_variable& bind_var, const query_options& options) {
-    if (bind_var.value_type.get() == nullptr) {
+    if (bind_var.receiver.get() == nullptr) {
         on_internal_error(expr_logger,
-            "evaluate(bind_variable) called with nullptr type, should be prepared first");
+            "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
     }
 
     cql3::raw_value_view value = options.get_value_at(bind_var.bind_index);
 
     if (value.is_null()) {
-        return constant::make_null(bind_var.value_type);
+        return constant::make_null(bind_var.receiver->type);
     }
 
     if (value.is_unset_value()) {
-        return constant::make_unset_value(bind_var.value_type);
+        return constant::make_unset_value(bind_var.receiver->type);
     }
 
-    const abstract_type& value_type = bind_var.value_type->without_reversed();
+    const abstract_type& value_type = bind_var.receiver->type->without_reversed();
     try {
         value.validate(value_type, options.get_cql_serialization_format());
     } catch (const marshal_exception& e) {
-        throw exceptions::invalid_request_exception(
-                format("Exception while binding value of type {}: {}",
-                       bind_var.value_type->name(), e.what()));
+        throw exceptions::invalid_request_exception(format("Exception while binding column {:s}: {:s}",
+                                                           bind_var.receiver->name->to_cql_string(), e.what()));
     }
 
     if (value_type.bound_value_needs_to_be_reserialized(options.get_cql_serialization_format())) {
@@ -1532,10 +1531,10 @@ constant evaluate(const bind_variable& bind_var, const query_options& options) {
             return reserialize_value(value_bytes, value_type, options.get_cql_serialization_format());
         });
 
-        return constant(raw_value::make_value(std::move(new_value)), bind_var.value_type);
+        return constant(raw_value::make_value(std::move(new_value)), bind_var.receiver->type);
     }
 
-    return constant(raw_value::make_value(value), bind_var.value_type);
+    return constant(raw_value::make_value(value), bind_var.receiver->type);
 }
 
 constant evaluate(const tuple_constructor& tuple, const query_options& options) {
