@@ -63,7 +63,7 @@ usertype_constructor_validate_assignable_to(const usertype_constructor& u, datab
         if (!u.elements.contains(field)) {
             continue;
         }
-        const expression& value = *u.elements.at(field);
+        const expression& value = u.elements.at(field);
         auto&& field_spec = usertype_field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(test_assignment(value, db, keyspace, *field_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
@@ -98,7 +98,7 @@ usertype_constructor_prepare_term(const usertype_constructor& u, database& db, c
         if (iraw == u.elements.end()) {
             raw = expr::null();
         } else {
-            raw = *iraw->second;
+            raw = iraw->second;
             ++found_values;
         }
         auto&& value = prepare_term(raw, db, keyspace, usertype_field_spec_of(*receiver, i));
@@ -740,7 +740,7 @@ null_prepare_term(database& db, const sstring& keyspace, lw_shared_ptr<column_sp
 static
 sstring
 cast_display_name(const cast& c) {
-    return format("({}){}", std::get<shared_ptr<cql3_type::raw>>(c.type), *c.arg);
+    return format("({}){}", std::get<shared_ptr<cql3_type::raw>>(c.type), c.arg);
 }
 
 static
@@ -773,13 +773,13 @@ static
 shared_ptr<term>
 cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
-    if (!is_assignable(test_assignment(*c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
-        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", *c.arg, type));
+    if (!is_assignable(test_assignment(c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
+        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
     }
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
-    return prepare_term(*c.arg, db, keyspace, receiver);
+    return prepare_term(c.arg, db, keyspace, receiver);
 }
 
 ::shared_ptr<term>

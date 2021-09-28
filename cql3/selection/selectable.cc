@@ -172,7 +172,7 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             return ui.ident->prepare(s);
         },
         [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
-            auto unresolved_id = expr::as<expr::unresolved_identifier>(*cma.column);
+            auto unresolved_id = expr::as<expr::unresolved_identifier>(cma.column);
             bool is_writetime = cma.kind == expr::column_mutation_attribute::attribute_kind::writetime;
             return make_shared<selectable::writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
         },
@@ -197,12 +197,12 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
                 // FIXME: adjust prepare_seletable() signature so we can prepare the type too
                 on_internal_error(slogger, "unprepared type in selector type cast");
             }
-            return ::make_shared<selectable::with_cast>(prepare_selectable(s, *c.arg), *t);
+            return ::make_shared<selectable::with_cast>(prepare_selectable(s, c.arg), *t);
         },
         [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
-            return make_shared<selectable::with_field_selection>(prepare_selectable(s, *fs.structure),
+            return make_shared<selectable::with_field_selection>(prepare_selectable(s, fs.structure),
                     static_pointer_cast<column_identifier>(fs.field->prepare(s)));
         },
         [&] (const expr::null&) -> shared_ptr<selectable> {

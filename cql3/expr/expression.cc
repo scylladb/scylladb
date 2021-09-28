@@ -69,22 +69,6 @@ expression::operator=(const expression& o) {
     return *this;
 }
 
-nested_expression::nested_expression(expression e)
-        : _e(std::make_unique<expression>(std::move(e))) {
-}
-
-nested_expression::nested_expression(const nested_expression& o)
-        : nested_expression(*o._e) {
-}
-
-nested_expression&
-nested_expression::operator=(const nested_expression& o) {
-    if (this != &o) {
-        _e = std::make_unique<expression>(*o._e);
-    }
-    return *this;
-}
-
 binary_operator::binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order)
             : lhs(std::move(lhs))
             , op(op)
@@ -546,7 +530,7 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const usertype_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: usertype_constructor cannot serve as the LHS of a binary expression");
             },
-        }, *opr.lhs);
+        }, opr.lhs);
 }
 
 bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
@@ -826,7 +810,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const usertype_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
                         },
-                    }, *oper.lhs);
+                    }, oper.lhs);
             },
             [] (const column_value&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a column cannot serve as a restriction by itself");
@@ -942,7 +926,7 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (const usertype_constructor&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: user type constructors are not supported as the LHS of a binary expression");
                         },
-                    }, *oper.lhs);
+                    }, oper.lhs);
             },
             [] (const auto& default_case) { return false; }
         }, expr);
@@ -973,7 +957,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const constant& v) { os << v.value.to_view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
-                os << "(" << *opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
+                os << "(" << opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
             },
             [&] (const token& t) { os << "TOKEN"; },
             [&] (const column_value& col) {
@@ -985,7 +969,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const column_mutation_attribute& cma)  {
                 fmt::print(os, "{}({})",
                         cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
-                        *cma.column);
+                        cma.column);
             },
             [&] (const function_call& fc)  {
                 std::visit(overloaded_functor{
@@ -1000,15 +984,15 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const cast& c)  {
                 std::visit(overloaded_functor{
                     [&] (const cql3_type& t) {
-                        fmt::print(os, "({} AS {})", *c.arg, t);
+                        fmt::print(os, "({} AS {})", c.arg, t);
                     },
                     [&] (const shared_ptr<cql3_type::raw>& t) {
-                        fmt::print(os, "({}) {}", t, *c.arg);
+                        fmt::print(os, "({}) {}", t, c.arg);
                     },
                 }, c.type);
             },
             [&] (const field_selection& fs)  {
-                fmt::print(os, "({}.{})", *fs.structure, fs.field);
+                fmt::print(os, "({}.{})", fs.structure, fs.field);
             },
             [&] (const null&) {
                 // FIXME: adjust tests and change to NULL
@@ -1063,7 +1047,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                         fmt::print(os, ", ");
                     }
                     first = false;
-                    fmt::print(os, "{}:{}", k, *v);
+                    fmt::print(os, "{}:{}", k, v);
                 }
                 fmt::print(os, "}}");
             },
@@ -1079,7 +1063,7 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = expr::as_if<tuple_constructor>(&*b.lhs)) {
+    if (auto tuple = expr::as_if<tuple_constructor>(&b.lhs)) {
         return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return expr::as<column_value>(v).sub; });
     }
     return false;
@@ -1126,10 +1110,10 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const binary_operator& oper) -> expression {
-                    return binary_operator(recurse(*oper.lhs), oper.op, oper.rhs);
+                    return binary_operator(recurse(oper.lhs), oper.op, oper.rhs);
                 },
                 [&] (const column_mutation_attribute& cma) -> expression {
-                    return column_mutation_attribute{cma.kind, recurse(*cma.column)};
+                    return column_mutation_attribute{cma.kind, recurse(cma.column)};
                 },
                 [&] (const tuple_constructor& tc) -> expression {
                     return tuple_constructor{
@@ -1151,7 +1135,7 @@ expression search_and_replace(const expression& e,
                 [&] (const usertype_constructor& uc) -> expression {
                     usertype_constructor::elements_map_type m;
                     for (auto& [k, v] : uc.elements) {
-                        m.emplace(k, recurse(*v));
+                        m.emplace(k, recurse(v));
                     }
                     return usertype_constructor{std::move(m), uc.type};
                 },
@@ -1164,10 +1148,10 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const cast& c) -> expression {
-                    return cast{recurse(*c.arg), c.type};
+                    return cast{recurse(c.arg), c.type};
                 },
                 [&] (const field_selection& fs) -> expression {
-                    return field_selection{recurse(*fs.structure), fs.field};
+                    return field_selection{recurse(fs.structure), fs.field};
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -1226,7 +1210,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
 
             current_binary_operator = &oper;
-            expr::visit(*this, *oper.lhs);
+            expr::visit(*this, oper.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -1743,7 +1727,7 @@ constant evaluate(const usertype_constructor& user_val, const query_options& opt
                 utype.field_name_as_string(i)));
         }
 
-        constant field_val = evaluate(*cur_field->second, options);
+        constant field_val = evaluate(cur_field->second, options);
         if (field_val.is_unset_value()) {
             // TODO: Behaviour copied from user_types::delayed_value::bind(), but this seems incorrect
             field_val.value = raw_value::make_null();

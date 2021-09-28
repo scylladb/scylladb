@@ -172,7 +172,7 @@ static std::vector<expr::expression> extract_partition_range(
                 throw std::logic_error("Nested binary operators are not supported");
             }
             current_binary_operator = &b;
-            expr::visit(*this, *b.lhs);
+            expr::visit(*this, b.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -281,7 +281,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
                 throw std::logic_error("Nested binary operators are not supported");
             }
             current_binary_operator = &b;
-            expr::visit(*this, *b.lhs);
+            expr::visit(*this, b.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -762,7 +762,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     size_t product_size = 1;
     for (const auto& e : expressions) {
         if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
-            if (auto cv = expr::as_if<expr::column_value>(&*arbitrary_binop->lhs)) {
+            if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
                 const value_set vals = possible_lhs_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
@@ -791,7 +791,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
         const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
-        const auto col = expr::as<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
@@ -977,7 +977,7 @@ struct multi_column_range_accumulator {
     void operator()(const binary_operator& binop) {
         if (is_compare(binop.op)) {
             auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options));
-            auto& lhs = expr::as<tuple_constructor>(*binop.lhs);
+            auto& lhs = expr::as<tuple_constructor>(binop.lhs);
             std::vector<managed_bytes> values(lhs.elements.size());
             for (size_t i = 0; i < lhs.elements.size(); ++i) {
                 auto& col = expr::as<column_value>(lhs.elements.at(i));
@@ -1433,7 +1433,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
             if (is_clustering_order(binop)) {
                 return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
             }
-            for (auto& element : expr::as<tuple_constructor>(*binop.lhs).elements) {
+            for (auto& element : expr::as<tuple_constructor>(binop.lhs).elements) {
                 auto& cv = expr::as<column_value>(element);
                 if (cv.col->type->is_reversed()) {
                     all_natural = false;
@@ -1602,7 +1602,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
     for (const auto& e : _partition_range_restrictions) {
-        const auto col = expr::as<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto pos = _schema->position(*col) + 1;
         (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
     }
@@ -1652,7 +1652,7 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         if (!any_binop) {
             break;
         }
-        const auto col = expr::as<column_value>(*any_binop->lhs).col;
+        const auto col = expr::as<column_value>(any_binop->lhs).col;
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
 }
@@ -1666,7 +1666,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     }
     std::vector<managed_bytes> pk_value(_schema->partition_key_size());
     for (const auto& e : _partition_range_restrictions) {
-        const auto col = expr::as<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};

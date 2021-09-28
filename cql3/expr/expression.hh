@@ -170,26 +170,6 @@ concept LeafExpression
         || std::same_as<constant, E>
         ;
 
-// An expression variant element can't contain an expression by value, since the size of the variant
-// will be infinite. `nested_expression` contains an expression indirectly, but has value semantics and
-// is copyable.
-class nested_expression {
-    std::unique_ptr<expression> _e;
-public:
-    // not explicit, an expression _is_ a nested expression
-    nested_expression(expression e);
-    // not explicit, an ExpressionElement _is_ an expression
-    nested_expression(ExpressionElement auto e);
-    nested_expression(const nested_expression&);
-    nested_expression(nested_expression&&) = default;
-    nested_expression& operator=(const nested_expression&);
-    nested_expression& operator=(nested_expression&&) = default;
-    const expression* operator->() const { return _e.get(); }
-    expression* operator->() { return _e.get(); }
-    const expression& operator*() const { return *_e.get(); }
-    expression& operator*() { return *_e.get(); }
-};
-
 /// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
 struct column_value {
     const column_definition* col;
@@ -214,7 +194,7 @@ enum class comparison_order : char {
 
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
-    nested_expression lhs;
+    expression lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
     comparison_order order;
@@ -241,7 +221,7 @@ struct column_mutation_attribute {
     attribute_kind kind;
     // note: only unresolved_identifier is legal here now. One day, when prepare()
     // on expressions yields expressions, column_value will also be legal here.
-    nested_expression column;
+    expression column;
 };
 
 struct function_call {
@@ -265,12 +245,12 @@ struct function_call {
 };
 
 struct cast {
-    nested_expression arg;
+    expression arg;
     std::variant<cql3_type, shared_ptr<cql3_type::raw>> type;
 };
 
 struct field_selection {
-    nested_expression structure;
+    expression structure;
     shared_ptr<column_identifier_raw> field;
 };
 
@@ -339,7 +319,7 @@ struct collection_constructor {
 
 // Constructs an object of a user-defined type
 struct usertype_constructor {
-    using elements_map_type = std::unordered_map<column_identifier, nested_expression>;
+    using elements_map_type = std::unordered_map<column_identifier, expression>;
     elements_map_type elements;
 
     // Might be nullptr before prepare.
@@ -466,10 +446,10 @@ const binary_operator* find_atom(const expression& e, Fn f) {
                 return nullptr;
             },
             [&] (const cast& c) -> const binary_operator* {
-                return find_atom(*c.arg, f);
+                return find_atom(c.arg, f);
             },
             [&] (const field_selection& fs) -> const binary_operator* {
-                return find_atom(*fs.structure, f);
+                return find_atom(fs.structure, f);
             },
             [&] (const null&) -> const binary_operator* {
                 return nullptr;
@@ -498,7 +478,7 @@ const binary_operator* find_atom(const expression& e, Fn f) {
             },
             [&] (const usertype_constructor& c) -> const binary_operator* {
                 for (auto& [k, v] : c.elements) {
-                    if (auto found = find_atom(*v, f)) {
+                    if (auto found = find_atom(v, f)) {
                         return found;
                     }
                 }
@@ -527,9 +507,9 @@ size_t count_if(const expression& e, Fn f) {
                                        [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
             },
             [&] (const cast& c) -> size_t {
-                return count_if(*c.arg, f); },
+                return count_if(c.arg, f); },
             [&] (const field_selection& fs) -> size_t {
-                return count_if(*fs.structure, f);
+                return count_if(fs.structure, f);
             },
             [&] (const null&) -> size_t {
                 return 0;
@@ -550,7 +530,7 @@ size_t count_if(const expression& e, Fn f) {
             },
             [&] (const usertype_constructor& c) -> size_t {
                 return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
-                                       [&] (size_t acc, const usertype_constructor::elements_map_type::value_type& e) { return acc + count_if(*e.second, f); });
+                                       [&] (size_t acc, const usertype_constructor::elements_map_type::value_type& e) { return acc + count_if(e.second, f); });
             },
         }, e);
 }
@@ -591,11 +571,11 @@ inline bool is_compare(oper_t op) {
 }
 
 inline bool is_multi_column(const binary_operator& op) {
-    return expr::is<tuple_constructor>(*op.lhs);
+    return expr::is<tuple_constructor>(op.lhs);
 }
 
 inline bool has_token(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return expr::is<token>(*o.lhs); });
+    return find_atom(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
@@ -654,10 +634,6 @@ inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :
             (inclusive ? oper_t::LTE : oper_t::LT);
-}
-
-nested_expression::nested_expression(ExpressionElement auto e)
-        : nested_expression(expression(std::move(e))) {
 }
 
 // Extracts all binary operators which have the given column on their left hand side.

@@ -122,7 +122,7 @@ expr::expression user_types::delayed_value::to_expression() {
     expr::usertype_constructor::elements_map_type new_elements;
     for (size_t i = 0; i < _values.size(); i++) {
         column_identifier field_name(_type->field_names().at(i), _type->string_field_names().at(i));
-        expr::nested_expression field_value(expr::to_expression(_values[i]));
+        expr::expression field_value(expr::to_expression(_values[i]));
         new_elements.emplace(std::move(field_name), std::move(field_value));
     }
 
