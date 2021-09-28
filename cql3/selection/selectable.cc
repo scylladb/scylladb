@@ -172,7 +172,7 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             return ui.ident->prepare(s);
         },
         [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
-            auto unresolved_id = std::get<expr::unresolved_identifier>(*cma.column);
+            auto unresolved_id = expr::as<expr::unresolved_identifier>(*cma.column);
             bool is_writetime = cma.kind == expr::column_mutation_attribute::attribute_kind::writetime;
             return make_shared<selectable::writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
         },

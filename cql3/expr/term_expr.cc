@@ -154,7 +154,7 @@ map_validate_assignable_to(const collection_constructor& c, database& db, const 
     auto&& key_spec = map_key_spec_of(receiver);
     auto&& value_spec = map_value_spec_of(receiver);
     for (auto&& entry : c.elements) {
-        auto& entry_tuple = std::get<tuple_constructor>(entry);
+        auto& entry_tuple = expr::as<tuple_constructor>(entry);
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
@@ -182,7 +182,7 @@ map_test_assignment(const collection_constructor& c, database& db, const sstring
     // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
     auto res = assignment_testable::test_result::EXACT_MATCH;
     for (auto entry : c.elements) {
-        auto& entry_tuple = std::get<tuple_constructor>(entry);
+        auto& entry_tuple = expr::as<tuple_constructor>(entry);
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
@@ -207,7 +207,7 @@ map_prepare_term(const collection_constructor& c, database& db, const sstring& k
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto&& entry : c.elements) {
-        auto& entry_tuple = std::get<tuple_constructor>(entry);
+        auto& entry_tuple = expr::as<tuple_constructor>(entry);
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }

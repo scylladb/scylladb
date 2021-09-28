@@ -122,6 +122,23 @@ auto visit(invocable_on_expression auto&& visitor, const expression& expr) {
     return std::visit(visitor, expr);
 }
 
+template <ExpressionElement E>
+bool is(const expression& e) {
+    return expr::is<E>(e);
+}
+
+template <ExpressionElement E>
+const E&
+as(const expression& e) {
+    return expr::as<E>(e);
+}
+
+template <ExpressionElement E>
+const E*
+as_if(const expression* e) {
+    return std::get_if<E>(e);
+}
+
 // An expression that doesn't contain subexpressions
 template <typename E>
 concept LeafExpression
@@ -518,11 +535,11 @@ inline bool is_compare(oper_t op) {
 }
 
 inline bool is_multi_column(const binary_operator& op) {
-    return holds_alternative<tuple_constructor>(*op.lhs);
+    return expr::is<tuple_constructor>(*op.lhs);
 }
 
 inline bool has_token(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return std::holds_alternative<token>(*o.lhs); });
+    return find_atom(e, [] (const binary_operator& o) { return expr::is<token>(*o.lhs); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {

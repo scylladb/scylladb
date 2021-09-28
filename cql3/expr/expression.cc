@@ -190,7 +190,7 @@ bool equal(term& t, const tuple_constructor& columns_tuple, const column_value_e
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
                        columns_tuple.elements.size(), rhs.size()));
     }
-    auto as_column_value = [] (const expression& e) { return std::get<column_value>(e); };
+    auto as_column_value = [] (const expression& e) { return expr::as<column_value>(e); };
     return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_value), [&] (const managed_bytes_opt& b, const column_value& lhs) {
         return equal(b, lhs, bag);
     });
@@ -248,7 +248,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, term& t,
                        columns_tuple.elements.size(), rhs.size()));
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
-        auto& cv = std::get<column_value>(columns_tuple.elements[i]);
+        auto& cv = expr::as<column_value>(columns_tuple.elements[i]);
         const auto cmp = get_value_comparator(cv)->compare(
                 // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null.
                 *get_value(cv, bag),
@@ -424,7 +424,7 @@ bool is_one_of(const tuple_constructor& tuple, term& rhs, const column_value_eva
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(b, std::get<column_value>(c), bag);
+            return equal(b, expr::as<column_value>(c), bag);
         });
     });
 }
@@ -726,7 +726,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return unbounded_value_set;
                             }
                             const auto found = boost::find_if(
-                                    tuple.elements, [&] (const expression& c) { return std::get<column_value>(c).col == cdef; });
+                                    tuple.elements, [&] (const expression& c) { return expr::as<column_value>(c).col == cdef; });
                             if (found == tuple.elements.end()) {
                                 return unbounded_value_set;
                             }
@@ -886,7 +886,7 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         },
                         [&] (const tuple_constructor& tuple) {
                             if (tuple.elements.size() == 1) {
-                                if (auto column = std::get_if<column_value>(&tuple.elements[0])) {
+                                if (auto column = expr::as_if<column_value>(&tuple.elements[0])) {
                                     return idx.supports_expression(*column->col, oper.op);
                                 }
                             }
@@ -1034,7 +1034,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                             fmt::print(os, ", ");
                         }
                         first = false;
-                        auto& tuple = std::get<tuple_constructor>(e);
+                        auto& tuple = expr::as<tuple_constructor>(e);
                         if (tuple.elements.size() != 2) {
                             on_internal_error(expr_logger, "map constructor element is not a tuple of arity 2");
                         }
@@ -1070,17 +1070,17 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = std::get_if<tuple_constructor>(&*b.lhs)) {
-        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return std::get<column_value>(v).sub; });
+    if (auto tuple = expr::as_if<tuple_constructor>(&*b.lhs)) {
+        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return expr::as<column_value>(v).sub; });
     }
     return false;
 }
 
 expression replace_column_def(const expression& expr, const column_definition* new_cdef) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
-        if (std::holds_alternative<column_value>(expr)) {
+        if (expr::is<column_value>(expr)) {
             return column_value{new_cdef};
-        } else if (std::holds_alternative<tuple_constructor>(expr)) {
+        } else if (expr::is<tuple_constructor>(expr)) {
             throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
         } else {
             return std::nullopt;
@@ -1090,7 +1090,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
 
 expression replace_token(const expression& expr, const column_definition* new_cdef) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
-        if (std::holds_alternative<token>(expr)) {
+        if (expr::is<token>(expr)) {
             return column_value{new_cdef};
         } else {
             return std::nullopt;
@@ -1648,7 +1648,7 @@ static constant evaluate_map(const collection_constructor& collection, const que
     std::map<managed_bytes, managed_bytes, serialized_compare> evaluated_elements(mtype.get_keys_type()->as_less_comparator());
 
     for (const expression& element : collection.elements) {
-        if (auto tuple = std::get_if<tuple_constructor>(&element)) {
+        if (auto tuple = expr::as_if<tuple_constructor>(&element)) {
             constant key = evaluate(tuple->elements.at(0), options);
             constant value = evaluate(tuple->elements.at(1), options);
 
@@ -1807,7 +1807,7 @@ constant evaluate_IN_list(term* term_ptr, const query_options& options) {
 
     expression e = term_ptr->to_expression();
 
-    if (auto collection = std::get_if<collection_constructor>(&e)) {
+    if (auto collection = expr::as_if<collection_constructor>(&e)) {
         if (collection->style == collection_constructor::style_type::list) {
             return evaluate_list(*collection, options, true);
         }

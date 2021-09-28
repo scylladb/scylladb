@@ -325,7 +325,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     }
 
     if (_op == expr::oper_t::LIKE) {
-        auto literal_term = std::get_if<expr::untyped_constant>(&*_value);
+        auto literal_term = expr::as_if<expr::untyped_constant>(&*_value);
         if (literal_term) {
             // Pass matcher object
             const sstring& pattern = literal_term->raw_text;
