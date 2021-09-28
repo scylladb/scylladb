@@ -2620,7 +2620,7 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
     std::list<std::deque<mutation_fragment>> segregated_fragment_streams;
 
     mutation_writer::segregate_by_partition(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(all_fragments)),
-                sstables::compaction_type_options::scrub::mode::segregate), [&schema, &segregated_fragment_streams] (flat_mutation_reader rd) {
+                sstables::compaction_type_options::scrub::mode::segregate), 100, [&schema, &segregated_fragment_streams] (flat_mutation_reader rd) {
         return async([&schema, &segregated_fragment_streams, rd = std::move(rd)] () mutable {
             auto close = deferred_close(rd);
             auto& fragments = segregated_fragment_streams.emplace_back();
