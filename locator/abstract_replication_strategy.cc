@@ -309,7 +309,9 @@ future<mutable_effective_replication_map_ptr> calculate_effective_replication_ma
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
-    co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map), rf);
+    auto erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map), rf);
+    co_await erm->update_pending_ranges();
+    co_return std::move(erm);
 }
 
 future<replication_map> effective_replication_map::clone_endpoints_gently() const {
@@ -328,8 +330,193 @@ inet_address_vector_replica_set effective_replication_map::get_natural_endpoints
 }
 
 future<> effective_replication_map::clear_gently() noexcept {
+    for (auto& [range, eps] : _pending_ranges_interval_map) {
+        eps.clear();
+        co_await coroutine::maybe_yield();
+    }
     co_await utils::clear_gently(_replication_map);
     co_await utils::clear_gently(_tmptr);
+}
+
+inet_address_vector_topology_change effective_replication_map::pending_endpoints_for(const token& token) const {
+    // Fast path: empty pending ranges for this replication map
+    const auto& ks_map = _pending_ranges_interval_map;
+    if (ks_map.empty()) {
+        return {};
+    }
+
+    // Slow path: lookup pending ranges
+    auto interval = token_metadata::range_to_interval(range<dht::token>(token));
+    const auto it = ks_map.find(interval);
+    if (it != ks_map.end()) {
+        // interval_map does not work with std::vector, convert to std::vector of ips
+        return inet_address_vector_topology_change(it->second.begin(), it->second.end());
+    }
+    return inet_address_vector_topology_change{};
+}
+
+bool effective_replication_map::has_pending_ranges(inet_address endpoint) const noexcept {
+    for (const auto& item : _pending_ranges_interval_map) {
+        const auto& nodes = item.second;
+        if (nodes.contains(endpoint)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+future<effective_replication_map::address_ranges>
+effective_replication_map::calculate_address_ranges() const {
+    const token_metadata& tm = *_tmptr;
+    address_ranges ret;
+    for (auto& t : tm.sorted_tokens()) {
+        dht::token_range_vector r = tm.get_primary_ranges_for(t);
+        auto eps = get_natural_endpoints(t);
+        rslogger.debug("effective_replication_map: calculate_address_ranges: token={} primary_range={} endpoints={}", t, r, eps);
+        for (auto ep : eps) {
+            for (auto&& rng : r) {
+                ret.emplace(ep, rng);
+            }
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return ret;
+}
+
+future<> effective_replication_map::calculate_pending_ranges_for_replacing(
+        const address_ranges& address_ranges,
+        pending_ranges& new_pending_ranges,
+        const std::unordered_map<inet_address, inet_address>& replacing_endpoints) const {
+    if (replacing_endpoints.empty()) {
+        co_return;
+    }
+    for (const auto& node : replacing_endpoints) {
+        auto existing_node = node.first;
+        auto replacing_node = node.second;
+        for (const auto& x : address_ranges) {
+            if (x.first == existing_node) {
+                rslogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x.second);
+                new_pending_ranges.emplace(x.second, replacing_node);
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+}
+
+future<> effective_replication_map::calculate_pending_ranges_for_leaving(
+        const address_ranges& address_ranges,
+        pending_ranges& new_pending_ranges,
+        const token_metadata& all_left_metadata,
+        const std::unordered_set<inet_address>& leaving_endpoints) const {
+    // get all ranges that will be affected by leaving nodes
+    std::unordered_set<range<token>> affected_ranges;
+    for (auto endpoint : leaving_endpoints) {
+        auto r = address_ranges.equal_range(endpoint);
+        for (auto x = r.first; x != r.second; x++) {
+            affected_ranges.emplace(x->second);
+        }
+        co_await coroutine::maybe_yield();
+    }
+    // for each of those ranges, find what new nodes will be responsible for the range when
+    // all leaving nodes are gone.
+    auto metadata = co_await _tmptr->clone_only_token_map();
+    auto affected_ranges_size = affected_ranges.size();
+    rslogger.debug("In calculate_pending_ranges: affected_ranges.size={} starts", affected_ranges_size);
+    for (const auto& r : affected_ranges) {
+        auto t = r.end() ? r.end()->value() : dht::maximum_token();
+        auto current_endpoints = co_await _rs->calculate_natural_endpoints(t, metadata);
+        auto new_endpoints = co_await _rs->calculate_natural_endpoints(t, all_left_metadata);
+        std::vector<inet_address> diff;
+        std::sort(current_endpoints.begin(), current_endpoints.end());
+        std::sort(new_endpoints.begin(), new_endpoints.end());
+        std::set_difference(new_endpoints.begin(), new_endpoints.end(),
+            current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
+        for (auto& ep : diff) {
+            new_pending_ranges.emplace(r, ep);
+        }
+    }
+    co_await metadata.clear_gently();
+    rslogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges_size);
+}
+
+future<> effective_replication_map::calculate_pending_ranges_for_bootstrap(
+        pending_ranges& new_pending_ranges,
+        token_metadata& all_left_metadata,
+        const std::unordered_map<token, inet_address>& bootstrap_tokens) const {
+    // For each of the bootstrapping nodes, simply add and remove them one by one to
+    // all_left_metadata and check in between what their ranges would be.
+    std::unordered_multimap<inet_address, token> bootstrap_addresses;
+    for (auto& x : bootstrap_tokens) {
+        bootstrap_addresses.emplace(x.second, x.first);
+    }
+
+    std::unordered_map<inet_address, std::unordered_set<token>> tmp;
+    for (auto& x : bootstrap_addresses) {
+        auto& addr = x.first;
+        auto& t = x.second;
+        tmp[addr].insert(t);
+    }
+    for (auto& x : tmp) {
+        auto& endpoint = x.first;
+        auto& tokens = x.second;
+        co_await all_left_metadata.update_normal_tokens(tokens, endpoint);
+        auto all_left_address_ranges = co_await _rs->get_address_ranges(all_left_metadata, endpoint);
+        for (auto& x : all_left_address_ranges) {
+            new_pending_ranges.emplace(x.second, endpoint);
+        }
+        all_left_metadata.remove_endpoint(endpoint);
+    }
+}
+
+future<> effective_replication_map::set_pending_ranges(pending_ranges new_pending_ranges) {
+    _pending_ranges_interval_map = {};
+
+    if (new_pending_ranges.empty()) {
+        co_return;
+    }
+
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
+    for (const auto& x : new_pending_ranges) {
+        map[x.first].emplace(x.second);
+        co_await coroutine::maybe_yield();
+    }
+
+    // construct a interval map to speed up the search
+    pending_ranges_interval_map interval_map;
+    for (auto& m : map) {
+        interval_map +=
+                std::make_pair(token_metadata::range_to_interval(m.first), std::move(m.second));
+        co_await coroutine::maybe_yield();
+    }
+    _pending_ranges_interval_map = std::move(interval_map);
+}
+
+future<> effective_replication_map::update_pending_ranges() {
+    const auto& bootstrap_tokens = _tmptr->get_bootstrap_tokens();
+    const auto& leaving_endpoints = _tmptr->get_leaving_endpoints();
+    const auto& replacing_endpoints = _tmptr->get_replacing_endpoints();
+    if (bootstrap_tokens.empty() && leaving_endpoints.empty() && replacing_endpoints.empty()) {
+        rslogger.debug("No bootstrapping, leaving nodes, replacing nodes -> empty pending ranges");
+        co_return co_await set_pending_ranges(pending_ranges());
+    }
+
+    rslogger.debug("update_pending_ranges: bootstrap_tokens={}, leaving nodes={}, replacing_endpoints={}",
+            bootstrap_tokens, leaving_endpoints, replacing_endpoints);
+
+    auto address_ranges = co_await calculate_address_ranges();
+    pending_ranges new_pending_ranges;
+    co_await calculate_pending_ranges_for_replacing(address_ranges, new_pending_ranges, replacing_endpoints);
+    // Copy of metadata reflecting the situation after all leave operations are finished.
+    auto all_left_metadata = co_await _tmptr->clone_after_all_left();
+    co_await calculate_pending_ranges_for_leaving(address_ranges, new_pending_ranges, all_left_metadata, leaving_endpoints);
+    // At this stage newPendingRanges has been updated according to leave operations. We can
+    // now continue the calculation by checking bootstrapping nodes.
+    co_await calculate_pending_ranges_for_bootstrap(new_pending_ranges, all_left_metadata, bootstrap_tokens);
+    co_await all_left_metadata.clear_gently();
+    co_await utils::clear_gently(address_ranges);
+
+    // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
+    co_await set_pending_ranges(std::move(new_pending_ranges));
 }
 
 effective_replication_map::~effective_replication_map() {
