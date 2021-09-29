@@ -551,13 +551,33 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
 
 stop_iteration
 partition_snapshot::range_tombstones(position_in_partition_view start, position_in_partition_view end,
-                                     std::function<stop_iteration(range_tombstone)> callback)
+                                     std::function<stop_iteration(range_tombstone)> callback,
+                                     bool reverse)
 {
     partition_version* v = &*version();
 
+    if (reverse) [[unlikely]] {
+        std::swap(start, end);
+        start = start.reversed();
+        end = end.reversed();
+    }
+
+    auto pop_stream = [&] (range_tombstone_list::iterator_range& range) -> range_tombstone {
+        auto rt = reverse ? std::prev(range.end())->tombstone()
+                          : range.begin()->tombstone();
+        if (reverse) [[unlikely]] {
+            rt.reverse();
+            range.advance_end(-1);
+        } else {
+            range.advance_begin(1);
+        }
+        return rt;
+    };
+
     if (!v->next()) { // Optimization for single-version snapshots
-        for (auto&& rt : v->partition().row_tombstones().slice(*_schema, start, end)) {
-            if (callback(rt.tombstone()) == stop_iteration::yes) {
+        auto range = v->partition().row_tombstones().slice(*_schema, start, end);
+        while (!range.empty()) {
+            if (callback(pop_stream(range)) == stop_iteration::yes) {
                 return stop_iteration::no;
             }
         }
@@ -568,8 +588,13 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
     position_in_partition::less_compare less(*_schema);
 
     // Sorts ranges by first range_tombstone's starting position
-    // in descending order.
+    // in descending order (because the heap is a max-heap).
+    // In reverse mode, sorts by range_tombstone's end position
+    // in ascending order.
     auto stream_less = [&] (range_tombstone_list::iterator_range left, range_tombstone_list::iterator_range right) {
+        if (reverse) [[unlikely]] {
+            return less(std::prev(left.end())->end_position(), std::prev(right.end())->end_position());
+        }
         return less(right.begin()->position(), left.begin()->position());
     };
 
@@ -586,10 +611,9 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
     while (!streams.empty()) {
         std::pop_heap(streams.begin(), streams.end(), stream_less);
         range_tombstone_list::iterator_range& stream = streams.back();
-        if (callback(stream.begin()->tombstone()) == stop_iteration::yes) {
+        if (callback(pop_stream(stream)) == stop_iteration::yes) {
             return stop_iteration::no;
         }
-        stream.advance_begin(1);
         if (!stream.empty()) {
             std::push_heap(streams.begin(), streams.end(), stream_less);
         } else {

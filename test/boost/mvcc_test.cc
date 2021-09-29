@@ -33,6 +33,7 @@
 #include "clustering_interval_set.hh"
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -51,7 +52,7 @@ static thread_local mutation_application_stats app_stats_for_tests;
 static
 void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_tombstone>& list,
     const query::clustering_range& range,
-    std::initializer_list<range_tombstone> expected)
+    const range_tombstone_list& expected)
 {
     range_tombstone_list actual(s);
     position_in_partition::less_compare less(s);
@@ -73,14 +74,24 @@ void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_to
 
     actual.trim(s, query::clustering_row_ranges{range});
 
-    range_tombstone_list expected_list(s);
-    for (auto&& rt : expected) {
-        expected_list.apply(s, rt);
-    }
+    range_tombstone_list expected_list(expected);
     expected_list.trim(s, query::clustering_row_ranges{range});
 
     assert_that(s, actual).is_equal_to(expected_list);
 }
+
+static
+void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_tombstone>& list,
+                           const query::clustering_range& range,
+                           std::initializer_list<range_tombstone> expected)
+{
+    range_tombstone_list expected_list(s);
+    for (auto&& rt : expected) {
+        expected_list.apply(s, rt);
+    }
+    check_tombstone_slice(s, list, range, expected_list);
+}
+
 
 // Reads the rest of the partition into a mutation_partition object.
 // There must be at least one entry ahead of the cursor.
@@ -165,6 +176,89 @@ SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
         });
     });
 
+}
+
+static query::clustering_range reversed(const query::clustering_range& range) {
+    if (!range.is_singular()) {
+        return query::clustering_range(range.end(), range.start());
+    }
+    return range;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_range_tombstone_reverse_slicing) {
+    logalloc::region r;
+    mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
+    with_allocator(r.allocator(), [&] {
+        mutation_application_stats app_stats;
+        logalloc::reclaim_lock l(r);
+
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+        auto rev_s = s->make_reversed();
+
+        mutation_partition m1(s);
+        mutation_partition m2(s); // m2 and m3 will have effectively m1 split among each other randomly
+        mutation_partition m3(s);
+        range_tombstone_list rts(*s);
+        range_tombstone_list rev_rts(*rev_s);
+        for (int i = 0; i < 12; ++i) {
+            auto rt = gen.make_random_range_tombstone();
+            rts.apply(*s, rt);
+            {
+                auto rev_rt = rt;
+                rev_rt.reverse();
+                rev_rts.apply(*rev_s, rev_rt);
+            }
+            m1.apply_delete(*s, rt);
+            if (i % 2 == 0) {
+                m2.apply_delete(*s, rt);
+            } else {
+                m3.apply_delete(*s, rt);
+            }
+        }
+
+        auto check_range = [&] (partition_snapshot& snap, query::clustering_range range, bool reverse = false) {
+            utils::chunked_vector<range_tombstone> result;
+
+            if (reverse) {
+                range = reversed(range);
+            }
+
+            auto start = position_in_partition::for_range_start(range);
+            auto end = position_in_partition::for_range_end(range);
+            snap.range_tombstones(start, end, [&] (range_tombstone rt) {
+                result.emplace_back(std::move(rt));
+                return stop_iteration::no;
+            }, reverse);
+
+            if (reverse) {
+                check_tombstone_slice(*rev_s, result, range, rev_rts);
+            } else {
+                check_tombstone_slice(*s, result, range, rts);
+            }
+        };
+
+        // Single version
+        {
+            partition_entry e(mutation_partition(*s, m1));
+            auto snap = e.read(r, cleaner, s, no_cache_tracker);
+            check_range(*snap, query::clustering_range::make_open_ended_both_sides());
+            check_range(*snap, query::clustering_range::make_open_ended_both_sides(), true);
+        }
+
+        // Two versions
+        {
+            partition_entry e(mutation_partition(*s, m2));
+            auto snap = e.read(r, cleaner, s, no_cache_tracker);
+
+            auto&& v2 = e.add_version(*s, no_cache_tracker);
+            v2.partition().apply_weak(*s, m3, *s, app_stats);
+            auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
+
+            check_range(*snap2, query::clustering_range::make_open_ended_both_sides());
+            check_range(*snap2, query::clustering_range::make_open_ended_both_sides(), true);
+        }
+    });
 }
 
 class mvcc_partition;
