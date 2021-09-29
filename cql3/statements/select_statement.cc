@@ -140,8 +140,8 @@ select_statement::select_statement(schema_ptr schema,
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
-                                   ::shared_ptr<term> limit,
-                                   ::shared_ptr<term> per_partition_limit,
+                                   std::optional<expr::expression> limit,
+                                   std::optional<expr::expression> per_partition_limit,
                                    cql_stats& stats,
                                    std::unique_ptr<attributes> attrs)
     : cql_statement(select_timeout(*restrictions))
@@ -251,12 +251,14 @@ select_statement::make_partition_slice(const query_options& options) const
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format(), get_per_partition_limit(options));
 }
 
-uint64_t select_statement::do_get_limit(const query_options& options, ::shared_ptr<term> limit, uint64_t default_limit) const {
-    if (!limit || _selection->is_aggregate()) {
+uint64_t select_statement::do_get_limit(const query_options& options,
+                                        const std::optional<expr::expression>& limit,
+                                        uint64_t default_limit) const {
+    if (!limit.has_value() || _selection->is_aggregate()) {
         return default_limit;
     }
 
-    auto val = expr::evaluate_to_raw_view(limit, options);
+    auto val = expr::evaluate(*limit, options);
     if (val.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of limit");
     }
@@ -264,7 +266,7 @@ uint64_t select_statement::do_get_limit(const query_options& options, ::shared_p
         return default_limit;
     }
     try {
-        auto l = val.validate_and_deserialize<int32_t>(*int32_type, options.get_cql_serialization_format());
+        auto l = val.view().validate_and_deserialize<int32_t>(*int32_type, cql_serialization_format::internal());
         if (l <= 0) {
             throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
         }
@@ -820,11 +822,11 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
-                                                           ::shared_ptr<term> limit,
-                                                           ::shared_ptr<term> per_partition_limit,
+                                                           std::optional<expr::expression> limit,
+                                                           std::optional<expr::expression> per_partition_limit,
                                                            cql_stats &stats,
                                                            std::unique_ptr<attributes> attrs)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, std::move(limit), std::move(per_partition_limit), stats, std::move(attrs)}
 {
     if (_ks_sel == ks_selector::NONSYSTEM) {
         if (_restrictions->need_filtering() ||
@@ -848,8 +850,8 @@ indexed_table_select_statement::prepare(database& db,
                                         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                         bool is_reversed,
                                         ordering_comparator_type ordering_comparator,
-                                        ::shared_ptr<term> limit,
-                                         ::shared_ptr<term> per_partition_limit,
+                                        std::optional<expr::expression> limit,
+                                         std::optional<expr::expression> per_partition_limit,
                                          cql_stats &stats,
                                          std::unique_ptr<attributes> attrs)
 {
@@ -878,8 +880,8 @@ indexed_table_select_statement::prepare(database& db,
             std::move(group_by_cell_indices),
             is_reversed,
             std::move(ordering_comparator),
-            limit,
-            per_partition_limit,
+            std::move(limit),
+            std::move(per_partition_limit),
             stats,
             *index_opt,
             std::move(used_index_restrictions),
@@ -895,8 +897,8 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
-                                                           ::shared_ptr<term> limit,
-                                                           ::shared_ptr<term> per_partition_limit,
+                                                           std::optional<expr::expression> limit,
+                                                           std::optional<expr::expression> per_partition_limit,
                                                            cql_stats &stats,
                                                            const secondary_index::index& index,
                                                            ::shared_ptr<restrictions::restrictions> used_index_restrictions,
@@ -1476,16 +1478,16 @@ select_statement::prepare_restrictions(database& db,
     }
 }
 
-/** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
-::shared_ptr<term>
+/** Returns a expr::expression for the limit or nullopt if no limit is set */
+std::optional<expr::expression>
 select_statement::prepare_limit(database& db, prepare_context& ctx, const std::optional<expr::expression>& limit)
 {
-    if (!limit) {
-        return {};
+    if (!limit.has_value()) {
+        return std::nullopt;
     }
 
-    auto prep_limit = prepare_term(*limit, db, keyspace(), limit_receiver());
-    prep_limit->fill_prepare_context(ctx);
+    expr::expression prep_limit = expr::to_expression(prepare_term(*limit, db, keyspace(), limit_receiver()));
+    expr::fill_prepare_context(prep_limit, ctx);
     return prep_limit;
 }
 
