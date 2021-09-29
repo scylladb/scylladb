@@ -23,6 +23,7 @@
 
 #include <optional>
 
+#include "commitlog_types.hh"
 #include "frozen_mutation.hh"
 #include "schema_fwd.hh"
 
@@ -39,7 +40,7 @@ public:
 
 class commitlog_entry_writer {
 public:
-    using force_sync = bool_class<class force_sync_tag>;
+    using force_sync = db::commitlog_force_sync;
 private:
     schema_ptr _schema;
     const frozen_mutation& _mutation;
