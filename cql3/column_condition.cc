@@ -118,17 +118,15 @@ uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
 
 namespace cql3 {
 
-void column_condition::collect_marker_specificaton(prepare_context& ctx) const {
+void column_condition::collect_marker_specificaton(prepare_context& ctx) {
     if (_collection_element) {
-        _collection_element->fill_prepare_context(ctx);
+        expr::fill_prepare_context(*_collection_element, ctx);
     }
-    if (!_in_values.empty()) {
-        for (auto&& value : _in_values) {
-            value->fill_prepare_context(ctx);
-        }
+    for (auto&& value : _in_values) {
+        expr::fill_prepare_context(value, ctx);
     }
     if (_value) {
-        _value->fill_prepare_context(ctx);
+        expr::fill_prepare_context(*_value, ctx);
     }
 }
 
@@ -150,12 +148,13 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     // The code below implements these rules in a way compatible with Cassandra.
 
     // Use a map/list value instead of entire collection if a key is present in the predicate.
-    if (_collection_element != nullptr && cell_value != nullptr) {
+    if (_collection_element.has_value() && cell_value != nullptr) {
         // Checked in column_condition::raw::prepare()
         assert(cell_value->type()->is_collection());
         const collection_type_impl& cell_type = static_cast<const collection_type_impl&>(*cell_value->type());
 
-        cql3::raw_value_view key = expr::evaluate_to_raw_view(_collection_element, options);
+        expr::constant key_constant = expr::evaluate(*_collection_element, options);
+        cql3::raw_value_view key = key_constant.view();
         if (key.is_unset_value()) {
             throw exceptions::invalid_request_exception(
                     format("Invalid 'unset' value in {} element access", cell_type.cql3_type_name()));
@@ -211,7 +210,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
     if (is_compare(_op)) {
         // <, >, >=, <=, !=
-        cql3::raw_value_view param = expr::evaluate_to_raw_view(_value, options);
+        expr::constant param = expr::evaluate(*_value, options);
 
         if (param.is_unset_value()) {
             throw exceptions::invalid_request_exception("Invalid 'unset' value in condition");
@@ -230,7 +229,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         }
         // type::validate() is called earlier when creating the value, so it's safe to pass to_bytes() result
         // directly to compare.
-        return is_satisfied_by(_op, *cell_value->type(), *column.type, *cell_value, to_bytes(param));
+        return is_satisfied_by(_op, *cell_value->type(), *column.type, *cell_value, to_bytes(param.view()));
     }
 
     if (_op == expr::oper_t::LIKE) {
@@ -240,14 +239,14 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         if (_matcher) {
             return (*_matcher)(bytes_view(cell_value->serialize_nonnull()));
         } else {
-            auto param = expr::evaluate_to_raw_view(_value, options);  // LIKE pattern
+            auto param = expr::evaluate(*_value, options);  // LIKE pattern
             if (param.is_unset_value()) {
                 throw exceptions::invalid_request_exception("Invalid 'unset' value in LIKE pattern");
             }
             if (param.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid NULL value in LIKE pattern");
             }
-            like_matcher matcher(to_bytes(param));
+            like_matcher matcher(to_bytes(param.view()));
             return matcher(bytes_view(cell_value->serialize_nonnull()));
         }
     }
@@ -257,8 +256,8 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
     // FIXME Use managed_bytes_opt
     std::vector<bytes_opt> in_values;
 
-    if (_value) {
-        expr::constant lval = expr::evaluate(_value, options);
+    if (_value.has_value()) {
+        expr::constant lval = expr::evaluate(*_value, options);
         if (lval.is_null()) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
@@ -271,7 +270,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         }
     } else {
         for (auto&& v : _in_values) {
-            in_values.emplace_back(to_bytes_opt(expr::evaluate_to_raw_view(v, options)));
+            in_values.emplace_back(to_bytes_opt(expr::evaluate(v, options).view()));
         }
     }
     // If cell value is NULL, IN list must contain NULL or an empty set/list. Otherwise it must contain cell value.
@@ -289,7 +288,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }
-    shared_ptr<term> collection_element_term;
+    std::optional<expr::expression> collection_element_expression;
     lw_shared_ptr<column_specification> value_spec = receiver.column_specification;
 
     if (_collection_element) {
@@ -315,13 +314,13 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
             throw exceptions::invalid_request_exception(
                     format("Unsupported collection type {} in a condition with element access", ctype->cql3_type_name()));
         }
-        collection_element_term = prepare_term(*_collection_element, db, keyspace, element_spec);
+        collection_element_expression = expr::to_expression(prepare_term(*_collection_element, db, keyspace, element_spec));
     }
 
     if (is_compare(_op)) {
         validate_operation_on_durations(*receiver.type, _op);
-        return column_condition::condition(receiver, collection_element_term,
-                prepare_term(*_value, db, keyspace, value_spec), nullptr, _op);
+        return column_condition::condition(receiver, std::move(collection_element_expression),
+                expr::to_expression(prepare_term(*_value, db, keyspace, value_spec)), nullptr, _op);
     }
 
     if (_op == expr::oper_t::LIKE) {
@@ -329,15 +328,15 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         if (literal_term) {
             // Pass matcher object
             const sstring& pattern = literal_term->raw_text;
-            return column_condition::condition(receiver, collection_element_term,
-                    prepare_term(*_value, db, keyspace, value_spec),
+            return column_condition::condition(receiver, std::move(collection_element_expression),
+                    expr::to_expression(prepare_term(*_value, db, keyspace, value_spec)),
                     std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size())),
                     _op);
         } else {
             // Pass through rhs value, matcher object built on execution
             // TODO: caller should validate parametrized LIKE pattern
-            return column_condition::condition(receiver, collection_element_term,
-                    prepare_term(*_value, db, keyspace, value_spec), nullptr, _op);
+            return column_condition::condition(receiver, std::move(collection_element_expression),
+                    expr::to_expression(prepare_term(*_value, db, keyspace, value_spec)), nullptr, _op);
         }
     }
 
@@ -347,16 +346,17 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
 
     if (_in_marker) {
         assert(_in_values.empty());
-        shared_ptr<term> multi_item_term = prepare_term(*_in_marker, db, keyspace, value_spec);
-        return column_condition::in_condition(receiver, collection_element_term, multi_item_term, {});
+        expr::expression multi_item_term = expr::to_expression(prepare_term(*_in_marker, db, keyspace, value_spec));
+        return column_condition::in_condition(receiver, collection_element_expression, std::move(multi_item_term), {});
     }
     // Both _in_values and in _in_marker can be missing in case of empty IN list: "a IN ()"
-    std::vector<::shared_ptr<term>> terms;
+    std::vector<expr::expression> terms;
     terms.reserve(_in_values.size());
     for (auto&& value : _in_values) {
-        terms.push_back(prepare_term(value, db, keyspace, value_spec));
+        terms.push_back(expr::to_expression(prepare_term(value, db, keyspace, value_spec)));
     }
-    return column_condition::in_condition(receiver, collection_element_term, {}, std::move(terms));
+    return column_condition::in_condition(receiver, std::move(collection_element_expression),
+                                          std::nullopt, std::move(terms));
 }
 
 } // end of namespace cql3
