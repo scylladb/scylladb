@@ -82,7 +82,7 @@ private:
  * Overridden add_update_for_key uses this parsed JSON to look up values for columns.
  */
 class insert_prepared_json_statement : public update_statement {
-    ::shared_ptr<term> _term;
+    expr::expression _value;
     bool _default_unset;
 public:
     insert_prepared_json_statement(
@@ -90,9 +90,9 @@ public:
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
             cql_stats& stats,
-            ::shared_ptr<term> t, bool default_unset)
+            expr::expression v, bool default_unset)
         : update_statement(statement_type::INSERT, bound_terms, s, std::move(attrs), stats)
-        , _term(t)
+        , _value(std::move(v))
         , _default_unset(default_unset) {
         _restrictions = restrictions::statement_restrictions(s, false);
     }
