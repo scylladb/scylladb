@@ -1967,7 +1967,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, keyspace_name);
+    inet_address_vector_topology_change pending_endpoints = erm->pending_endpoints_for(token);
 
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
@@ -2292,7 +2292,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     replica::keyspace& ks = _db.local().find_keyspace(ks_name);
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
+    inet_address_vector_topology_change pending_endpoints = erm->pending_endpoints_for(token);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
         auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(db::is_local)));
