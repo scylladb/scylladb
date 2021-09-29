@@ -204,12 +204,6 @@ public:
         void clear_buffer_to_next_partition();
         template<typename Source>
         future<bool> fill_buffer_from(Source&);
-        // When succeeds, makes sure that the next push_mutation_fragment() will not fail.
-        void reserve_one() {
-            if (_buffer.capacity() == _buffer.size()) {
-                _buffer.reserve(_buffer.size() * 2 + 1);
-            }
-        }
         const tracked_buffer& buffer() const {
             return _buffer;
         }
