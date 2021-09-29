@@ -1773,6 +1773,34 @@ void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_rang
                     ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
     }, with_partition_range_forwarding);
+
+    // read in reverse
+    run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
+        auto table_schema = s->make_reversed();
+
+        std::vector<mutation> reversed_mutations;
+        reversed_mutations.reserve(m.size());
+        for (const auto& mut : m) {
+            reversed_mutations.emplace_back(reverse(mut));
+        }
+        auto ms = populate(table_schema, reversed_mutations, t);
+
+        return mutation_source([table_schema, ms = std::move(ms), reversed_slices = std::list<query::partition_slice>()] (
+                    schema_ptr query_schema,
+                    reader_permit permit,
+                    const dht::partition_range& pr,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr tr,
+                    streamed_mutation::forwarding fwd,
+                    mutation_reader::forwarding mr_fwd) mutable {
+            reversed_slices.emplace_back(partition_slice_builder(*table_schema, query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, slice))
+                        .with_option<query::partition_slice::option::reversed>()
+                        .build());
+
+            return ms.make_reader(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
+        });
+    }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }
 
 struct mutation_sets {

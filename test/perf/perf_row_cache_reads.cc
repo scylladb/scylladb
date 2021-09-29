@@ -210,8 +210,7 @@ void test_scan_with_range_delete_over_rows() {
             q.consume_page(noop_compacted_fragments_consumer(),
                            std::numeric_limits<uint32_t>::max(),
                            std::numeric_limits<uint32_t>::max(),
-                           gc_clock::now(),
-                           query::max_result_size(query::result_memory_limiter::unlimited_result_size)).get();
+                           gc_clock::now()).get();
         });
 
         slm.stop();

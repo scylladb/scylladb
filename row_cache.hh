@@ -359,6 +359,9 @@ private:
     //
     // internal_updater is only kept alive until its invocation returns.
     future<> do_update(external_updater eu, internal_updater iu) noexcept;
+
+    flat_mutation_reader do_make_reader(schema_ptr, reader_permit permit, const dht::partition_range&, const query::partition_slice&,
+            const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding);
 public:
     ~row_cache();
     row_cache(schema_ptr, snapshot_source, cache_tracker&, is_continuous = is_continuous::no);

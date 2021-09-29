@@ -239,11 +239,15 @@ public:
 };
 
 // See docs/design-notes/reverse-reads.md
+// In the following functions, `schema` may be reversed or not (both work).
 partition_slice legacy_reverse_slice_to_native_reverse_slice(const schema& schema, partition_slice slice);
 partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schema, partition_slice slice);
-// Fully reverse slice (forward to native reverse)
-// Also set the reversed bit in `partition_slice::options`.
+// Fully reverse slice (forward to native reverse or native reverse to forward).
+// Also toggles the reversed bit in `partition_slice::options`.
 partition_slice reverse_slice(const schema& schema, partition_slice slice);
+// Half reverse slice (forwad to legacy reverse or legacy reverse to forward).
+// Also toggles the reversed bit in `partition_slice::options`.
+partition_slice half_reverse_slice(const schema&, partition_slice);
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 

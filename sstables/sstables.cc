@@ -2139,10 +2139,27 @@ sstable::make_reader_v1(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon) {
-    if (_version >= version_types::mc) {
-        return downgrade_to_v1(mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
+    const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+    auto fwd_sm = fwd;
+    if (reversed) {
+        fwd_sm = streamed_mutation::forwarding::no;
+        schema = schema->make_reversed();
     }
-    return kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
+
+    flat_mutation_reader rd(nullptr);
+    if (_version >= version_types::mc) {
+        rd = downgrade_to_v1(mx::make_reader(shared_from_this(), std::move(schema), permit, range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon));
+    } else {
+        rd = kl::make_reader(shared_from_this(), std::move(schema), permit, range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon);
+    }
+
+    if (reversed) {
+        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+        if (fwd) {
+            rd = make_forwardable(std::move(rd));
+        }
+    }
+    return rd;
 }
 
 flat_mutation_reader_v2

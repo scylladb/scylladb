@@ -150,6 +150,19 @@ partition_slice reverse_slice(const schema& schema, partition_slice slice) {
         .build();
 }
 
+partition_slice half_reverse_slice(const schema& schema, partition_slice slice) {
+    return partition_slice_builder(schema, std::move(slice))
+        .mutate_ranges([] (clustering_row_ranges& ranges) {
+            std::reverse(ranges.begin(), ranges.end());
+        })
+        .mutate_specific_ranges([] (specific_ranges& sranges) {
+            auto& ranges = sranges.ranges();
+            std::reverse(ranges.begin(), ranges.end());
+        })
+        .with_option_toggled<partition_slice::option::reversed>()
+        .build();
+}
+
 partition_slice::partition_slice(clustering_row_ranges row_ranges,
     query::column_id_vector static_columns,
     query::column_id_vector regular_columns,

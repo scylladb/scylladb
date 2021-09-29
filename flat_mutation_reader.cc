@@ -95,7 +95,7 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
-flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size) {
+flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice) {
     class partition_reversing_mutation_reader final : public flat_mutation_reader::impl {
         flat_mutation_reader _source;
         range_tombstone_list _range_tombstones;
@@ -104,6 +104,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
         size_t _stack_size = 0;
         const query::max_result_size _max_size;
         bool _below_soft_limit = true;
+        std::unique_ptr<query::partition_slice> _slice; // only stored, not used
     private:
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
@@ -184,11 +185,12 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
             return make_ready_future<stop_iteration>(is_buffer_full());
         }
     public:
-        explicit partition_reversing_mutation_reader(flat_mutation_reader mr, query::max_result_size max_size)
+        explicit partition_reversing_mutation_reader(flat_mutation_reader mr, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice)
             : flat_mutation_reader::impl(mr.schema()->make_reversed(), mr.permit())
             , _source(std::move(mr))
             , _range_tombstones(*_schema)
             , _max_size(max_size)
+            , _slice(std::move(slice))
         { }
 
         virtual future<> fill_buffer() override {
@@ -239,7 +241,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
         }
     };
 
-    return make_flat_mutation_reader<partition_reversing_mutation_reader>(std::move(original), max_size);
+    return make_flat_mutation_reader<partition_reversing_mutation_reader>(std::move(original), max_size, std::move(slice));
 }
 
 template<typename Source>
@@ -433,15 +435,26 @@ flat_mutation_reader
 flat_mutation_reader_from_mutations(reader_permit permit,
                                     std::vector<mutation> ms,
                                     const dht::partition_range& pr,
-                                    const query::partition_slice& slice,
+                                    const query::partition_slice& query_slice,
                                     streamed_mutation::forwarding fwd) {
+    const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+    auto slice = reversed
+            ? query::half_reverse_slice(*ms.front().schema(), query_slice)
+            : query_slice;
     std::vector<mutation> sliced_ms;
     for (auto& m : ms) {
         auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*m.schema(), slice, m.key());
         auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
         sliced_ms.emplace_back(m.schema(), m.decorated_key(), std::move(mp));
     }
-    return flat_mutation_reader_from_mutations(std::move(permit), sliced_ms, pr, fwd);
+    auto rd = flat_mutation_reader_from_mutations(permit, sliced_ms, pr, reversed ? streamed_mutation::forwarding::no : fwd);
+    if (reversed) {
+        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+        if (fwd) {
+            rd = make_forwardable(std::move(rd));
+        }
+    }
+    return rd;
 }
 
 flat_mutation_reader
@@ -942,7 +955,13 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
 
 flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment> fragments,
-        const dht::partition_range& pr, const query::partition_slice& slice) {
+        const dht::partition_range& pr, const query::partition_slice& query_slice) {
+    const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+    if (reversed) {
+        schema = schema->make_reversed();
+    }
+    auto slice = reversed ? query::half_reverse_slice(*schema, query_slice) : query_slice;
+
     std::optional<clustering_ranges_walker> ranges_walker;
     std::optional<range_tombstone_splitter> splitter;
     std::deque<mutation_fragment> filtered;
@@ -977,7 +996,11 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
                 break;
         }
     }
-    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
+    auto rd = make_flat_mutation_reader_from_fragments(std::move(schema), permit, std::move(filtered), pr);
+    if (reversed) {
+        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+    }
+    return rd;
 }
 
 flat_mutation_reader

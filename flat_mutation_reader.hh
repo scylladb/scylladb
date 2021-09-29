@@ -810,16 +810,23 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s, reader_permit permit);
 
+// Mutation vector cannot be empty, all mutations should have the same schema.
 flat_mutation_reader flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation>,
         const dht::partition_range& pr = query::full_partition_range, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+// Mutation vector cannot be empty, all mutations should have the same schema.
 inline flat_mutation_reader flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
     return flat_mutation_reader_from_mutations(std::move(permit), std::move(ms), query::full_partition_range, fwd);
 }
+
+// Mutation vector cannot be empty, all mutations should have the same schema.
 flat_mutation_reader
 flat_mutation_reader_from_mutations(reader_permit permit,
                                     std::vector<mutation> ms,
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+// Mutation vector cannot be empty, all mutations should have the same schema.
 flat_mutation_reader
 flat_mutation_reader_from_mutations(reader_permit permit,
                                     std::vector<mutation> ms,
@@ -910,10 +917,14 @@ make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<
 ///     to enforce a limit on memory consumption. When reaching the soft limit
 ///     a warning will be logged. When reaching the hard limit the read will be
 ///     aborted.
+/// \param slice serves as a convenience slice storage for reads that have to
+///     store an edited slice somewhere. This is common for reads that work
+///     with a native-reversed slice and so have to convert the one used in the
+///     query -- which is in half-reversed format.
 ///
 /// FIXME: reversing should be done in the sstable layer, see #1413.
 flat_mutation_reader
-make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size);
+make_reversing_reader(flat_mutation_reader original, query::max_result_size max_size, std::unique_ptr<query::partition_slice> slice = {});
 
 /// A cosumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
