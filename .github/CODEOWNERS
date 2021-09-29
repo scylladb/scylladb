@@ -4,7 +4,7 @@ auth/* @elcallio @vladzcloudius
 # CACHE
 row_cache* @tgrabiec @haaawk
 *mutation* @tgrabiec @haaawk
-tests/mvcc* @tgrabiec @haaawk
+test/boost/mvcc* @tgrabiec @haaawk
 
 # CDC
 cdc/* @haaawk @kbr- @elcallio @piodul @jul-stas
@@ -25,7 +25,7 @@ compaction/* @raphaelsc @nyh
 transport/*
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec @psarna
+cql3/* @tgrabiec @psarna @cvybhu
 
 # COUNTERS
 counters* @haaawk @jul-stas
@@ -78,10 +78,20 @@ db/hints/* @haaawk @piodul @vladzcloudius
 
 # REDIS
 redis/* @nyh @syuu1228
-redis-test/* @nyh @syuu1228
+test/redis/* @nyh @syuu1228
 
 # READERS
 reader_* @denesb
 querier* @denesb
 test/boost/mutation_reader_test.cc @denesb
 test/boost/querier_cache_test.cc @denesb
+
+# PYTEST-BASED CQL TESTS
+test/cql-pytest/* @nyh
+
+# RAFT
+raft/* @kbr- @gleb-cloudius @kostja
+test/raft/* @kbr- @gleb-cloudius @kostja
+
+# HEAT-WEIGHTED LOAD BALANCING
+db/heat_load_balance.* @nyh @gleb-cloudius
