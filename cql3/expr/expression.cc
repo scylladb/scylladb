@@ -59,20 +59,13 @@ logging::logger expr_logger("cql_expression");
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
-
-nested_expression::nested_expression(expression e)
-        : _e(std::make_unique<expression>(std::move(e))) {
+expression::expression(const expression& o)
+        : _v(std::make_unique<impl>(*o._v)) {
 }
 
-nested_expression::nested_expression(const nested_expression& o)
-        : nested_expression(*o._e) {
-}
-
-nested_expression&
-nested_expression::operator=(const nested_expression& o) {
-    if (this != &o) {
-        _e = std::make_unique<expression>(*o._e);
-    }
+expression&
+expression::operator=(const expression& o) {
+    *this = expression(o);
     return *this;
 }
 
@@ -91,7 +84,7 @@ namespace {
 using children_t = std::vector<expression>; // conjunction's children.
 
 children_t explode_conjunction(expression e) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [] (const conjunction& c) { return std::move(c.children); },
             [&] (const auto&) { return children_t{std::move(e)}; },
         }, e);
@@ -190,7 +183,7 @@ bool equal(term& t, const tuple_constructor& columns_tuple, const column_value_e
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
                        columns_tuple.elements.size(), rhs.size()));
     }
-    auto as_column_value = [] (const expression& e) { return std::get<column_value>(e); };
+    auto as_column_value = [] (const expression& e) { return expr::as<column_value>(e); };
     return boost::equal(rhs, columns_tuple.elements | boost::adaptors::transformed(as_column_value), [&] (const managed_bytes_opt& b, const column_value& lhs) {
         return equal(b, lhs, bag);
     });
@@ -248,7 +241,7 @@ bool limits(const tuple_constructor& columns_tuple, const oper_t op, term& t,
                        columns_tuple.elements.size(), rhs.size()));
     }
     for (size_t i = 0; i < rhs.size(); ++i) {
-        auto& cv = std::get<column_value>(columns_tuple.elements[i]);
+        auto& cv = expr::as<column_value>(columns_tuple.elements[i]);
         const auto cmp = get_value_comparator(cv)->compare(
                 // CQL dictates that columns_tuple.elements[i] is a clustering column and non-null.
                 *get_value(cv, bag),
@@ -424,7 +417,7 @@ bool is_one_of(const tuple_constructor& tuple, term& rhs, const column_value_eva
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
-            return equal(b, std::get<column_value>(c), bag);
+            return equal(b, expr::as<column_value>(c), bag);
         });
     });
 }
@@ -461,7 +454,7 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
 }
 
 bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& bag) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
                     return equal(*opr.rhs, col, bag);
@@ -537,11 +530,11 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
             [] (const usertype_constructor&) -> bool {
                 on_internal_error(expr_logger, "is_satisified_by: usertype_constructor cannot serve as the LHS of a binary expression");
             },
-        }, *opr.lhs);
+        }, opr.lhs);
 }
 
 bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
                 if (bool_val.has_value()) {
@@ -686,7 +679,7 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
 
 value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
     const auto type = cdef ? get_value_comparator(cdef) : long_type.get();
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
                 if (bool_val.has_value()) {
@@ -704,7 +697,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         });
             },
             [&] (const binary_operator& oper) -> value_set {
-                return std::visit(overloaded_functor{
+                return expr::visit(overloaded_functor{
                         [&] (const column_value& col) -> value_set {
                             if (!cdef || cdef != col.col) {
                                 return unbounded_value_set;
@@ -726,7 +719,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return unbounded_value_set;
                             }
                             const auto found = boost::find_if(
-                                    tuple.elements, [&] (const expression& c) { return std::get<column_value>(c).col == cdef; });
+                                    tuple.elements, [&] (const expression& c) { return expr::as<column_value>(c).col == cdef; });
                             if (found == tuple.elements.end()) {
                                 return unbounded_value_set;
                             }
@@ -817,7 +810,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const usertype_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
                         },
-                    }, *oper.lhs);
+                    }, oper.lhs);
             },
             [] (const column_value&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a column cannot serve as a restriction by itself");
@@ -875,18 +868,18 @@ nonwrapping_range<managed_bytes> to_range(const value_set& s) {
 
 bool is_supported_by(const expression& expr, const secondary_index::index& idx) {
     using std::placeholders::_1;
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
             [&] (const conjunction& conj) {
                 return boost::algorithm::all_of(conj.children, std::bind(is_supported_by, _1, idx));
             },
             [&] (const binary_operator& oper) {
-                return std::visit(overloaded_functor{
+                return expr::visit(overloaded_functor{
                         [&] (const column_value& col) {
                             return idx.supports_expression(*col.col, oper.op);
                         },
                         [&] (const tuple_constructor& tuple) {
                             if (tuple.elements.size() == 1) {
-                                if (auto column = std::get_if<column_value>(&tuple.elements[0])) {
+                                if (auto column = expr::as_if<column_value>(&tuple.elements[0])) {
                                     return idx.supports_expression(*column->col, oper.op);
                                 }
                             }
@@ -933,7 +926,7 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                         [&] (const usertype_constructor&) -> bool {
                             on_internal_error(expr_logger, "is_supported_by: user type constructors are not supported as the LHS of a binary expression");
                         },
-                    }, *oper.lhs);
+                    }, oper.lhs);
             },
             [] (const auto& default_case) { return false; }
         }, expr);
@@ -960,11 +953,11 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 }
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
-    std::visit(overloaded_functor{
+    expr::visit(overloaded_functor{
             [&] (const constant& v) { os << v.value.to_view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
-                os << "(" << *opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
+                os << "(" << opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
             },
             [&] (const token& t) { os << "TOKEN"; },
             [&] (const column_value& col) {
@@ -976,7 +969,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const column_mutation_attribute& cma)  {
                 fmt::print(os, "{}({})",
                         cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
-                        *cma.column);
+                        cma.column);
             },
             [&] (const function_call& fc)  {
                 std::visit(overloaded_functor{
@@ -991,15 +984,15 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const cast& c)  {
                 std::visit(overloaded_functor{
                     [&] (const cql3_type& t) {
-                        fmt::print(os, "({} AS {})", *c.arg, t);
+                        fmt::print(os, "({} AS {})", c.arg, t);
                     },
                     [&] (const shared_ptr<cql3_type::raw>& t) {
-                        fmt::print(os, "({}) {}", t, *c.arg);
+                        fmt::print(os, "({}) {}", t, c.arg);
                     },
                 }, c.type);
             },
             [&] (const field_selection& fs)  {
-                fmt::print(os, "({}.{})", *fs.structure, fs.field);
+                fmt::print(os, "({}.{})", fs.structure, fs.field);
             },
             [&] (const null&) {
                 // FIXME: adjust tests and change to NULL
@@ -1034,7 +1027,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                             fmt::print(os, ", ");
                         }
                         first = false;
-                        auto& tuple = std::get<tuple_constructor>(e);
+                        auto& tuple = expr::as<tuple_constructor>(e);
                         if (tuple.elements.size() != 2) {
                             on_internal_error(expr_logger, "map constructor element is not a tuple of arity 2");
                         }
@@ -1054,7 +1047,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                         fmt::print(os, ", ");
                     }
                     first = false;
-                    fmt::print(os, "{}:{}", k, *v);
+                    fmt::print(os, "{}:{}", k, v);
                 }
                 fmt::print(os, "}}");
             },
@@ -1070,17 +1063,17 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = std::get_if<tuple_constructor>(&*b.lhs)) {
-        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return std::get<column_value>(v).sub; });
+    if (auto tuple = expr::as_if<tuple_constructor>(&b.lhs)) {
+        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return expr::as<column_value>(v).sub; });
     }
     return false;
 }
 
 expression replace_column_def(const expression& expr, const column_definition* new_cdef) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
-        if (std::holds_alternative<column_value>(expr)) {
+        if (expr::is<column_value>(expr)) {
             return column_value{new_cdef};
-        } else if (std::holds_alternative<tuple_constructor>(expr)) {
+        } else if (expr::is<tuple_constructor>(expr)) {
             throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
         } else {
             return std::nullopt;
@@ -1090,7 +1083,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
 
 expression replace_token(const expression& expr, const column_definition* new_cdef) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
-        if (std::holds_alternative<token>(expr)) {
+        if (expr::is<token>(expr)) {
             return column_value{new_cdef};
         } else {
             return std::nullopt;
@@ -1107,7 +1100,7 @@ expression search_and_replace(const expression& e,
     if (replace_result) {
         return std::move(*replace_result);
     } else {
-        return std::visit(
+        return expr::visit(
             overloaded_functor{
                 [&] (const conjunction& conj) -> expression {
                     return conjunction{
@@ -1117,10 +1110,10 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const binary_operator& oper) -> expression {
-                    return binary_operator(recurse(*oper.lhs), oper.op, oper.rhs);
+                    return binary_operator(recurse(oper.lhs), oper.op, oper.rhs);
                 },
                 [&] (const column_mutation_attribute& cma) -> expression {
-                    return column_mutation_attribute{cma.kind, recurse(*cma.column)};
+                    return column_mutation_attribute{cma.kind, recurse(cma.column)};
                 },
                 [&] (const tuple_constructor& tc) -> expression {
                     return tuple_constructor{
@@ -1142,7 +1135,7 @@ expression search_and_replace(const expression& e,
                 [&] (const usertype_constructor& uc) -> expression {
                     usertype_constructor::elements_map_type m;
                     for (auto& [k, v] : uc.elements) {
-                        m.emplace(k, recurse(*v));
+                        m.emplace(k, recurse(v));
                     }
                     return usertype_constructor{std::move(m), uc.type};
                 },
@@ -1155,10 +1148,10 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const cast& c) -> expression {
-                    return cast{recurse(*c.arg), c.type};
+                    return cast{recurse(c.arg), c.type};
                 },
                 [&] (const field_selection& fs) -> expression {
-                    return field_selection{recurse(*fs.structure), fs.field};
+                    return field_selection{recurse(fs.structure), fs.field};
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -1206,7 +1199,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 
         void operator()(const conjunction& conj) {
             for (const expression& child : conj.children) {
-                std::visit(*this, child);
+                expr::visit(*this, child);
             }
         }
 
@@ -1217,7 +1210,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
 
             current_binary_operator = &oper;
-            std::visit(*this, *oper.lhs);
+            expr::visit(*this, oper.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -1247,7 +1240,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         .current_binary_operator = nullptr,
     };
 
-    std::visit(v, expr);
+    expr::visit(v, expr);
 
     return std::move(v.restrictions);
 }
@@ -1340,7 +1333,7 @@ cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& o
 }
 
 constant evaluate(const expression& e, const query_options& options) {
-    return std::visit(overloaded_functor {
+    return expr::visit(overloaded_functor {
         [](const binary_operator&) -> constant {
             on_internal_error(expr_logger, "Can't evaluate a binary_operator");
         },
@@ -1648,7 +1641,7 @@ static constant evaluate_map(const collection_constructor& collection, const que
     std::map<managed_bytes, managed_bytes, serialized_compare> evaluated_elements(mtype.get_keys_type()->as_less_comparator());
 
     for (const expression& element : collection.elements) {
-        if (auto tuple = std::get_if<tuple_constructor>(&element)) {
+        if (auto tuple = expr::as_if<tuple_constructor>(&element)) {
             constant key = evaluate(tuple->elements.at(0), options);
             constant value = evaluate(tuple->elements.at(1), options);
 
@@ -1734,7 +1727,7 @@ constant evaluate(const usertype_constructor& user_val, const query_options& opt
                 utype.field_name_as_string(i)));
         }
 
-        constant field_val = evaluate(*cur_field->second, options);
+        constant field_val = evaluate(cur_field->second, options);
         if (field_val.is_unset_value()) {
             // TODO: Behaviour copied from user_types::delayed_value::bind(), but this seems incorrect
             field_val.value = raw_value::make_null();
@@ -1807,7 +1800,7 @@ constant evaluate_IN_list(term* term_ptr, const query_options& options) {
 
     expression e = term_ptr->to_expression();
 
-    if (auto collection = std::get_if<collection_constructor>(&e)) {
+    if (auto collection = expr::as_if<collection_constructor>(&e)) {
         if (collection->style == collection_constructor::style_type::list) {
             return evaluate_list(*collection, options, true);
         }

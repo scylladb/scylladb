@@ -230,26 +230,26 @@ struct uninitialized {
         }
         std::map<sstring, sstring> res;
         for (auto&& entry : map.elements) {
-            auto entry_tuple = std::get_if<tuple_constructor>(&entry);
+            auto entry_tuple = expr::as_if<tuple_constructor>(&entry);
             // Because the parser tries to be smart and recover on error (to
             // allow displaying more than one error I suppose), we have default-constructed
             // entries in map.elements. Just skip those, a proper error will be thrown in the end.
             if (!entry_tuple || entry_tuple->elements.size() != 2) {
                 break;
             }
-            auto left = std::get_if<untyped_constant>(&entry_tuple->elements[0]);
+            auto left = expr::as_if<untyped_constant>(&entry_tuple->elements[0]);
             if (!left) {
                 sstring msg = fmt::format("Invalid property name: {}", entry_tuple->elements[0]);
-                if (std::holds_alternative<bind_variable>(entry_tuple->elements[0])) {
+                if (expr::is<bind_variable>(entry_tuple->elements[0])) {
                     msg += " (bind variables are not supported in DDL queries)";
                 }
                 add_recognition_error(msg);
                 break;
             }
-            auto right = std::get_if<untyped_constant>(&entry_tuple->elements[1]);
+            auto right = expr::as_if<untyped_constant>(&entry_tuple->elements[1]);
             if (!right) {
                 sstring msg = fmt::format("Invalid property value: {} for property: {}", entry_tuple->elements[0], entry_tuple->elements[1]);
-                if (std::holds_alternative<bind_variable>(entry_tuple->elements[1])) {
+                if (expr::is<bind_variable>(entry_tuple->elements[1])) {
                     msg += " (bind variables are not supported in DDL queries)";
                 }
                 add_recognition_error(msg);

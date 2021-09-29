@@ -363,7 +363,7 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
 {
     // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
     (void)_if_not_exists;
-    assert(std::holds_alternative<cql3::expr::untyped_constant>(_json_value) || std::holds_alternative<cql3::expr::bind_variable>(_json_value));
+    assert(expr::is<cql3::expr::untyped_constant>(_json_value) || expr::is<cql3::expr::bind_variable>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = prepare_term(_json_value, db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->fill_prepare_context(ctx);

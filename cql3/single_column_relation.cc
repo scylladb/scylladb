@@ -77,7 +77,7 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prep
     if (!_map_key) {
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
-        r->expression = binary_operator{&column_def, expr::oper_t::EQ, std::move(term)};
+        r->expression = binary_operator{column_value{&column_def}, expr::oper_t::EQ, std::move(term)};
         return r;
     }
     auto&& receivers = to_receivers(*schema, column_def);
@@ -102,19 +102,19 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, prep
     if (_value) {
         auto term = to_term(receivers, *_value, db, schema->ks_name(), ctx);
         auto r = ::make_shared<single_column_restriction>(column_def);
-        r->expression = binary_operator{&column_def, expr::oper_t::IN, std::move(term)};
+        r->expression = binary_operator{column_value{&column_def}, expr::oper_t::IN, std::move(term)};
         return r;
     }
     auto terms = to_terms(receivers, _in_values, db, schema->ks_name(), ctx);
     // Convert a single-item IN restriction to an EQ restriction
     if (terms.size() == 1) {
         auto r = ::make_shared<single_column_restriction>(column_def);
-        r->expression = binary_operator{&column_def, expr::oper_t::EQ, std::move(terms[0])};
+        r->expression = binary_operator{column_value{&column_def}, expr::oper_t::EQ, std::move(terms[0])};
         return r;
     }
     auto r = ::make_shared<single_column_restriction>(column_def);
     r->expression = binary_operator{
-            &column_def,
+            column_value{&column_def},
             expr::oper_t::IN,
             ::make_shared<lists::delayed_value>(std::move(terms), list_type_impl::get_instance(column_def.type, false))};
     return r;
@@ -130,7 +130,7 @@ single_column_relation::new_LIKE_restriction(
     }
     auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
-    r->expression = binary_operator{&column_def, expr::oper_t::LIKE, std::move(term)};
+    r->expression = binary_operator{column_value{&column_def}, expr::oper_t::LIKE, std::move(term)};
     return r;
 }
 

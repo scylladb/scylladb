@@ -164,7 +164,7 @@ static std::vector<expr::expression> extract_partition_range(
         const binary_operator* current_binary_operator = nullptr;
 
         void operator()(const conjunction& c) {
-            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+            std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
         }
 
         void operator()(const binary_operator& b) {
@@ -172,7 +172,7 @@ static std::vector<expr::expression> extract_partition_range(
                 throw std::logic_error("Nested binary operators are not supported");
             }
             current_binary_operator = &b;
-            std::visit(*this, *b.lhs);
+            expr::visit(*this, b.lhs);
             current_binary_operator = nullptr;
         }
 
@@ -246,7 +246,7 @@ static std::vector<expr::expression> extract_partition_range(
             on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
         }
     } v;
-    std::visit(v, where_clause);
+    expr::visit(v, where_clause);
     if (v.tokens) {
         return {std::move(*v.tokens)};
     }
@@ -273,7 +273,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         const binary_operator* current_binary_operator = nullptr;
 
         void operator()(const conjunction& c) {
-            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+            std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
         }
 
         void operator()(const binary_operator& b) {
@@ -281,13 +281,13 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
                 throw std::logic_error("Nested binary operators are not supported");
             }
             current_binary_operator = &b;
-            std::visit(*this, *b.lhs);
+            expr::visit(*this, b.lhs);
             current_binary_operator = nullptr;
         }
 
         void operator()(const tuple_constructor& tc) {
             for (auto& e : tc.elements) {
-                if (!std::holds_alternative<column_value>(e)) {
+                if (!expr::is<column_value>(e)) {
                     on_internal_error(rlogger, fmt::format("extract_clustering_prefix_restrictions: tuple of non-column_value: {}", tc));
                 }
             }
@@ -356,7 +356,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
         }
     } v;
-    std::visit(v, where_clause);
+    expr::visit(v, where_clause);
 
     if (!v.multi.empty()) {
         return move(v.multi);
@@ -403,7 +403,7 @@ statement_restrictions::statement_restrictions(database& db,
                 }
                 // currently, the grammar only allows the NULL argument to be
                 // "IS NOT", so this assertion should not be able to fail
-                assert(std::holds_alternative<expr::null>(*r->get_value()));
+                assert(expr::is<expr::null>(*r->get_value()));
 
                 auto col_id = r->get_entity()->prepare_column_identifier(*schema);
                 const auto *cd = get_column_definition(*schema, *col_id);
@@ -762,7 +762,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     size_t product_size = 1;
     for (const auto& e : expressions) {
         if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
-            if (auto cv = std::get_if<expr::column_value>(&*arbitrary_binop->lhs)) {
+            if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
                 const value_set vals = possible_lhs_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
@@ -791,7 +791,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
         const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
-        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
@@ -977,10 +977,10 @@ struct multi_column_range_accumulator {
     void operator()(const binary_operator& binop) {
         if (is_compare(binop.op)) {
             auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options));
-            auto& lhs = std::get<tuple_constructor>(*binop.lhs);
+            auto& lhs = expr::as<tuple_constructor>(binop.lhs);
             std::vector<managed_bytes> values(lhs.elements.size());
             for (size_t i = 0; i < lhs.elements.size(); ++i) {
-                auto& col = std::get<column_value>(lhs.elements.at(i));
+                auto& col = expr::as<column_value>(lhs.elements.at(i));
                 values[i] = *statements::request_validations::check_not_null(
                         opt_values[i],
                         "Invalid null value in condition for column %s", col.col->name_as_text());
@@ -996,7 +996,7 @@ struct multi_column_range_accumulator {
     }
 
     void operator()(const conjunction& c) {
-        std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+        std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
     }
 
     void operator()(const constant& v) {
@@ -1103,7 +1103,7 @@ std::vector<query::clustering_range> get_multi_column_clustering_bounds(
         const std::vector<expression>& multi_column_restrictions) {
     multi_column_range_accumulator acc{options, schema};
     for (const auto& restr : multi_column_restrictions) {
-        std::visit(acc, restr);
+        expr::visit(acc, restr);
     }
     return acc.ranges;
 }
@@ -1429,12 +1429,12 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
             using namespace expr;
-            const auto& binop = std::get<binary_operator>(r);
+            const auto& binop = expr::as<binary_operator>(r);
             if (is_clustering_order(binop)) {
                 return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
             }
-            for (auto& element : std::get<tuple_constructor>(*binop.lhs).elements) {
-                auto& cv = std::get<column_value>(element);
+            for (auto& element : expr::as<tuple_constructor>(binop.lhs).elements) {
+                auto& cv = expr::as<column_value>(element);
                 if (cv.col->type->is_reversed()) {
                     all_natural = false;
                 } else {
@@ -1602,7 +1602,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
     for (const auto& e : _partition_range_restrictions) {
-        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto pos = _schema->position(*col) + 1;
         (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
     }
@@ -1652,7 +1652,7 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         if (!any_binop) {
             break;
         }
-        const auto col = std::get<column_value>(*any_binop->lhs).col;
+        const auto col = expr::as<column_value>(any_binop->lhs).col;
         _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
     }
 }
@@ -1666,7 +1666,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     }
     std::vector<managed_bytes> pk_value(_schema->partition_key_size());
     for (const auto& e : _partition_range_restrictions) {
-        const auto col = std::get<column_value>(*find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
@@ -1686,7 +1686,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     }
     // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
     // overwritten.
-    const_cast<::shared_ptr<term>&>(std::get<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
+    const_cast<::shared_ptr<term>&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
             ::make_shared<constants::value>(raw_value::make_value(*token_bytes), token_column.type);
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.

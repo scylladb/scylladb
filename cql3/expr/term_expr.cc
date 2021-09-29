@@ -63,7 +63,7 @@ usertype_constructor_validate_assignable_to(const usertype_constructor& u, datab
         if (!u.elements.contains(field)) {
             continue;
         }
-        const expression& value = *u.elements.at(field);
+        const expression& value = u.elements.at(field);
         auto&& field_spec = usertype_field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(test_assignment(value, db, keyspace, *field_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
@@ -98,7 +98,7 @@ usertype_constructor_prepare_term(const usertype_constructor& u, database& db, c
         if (iraw == u.elements.end()) {
             raw = expr::null();
         } else {
-            raw = *iraw->second;
+            raw = iraw->second;
             ++found_values;
         }
         auto&& value = prepare_term(raw, db, keyspace, usertype_field_spec_of(*receiver, i));
@@ -154,7 +154,7 @@ map_validate_assignable_to(const collection_constructor& c, database& db, const 
     auto&& key_spec = map_key_spec_of(receiver);
     auto&& value_spec = map_value_spec_of(receiver);
     for (auto&& entry : c.elements) {
-        auto& entry_tuple = std::get<tuple_constructor>(entry);
+        auto& entry_tuple = expr::as<tuple_constructor>(entry);
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
@@ -182,7 +182,7 @@ map_test_assignment(const collection_constructor& c, database& db, const sstring
     // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
     auto res = assignment_testable::test_result::EXACT_MATCH;
     for (auto entry : c.elements) {
-        auto& entry_tuple = std::get<tuple_constructor>(entry);
+        auto& entry_tuple = expr::as<tuple_constructor>(entry);
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
@@ -207,7 +207,7 @@ map_prepare_term(const collection_constructor& c, database& db, const sstring& k
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto&& entry : c.elements) {
-        auto& entry_tuple = std::get<tuple_constructor>(entry);
+        auto& entry_tuple = expr::as<tuple_constructor>(entry);
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
@@ -740,7 +740,7 @@ null_prepare_term(database& db, const sstring& keyspace, lw_shared_ptr<column_sp
 static
 sstring
 cast_display_name(const cast& c) {
-    return format("({}){}", std::get<shared_ptr<cql3_type::raw>>(c.type), *c.arg);
+    return format("({}){}", std::get<shared_ptr<cql3_type::raw>>(c.type), c.arg);
 }
 
 static
@@ -773,18 +773,18 @@ static
 shared_ptr<term>
 cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
-    if (!is_assignable(test_assignment(*c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
-        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", *c.arg, type));
+    if (!is_assignable(test_assignment(c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
+        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
     }
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
-    return prepare_term(*c.arg, db, keyspace, receiver);
+    return prepare_term(c.arg, db, keyspace, receiver);
 }
 
 ::shared_ptr<term>
 prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [] (const constant&) -> ::shared_ptr<term> {
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
@@ -849,7 +849,7 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_s
 
 ::shared_ptr<term>
 prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [&] (const bind_variable& bv) -> ::shared_ptr<term> {
             switch (bv.shape) {
             case expr::bind_variable::shape_type::scalar: on_internal_error(expr_logger, "prepare_term_multi_column(bind_variable(scalar))");
@@ -871,7 +871,7 @@ prepare_term_multi_column(const expression& expr, database& db, const sstring& k
 assignment_testable::test_result
 test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
-    return std::visit(overloaded_functor{
+    return expr::visit(overloaded_functor{
         [&] (const constant&) -> test_result {
             // constants shouldn't appear in parser output, only untyped_constants
             on_internal_error(expr_logger, "constants are not yet reachable via term_raw_expr::test_assignment()");

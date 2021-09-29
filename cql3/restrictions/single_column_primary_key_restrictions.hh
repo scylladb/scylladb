@@ -150,7 +150,7 @@ public:
 
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
         if (find_atom(restriction->expression, [] (const expr::binary_operator& b) {
-                    return std::holds_alternative<expr::tuple_constructor>(*b.lhs);
+                    return expr::is<expr::tuple_constructor>(b.lhs);
                 })) {
             throw exceptions::invalid_request_exception(
                 "Mixing single column relations and multi column relations on clustering columns is not allowed");
@@ -169,7 +169,7 @@ public:
         for (auto&& e : restrictions()) {
             auto&& r = e.second;
             assert(!has_slice(r->expression));
-            auto values = std::get<expr::value_list>(possible_lhs_values(e.first, r->expression, options));
+            auto values = expr::as<expr::value_list>(possible_lhs_values(e.first, r->expression, options));
             if (values.empty()) {
                 return {};
             }
