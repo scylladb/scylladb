@@ -546,6 +546,8 @@ private:
     void add_maintenance_sstable(sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
+    // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
+    void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     lw_shared_ptr<memtable> new_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.

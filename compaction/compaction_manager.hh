@@ -241,10 +241,6 @@ public:
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
     future<> remove(column_family* cf);
 
-    // No longer interested in tracking backlog for compactions in this column
-    // family. For instance, we could be ALTERing TABLE to a different strategy.
-    void stop_tracking_ongoing_compactions(column_family* cf);
-
     const stats& get_stats() const {
         return _stats;
     }
