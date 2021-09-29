@@ -611,6 +611,7 @@ void storage_service::bootstrap() {
     auto x = seastar::defer([this] { _is_bootstrap_mode = false; });
     auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
+    slogger.debug("bootstrap: rbno={} replacing={}", bootstrap_rbno, _db.local().is_replacing());
     if (!_db.local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
@@ -636,6 +637,7 @@ void storage_service::bootstrap() {
       if (!bootstrap_rbno) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node
         // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
+        slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), _bootstrap_tokens);
         mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
             auto endpoint = get_broadcast_address();
             tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
