@@ -78,6 +78,7 @@ private:
     topology _topology;
 
     long _ring_version = 0;
+    static thread_local long _static_ring_version;
 
     // Note: if any member is added to this class
     // clone_async() must be updated to copy that member.
@@ -317,12 +318,13 @@ public:
     }
 
     void invalidate_cached_rings() {
-        ++_ring_version;
-        //cachedTokenMap.set(null);
+        _ring_version = ++_static_ring_version;
     }
 
     friend class token_metadata;
 };
+
+thread_local long token_metadata_impl::_static_ring_version;
 
 token_metadata::tokens_iterator::tokens_iterator(const token& start, const token_metadata_impl* token_metadata)
     : _token_metadata(token_metadata) {
