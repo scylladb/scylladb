@@ -1865,13 +1865,11 @@ future<> storage_service::decommission() {
                 throw std::runtime_error(format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
             }
 
-            auto non_system_keyspaces = db.get_non_system_keyspaces();
-            for (const auto& keyspace_name : non_system_keyspaces) {
-                auto erm = db.find_keyspace(keyspace_name).get_effective_replication_map();
-                if (erm->has_pending_ranges(ss.get_broadcast_address())) {
+            ss.get_erm_factory().do_for_each([endpoint] (const locator::effective_replication_map& erm) {
+                if (erm.has_pending_ranges(endpoint)) {
                     throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
                 }
-            }
+            }).get();
 
             slogger.info("DECOMMISSIONING: starts");
             auto leaving_nodes = std::list<gms::inet_address>{endpoint};
