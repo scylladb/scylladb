@@ -41,7 +41,11 @@ token
 murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
     std::array<uint64_t, 2> hash;
     auto&& legacy = key.legacy_form(s);
-    utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
+    auto size = legacy.size();
+    if (size == 0) {
+        return minimum_token();
+    }
+    utils::murmur_hash::hash3_x64_128(legacy.begin(), size, 0, hash);
     return get_token(hash[0]);
 }
 
