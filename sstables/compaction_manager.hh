@@ -100,7 +100,7 @@ private:
     future<> _waiting_reevalution = make_ready_future<>();
     condition_variable _postponed_reevaluation;
     // column families that wait for compaction but had its submission postponed due to ongoing compaction.
-    std::vector<column_family*> _postponed;
+    std::unordered_set<column_family*> _postponed;
     // tracks taken weights of ongoing compactions, only one compaction per weight is allowed.
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
