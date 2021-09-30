@@ -194,37 +194,6 @@ bool storage_service::is_auto_bootstrap() const {
     return _db.local().get_config().auto_bootstrap();
 }
 
-std::unordered_set<token> storage_service::get_replace_tokens() {
-    std::unordered_set<token> ret;
-    std::unordered_set<sstring> tokens;
-    auto tokens_string = _db.local().get_config().replace_token();
-    try {
-        boost::split(tokens, tokens_string, boost::is_any_of(sstring(",")));
-    } catch (...) {
-        throw std::runtime_error(format("Unable to parse replace_token={}", tokens_string));
-    }
-    tokens.erase("");
-    for (auto token_string : tokens) {
-        auto token = dht::token::from_sstring(token_string);
-        ret.insert(token);
-    }
-    return ret;
-}
-
-std::optional<UUID> storage_service::get_replace_node() {
-    auto replace_node = _db.local().get_config().replace_node();
-    if (replace_node.empty()) {
-        return std::nullopt;
-    }
-    try {
-        return utils::UUID(replace_node);
-    } catch (...) {
-        auto msg = format("Unable to parse {} as host-id", replace_node);
-        slogger.error("{}", msg);
-        throw std::runtime_error(msg);
-    }
-}
-
 bool storage_service::is_first_node() {
     if (_db.local().is_replacing()) {
         return false;
@@ -280,9 +249,7 @@ void storage_service::prepare_to_join(
             throw std::runtime_error(msg);
         }
     }
-    if (get_replace_tokens().size() > 0 || get_replace_node()) {
-         throw std::runtime_error("Replace method removed; use replace_address instead");
-    }
+
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
     auto tmlock = std::make_unique<token_metadata_lock>(get_token_metadata_lock().get0());
