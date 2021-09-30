@@ -1769,6 +1769,10 @@ constant evaluate_IN_list(term* term_ptr, const query_options& options) {
 
     expression e = term_ptr->to_expression();
 
+    return evaluate_IN_list(e, options);
+}
+
+constant evaluate_IN_list(const expression& e, const query_options& options) {
     if (auto collection = expr::as_if<collection_constructor>(&e)) {
         if (collection->style == collection_constructor::style_type::list) {
             return evaluate_list(*collection, options, true);

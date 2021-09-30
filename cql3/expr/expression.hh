@@ -698,6 +698,7 @@ constant evaluate(term&, const query_options&);
 constant evaluate_IN_list(const ::shared_ptr<term>&, const query_options&);
 constant evaluate_IN_list(term*, const query_options&);
 constant evaluate_IN_list(term&, const query_options&);
+constant evaluate_IN_list(const expression&, const query_options&);
 
 // Calls evaluate() on the term and then converts the constant to raw_value_view
 cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
