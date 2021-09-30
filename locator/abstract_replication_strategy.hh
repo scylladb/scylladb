@@ -15,6 +15,8 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 
+#include <seastar/core/coroutine.hh>
+
 #include "gms/inet_address.hh"
 #include "locator/snitch_base.hh"
 #include "dht/i_partitioner.hh"
@@ -388,6 +390,13 @@ public:
         return _stopped;
     }
 
+    // Note that func is called with a const effective_replication_map&
+    // If it yields, it must keep erm.shared_from_this() to extend its lifetime
+    future<> do_for_each(std::invocable<const effective_replication_map&> auto func) const noexcept {
+        for (const auto& [key, p] : _effective_replication_maps) {
+            co_await futurize_invoke(func, *p);
+        }
+    }
 private:
     effective_replication_map_ptr find_effective_replication_map(const effective_replication_map::factory_key& key) const;
     effective_replication_map_ptr insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key);
