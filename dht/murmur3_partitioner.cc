@@ -15,11 +15,18 @@
 
 namespace dht {
 
+// Note: Cassandra has a special case where for an empty key it returns
+// minimum_token() instead of 0 (the naturally-calculated hash function for
+// an empty string). Their thinking was that empty partition keys are not
+// allowed anyway. However, they *are* allowed in materialized views, so the
+// empty-key partition should get a real token, not an invalid token, so
+// we dropped this special case. Since we don't support migrating sstables of
+// materialized-views from Cassandra, this Cassandra-Scylla incompatiblity
+// will not cause problems in practice.
+// Note that get_token(const schema& s, partition_key_view key) below must
+// use exactly the same algorithm as this function.
 token
 murmur3_partitioner::get_token(bytes_view key) const {
-    if (key.empty()) {
-        return minimum_token();
-    }
     std::array<uint64_t, 2> hash;
     utils::murmur_hash::hash3_x64_128(key, 0, hash);
     return get_token(hash[0]);
