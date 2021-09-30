@@ -2040,29 +2040,22 @@ future<> system_keyspace::make(database& db, service::storage_service& ss) {
 }
 
 future<utils::UUID> system_keyspace::get_local_host_id() {
-    using namespace cql_transport::messages;
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        auto new_id = [] {
-            auto host_id = utils::make_random_uuid();
-            return set_local_host_id(host_id);
-        };
-        if (msg->empty() || !msg->one().has("host_id")) {
-            return new_id();
-        }
-
+    auto msg = co_await qctx->execute_cql(req, sstring(LOCAL));
+    if (msg->empty() || !msg->one().has("host_id")) {
+        auto host_id = utils::make_random_uuid();
+        co_return co_await set_local_host_id(host_id);
+    } else {
         auto host_id = msg->one().get_as<utils::UUID>("host_id");
-        return make_ready_future<utils::UUID>(host_id);
-    });
+        co_return host_id;
+    }
 }
 
 future<utils::UUID> system_keyspace::set_local_host_id(const utils::UUID& host_id) {
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL), host_id).then([] (auto msg) {
-        return force_blocking_flush(LOCAL);
-    }).then([host_id] {
-        return host_id;
-    });
+    co_await qctx->execute_cql(req, sstring(LOCAL), host_id);
+    co_await force_blocking_flush(LOCAL);
+    co_return host_id;
 }
 
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
