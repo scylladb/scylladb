@@ -1355,8 +1355,12 @@ for mode in modes:
 has_wasmtime = os.path.isfile('/usr/lib64/libwasmtime.a') and os.path.isdir('/usr/local/include/wasmtime')
 
 if has_wasmtime:
-    for mode in modes:
-        modes[mode]['cxxflags'] += ' -DSCYLLA_ENABLE_WASMTIME'
+    if platform.machine() == 'aarch64':
+        print("wasmtime is temporarily not supported on aarch64. Ref: issue #9387")
+        has_wasmtime = False
+    else:
+        for mode in modes:
+            modes[mode]['cxxflags'] += ' -DSCYLLA_ENABLE_WASMTIME'
 else:
     print("wasmtime not found - WASM support will not be enabled in this build")
 
