@@ -1063,6 +1063,10 @@ public:
         return _id;
     }
 
+    raft::configuration get_configuration() const {
+        return _server->get_configuration();
+    }
+
     void deliver(raft::server_id src, const typename rpc<typename M::state_t>::message_t& m) {
         assert(_started);
         if (!_gate.is_closed()) {
@@ -2046,10 +2050,17 @@ std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
     return os << format("ret{{{}, {}}}", r.x, r.prev);
 }
 
+namespace raft {
+std::ostream& operator<<(std::ostream& os, const raft::server_address& a) {
+    return os << a.id;
+}
+}
+
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
-            network_majority_grudge<AppendReg>
+            network_majority_grudge<AppendReg>,
+            reconfiguration<AppendReg>
         >>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
 
@@ -2076,39 +2087,77 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // Wait for the server to elect itself as a leader.
         assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
 
+        size_t no_all_servers = 10;
+        std::vector<raft::server_id> all_servers{leader_id};
+        for (size_t i = 1; i < no_all_servers; ++i) {
+            all_servers.push_back(co_await env.new_server(false));
+        }
 
-        size_t no_servers = 5;
-        std::unordered_set<raft::server_id> servers{leader_id};
-        for (size_t i = 1; i < no_servers; ++i) {
-            servers.insert(co_await env.new_server(false));
+        size_t no_init_servers = 5;
+
+        // `known_config` represents the set of servers that may potentially be in the cluster configuration.
+        //
+        // It is not possible to determine in general what the 'true' current configuration is (if even such notion
+        // makes sense at all). Given a sequence of reconfiguration requests, assuming that all except possibly the last
+        // requests have finished, then:
+        // - if the last request has finished successfully, then the current configuration must be equal
+        //   to the one chosen in the last request;
+        // - but if it hasn't finished yet, or it finished with a failure, the current configuration may contain servers
+        //   from the one chosen in the last request or from the previously known set of servers.
+        //
+        // The situation is even worse considering that requests may never 'finish', i.e. we may never get a response
+        // to a reconfiguration request (in which case we eventually timeout). These requests may in theory execute
+        // at any point in the future. We take a practical approach when updating `known_config`: we assume
+        // that our timeouts for reconfiguration requests are large enough so that if a reconfiguration request
+        // has timed out, it has either already finished or it never will.
+        // TODO: this may not be true and we may end up with `known_config` that does not contain the current leader
+        // (not observed in practice yet though... I think) Come up with a better approach.
+        std::unordered_set<raft::server_id> known_config;
+
+        for (size_t i = 0; i < no_init_servers; ++i) {
+            known_config.insert(all_servers[i]);
         }
 
         assert(std::holds_alternative<std::monostate>(
             co_await env.get_server(leader_id).reconfigure(
-                std::vector<raft::server_id>{servers.begin(), servers.end()}, timer.now() + 100_t, timer)));
+                std::vector<raft::server_id>{known_config.begin(), known_config.end()}, timer.now() + 100_t, timer)));
 
-        auto threads = operation::make_thread_set(servers.size() + 1);
+        auto threads = operation::make_thread_set(all_servers.size() + 2);
         auto nemesis_thread = some(threads);
+
+        auto threads_without_nemesis = threads;
+        threads_without_nemesis.erase(nemesis_thread);
+
+        auto reconfig_thread = some(threads_without_nemesis);
 
         auto seed = tests::random::get_int<int32_t>();
 
-        // TODO: make it dynamic based on the current configuration
-        std::unordered_set<raft::server_id>& known = servers;
-
         raft_call<AppendReg>::state_type db_call_state {
             .env = env,
-            .known = known,
+            .known = known_config,
             .timer = timer
         };
 
         network_majority_grudge<AppendReg>::state_type network_majority_grudge_state {
             .env = env,
-            .known = known,
+            .known = known_config,
             .timer = timer,
             .rnd = std::mt19937{seed}
         };
 
-        auto init_state = op_type::state_type{std::move(db_call_state), std::move(network_majority_grudge_state)};
+        reconfiguration<AppendReg>::state_type reconfiguration_state {
+            .all_servers = all_servers,
+            .env = env,
+            .known = known_config,
+            .timer = timer,
+            .rnd = std::mt19937{seed}
+        };
+
+        auto init_state = op_type::state_type{
+            std::move(db_call_state),
+            std::move(network_majority_grudge_state),
+            std::move(reconfiguration_state)
+        };
 
         using namespace generator;
 
@@ -2131,11 +2180,16 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                         return op_type{network_majority_grudge<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
                     })
                 ),
-                stagger(seed, timer.now(), 0_t, 50_t,
-                    sequence(1, [] (int32_t i) {
-                        assert(i > 0);
-                        return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                    })
+                pin(reconfig_thread,
+                    stagger(seed, timer.now() + 1000_t, 500_t, 500_t,
+                        constant([] () { return op_type{reconfiguration<AppendReg>{500_t}}; })
+                    ),
+                    stagger(seed, timer.now(), 0_t, 50_t,
+                        sequence(1, [] (int32_t i) {
+                            assert(i > 0);
+                            return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                        })
+                    )
                 )
             )
         );
@@ -2178,6 +2232,10 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 } else {
                     tlogger.debug("completion {}", c);
                 }
+
+                // TODO: check consistency of reconfiguration completions
+                // (there's not much to check, but for example: we should not get back `conf_change_in_progress`
+                //  if our last reconfiguration was successful?).
             }
         };
 
@@ -2201,7 +2259,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
             auto now = timer.now();
             auto leader = co_await wait_for_leader<AppendReg>{}(env,
-                        std::vector<raft::server_id>{servers.begin(), servers.end()}, timer, limit)
+                        std::vector<raft::server_id>{all_servers.begin(), all_servers.end()}, timer, limit)
                     .handle_exception_type([&timer, now] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
                 tlogger.error("Failed to find a leader after {} ticks at the end of test.", timer.now() - now);
                 assert(false);
@@ -2214,16 +2272,22 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 continue;
             }
 
-            for (auto& s: servers) {
+            auto config = env.get_server(leader).get_configuration();
+            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config.current, config.previous);
+
+            for (auto& s: all_servers) {
                 auto& srv = env.get_server(s);
                 if (srv.is_leader() && s != leader) {
-                    tlogger.debug("There is another leader: {}", s);
+                    auto conf = srv.get_configuration();
+                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf.current, conf.previous);
                 }
             }
 
+            tlogger.debug("From the clients' point of view, the possible cluster members are: {}", known_config);
+
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
                 return env.get_server(id).call(AppendReg::append{-1}, timer.now() + 200_t, timer);
-            }}(timer, known, leader, known.size() + 1, 10_t, 10_t);
+            }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
                 tlogger.debug("Last result: {}", res);
