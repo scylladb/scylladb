@@ -1424,6 +1424,13 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 
 /////////////////// class topology end /////////////////////////////////////////
 
+void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
+    if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
+        on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
+    }
+    _shared = std::move(tmptr);
+}
+
 future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
     auto lk = co_await get_lock();
     auto tm = co_await _shared->clone_async();

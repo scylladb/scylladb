@@ -379,9 +379,7 @@ public:
         return _shared;
     }
 
-    void set(mutable_token_metadata_ptr tmptr) noexcept {
-        _shared = std::move(tmptr);
-    }
+    void set(mutable_token_metadata_ptr tmptr) noexcept;
 
     // Token metadata changes are serialized
     // using the schema_tables merge_lock.
