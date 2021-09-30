@@ -204,7 +204,7 @@ public:
     {
         using namespace expr;
         expression = binary_operator{
-            column_definitions_as_tuple_constructor(_column_defs), oper_t::EQ, _value};
+            column_definitions_as_tuple_constructor(_column_defs), oper_t::EQ, expr::to_expression(_value)};
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -329,7 +329,7 @@ public:
         expression = binary_operator{
             column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
-            ::make_shared<lists::delayed_value>(_values, std::move(in_list_type))};
+            expr::to_expression(::make_shared<lists::delayed_value>(_values, std::move(in_list_type)))};
     }
 };
 
@@ -348,7 +348,7 @@ public:
         expression = binary_operator{
             column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
-            std::move(marker)};
+            expr::to_expression(std::move(marker))};
     }
 };
 
@@ -370,7 +370,7 @@ public:
         expression = expr::binary_operator{
             column_definitions_as_tuple_constructor(defs),
             expr::pick_operator(bound, inclusive),
-            std::move(term),
+            expr::to_expression(std::move(term)),
             m};
     }
 
@@ -472,17 +472,17 @@ private:
      */
     ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
                                                              std::size_t column_pos, const managed_bytes_opt& value) const {
-        ::shared_ptr<cql3::term> term =
-            ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value), _column_defs[column_pos]->type);
+        expr::expression e = expr::to_expression(
+            ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value), _column_defs[column_pos]->type));
         using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = binary_operator{column_value{_column_defs[column_pos]}, expr::oper_t::EQ, std::move(term)};
+            r->expression = binary_operator{column_value{_column_defs[column_pos]}, expr::oper_t::EQ, std::move(e)};
             return r;
         } else {
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
             r->expression = binary_operator{
-                column_value(_column_defs[column_pos]), pick_operator(*bound, inclusive), std::move(term)};
+                column_value(_column_defs[column_pos]), pick_operator(*bound, inclusive), std::move(e)};
             return r;
         }
     }

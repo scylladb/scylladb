@@ -1617,7 +1617,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
             oper_t::EQ,
             // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
             // handy mechanism for doing that in query_options.
-            ::make_shared<constants::value>(raw_value::make_unset_value(), token_column->type));
+            expr::constant::make_unset_value(token_column->type));
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
@@ -1689,8 +1689,8 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     }
     // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
     // overwritten.
-    const_cast<::shared_ptr<term>&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
-            ::make_shared<constants::value>(raw_value::make_value(*token_bytes), token_column.type);
+    const_cast<expr::expression&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
+            expr::constant(raw_value::make_value(*token_bytes), token_column.type);
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
@@ -1734,7 +1734,7 @@ sstring statement_restrictions::to_string() const {
 
 static bool has_eq_null(const query_options& options, const expression& expr) {
     return find_atom(expr, [&] (const binary_operator& binop) {
-        return binop.op == oper_t::EQ && !evaluate_to_raw_view(binop.rhs, options);
+        return binop.op == oper_t::EQ && evaluate(binop.rhs, options).is_null();
     });
 }
 

@@ -83,11 +83,11 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         database& db, schema_ptr schema,
         prepare_context& ctx) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
-            schema->ks_name(), ctx);
+    auto e = expr::to_expression(to_term(to_receivers(*schema, column_defs), _value, db,
+            schema->ks_name(), ctx));
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
-    r->expression = binary_operator{token{}, oper_t::EQ, std::move(term)};
+    r->expression = binary_operator{token{}, oper_t::EQ, std::move(e)};
     return r;
 }
 
@@ -105,11 +105,11 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         statements::bound bound,
         bool inclusive) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
-            schema->ks_name(), ctx);
+    auto e = expr::to_expression(to_term(to_receivers(*schema, column_defs), _value, db,
+            schema->ks_name(), ctx));
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
-    r->expression = binary_operator{token{}, pick_operator(bound, inclusive), std::move(term)};
+    r->expression = binary_operator{token{}, pick_operator(bound, inclusive), std::move(e)};
     return r;
 }
 
