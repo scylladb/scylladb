@@ -1269,6 +1269,7 @@ future<> system_keyspace::setup_version(distributed<gms::feature_service>& feat,
 struct local_cache {
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
     system_keyspace::bootstrap_state _state;
+    std::optional<utils::UUID> _cached_local_host_id;
     future<> stop() {
         return make_ready_future<>();
     }
@@ -2039,7 +2040,15 @@ future<> system_keyspace::make(database& db, service::storage_service& ss) {
     return system_keyspace_make(db, ss);
 }
 
+utils::UUID system_keyspace::get_local_host_id() {
+    return _local_cache.local()._cached_local_host_id.value();
+}
+
 future<utils::UUID> system_keyspace::load_local_host_id() {
+    if (_local_cache.local()._cached_local_host_id) {
+        co_return *_local_cache.local()._cached_local_host_id;
+    }
+
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
     auto msg = co_await qctx->execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
@@ -2047,6 +2056,7 @@ future<utils::UUID> system_keyspace::load_local_host_id() {
         co_return co_await set_local_host_id(host_id);
     } else {
         auto host_id = msg->one().get_as<utils::UUID>("host_id");
+        co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
         co_return host_id;
     }
 }
@@ -2055,6 +2065,7 @@ future<utils::UUID> system_keyspace::set_local_host_id(const utils::UUID& host_i
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
     co_await qctx->execute_cql(req, sstring(LOCAL), host_id);
     co_await force_blocking_flush(LOCAL);
+    co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
     co_return host_id;
 }
 
