@@ -104,7 +104,7 @@ public:
     void insert(partition_entry&) noexcept;
     void insert(partition_version&) noexcept;
     void insert(rows_entry&) noexcept;
-    void on_remove(rows_entry&) noexcept;
+    void on_remove() noexcept;
     void clear_continuity(cache_entry& ce) noexcept;
     void on_partition_erase() noexcept;
     void on_partition_merge() noexcept;
@@ -135,7 +135,7 @@ public:
 };
 
 inline
-void cache_tracker::on_remove(rows_entry& row) noexcept {
+void cache_tracker::on_remove() noexcept {
     --_stats.rows;
     ++_stats.row_removals;
 }

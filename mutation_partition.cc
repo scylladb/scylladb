@@ -346,7 +346,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 if (src_e.dummy()) {
                     p_i = p._rows.erase(p_i);
                     if (tracker) {
-                        tracker->on_remove(src_e);
+                        tracker->on_remove();
                     }
                     del(&src_e);
                     insert = false;
@@ -366,7 +366,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
             // violating exception guarantees.
             src_e.set_continuous(false);
             if (tracker) {
-                tracker->on_remove(*i);
+                tracker->on_remove();
                 // Newer evictable versions store complete rows
                 i->replace_with(std::move(src_e));
             } else {
@@ -2209,7 +2209,7 @@ stop_iteration mutation_partition::clear_gently(cache_tracker* tracker) noexcept
     auto end = _rows.end();
     while (i != end) {
         if (tracker) {
-            tracker->on_remove(*i);
+            tracker->on_remove();
         }
         i = _rows.erase_and_dispose(i, del);
 
