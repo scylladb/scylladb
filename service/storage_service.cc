@@ -341,9 +341,6 @@ void storage_service::prepare_to_join(
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = db::system_keyspace::load_local_host_id().get0();
-    _db.invoke_on_all([local_host_id] (auto& db) {
-        db.set_local_id(local_host_id);
-    }).get();
     auto features = _feature_service.supported_feature_set();
     if (!replacing_a_node_with_diff_ip) {
         // Replacing node with a different ip should own the host_id only after
