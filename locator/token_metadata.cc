@@ -1068,17 +1068,7 @@ token_metadata::token_metadata()
 token_metadata::~token_metadata() = default;
 
 
-token_metadata::token_metadata(const token_metadata& tm)
-    : _impl(std::make_unique<token_metadata_impl>(*tm._impl)) {
-}
-
 token_metadata::token_metadata(token_metadata&&) noexcept = default;
-
-token_metadata&
-token_metadata::operator=(const token_metadata& that) {
-    *this = token_metadata(that);
-    return *this;
-}
 
 token_metadata& token_metadata::token_metadata::operator=(token_metadata&&) noexcept = default;
 

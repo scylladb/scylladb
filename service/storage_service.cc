@@ -944,7 +944,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     if (slogger.is_enabled(logging::log_level::debug)) {
-        auto tm = get_token_metadata();
+        const auto& tm = get_token_metadata();
         auto ver = tm.get_ring_version();
         for (auto& x : tm.get_token_to_endpoint()) {
             slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);

@@ -172,9 +172,7 @@ private:
 public:
     token_metadata();
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
-    token_metadata(const token_metadata&);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
-    token_metadata& operator=(const token_metadata&);
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
