@@ -2039,7 +2039,7 @@ future<> system_keyspace::make(database& db, service::storage_service& ss) {
     return system_keyspace_make(db, ss);
 }
 
-future<utils::UUID> system_keyspace::get_local_host_id() {
+future<utils::UUID> system_keyspace::load_local_host_id() {
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
     auto msg = co_await qctx->execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {

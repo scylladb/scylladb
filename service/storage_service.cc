@@ -340,7 +340,7 @@ void storage_service::prepare_to_join(
     // for bootstrap to get the load info it needs.
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
-    auto local_host_id = db::system_keyspace::get_local_host_id().get0();
+    auto local_host_id = db::system_keyspace::load_local_host_id().get0();
     _db.invoke_on_all([local_host_id] (auto& db) {
         db.set_local_id(local_host_id);
     }).get();
