@@ -1327,6 +1327,10 @@ std::ostream& operator<<(std::ostream& os, const ExReg::exchange& e) {
 
 // Wait until either one of `nodes` in `env` becomes a leader, or time point `timeout` is reached according to `timer` (whichever happens first).
 // If the leader is found, returns it. Otherwise throws a `logical_timer::timed_out` exception.
+//
+// Note: the returned node may have been a leader the moment we found it, but may have just stepped down
+// the moment we return it. It may be useful to call this function multiple times during cluster
+// stabilization periods in order to find a node that will successfully answer calls.
 template <PureStateMachine M>
 struct wait_for_leader {
     // FIXME: change into free function after clang bug #50345 is fixed
@@ -1351,7 +1355,9 @@ struct wait_for_leader {
         }(env.weak_from_this(), std::move(nodes)));
 
         assert(l != raft::server_id{});
-        assert(env.get_server(l).is_leader());
+
+        // Note: `l` may no longer be a leader at this point if there was a yield at the `co_await` above
+        // and `l` decided to step down, was restarted, or just got removed from the configuration.
 
         co_return l;
     }
@@ -2108,20 +2114,53 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             consistency_checker{}};
         co_await interp.run();
 
-        // All network partitions are healed, this should succeed:
-        auto last_leader = co_await wait_for_leader<AppendReg>{}(env, std::vector<raft::server_id>{servers.begin(), servers.end()}, timer, timer.now() + 10000_t)
-                .handle_exception_type([] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
-            tlogger.error("Failed to find a leader after 10000 ticks at the end of test (network partitions are healed).");
-            assert(false);
-        });
+        tlogger.debug("Finished generator run, time: {}", timer.now());
 
-        // Should also succeed
-        auto last_res = co_await env.get_server(last_leader).call(AppendReg::append{-1}, timer.now() + 10000_t, timer);
-        if (!std::holds_alternative<typename AppendReg::ret>(last_res)) {
-            tlogger.error(
-                    "Expected success on the last call in the test (after electing a leader; network partitions are healed)."
-                    " Got: {}", last_res);
-            assert(false);
+        // Liveness check: we must be able to obtain a final response after all the nemeses have stopped.
+        // Due to possible multiple leaders at this point and the cluster stabilizing (for example there
+        // may be no leader right now, the current leader may be stepping down etc.) we may need to try
+        // sending requests multiple times to different servers to obtain the last result.
+
+        auto limit = timer.now() + 10000_t;
+        size_t cnt = 0;
+        for (; timer.now() < limit; ++cnt) {
+            tlogger.debug("Trying to obtain last result: attempt number {}", cnt + 1);
+
+            auto now = timer.now();
+            auto leader = co_await wait_for_leader<AppendReg>{}(env,
+                        std::vector<raft::server_id>{servers.begin(), servers.end()}, timer, limit)
+                    .handle_exception_type([&timer, now] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
+                tlogger.error("Failed to find a leader after {} ticks at the end of test.", timer.now() - now);
+                assert(false);
+            });
+
+            if (env.get_server(leader).is_leader()) {
+                tlogger.debug("Leader {} found after {} ticks", leader, timer.now() - now);
+            } else {
+                tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
+                continue;
+            }
+
+            for (auto& s: servers) {
+                auto& srv = env.get_server(s);
+                if (srv.is_leader() && s != leader) {
+                    tlogger.debug("There is another leader: {}", s);
+                }
+            }
+
+            auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
+                return env.get_server(id).call(AppendReg::append{-1}, timer.now() + 200_t, timer);
+            }}(timer, known, leader, known.size() + 1, 10_t, 10_t);
+
+            if (std::holds_alternative<typename AppendReg::ret>(res)) {
+                tlogger.debug("Last result: {}", res);
+                co_return;
+            }
+
+            tlogger.warn("Failed to obtain last result at end of test: {} returned by {}", res, last_attempted_server);
         }
+
+        tlogger.error("Failed to obtain a final successful response at the end of the test. Number of attempts: {}", cnt);
+        assert(false);
     });
 }
