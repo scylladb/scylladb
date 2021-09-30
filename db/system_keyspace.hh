@@ -363,7 +363,12 @@ public:
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    static future<utils::UUID> get_local_host_id();
+    static future<utils::UUID> load_local_host_id();
+    /**
+     * Read the host ID from the system keyspace, generating an exception if it
+     * doesn't exist.
+     */
+    static utils::UUID get_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
