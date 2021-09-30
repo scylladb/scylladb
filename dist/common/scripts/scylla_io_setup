@@ -180,62 +180,64 @@ if __name__ == "__main__":
         print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
+    # --ami option is not used anymore, but keep it for compatibility
     parser.add_argument('--ami', dest='ami', action='store_true',
                         help='configure AWS AMI')
     args = parser.parse_args()
 
     cpudata = scylla_cpuinfo()
     if not is_developer_mode():
-        if args.ami:
+        if aws_instance.is_aws_instance():
             idata = aws_instance()
 
-            if not idata.is_supported_instance_class():
-                logging.error('{} is not supported instance type, run "scylla_io_setup" again without --ami option.'.format(idata.instance()))
-                sys.exit(1)
-            disk_properties = {}
-            disk_properties["mountpoint"] = datadir()
-            nr_disks = len(idata.ephemeral_disks())
-            ## both i3 and i2 can run with 1 I/O Queue per shard
-            if idata.instance() == "i3.large":
-                disk_properties["read_iops"] = 111000
-                disk_properties["read_bandwidth"] = 653925080
-                disk_properties["write_iops"] = 36800
-                disk_properties["write_bandwidth"] = 215066473
-            elif idata.instance() == "i3.xlarge":
-                disk_properties["read_iops"] = 200800
-                disk_properties["read_bandwidth"] = 1185106376
-                disk_properties["write_iops"] = 53180
-                disk_properties["write_bandwidth"] = 423621267
-            elif idata.instance_class() == "i3":
-                disk_properties["read_iops"] = 411200 * nr_disks
-                disk_properties["read_bandwidth"] = 2015342735 * nr_disks
-                disk_properties["write_iops"] = 181500 * nr_disks
-                disk_properties["write_bandwidth"] = 808775652 * nr_disks
-            elif idata.instance_class() == "i3en":
-                if idata.instance() == "i3en.large":
-                    disk_properties["read_iops"] = 43315
-                    disk_properties["read_bandwidth"] = 330301440
-                    disk_properties["write_iops"] = 33177
-                    disk_properties["write_bandwidth"] = 165675008
-                elif idata.instance() in ("i3en.xlarge", "i3en.2xlarge"):
-                    disk_properties["read_iops"] = 84480 * nr_disks
-                    disk_properties["read_bandwidth"] = 666894336 * nr_disks
-                    disk_properties["write_iops"] = 66969 * nr_disks
-                    disk_properties["write_bandwidth"] = 333447168 * nr_disks
-                else:
-                    disk_properties["read_iops"] = 257024 * nr_disks
-                    disk_properties["read_bandwidth"] = 2043674624 * nr_disks
-                    disk_properties["write_iops"] = 174080 * nr_disks
-                    disk_properties["write_bandwidth"] = 1024458752 * nr_disks
-            elif idata.instance_class() == "i2":
-                disk_properties["read_iops"] = 64000 * nr_disks
-                disk_properties["read_bandwidth"] = 507338935 * nr_disks
-                disk_properties["write_iops"] = 57100 * nr_disks
-                disk_properties["write_bandwidth"] = 483141731 * nr_disks
-            properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
-            yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
-            ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
-            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+            if idata.is_supported_instance_class():
+                disk_properties = {}
+                disk_properties["mountpoint"] = datadir()
+                nr_disks = len(idata.ephemeral_disks())
+                ## both i3 and i2 can run with 1 I/O Queue per shard
+                if idata.instance() == "i3.large":
+                    disk_properties["read_iops"] = 111000
+                    disk_properties["read_bandwidth"] = 653925080
+                    disk_properties["write_iops"] = 36800
+                    disk_properties["write_bandwidth"] = 215066473
+                elif idata.instance() == "i3.xlarge":
+                    disk_properties["read_iops"] = 200800
+                    disk_properties["read_bandwidth"] = 1185106376
+                    disk_properties["write_iops"] = 53180
+                    disk_properties["write_bandwidth"] = 423621267
+                elif idata.instance_class() == "i3":
+                    disk_properties["read_iops"] = 411200 * nr_disks
+                    disk_properties["read_bandwidth"] = 2015342735 * nr_disks
+                    disk_properties["write_iops"] = 181500 * nr_disks
+                    disk_properties["write_bandwidth"] = 808775652 * nr_disks
+                elif idata.instance_class() == "i3en":
+                    if idata.instance() == "i3en.large":
+                        disk_properties["read_iops"] = 43315
+                        disk_properties["read_bandwidth"] = 330301440
+                        disk_properties["write_iops"] = 33177
+                        disk_properties["write_bandwidth"] = 165675008
+                    elif idata.instance() in ("i3en.xlarge", "i3en.2xlarge"):
+                        disk_properties["read_iops"] = 84480 * nr_disks
+                        disk_properties["read_bandwidth"] = 666894336 * nr_disks
+                        disk_properties["write_iops"] = 66969 * nr_disks
+                        disk_properties["write_bandwidth"] = 333447168 * nr_disks
+                    else:
+                        disk_properties["read_iops"] = 257024 * nr_disks
+                        disk_properties["read_bandwidth"] = 2043674624 * nr_disks
+                        disk_properties["write_iops"] = 174080 * nr_disks
+                        disk_properties["write_bandwidth"] = 1024458752 * nr_disks
+                elif idata.instance_class() == "i2":
+                    disk_properties["read_iops"] = 64000 * nr_disks
+                    disk_properties["read_bandwidth"] = 507338935 * nr_disks
+                    disk_properties["write_iops"] = 57100 * nr_disks
+                    disk_properties["write_bandwidth"] = 483141731 * nr_disks
+                properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
+                yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
+                ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
+                ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+            else:
+                logging.error('{} is not supported instance type, running manual iotune.'.format(idata.instance()))
+                run_iotune()
         elif gcp_instance().is_gce_instance():
             idata = gcp_instance()
 
