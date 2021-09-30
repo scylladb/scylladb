@@ -94,8 +94,6 @@ public:
     future<> update_normal_token(token token, inet_address endpoint);
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
     future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
-    void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
-    void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
@@ -193,13 +191,6 @@ public:
      */
     future<token_metadata_impl> clone_async() const noexcept;
 
-    /**
-     * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
-     * bootstrap tokens and leaving endpoints are not included in the copy.
-     */
-    token_metadata_impl clone_only_token_map_sync() const {
-        return token_metadata_impl(this->_token_to_endpoint_map, this->_endpoint_to_host_id_map, this->_topology);
-    }
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
@@ -457,16 +448,6 @@ future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tok
     co_return co_await update_normal_tokens(endpoint_tokens);
 }
 
-void token_metadata_impl::update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint) {
-    if (tokens.empty()) {
-        return;
-    }
-    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, std::move(tokens)}});
-    update_normal_tokens_sync(endpoint_tokens);
-}
-
-// Note: The sync version of this function `update_normal_tokens_sync`
-// must be kept in sync with this function if any change is made.
 future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
     if (endpoint_tokens.empty()) {
         co_return;
@@ -512,64 +493,6 @@ future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet
         sort_tokens();
     }
     co_return;
-}
-
-/**
- * Update token map with a set of token/endpoint pairs in normal state.
- *
- * Prefer this whenever there are multiple pairs to update, as each update (whether a single or multiple)
- * is expensive (CASSANDRA-3831).
- *
- * @param endpointTokens
- *
- * Note: The futurized version of this function `update_normal_tokens`
- * must be kept in sync with this function if any change is made.
- *
- * This version is meant to be deprecated when the whole interface
- * will be futurized.
- */
-void token_metadata_impl::update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
-    if (endpoint_tokens.empty()) {
-        return;
-    }
-
-    bool should_sort_tokens = false;
-    for (auto&& i : endpoint_tokens) {
-        inet_address endpoint = i.first;
-        const auto& tokens = i.second;
-
-        if (tokens.empty()) {
-            auto msg = format("tokens is empty in update_normal_tokens_sync");
-            tlogger.error("{}", msg);
-            throw std::runtime_error(msg);
-        }
-
-        for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
-            if(it->second == endpoint) {
-                it = _token_to_endpoint_map.erase(it);
-            } else {
-                ++it;
-            }
-        }
-
-        _topology.add_endpoint(endpoint);
-        remove_by_value(_bootstrap_tokens, endpoint);
-        _leaving_endpoints.erase(endpoint);
-        invalidate_cached_rings();
-        for (const token& t : tokens)
-        {
-            auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
-            should_sort_tokens |= prev.second; // new token inserted -> sort
-            if (prev.first->second != endpoint) {
-                tlogger.debug("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
-                prev.first->second = endpoint;
-            }
-        }
-    }
-
-    if (should_sort_tokens) {
-        sort_tokens();
-    }
 }
 
 size_t token_metadata_impl::first_token_index(const token& start) const {
@@ -1094,16 +1017,6 @@ token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std:
     return _impl->update_normal_tokens(endpoint_tokens);
 }
 
-void
-token_metadata::update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint) {
-    _impl->update_normal_tokens_sync(std::move(tokens), endpoint);
-}
-
-void
-token_metadata::update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
-    _impl->update_normal_tokens_sync(endpoint_tokens);
-}
-
 const token&
 token_metadata::first_token(const token& start) const {
     return _impl->first_token(start);
@@ -1257,11 +1170,6 @@ future<token_metadata> token_metadata::clone_async() const noexcept {
     return _impl->clone_async().then([] (token_metadata_impl impl) {
         return make_ready_future<token_metadata>(std::make_unique<token_metadata_impl>(std::move(impl)));
     });
-}
-
-token_metadata
-token_metadata::clone_only_token_map_sync() const {
-    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_only_token_map_sync()));
 }
 
 future<token_metadata>
