@@ -1059,7 +1059,9 @@ public:
 
     void deliver(raft::server_id src, const typename rpc<typename M::state_t>::message_t& m) {
         assert(_started);
-        _queue->push(src, m);
+        if (!_gate.is_closed()) {
+            _queue->push(src, m);
+        }
     }
 
 private:
@@ -1241,8 +1243,12 @@ auto with_env_and_ticker(environment_config cfg, F f) {
             auto& env = env_;
             auto& t = t_;
 
-            co_await t->abort();
+            // We abort the environment before the ticker as the environment may require time to advance
+            // in order to finish (e.g. some operations may need to timeout).
             co_await env->abort();
+            tlogger.trace("environment aborted");
+            co_await t->abort();
+            tlogger.trace("ticker aborted");
         });
     });
 }
