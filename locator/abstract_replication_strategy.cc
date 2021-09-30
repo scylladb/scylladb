@@ -252,6 +252,20 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
     co_return ret;
 }
 
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+effective_replication_map::get_range_addresses() const {
+    const token_metadata& tm = *_tmptr;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
+        auto eps = get_natural_endpoints(t);
+        for (auto& r : ranges) {
+            ret.emplace(r, eps);
+        }
+    }
+    return ret;
+}
+
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;

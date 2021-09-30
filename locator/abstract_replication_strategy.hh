@@ -187,6 +187,9 @@ public:
     // instead of one node globally.
     dht::token_range_vector get_primary_ranges_within_dc(inet_address ep) const;
 
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+    get_range_addresses() const;
+
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<bool(inet_address_vector_replica_set)> should_add_range) const;
 };

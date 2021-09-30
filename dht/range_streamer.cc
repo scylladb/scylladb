@@ -114,11 +114,9 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     logger.debug("{} ks={}", __func__, keyspace_name);
 
     auto& ks = _db.local().find_keyspace(keyspace_name);
-    auto& strat = ks.get_replication_strategy();
+    auto erm = ks.get_effective_replication_map();
 
-    auto tm = get_token_metadata().clone_only_token_map().get0();
-    auto range_addresses = strat.get_range_addresses(tm).get0();
-    tm.clear_gently().get();
+    auto range_addresses = erm->get_range_addresses();
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 

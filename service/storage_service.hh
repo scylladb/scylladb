@@ -639,13 +639,9 @@ private:
      *
      * @param keyspaceName the keyspace ranges belong to
      * @param ranges the ranges to find sources for
-     * @param tm the token metadata
      * @return multimap of addresses to ranges the address is responsible for
-     *
-     * @note The function must be called from a seastar thread.
-     *       The caller is responsible for keeping @ref tm valid across the call.
      */
-    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges, const token_metadata& tm);
+    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
 public:
     future<> confirm_replication(inet_address node);
 
@@ -670,7 +666,7 @@ private:
      */
     future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
     future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
-    future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
+    void removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
     std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
