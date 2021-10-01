@@ -459,7 +459,7 @@ schema::schema(reversed_tag, const schema& o)
 {
 }
 
-static lw_shared_ptr<const schema> make_shared_schema(schema_registry* registry, std::optional<utils::UUID> id, std::string_view ks_name,
+lw_shared_ptr<const schema> make_shared_schema(schema_registry& registry, std::optional<utils::UUID> id, std::string_view ks_name,
     std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
     std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
     data_type regular_column_name_type, sstring comment) {
@@ -478,22 +478,6 @@ static lw_shared_ptr<const schema> make_shared_schema(schema_registry* registry,
     }
     builder.set_comment(comment);
     return builder.build();
-}
-
-lw_shared_ptr<const schema> make_shared_schema(schema_registry& registry, std::optional<utils::UUID> id, std::string_view ks_name,
-    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
-    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
-    data_type regular_column_name_type, sstring comment) {
-    return make_shared_schema(&registry, id, ks_name, cf_name, std::move(partition_key), std::move(clustering_key),
-            std::move(regular_columns), std::move(static_columns), std::move(regular_column_name_type), std::move(comment));
-}
-
-lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
-    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
-    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
-    data_type regular_column_name_type, sstring comment) {
-    return make_shared_schema(nullptr, id, ks_name, cf_name, std::move(partition_key), std::move(clustering_key),
-            std::move(regular_columns), std::move(static_columns), std::move(regular_column_name_type), std::move(comment));
 }
 
 schema::~schema() {
