@@ -89,6 +89,7 @@ public:
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
     schema_ptr load(frozen_schema);
+    schema_registry& registry() const { return _registry; }
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
     // Can be called from other shards
