@@ -139,6 +139,8 @@ schema_ptr computed_columns();
 // Belongs to the "system" keyspace
 schema_ptr scylla_table_schema_history();
 
+utils::UUID views_id();
+
 }
 
 namespace legacy {

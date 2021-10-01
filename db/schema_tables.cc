@@ -487,9 +487,13 @@ schema_ptr triggers() {
     return schema;
 }
 
+utils::UUID views_id() {
+    return generate_legacy_id(NAME, VIEWS);
+}
+
 schema_ptr views() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, VIEWS), NAME, VIEWS,
+        schema_builder builder(views_id(), NAME, VIEWS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
