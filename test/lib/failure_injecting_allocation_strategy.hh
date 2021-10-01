@@ -25,7 +25,7 @@
 
 class failure_injecting_allocation_strategy : public allocation_strategy {
     allocation_strategy& _delegate;
-    uint64_t _alloc_count;
+    uint64_t _alloc_count = 0;
     uint64_t _fail_at = std::numeric_limits<uint64_t>::max();
 public:
     failure_injecting_allocation_strategy(allocation_strategy& delegate) : _delegate(delegate) {}
