@@ -154,11 +154,12 @@ void migration_manager::init_messaging_service()
         return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
     _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
-        get_local_storage_proxy().get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        auto& proxy = get_local_storage_proxy();
+        proxy.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
-        return container().invoke_on(shard, [v] (auto&& sp) {
+        return container().invoke_on(shard, [v, &proxy] (auto&& sp) {
             mlogger.debug("Schema version request for {}", v);
-            return local_schema_registry().get_frozen(v);
+            return proxy.local_db().get_schema_registry().get_frozen(v);
         });
     });
 }
@@ -1158,7 +1159,8 @@ future<> migration_manager::sync_schema(const database& db, const std::vector<gm
 }
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v) {
-    schema_ptr s = local_schema_registry().get_or_null(v);
+    auto& db = get_local_storage_proxy().local_db();
+    schema_ptr s = db.get_schema_registry().get_or_null(v);
     if (s) {
         return make_ready_future<column_mapping>(s->get_column_mapping());
     }
