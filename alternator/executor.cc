@@ -816,7 +816,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
 
     tracing::add_table_name(trace_state, keyspace_name, table_name);
 
-    schema_builder builder(keyspace_name, table_name);
+    auto& registry = _proxy.get_db().local().get_schema_registry();
+
+    schema_builder builder(registry, keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(request);
     add_column(builder, hash_key, attribute_definitions, column_kind::partition_key);
     if (!range_key.empty()) {
@@ -847,7 +849,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             elogger.trace("Adding GSI {}", index_name->GetString());
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(keyspace_name, vname);
+            schema_builder view_builder(registry, keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(g);
             if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
                 // A column that exists in a global secondary index is upgraded from being a map entry
@@ -904,7 +906,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             }
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(keyspace_name, vname);
+            schema_builder view_builder(registry, keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l);
             if (view_hash_key != hash_key) {
                 return make_ready_future<request_return_type>(api_error::validation(
