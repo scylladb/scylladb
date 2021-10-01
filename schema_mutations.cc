@@ -162,7 +162,7 @@ bool schema_mutations::live() const {
 }
 
 bool schema_mutations::is_view() const {
-    return _columnfamilies.schema() == db::schema_tables::views();
+    return _columnfamilies.schema()->id() == db::schema_tables::views_id();
 }
 
 std::ostream& operator<<(std::ostream& out, const schema_mutations& sm) {
