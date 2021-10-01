@@ -372,10 +372,11 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _sst_dir_semaphore(sst_dir_sem)
     , _wasm_engine(std::make_unique<wasm::engine>())
     , _stop_barrier(std::move(barrier))
+    , _schema_registry(local_schema_registry())
 {
     assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
-    local_schema_registry().init(*this); // TODO: we're never unbound.
+    _schema_registry.init(*this); // TODO: we're never unbound.
     setup_metrics();
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
@@ -873,7 +874,7 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
-    schema = local_schema_registry().learn(schema);
+    schema = _schema_registry.learn(schema);
     schema->registry_entry()->mark_synced();
 
     lw_shared_ptr<column_family> cf;
@@ -911,7 +912,7 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema) {
 bool database::update_column_family(schema_ptr new_schema) {
     column_family& cfm = find_column_family(new_schema->id());
     bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
-    auto s = local_schema_registry().learn(new_schema);
+    auto s = _schema_registry.learn(new_schema);
     s->registry_entry()->mark_synced();
     cfm.set_schema(s);
     find_keyspace(s->ks_name()).metadata()->add_or_update_column_family(s);
@@ -1604,6 +1605,10 @@ future<reader_permit> database::obtain_reader_permit(table& tbl, const char* con
 
 future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout) {
     return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout);
+}
+
+schema_registry& database::get_schema_registry() const {
+    return _schema_registry;
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {

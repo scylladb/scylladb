@@ -81,7 +81,7 @@ class cell_locker;
 class cell_locker_stats;
 class locked_cell;
 class mutation;
-
+class schema_registry;
 class frozen_mutation;
 class reconcilable_result;
 
@@ -1361,6 +1361,8 @@ private:
     std::unique_ptr<wasm::engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
+    schema_registry& _schema_registry;
+
 public:
     future<> init_commitlog();
     const gms::feature_service& features() const { return _feat; }
@@ -1641,6 +1643,8 @@ public:
     sharded<semaphore>& get_sharded_sst_dir_semaphore() {
         return _sst_dir_semaphore;
     }
+
+    schema_registry& get_schema_registry() const;
 };
 
 future<> start_large_data_handler(sharded<database>& db);
