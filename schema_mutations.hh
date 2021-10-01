@@ -26,6 +26,39 @@
 #include "schema_fwd.hh"
 #include "canonical_mutation.hh"
 
+class schema_mutations;
+
+struct frozen_schema_mutations {
+    canonical_mutation columnfamilies;
+    canonical_mutation columns;
+    bool is_view;
+    std::optional<canonical_mutation> view_virtual_columns;
+    std::optional<canonical_mutation> computed_columns;
+    std::optional<canonical_mutation> indices;
+    std::optional<canonical_mutation> dropped_columns;
+    std::optional<canonical_mutation> scylla_tables;
+
+    frozen_schema_mutations(
+            canonical_mutation columnfamilies,
+            canonical_mutation columns,
+            bool is_view,
+            std::optional<canonical_mutation> indices,
+            std::optional<canonical_mutation> dropped_columns,
+            std::optional<canonical_mutation> scylla_tables,
+            std::optional<canonical_mutation> view_virtual_columns,
+            std::optional<canonical_mutation> computed_columns)
+        : columnfamilies(std::move(columnfamilies))
+        , columns(std::move(columns))
+        , is_view(is_view)
+        , view_virtual_columns(std::move(view_virtual_columns))
+        , computed_columns(std::move(computed_columns))
+        , indices(std::move(indices))
+        , dropped_columns(std::move(dropped_columns))
+        , scylla_tables(std::move(scylla_tables))
+    { }
+    frozen_schema_mutations(const schema_mutations& sm);
+};
+
 // Commutative representation of table schema
 // Equality ignores tombstones.
 class schema_mutations {
@@ -47,14 +80,7 @@ public:
             , _dropped_columns(std::move(dropped_columns))
             , _scylla_tables(std::move(scylla_tables))
     { }
-    schema_mutations(canonical_mutation columnfamilies,
-                     canonical_mutation columns,
-                     bool is_view,
-                     std::optional<canonical_mutation> indices,
-                     std::optional<canonical_mutation> dropped_columns,
-                     std::optional<canonical_mutation> scylla_tables,
-                     std::optional<canonical_mutation> view_virtual_columns,
-                     std::optional<canonical_mutation> computed_columns);
+    explicit schema_mutations(frozen_schema_mutations);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;

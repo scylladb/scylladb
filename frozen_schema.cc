@@ -40,7 +40,7 @@ frozen_schema::frozen_schema(const schema_ptr& s)
         bytes_ostream out;
         ser::writer_of_schema<bytes_ostream> wr(out);
         std::move(wr).write_version(s->version())
-                     .write_mutations(sm)
+                     .write_mutations(frozen_schema_mutations(sm))
                      .end_schema();
         return to_bytes(out.linearize());
     }())
@@ -49,9 +49,9 @@ frozen_schema::frozen_schema(const schema_ptr& s)
 schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
     auto in = ser::as_input_stream(_data);
     auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
-    return sv.mutations().is_view()
-         ? db::schema_tables::create_view_from_mutations(ctxt, sv.mutations(), sv.version())
-         : db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), sv.version());
+    return sv.mutations().is_view
+         ? db::schema_tables::create_view_from_mutations(ctxt, schema_mutations(sv.mutations()), sv.version())
+         : db::schema_tables::create_table_from_mutations(ctxt, schema_mutations(sv.mutations()), sv.version());
 }
 
 frozen_schema::frozen_schema(bytes b)

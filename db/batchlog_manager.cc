@@ -61,6 +61,7 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "schema_registry.hh"
+#include "schema_mutations.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "serializer_impl.hh"
