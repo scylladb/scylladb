@@ -122,6 +122,10 @@ table_schema_version system_keyspace::generate_schema_version(utils::UUID table_
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 
+table_schema_version system_keyspace::generate_schema_version(const char* keyspace_name, const char* table_name, uint16_t offset) {
+    return generate_schema_version(generate_legacy_id(keyspace_name, table_name), offset);
+}
+
 // Currently, the type variables (uuid_type, etc.) are thread-local reference-
 // counted shared pointers. This forces us to also make the built in schemas
 // below thread-local as well.

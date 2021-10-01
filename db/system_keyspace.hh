@@ -228,6 +228,7 @@ public:
     static schema_ptr raft_snapshots();
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
+    static table_schema_version generate_schema_version(const char* keyspace_name, const char* table_name, uint16_t offset = 0);
 
     // Only for testing.
     static void minimal_setup(distributed<cql3::query_processor>& qp);
