@@ -4061,7 +4061,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     utils::small_vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>, 1> exec;
     exec.reserve(partition_ranges.size());
 
-    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+    schema_ptr schema = _db.local().get_schema_registry().get(cmd->schema_version);
 
     db::read_repair_decision repair_decision = query_options.read_repair_decision
         ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
@@ -4143,7 +4143,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         uint32_t remaining_partition_count,
         replicas_per_token_range preferred_replicas,
         service_permit permit) {
-    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+    schema_ptr schema = _db.local().get_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto p = shared_from_this();
@@ -4336,7 +4336,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
-    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+    schema_ptr schema = _db.local().get_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
