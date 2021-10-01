@@ -459,11 +459,11 @@ schema::schema(reversed_tag, const schema& o)
 {
 }
 
-lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+static lw_shared_ptr<const schema> make_shared_schema(schema_registry* registry, std::optional<utils::UUID> id, std::string_view ks_name,
     std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
     std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
     data_type regular_column_name_type, sstring comment) {
-    schema_builder builder(std::move(ks_name), std::move(cf_name), std::move(id), std::move(regular_column_name_type));
+    schema_builder builder(registry, std::move(ks_name), std::move(cf_name), std::move(id), std::move(regular_column_name_type));
     for (auto&& column : partition_key) {
         builder.with_column(std::move(column.name), std::move(column.type), column_kind::partition_key);
     }
@@ -478,6 +478,22 @@ lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, st
     }
     builder.set_comment(comment);
     return builder.build();
+}
+
+lw_shared_ptr<const schema> make_shared_schema(schema_registry& registry, std::optional<utils::UUID> id, std::string_view ks_name,
+    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
+    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
+    data_type regular_column_name_type, sstring comment) {
+    return make_shared_schema(&registry, id, ks_name, cf_name, std::move(partition_key), std::move(clustering_key),
+            std::move(regular_columns), std::move(static_columns), std::move(regular_column_name_type), std::move(comment));
+}
+
+lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
+    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
+    data_type regular_column_name_type, sstring comment) {
+    return make_shared_schema(nullptr, id, ks_name, cf_name, std::move(partition_key), std::move(clustering_key),
+            std::move(regular_columns), std::move(static_columns), std::move(regular_column_name_type), std::move(comment));
 }
 
 schema::~schema() {
