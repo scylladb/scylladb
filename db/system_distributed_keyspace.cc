@@ -26,6 +26,7 @@
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
 #include "schema_builder.hh"
+#include "schema_registry.hh"
 #include "timeout_config.hh"
 #include "types.hh"
 #include "types/tuple.hh"
@@ -63,25 +64,24 @@ thread_local data_type cdc_token_range_description_type = tuple_type_impl::get_i
         });
 thread_local data_type cdc_generation_description_type = list_type_impl::get_instance(cdc_token_range_description_type, false);
 
-schema_ptr view_build_status() {
-    static thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS, std::make_optional(id))
+schema_ptr view_build_status(schema_registry& registry) {
+    auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS);
+    return registry.get_or_load(system_keyspace::generate_schema_version(id), [&, id] (table_schema_version) {
+        return schema_builder(registry, system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS, std::make_optional(id))
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("status", utf8_type)
                 .with_version(system_keyspace::generate_schema_version(id))
                 .build();
-    }();
-    return schema;
+    });
 }
 
 /* An internal table used by nodes to exchange CDC generation data. */
-schema_ptr cdc_generations_v2() {
-    thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
-        return schema_builder(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2, {id})
+schema_ptr cdc_generations_v2(schema_registry& registry) {
+    auto id = generate_legacy_id(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
+    return registry.get_or_load(system_keyspace::generate_schema_version(id), [&, id] (table_schema_version) {
+        return schema_builder(registry, system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2, {id})
                 /* The unique identifier of this generation. */
                 .with_column("id", uuid_type, column_kind::partition_key)
                 /* The generation describes a mapping from all tokens in the token ring to a set of stream IDs.
@@ -110,15 +110,14 @@ schema_ptr cdc_generations_v2() {
                 .with_column("num_ranges", int32_type, column_kind::static_column)
                 .with_version(system_keyspace::generate_schema_version(id))
                 .build();
-    }();
-    return schema;
+    });
 }
 
 /* A user-facing table providing identifiers of the streams used in CDC generations. */
-schema_ptr cdc_desc() {
-    thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2, {id})
+schema_ptr cdc_desc(schema_registry& registry) {
+    auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2);
+    return registry.get_or_load(system_keyspace::generate_schema_version(id), [&, id] (table_schema_version) {
+        return schema_builder(registry, system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2, {id})
                 /* The timestamp of this CDC generation. */
                 .with_column("time", timestamp_type, column_kind::partition_key)
                 /* For convenience, the list of stream IDs in this generation is split into token ranges
@@ -129,15 +128,14 @@ schema_ptr cdc_desc() {
                 .with_column("streams", cdc_streams_set_type)
                 .with_version(system_keyspace::generate_schema_version(id))
                 .build();
-    }();
-    return schema;
+    });
 }
 
 /* A user-facing table providing CDC generation timestamps. */
-schema_ptr cdc_timestamps() {
-    thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS, {id})
+schema_ptr cdc_timestamps(schema_registry& registry) {
+    auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS);
+    return registry.get_or_load(system_keyspace::generate_schema_version(id), [&, id] (table_schema_version) {
+        return schema_builder(registry, system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS, {id})
                 /* This is a single-partition table. The partition key is always "timestamps". */
                 .with_column("key", utf8_type, column_kind::partition_key)
                 /* The timestamp of this CDC generation. */
@@ -146,21 +144,19 @@ schema_ptr cdc_timestamps() {
                 .with_column("expired", timestamp_type)
                 .with_version(system_keyspace::generate_schema_version(id))
                 .build();
-    }();
-    return schema;
+    });
 }
 
 static const sstring CDC_TIMESTAMPS_KEY = "timestamps";
 
-schema_ptr service_levels() {
-    static thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS, std::make_optional(id))
+schema_ptr service_levels(schema_registry& registry) {
+    auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+    return registry.get_or_load(system_keyspace::generate_schema_version(id), [&, id] (table_schema_version) {
+        return schema_builder(registry, system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS, std::make_optional(id))
                 .with_column("service_level", utf8_type, column_kind::partition_key)
                 .with_version(db::system_keyspace::generate_schema_version(id))
                 .build();
-    }();
-    return schema;
+    });
 }
 
 // This is the set of tables which this node ensures to exist in the cluster.
@@ -173,13 +169,13 @@ schema_ptr service_levels() {
 // does not ensure to exist. Such definitions exist most likely for backward compatibility
 // with previous versions of Scylla (needed during upgrades), but since they are not listed here,
 // they won't be created in new clusters.
-static std::vector<schema_ptr> ensured_tables() {
+static std::vector<schema_ptr> ensured_tables(schema_registry& registry) {
     return {
-        view_build_status(),
-        cdc_generations_v2(),
-        cdc_desc(),
-        cdc_timestamps(),
-        service_levels(),
+        view_build_status(registry),
+        cdc_generations_v2(registry),
+        cdc_desc(registry),
+        cdc_timestamps(registry),
+        service_levels(registry),
     };
 }
 
@@ -259,7 +255,9 @@ future<> system_distributed_keyspace::start() {
         return _mm.announce_new_keyspace(ksm, api::min_timestamp);
     });
 
-    for (auto&& table : ensured_tables()) {
+    auto& registry = _qp.db().get_schema_registry();
+
+    for (auto&& table : ensured_tables(registry)) {
         co_await ignore_existing([this, table = std::move(table)] {
             return _mm.announce_new_column_family(std::move(table), api::min_timestamp);
         });
