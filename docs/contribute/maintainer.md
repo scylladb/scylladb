@@ -107,6 +107,21 @@ log, check both your and the contributor's email address
 are correct (no @noreply.users.github.com or similar
 address, or home vs. work addresses).
 
+### Applying pull requests with a helper script
+
+For maintainers' convenience, a script can be used to properly
+prepare a pull request for merging. The script works correctly
+both on single- and multi-commit series.
+In order to apply a pull request with given number, change the directory
+to Scylla's root source directory and follow the example below.
+
+1. Fetch and checkout the `next` branch
+2. `./scripts/pull_github_pr.sh ${PUT_PULL_REQUEST_NUMBER_HERE}`
+3. Verify that the merge or cherry-pick was performed correctly
+4. Push the next branch to the remote repository
+
+The script can also be used for backports.
+
 ### Applying single patches from github pull requests
 
 Select "Squash and merge" and follow through.
