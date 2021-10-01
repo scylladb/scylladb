@@ -504,7 +504,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
 }
 
 static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
-    schema_builder b(s.ks_name(), log_name(s.cf_name()));
+    schema_builder b(*s.registry(), s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner("com.scylladb.dht.CDCPartitioner");
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
