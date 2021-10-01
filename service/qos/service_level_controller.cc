@@ -234,7 +234,7 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
     return seastar::async( [this, name, sl_data] {
         _subscribers.for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {
             try {
-                subscriber->on_before_service_level_add(name, sl_data.slo).get();
+                subscriber->on_before_service_level_add(sl_data.slo, {name}).get();
             } catch (...) {
                 sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
             }
@@ -252,7 +252,7 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
         return seastar::async( [this,sl_it, name, slo_before, slo] {
             _subscribers.for_each([name, slo_before, slo] (qos_configuration_change_subscriber* subscriber) {
                 try {
-                    subscriber->on_before_service_level_change(name, slo_before, slo).get();
+                    subscriber->on_before_service_level_change(slo_before, slo, {name}).get();
                 } catch (...) {
                     sl_logger.error("notify_service_level_updated: exception occurred in one of the observers callbacks {}", std::current_exception());
                 }
@@ -270,7 +270,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
         return seastar::async( [this, name] {
             _subscribers.for_each([name] (qos_configuration_change_subscriber* subscriber) {
                 try {
-                    subscriber->on_after_service_level_remove(name).get();
+                    subscriber->on_after_service_level_remove({name}).get();
                 } catch (...) {
                     sl_logger.error("notify_service_level_removed: exception occurred in one of the observers callbacks {}", std::current_exception());
                 }
