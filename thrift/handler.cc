@@ -879,7 +879,7 @@ public:
                 throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
             }
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace);
+            auto s = schema_from_thrift(_db.local().get_schema_registry(), cf_def, cf_def.keyspace);
             return _query_state.get_client_state().has_keyspace_access(_db.local(), cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
                 return _query_processor.local().get_migration_manager().announce_new_column_family(std::move(s)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
@@ -908,7 +908,7 @@ public:
     void system_add_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         service_permit permit = obtain_permit();
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto ksm = keyspace_from_thrift(ks_def);
+            auto ksm = keyspace_from_thrift(_db.local().get_schema_registry(), ks_def);
             return _query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE).then([this, ksm = std::move(ksm)] {
                 return _query_processor.local().get_migration_manager().announce_new_keyspace(std::move(ksm)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
@@ -945,7 +945,7 @@ public:
                 throw make_exception<InvalidRequestException>("Keyspace update must not contain any column family definitions.");
             }
 
-            auto ksm = keyspace_from_thrift(ks_def);
+            auto ksm = keyspace_from_thrift(_db.local().get_schema_registry(), ks_def);
             return _query_state.get_client_state().has_keyspace_access(_db.local(), ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
                 return _query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
@@ -974,7 +974,7 @@ public:
                                                               "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
             }
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
+            auto s = schema_from_thrift(_db.local().get_schema_registry(), cf_def, cf_def.keyspace, schema->id());
             if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
                 fail(unimplemented::cause::MIXED_CF);
             }
@@ -1283,9 +1283,9 @@ private:
         }
         return {};
     }
-    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::optional<utils::UUID> id = { }) {
+    static schema_ptr schema_from_thrift(schema_registry& registry, const CfDef& cf_def, const sstring ks_name, std::optional<utils::UUID> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
-        schema_builder builder(ks_name, cf_def.name, id);
+        schema_builder builder(registry, ks_name, cf_def.name, id);
         schema_builder::default_names names(builder);
 
         if (cf_def.__isset.key_validation_class) {
@@ -1382,7 +1382,7 @@ private:
         }
         return builder.build();
     }
-    static lw_shared_ptr<keyspace_metadata> keyspace_from_thrift(const KsDef& ks_def) {
+    static lw_shared_ptr<keyspace_metadata> keyspace_from_thrift(schema_registry& registry, const KsDef& ks_def) {
         thrift_validation::validate_ks_def(ks_def);
         std::vector<schema_ptr> cf_defs;
         cf_defs.reserve(ks_def.cf_defs.size());
@@ -1390,7 +1390,7 @@ private:
             if (cf_def.keyspace != ks_def.name) {
                 throw make_exception<InvalidRequestException>("CfDef ({}) had a keyspace definition that did not match KsDef", cf_def.keyspace);
             }
-            cf_defs.emplace_back(schema_from_thrift(cf_def, ks_def.name));
+            cf_defs.emplace_back(schema_from_thrift(registry, cf_def, ks_def.name));
         }
         return make_lw_shared<keyspace_metadata>(
             ks_def.name,
