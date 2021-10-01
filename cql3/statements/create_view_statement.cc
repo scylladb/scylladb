@@ -307,7 +307,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
                 column_family(), column_names));
     }
 
-    schema_builder builder{keyspace(), column_family()};
+    schema_builder builder{db.get_schema_registry(), keyspace(), column_family()};
     auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
         for (auto* def : defs) {
             auto&& type = _properties.get_reversable_type(*def->column_specification->name, def->type);

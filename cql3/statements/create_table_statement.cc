@@ -133,7 +133,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
 schema_ptr create_table_statement::get_cf_meta_data(const database& db) const {
-    schema_builder builder{keyspace(), column_family(), _id};
+    schema_builder builder{db.get_schema_registry(), keyspace(), column_family(), _id};
     apply_properties_to(builder, db);
     return builder.build(_use_compact_storage ? schema_builder::compact_storage::yes : schema_builder::compact_storage::no);
 }
