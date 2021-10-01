@@ -180,7 +180,7 @@ public:
             auto cf_name = td.get_as<sstring>("columnfamily_name");
             auto id = td.get_or("cf_id", generate_legacy_id(ks_name, cf_name));
 
-            schema_builder builder(dst.name, cf_name, id);
+            schema_builder builder(_qp.db().get_schema_registry(), dst.name, cf_name, id);
 
             builder.with_version(sm.digest());
 
