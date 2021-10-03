@@ -707,3 +707,29 @@ def test_null_in_bytes(test_table_b):
     assert 0 in val
     test_table_b.put_item(Item={'p': p, 'val': val})
     assert test_table_b.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'val': val}
+
+# Test that empty string or binary keys (either partition or sort key) are *not*
+# allowed - DynamoDB complains that "The AttributeValue for a key attribute cannot
+# contain an empty string value. Key: p."
+# Since May 2020, DynamoDB does allow to use empty strings or blobs for attributes
+# (see https://aws.amazon.com/about-aws/whats-new/2020/05/amazon-dynamodb-now-supports-empty-values-for-non-key-string-and-binary-attributes-in-dynamodb-tables/
+# but they are still not allowed for keys.
+# Note that also for GSI and LSI keys empty strings are not allowed - this is
+# checked in separate tests - test_lsi.py::test_lsi_empty_value and
+# test_gsi.py::test_gsi_empty_value.
+def test_key_empty_string_value(test_table):
+    p = random_string()
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*empty string'):
+        test_table.put_item(Item={'p': '', 'c': c})
+    with pytest.raises(ClientError, match='ValidationException.*empty string'):
+        test_table.put_item(Item={'p': p, 'c': ''})
+def test_key_empty_bytes_value(test_table_b, test_table_sb):
+    p = random_string()
+    # Interestingly, Scylla reports an "empty string" in the bytes case as well,
+    # while DynamoDB complains more accurately about an "empty binary value".
+    # Let's just accept both.
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_b.put_item(Item={'p': b''})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_sb.put_item(Item={'p': p, 'c': b''})
