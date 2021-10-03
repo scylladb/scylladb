@@ -25,6 +25,7 @@
 #include "service/raft/raft_state_machine.hh"
 
 namespace service {
+class migration_manager;
 
 class migration_manager;
 

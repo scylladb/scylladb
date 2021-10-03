@@ -32,7 +32,7 @@
 #include "serializer_impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
-
+#include "service/migration_manager.hh"
 
 namespace service {
 
@@ -63,7 +63,10 @@ future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> schema_raft_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_id snp) {
-    return make_ready_future<>();
+    // Note that this may bring newer state than the schema state machine raft's
+    // log, so some raft entries may be double applied, but since the state
+    // machine idempotent it is not a problem.
+    return _mm.submit_migration_task(from, false);
 }
 
 future<> schema_raft_state_machine::abort() {
