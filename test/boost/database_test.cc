@@ -146,9 +146,9 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source) {
-    do_with_cql_env_thread([] (cql_test_env& e) {
-        run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
+    do_with_cql_env_thread([run_tests] (cql_test_env& e) {
+        run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
             try {
                 e.local_db().find_column_family(s->ks_name(), s->cf_name());
                 e.migration_manager().local().announce_column_family_drop(s->ks_name(), s->cf_name()).get();
@@ -172,8 +172,24 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
                     mutation_reader::forwarding fwd_mr) {
                 return cf.make_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
-        });
+        }, true);
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain) {
+    test_database(run_mutation_source_tests_plain);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_downgrade) {
+    test_database(run_mutation_source_tests_downgrade);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_upgrade) {
+    test_database(run_mutation_source_tests_upgrade);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse) {
+    test_database(run_mutation_source_tests_reverse);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
