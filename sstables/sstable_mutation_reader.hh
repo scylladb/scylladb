@@ -36,6 +36,7 @@
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
 #include "flat_mutation_reader_v2.hh"
+#include "sstables/mx/partition_reversing_data_source.hh"
 
 namespace sstables {
 
@@ -146,6 +147,33 @@ inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s
     auto input = sst->data_stream(toread.start, last_end - toread.start, consumer.io_priority(),
             consumer.permit(), consumer.trace_state(), sst->_partition_range_history);
     return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
+}
+
+template <typename DataConsumeRowsContext>
+struct reversed_context {
+    std::unique_ptr<DataConsumeRowsContext> the_context;
+
+    // Underneath, the context is iterating over the sstable file in reverse order.
+    // This points to the current position of the context over the underlying sstable file;
+    // either the end of partition or the beginning of some row (never in the middle of a row).
+    // The reference is valid as long as the context is alive.
+    const uint64_t& current_position_in_sstable;
+};
+
+// See `sstables::mx::make_partition_reversing_data_source` for documentation.
+template <typename DataConsumeRowsContext>
+inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
+        const schema& s, shared_sstable sst, index_reader& ir,
+        typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
+    auto reversing_data_source = sstables::mx::make_partition_reversing_data_source(
+            s, sst, ir, toread.start, toread.end - toread.start,
+            consumer.permit(), consumer.io_priority(), consumer.trace_state());
+    return reversed_context<DataConsumeRowsContext> {
+        .the_context = std::make_unique<DataConsumeRowsContext>(
+                s, std::move(sst), consumer, input_stream<char>(std::move(reversing_data_source.the_source)),
+                toread.start, toread.end - toread.start),
+        .current_position_in_sstable = reversing_data_source.current_position_in_sstable
+    };
 }
 
 template <typename DataConsumeRowsContext>

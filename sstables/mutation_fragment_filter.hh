@@ -46,13 +46,13 @@ class mutation_fragment_filter {
     bool is_after_fwd_window(position_in_partition_view pos) const {
         return _fwd && !position_in_partition::less_compare(_schema)(pos, _fwd_end);
     }
+
 public:
     mutation_fragment_filter(const schema& schema,
-                             const query::partition_slice& slice,
-                             const partition_key& pk,
+                             query::clustering_key_filter_ranges ranges,
                              streamed_mutation::forwarding fwd)
         : _schema(schema)
-        , _ranges(query::clustering_key_filter_ranges::get_ranges(schema, slice, pk))
+        , _ranges(std::move(ranges))
         , _walker(schema, _ranges.ranges(), schema.has_static_columns())
         , _fwd(fwd)
         , _fwd_end(fwd ? position_in_partition_view::before_all_clustered_rows()

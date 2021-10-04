@@ -801,6 +801,10 @@ public:
     // Returns a pointer to the clustered index cursor for the current partition
     // or nullptr if there is no clustered index in the current partition.
     // Returns the same instance until we move to a different partition.
+    //
+    // Precondition: partition_data_ready(bound).
+    //
+    // For sstable versions >= mc the returned cursor (if not nullptr) will be of type `bsearch_clustered_cursor`.
     clustered_index_cursor* current_clustered_cursor(index_bound& bound) {
         if (!bound.clustered_cursor) {
             _alloc_section(_region, [&] {
@@ -931,6 +935,103 @@ public:
         });
     }
 
+    // Advances the upper bound to the partition immediately following the partition of the lower bound.
+    //
+    // Precondition: the sstable version is >= mc.
+    future<> advance_reverse_to_next_partition() {
+        return advance_reverse(position_in_partition_view::after_all_clustered_rows());
+    }
+
+    // Advances the upper bound to the start of the first promoted index block after `pos`,
+    // or to the next partition if there are no blocks after `pos`.
+    //
+    // Supports advancing backwards (i.e. `pos` can be smaller than the previous upper bound position).
+    //
+    // Precondition: the sstable version is >= mc.
+    future<> advance_reverse(position_in_partition_view pos) {
+        if (eof()) {
+            return make_ready_future<>();
+        }
+
+        // The `clustered_cursor` of an index bound does not support moving backward;
+        // we work around this by recreating the upper bound (if it already exists)
+        // at the lower bound position, then moving forward.
+        if (_upper_bound) {
+            return close(*_upper_bound).then([this, pos] {
+                _upper_bound.reset();
+                return advance_reverse(pos);
+            });
+        }
+
+        // We advance the clustered cursor within the current lower bound partition
+        // so need to make sure first that the lower bound partition data is in memory.
+        if (!partition_data_ready(_lower_bound)) {
+            return read_partition_data().then([this, pos] {
+                assert(partition_data_ready());
+                return advance_reverse(pos);
+            });
+        }
+
+        _upper_bound = _lower_bound;
+
+        auto cur = current_clustered_cursor(*_upper_bound);
+        if (!cur) {
+            sstlog.trace("index {}: no promoted index", fmt::ptr(this));
+            return advance_to_next_partition(*_upper_bound);
+        }
+
+        auto cur_bsearch = dynamic_cast<sstables::mc::bsearch_clustered_cursor*>(cur);
+        // The dynamic cast must have succeeded by precondition (sstable version >= mc)
+        // and `current_clustered_cursor` specification.
+        if (!cur_bsearch) {
+            on_internal_error(sstlog, format(
+                "index {}: expected the cursor type to be bsearch_clustered_cursor, but it's not;"
+                " sstable version (expected >= mc): {}", fmt::ptr(this), _sstable->get_version()));
+        }
+
+        index_entry& e = current_partition_entry(*_upper_bound);
+        return cur_bsearch->advance_past(pos).then([this, partition_start_pos = get_data_file_position()]
+                (std::optional<clustered_index_cursor::skip_info> si) {
+            if (!si) {
+                return advance_to_next_partition(*_upper_bound);
+            }
+            if (!si->active_tombstone) {
+                // End open marker can be only engaged in SSTables 3.x ('mc' format) and never in ka/la
+                _upper_bound->end_open_marker.reset();
+            } else {
+                _upper_bound->end_open_marker = open_rt_marker{std::move(si->active_tombstone_pos), si->active_tombstone};
+            }
+            _upper_bound->data_file_position = partition_start_pos + si->offset;
+            _upper_bound->element = indexable_element::cell;
+            sstlog.trace("index {}: advanced end after cell, _data_file_position={}", fmt::ptr(this), _upper_bound->data_file_position);
+            return make_ready_future<>();
+        });
+    }
+
+    // Returns the offset in the data file of the first row in the last promoted index block
+    // in the current partition or nullopt if there are no blocks in the current partition.
+    //
+    // Preconditions: sstable version >= mc, partition_data_ready().
+    future<std::optional<uint64_t>> last_block_offset() {
+        assert(partition_data_ready());
+
+        auto cur = current_clustered_cursor();
+        if (!cur) {
+            return make_ready_future<std::optional<uint64_t>>(std::nullopt);
+        }
+
+        auto cur_bsearch = dynamic_cast<sstables::mc::bsearch_clustered_cursor*>(cur);
+        // The dynamic cast must have succeeded by precondition (sstable version >= mc)
+        // and `current_clustered_cursor` specification.
+        if (!cur_bsearch) {
+            on_internal_error(sstlog, format(
+                "index {}: expected the cursor type to be bsearch_clustered_cursor, but it's not;"
+                " sstable version (expected >= mc): {}", fmt::ptr(this), _sstable->get_version()));
+        }
+
+        return cur_bsearch->last_block_offset();
+    }
+
     // Moves the cursor to the beginning of next partition.
     // Can be called only when !eof().
     future<> advance_to_next_partition() {
@@ -966,6 +1067,10 @@ public:
 
     std::optional<open_rt_marker> end_open_marker() const {
         return _lower_bound.end_open_marker;
+    }
+
+    std::optional<open_rt_marker> reverse_end_open_marker() const {
+        return _upper_bound->end_open_marker;
     }
 
     bool eof() const {
