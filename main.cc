@@ -95,6 +95,7 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "alternator/controller.hh"
+#include "schema_registry.hh"
 
 #include "service/raft/raft_group_registry.hh"
 
@@ -468,6 +469,7 @@ int main(int ac, char** av) {
     sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
+    sharded<schema_registry> schema_registry;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
@@ -515,7 +517,7 @@ int main(int ac, char** av) {
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &schema_registry] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -854,9 +856,17 @@ int main(int ac, char** av) {
             }
             view_hints_dir_initializer.ensure_created_and_verified().get();
 
+            schema_registry.start().get();
+            schema_registry.invoke_on_all([] (::schema_registry& sr) {
+                ::set_local_schema_registry(sr);
+            }).get();
+            auto stop_schema_registry = defer([&schema_registry] {
+                schema_registry.stop().get();
+            });
+
             supervisor::notify("starting database");
             debug::the_database = &db;
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(schema_registry),
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)

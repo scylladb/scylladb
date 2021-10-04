@@ -39,6 +39,7 @@
 #include "locator/snitch_base.hh"
 #include "tools/schema_loader.hh"
 #include "utils/fb_utilities.hh"
+#include "schema_registry.hh"
 
 namespace {
 
@@ -72,7 +73,10 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         locator::i_endpoint_snitch::create_snitch(cfg.endpoint_snitch()).get();
     }
 
-    database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata, as, sst_dir_sem);
+    schema_registry registry;
+    ::set_local_schema_registry(registry);
+
+    database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata, registry, as, sst_dir_sem);
     auto stop_db = deferred_stop(db);
 
     // Mock system_schema keyspace to be able to parse modification statements

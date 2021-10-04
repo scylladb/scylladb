@@ -52,6 +52,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
+#include "schema_registry.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"
@@ -576,6 +577,15 @@ public:
                 std::ref(raft_gr), std::ref(elc_notif)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
+            sharded<schema_registry> schema_registry;
+            schema_registry.start().get();
+            schema_registry.invoke_on_all([] (::schema_registry& sr) {
+                ::set_local_schema_registry(sr);
+            }).get();
+            auto stop_schema_registry = defer([&schema_registry] {
+                schema_registry.stop().get();
+            });
+
             sharded<semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
             auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
@@ -599,7 +609,7 @@ public:
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
             dbcfg.sstables_format = cfg->enable_sstables_md_format() ? sstables::sstable_version_types::md : sstables::sstable_version_types::mc;
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(schema_registry), std::ref(abort_sources), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });

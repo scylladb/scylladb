@@ -43,6 +43,11 @@
 #include "compaction/compaction_manager.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/schema_tables.hh"
+#include "schema_registry.hh"
+
+namespace db::view {
+class view_update_generator;
+}
 
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
@@ -112,7 +117,16 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             sst_dir_semaphore.stop().get();
         });
 
-        db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore)).get();
+        sharded<schema_registry> schema_registry;
+        schema_registry.start().get();
+        schema_registry.invoke_on_all([] (::schema_registry& sr) {
+            ::set_local_schema_registry(sr);
+        }).get();
+        auto stop_schema_registry = defer([&schema_registry] {
+            schema_registry.stop().get();
+        });
+
+        db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(schema_registry), std::ref(abort_sources), std::ref(sst_dir_semaphore)).get();
         auto stop_db = defer([&] { db.stop().get(); });
 
         cdc::generation_service::config cdc_cfg;

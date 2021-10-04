@@ -123,7 +123,7 @@ public:
 // alive the registry will keep its entry. To ensure remote nodes can query current node
 // for schema version, make sure that schema_ptr for the request is alive around the call.
 //
-class schema_registry {
+class schema_registry : public peering_sharded_service<schema_registry> {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
 
@@ -173,6 +173,7 @@ public:
     schema_ptr learn(const schema_ptr&);
 };
 
+void set_local_schema_registry(schema_registry&);
 schema_registry& local_schema_registry();
 
 // Schema pointer which can be safely accessed/passed across shards via
