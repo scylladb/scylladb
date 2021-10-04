@@ -578,8 +578,7 @@ public:
                 std::ref(token_metadata), std::ref(ms),
                 std::ref(cdc_generation_service),
                 std::ref(repair),
-                std::ref(raft_gr), std::ref(elc_notif),
-                true).get();
+                std::ref(raft_gr), std::ref(elc_notif)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -693,7 +692,16 @@ public:
                 stop_raft_rpc.cancel();
             }
 
-            cdc_generation_service.start(std::ref(*cfg), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();
+            cdc::generation_service::config cdc_config;
+            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
+            /*
+             * Currently used when choosing the timestamp of the first CDC stream generation:
+             * normally we choose a timestamp in the future so other nodes have a chance to learn about it
+             * before it starts operating, but in the single-node-cluster case this is not necessary
+             * and would only slow down tests (by having them wait).
+             */
+            cdc_config.ring_delay = std::chrono::milliseconds(0);
+            cdc_generation_service.start(std::ref(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
             auto stop_cdc_generation_service = defer([&cdc_generation_service] {
                 cdc_generation_service.stop().get();
             });

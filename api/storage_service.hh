@@ -30,6 +30,7 @@ class thrift_controller;
 namespace db { class snapshot_ctl; }
 namespace netw { class messaging_service; }
 class repair_service;
+namespace cdc { class generation_service; }
 
 namespace gms {
 
@@ -39,7 +40,7 @@ class gossiper;
 
 namespace api {
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g);
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs);
 void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair);
 void unset_repair(http_context& ctx, routes& r);
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl);
