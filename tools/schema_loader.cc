@@ -74,7 +74,6 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     }
 
     schema_registry registry;
-    ::set_local_schema_registry(registry);
 
     database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata, registry, as, sst_dir_sem);
     auto stop_db = deferred_stop(db);

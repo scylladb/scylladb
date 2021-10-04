@@ -173,9 +173,6 @@ public:
     schema_ptr learn(const schema_ptr&);
 };
 
-void set_local_schema_registry(schema_registry&);
-schema_registry& local_schema_registry();
-
 // Schema pointer which can be safely accessed/passed across shards via
 // const&. Useful for ensuring that schema version obtained on one shard is
 // automatically propagated to other shards, no matter how long the processing

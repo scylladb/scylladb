@@ -29,8 +29,6 @@
 
 static logging::logger slogger("schema_registry");
 
-static thread_local schema_registry* registry = nullptr;
-
 schema_version_not_found::schema_version_not_found(table_schema_version v)
         : std::runtime_error{format("Schema version {} not found", v)}
 { }
@@ -314,15 +312,6 @@ void schema_registry_entry::mark_synced() {
     }
     _sync_state = sync_state::SYNCED;
     slogger.debug("Marked {} as synced", _version);
-}
-
-
-void set_local_schema_registry(schema_registry& sr) {
-    registry = &sr;
-}
-
-schema_registry& local_schema_registry() {
-    return *registry;
 }
 
 global_schema_ptr::global_schema_ptr(const global_schema_ptr& o)

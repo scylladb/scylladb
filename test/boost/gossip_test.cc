@@ -119,9 +119,6 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
 
         sharded<schema_registry> schema_registry;
         schema_registry.start().get();
-        schema_registry.invoke_on_all([] (::schema_registry& sr) {
-            ::set_local_schema_registry(sr);
-        }).get();
         auto stop_schema_registry = defer([&schema_registry] {
             schema_registry.stop().get();
         });

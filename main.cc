@@ -857,9 +857,6 @@ int main(int ac, char** av) {
             view_hints_dir_initializer.ensure_created_and_verified().get();
 
             schema_registry.start().get();
-            schema_registry.invoke_on_all([] (::schema_registry& sr) {
-                ::set_local_schema_registry(sr);
-            }).get();
             auto stop_schema_registry = defer([&schema_registry] {
                 schema_registry.stop().get();
             });
