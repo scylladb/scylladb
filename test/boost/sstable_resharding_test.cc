@@ -25,27 +25,28 @@
 
 using namespace sstables;
 
-static schema_builder get_schema_builder() {
-    return schema_builder("tests", "sstable_resharding_test")
+static schema_builder get_schema_builder(::schema_registry& registry) {
+    return schema_builder(registry, "tests", "sstable_resharding_test")
         .with_column("id", utf8_type, column_kind::partition_key)
         .with_column("value", int32_type);
 }
 
-static schema_ptr get_schema() {
-    return get_schema_builder().build();
+static schema_ptr get_schema(::schema_registry& registry) {
+    return get_schema_builder(registry).build();
 }
 
-static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_bits) {
-    return get_schema_builder().with_sharder(shard_count, sharding_ignore_msb_bits).build();
+static schema_ptr get_schema(::schema_registry& registry, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
+    return get_schema_builder(registry).with_sharder(shard_count, sharding_ignore_msb_bits).build();
 }
 
 void run_sstable_resharding_test() {
+    tests::schema_registry_wrapper registry;
     test_env env;
     auto close_env = defer([&] { env.stop().get(); });
     cache_tracker tracker;
   for (const auto version : writable_sstable_versions) {
     auto tmp = tmpdir();
-    auto s = get_schema();
+    auto s = get_schema(registry);
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager(), env.semaphore()), column_family::no_commitlog(), *cm, *cl_stats, tracker);
@@ -135,6 +136,7 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
 
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
     return test_env::do_with_async([] (test_env& env) {
+      tests::schema_registry_wrapper registry;
       for (const auto version : writable_sstable_versions) {
         cell_locker_stats cl_stats;
 
@@ -151,7 +153,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
 
         // created sstable owned only by this shard
         {
-            auto s = get_schema();
+            auto s = get_schema(registry);
             auto sst_gen = [&env, s, &tmp, gen, version]() mutable {
                 return env.make_sstable(s, tmp.path().string(), (*gen)++, version, big);
             };
@@ -169,7 +171,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
         // create sstable owned by all shards
         // created unshared sstable
         {
-            auto single_sharded_s = get_schema(1, cfg->murmur3_partitioner_ignore_msb_bits());
+            auto single_sharded_s = get_schema(registry, 1, cfg->murmur3_partitioner_ignore_msb_bits());
             auto sst_gen = [&env, single_sharded_s, &tmp, gen, version]() mutable {
                 return env.make_sstable(single_sharded_s, tmp.path().string(), (*gen)++, version, big);
             };
@@ -186,7 +188,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto sst = make_sstable_containing(sst_gen, muts);
             BOOST_REQUIRE(!sst->is_shared());
 
-            auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
+            auto all_shards_s = get_schema(registry, smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
             sst = env.reusable_sst(all_shards_s, tmp.path().string(), sst->generation(), version).get0();
             BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
             BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);

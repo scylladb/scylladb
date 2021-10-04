@@ -527,13 +527,14 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
 }
 
 SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
+    tests::schema_registry_wrapper registry;
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
 
     const auto nr_tables = tests::random::get_int<unsigned>(2, 4);
     std::vector<schema_ptr> schemas;
     for (unsigned i = 0; i < nr_tables; ++i) {
-        schemas.emplace_back(schema_builder("ks", fmt::format("tbl{}", i))
+        schemas.emplace_back(schema_builder(registry, "ks", fmt::format("tbl{}", i))
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v", int32_type, column_kind::regular_column).build());
     }

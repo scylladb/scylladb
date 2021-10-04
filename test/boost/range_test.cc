@@ -30,6 +30,7 @@
 #include "schema_builder.hh"
 
 #include "locator/token_metadata.hh"
+#include "test/lib/schema_registry.hh"
 
 // yuck, but what can one do?  needed for BOOST_REQUIRE_EQUAL
 namespace std {
@@ -50,7 +51,8 @@ bool includes_token(const schema& s, const dht::partition_range& r, const dht::t
 }
 
 BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
         .build();

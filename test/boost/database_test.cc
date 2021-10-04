@@ -146,7 +146,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
     });
 }
 
-static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
+static void test_database(void (*run_tests)(populate_fn_ex, cql_test_env*, bool)) {
     do_with_cql_env_thread([run_tests] (cql_test_env& e) {
         run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
             try {
@@ -172,7 +172,7 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
                     mutation_reader::forwarding fwd_mr) {
                 return cf.make_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
-        }, true);
+        }, &e, true);
     }).get();
 }
 
@@ -371,8 +371,8 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
         auto db_cfg_ptr = make_shared<db::config>();
         db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data.path().string() }));
         do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
-            e.create_table([](std::string_view ks_name) {
-                return *schema_builder(ks_name, "cf")
+            e.create_table([&e](std::string_view ks_name) {
+                return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                         .with_column("p1", utf8_type, column_kind::partition_key)
                         .with_column("c1", int32_type, column_kind::clustering_key)
                         .with_column("c2", int32_type, column_kind::clustering_key)

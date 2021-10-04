@@ -59,13 +59,13 @@ column_family_for_tests::data::data()
     : semaphore(reader_concurrency_semaphore::no_limits{}, "column_family_for_tests")
 { }
 
-column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager)
+
+column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_registry& registry)
     : column_family_for_tests(
-        sstables_manager,
-        schema_builder(some_keyspace, some_column_family)
-            .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
-            .build()
-    )
+            sstables_manager,
+            schema_builder(registry, some_keyspace, some_column_family)
+                .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
+                .build())
 { }
 
 column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s)

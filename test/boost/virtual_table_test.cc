@@ -23,6 +23,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
+#include "test/lib/schema_registry.hh"
 
 #include "db/virtual_table.hh"
 #include "db/system_keyspace.hh"
@@ -30,12 +31,17 @@
 namespace db {
 
 class test_table : public virtual_table {
-public:
-    test_table() : virtual_table(build_schema()) {}
+    std::unique_ptr<tests::schema_registry_wrapper> _registry;
 
-    static schema_ptr build_schema() {
+    test_table(std::unique_ptr<tests::schema_registry_wrapper> registry)
+        : virtual_table(build_schema(*registry)), _registry(std::move(registry)) {}
+
+public:
+    test_table() : test_table(std::make_unique<tests::schema_registry_wrapper>()) {}
+
+    static schema_ptr build_schema(schema_registry& registry) {
         auto id = generate_legacy_id(system_keyspace::NAME, "test");
-        return schema_builder(system_keyspace::NAME, "test", std::make_optional(id))
+        return schema_builder(registry, system_keyspace::NAME, "test", std::make_optional(id))
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)

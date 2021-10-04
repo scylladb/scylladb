@@ -25,6 +25,7 @@
 #include "canonical_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/schema_registry.hh"
 
 #include <seastar/testing/test_case.hh>
 
@@ -32,7 +33,8 @@
 
 SEASTAR_TEST_CASE(test_conversion_back_and_forth) {
     return seastar::async([] {
-        for_each_mutation([] (const mutation& m) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation(registry, [] (const mutation& m) {
             canonical_mutation cm(m);
             assert_that(cm.to_mutation(m.schema())).is_equal_to(m);
         });
@@ -41,7 +43,8 @@ SEASTAR_TEST_CASE(test_conversion_back_and_forth) {
 
 SEASTAR_TEST_CASE(test_reading_with_different_schemas) {
     return seastar::async([] {
-        for_each_mutation_pair([] (const mutation& m1, const mutation& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [] (const mutation& m1, const mutation& m2, are_equal eq) {
             if (m1.schema() == m2.schema()) {
                 return;
             }

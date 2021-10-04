@@ -29,10 +29,13 @@
 #include "range_tombstone_list.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "test/lib/log.hh"
+#include "test/lib/schema_registry.hh"
 
 #include <seastar/util/defer.hh>
 
-static thread_local schema_ptr s = schema_builder("ks", "cf")
+static thread_local tests::schema_registry_wrapper registry;
+
+static thread_local schema_ptr s = schema_builder(registry, "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck1", int32_type, column_kind::clustering_key)
         .with_column("ck2", int32_type, column_kind::clustering_key)

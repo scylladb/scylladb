@@ -23,6 +23,7 @@
 #include "database.hh"
 #include "schema_builder.hh"
 #include "test/perf/perf.hh"
+#include "test/lib/schema_registry.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/core/reactor.hh>
 
@@ -37,7 +38,8 @@ int main(int argc, char* argv[]) {
         ("column-count", bpo::value<size_t>()->default_value(1), "column count");
     return app.run_deprecated(argc, argv, [&] {
         size_t column_count = app.configuration()["column-count"].as<size_t>();
-        auto builder = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto builder = schema_builder(registry, "ks", "cf")
             .with_column("p1", utf8_type, column_kind::partition_key)
             .with_column("c1", int32_type, column_kind::clustering_key);
 

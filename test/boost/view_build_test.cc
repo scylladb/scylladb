@@ -46,9 +46,9 @@
 
 using namespace std::literals::chrono_literals;
 
-schema_ptr test_table_schema() {
-    static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(
+schema_ptr test_table_schema(schema_registry& registry) {
+    return registry.get_or_load(db::system_keyspace::generate_schema_version("try1", "data"), [&registry] (table_schema_version v) {
+        schema_builder builder(registry,
                 generate_legacy_id("try1", "data"), "try1", "data",
         // partition key
         {{"p", utf8_type}},
@@ -62,10 +62,10 @@ schema_ptr test_table_schema() {
         utf8_type,
         // comment
         ""
-       ));
+       );
+       builder.with_version(v);
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return s;
+    });
 }
 
 SEASTAR_TEST_CASE(test_builder_with_large_partition) {
@@ -429,7 +429,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', '{}')", key2, i, i + 1)).get();
         }
         auto& view_update_generator = e.local_view_update_generator();
-        auto s = test_table_schema();
+        auto s = test_table_schema(e.local_db().get_schema_registry());
 
         std::vector<shared_sstable> ssts;
 
@@ -532,7 +532,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }).get();
 
         auto& view_update_generator = e.local_view_update_generator();
-        auto s = test_table_schema();
+        auto s = test_table_schema(e.local_db().get_schema_registry());
 
         lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
 
@@ -608,7 +608,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
         }).get();
 
         auto& view_update_generator = e.local_view_update_generator();
-        auto s = test_table_schema();
+        auto s = test_table_schema(e.local_db().get_schema_registry());
 
         lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
 
@@ -796,10 +796,11 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         }
     };
 
+    tests::schema_registry_wrapper registry;
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, new_reader_base_cost);
     auto stop_sem = deferred_stop(sem);
 
-    auto schema = schema_builder("ks", "cf")
+    auto schema = schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", bytes_type)

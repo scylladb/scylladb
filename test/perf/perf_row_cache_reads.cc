@@ -67,7 +67,9 @@ static const auto MB = 1024 * 1024;
 void test_scans_with_dummy_entries() {
     std::cout << __FUNCTION__<< std::endl;
 
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+
+    auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", uuid_type, column_kind::partition_key)
             .with_column("st", bytes_type, column_kind::static_column)
             .with_column("ck", reversed_type_impl::get_instance(uuid_type), column_kind::clustering_key)

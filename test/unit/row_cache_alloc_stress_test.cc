@@ -32,6 +32,7 @@
 #include "schema_builder.hh"
 #include "memtable.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/schema_registry.hh"
 
 static
 partition_key new_key(schema_ptr s) {
@@ -63,7 +64,8 @@ int main(int argc, char** argv) {
         // able to populate cache with large mutations This test works only
         // with seastar's allocator.
         return seastar::async([] {
-            auto s = schema_builder("ks", "cf")
+            tests::schema_registry_wrapper registry;
+            auto s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("v", bytes_type, column_kind::regular_column)

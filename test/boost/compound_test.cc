@@ -28,6 +28,7 @@
 #include "test/boost/range_assert.hh"
 #include "schema_builder.hh"
 #include "dht/murmur3_partitioner.hh"
+#include "test/lib/schema_registry.hh"
 
 static std::vector<managed_bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<managed_bytes> result;
@@ -195,11 +196,12 @@ SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form_same_token_singular) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
                 .with_column("c", int32_type, column_kind::partition_key)
                 .with_column("v", int32_type)
                 .build();
-    auto s1 = schema_builder("ks", "cf")
+    auto s1 = schema_builder(registry, "ks", "cf")
                   .with_column("c", byte_type, column_kind::partition_key)
                   .with_column("v", int32_type)
                   .build();
@@ -216,12 +218,13 @@ SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form_same_token_singular) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form_same_token_two_components) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
                 .with_column("c1", int32_type, column_kind::partition_key)
                 .with_column("c2", int32_type, column_kind::partition_key)
                 .with_column("v", int32_type)
                 .build();
-    auto s1 = schema_builder("ks", "cf")
+    auto s1 = schema_builder(registry, "ks", "cf")
                   .with_column("c", byte_type, column_kind::partition_key)
                   .with_column("v", int32_type)
                   .build();
@@ -310,7 +313,8 @@ SEASTAR_THREAD_TEST_CASE(test_enconding_of_singular_composite) {
 SEASTAR_THREAD_TEST_CASE(test_enconding_of_static_composite) {
     using components = std::vector<composite::component>;
 
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key)
         .with_column("v", bytes_type, column_kind::regular_column)

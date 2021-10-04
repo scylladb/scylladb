@@ -263,8 +263,8 @@ void table_description::alter_column_type(std::vector<column>& columns, const ss
     std::get<data_type>(*it) = new_type;
 }
 
-schema_ptr table_description::build_schema() const {
-    auto sb = schema_builder("ks", "cf");
+schema_ptr table_description::build_schema(schema_registry& registry) const {
+    auto sb = schema_builder(registry, "ks", "cf");
     for (auto&& [ name, type ] : _partition_key) {
         sb.with_column(utf8_type->decompose(name), type, column_kind::partition_key);
     }
@@ -367,8 +367,8 @@ void table_description::rename_clustering_column(const sstring& from, const sstr
     std::get<sstring>(*it) = to;
 }
 
-table_description::table table_description::build() const {
-    auto s = build_schema();
+table_description::table table_description::build(schema_registry& registry) const {
+    auto s = build_schema(registry);
     return { boost::algorithm::join(_change_log, "\n"), s, build_mutations(s) };
 }
 

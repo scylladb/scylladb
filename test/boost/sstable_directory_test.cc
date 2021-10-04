@@ -45,9 +45,9 @@ public:
     }
 };
 
-schema_ptr test_table_schema() {
-    static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(
+schema_ptr test_table_schema(schema_registry& registry) {
+    return registry.get_or_load(db::system_keyspace::generate_schema_version("ks", "cf"), [&registry] (table_schema_version v) {
+        schema_builder builder(registry,
                 generate_legacy_id("ks", "cf"), "ks", "cf",
         // partition key
         {{"p", bytes_type}},
@@ -61,17 +61,17 @@ schema_ptr test_table_schema() {
         bytes_type,
         // comment
         ""
-       ));
+       );
+       builder.with_version(v);
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return s;
+    });
 }
 
 using namespace sstables;
 
 sstables::shared_sstable
-make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factory) {
-    auto s = test_table_schema();
+make_sstable_for_this_shard(schema_registry& registry, std::function<sstables::shared_sstable()> sst_factory) {
+    auto s = test_table_schema(registry);
     auto key_token_pair = token_generation_for_shard(1, this_shard_id(), 12);
     auto key = partition_key::from_exploded(*s, {to_bytes(key_token_pair[0].first)});
     mutation m(s, key);
@@ -110,20 +110,30 @@ make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t
 }
 
 class sstable_from_existing_file {
+    std::function<schema_registry&()> _get_registry;
     std::function<sstables::sstables_manager* ()> _get_mgr;
 public:
-    explicit sstable_from_existing_file(sstables::test_env& env) : _get_mgr([m = &env.manager()] { return m; }) {}
+    explicit sstable_from_existing_file(sstables::test_env& env)
+        : _get_registry([&env] () -> schema_registry& { return env.registry(); })
+        , _get_mgr([m = &env.manager()] { return m; })
+    { }
     // This variant this transportable across shards
-    explicit sstable_from_existing_file(sharded<sstables::test_env>& env) : _get_mgr([s = &env] { return &s->local().manager(); }) {}
+    explicit sstable_from_existing_file(sharded<sstables::test_env>& env)
+        : _get_registry([&env] () -> schema_registry& { return env.local().registry(); })
+        , _get_mgr([s = &env] { return &s->local().manager(); })
+    { }
     // This variant this transportable across shards
-    explicit sstable_from_existing_file(cql_test_env& env) : _get_mgr([&env] { return &env.db().local().get_user_sstables_manager(); }) {}
+    explicit sstable_from_existing_file(cql_test_env& env)
+        : _get_registry([&env] () -> schema_registry& { return env.local_db().get_schema_registry(); })
+        , _get_mgr([&env] { return &env.db().local().get_user_sstables_manager(); })
+    {}
     sstables::shared_sstable operator()(fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) const {
-        return _get_mgr()->make_sstable(test_table_schema(), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
+        return _get_mgr()->make_sstable(test_table_schema(_get_registry()), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
     }
 };
 
 sstables::shared_sstable new_sstable(sstables::test_env& env, fs::path dir, int64_t gen) {
-    return env.manager().make_sstable(test_table_schema(), dir.native(), gen,
+    return env.manager().make_sstable(test_table_schema(env.registry()), dir.native(), gen,
                 sstables::sstable_version_types::mc, sstables::sstable_format_types::big,
                 gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
 }
@@ -194,9 +204,10 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
 SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
-  return sstables::test_env::do_with_async([] (test_env& env) {
+  return sstables::test_env::do_with_sharded_async([] (sharded<test_env>& sharded_env) {
+    auto& env = sharded_env.local();
     auto dir = tmpdir();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
+    auto sst = make_sstable_for_this_shard(env.registry(), std::bind(new_sstable, std::ref(env), dir.path(), 1));
 
     // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
     // We should fail validation and leave the directory untouched
@@ -207,7 +218,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
             sstable_directory::lack_of_toc_fatal::no,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            sstable_from_existing_file(env),
+            sstable_from_existing_file(sharded_env),
             [] (sharded<sstables::sstable_directory>& sstdir) {
     auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir);
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
@@ -219,7 +230,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
 SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
   return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
+    auto sst = make_sstable_for_this_shard(env.registry(), std::bind(new_sstable, std::ref(env), dir.path(), 1));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
    with_sstable_directory(dir.path(), 1,
@@ -239,7 +250,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_temporary_toc) {
 SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
     return sstables::test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();
-        auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
+        auto sst = make_sstable_for_this_shard(env.registry(), std::bind(new_sstable, std::ref(env), dir.path(), 1));
         link_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
         with_sstable_directory(dir.path(), 1,
@@ -260,7 +271,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
   return sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
+    auto sst = make_sstable_for_this_shard(env.registry(), std::bind(new_sstable, std::ref(env), dir.path(), 1));
     remove_file(sst->filename(sstables::component_type::TOC)).get();
 
    with_sstable_directory(dir.path(), 1,
@@ -294,7 +305,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
   sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
     auto dir = tmpdir();
 
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 1));
+    auto sst = make_sstable_for_this_shard(env.local().registry(), std::bind(new_sstable, std::ref(env.local()), dir.path(), 1));
     auto tempstr = sst->filename(dir.path().native(), component_type::TemporaryStatistics);
     auto f = open_file_dma(tempstr, open_flags::rw | open_flags::create | open_flags::truncate).get0();
     f.close().get();
@@ -334,8 +345,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
   sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
     auto dir = tmpdir();
-    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 3333));
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 6666));
+    make_sstable_for_this_shard(env.local().registry(), std::bind(new_sstable, std::ref(env.local()), dir.path(), 3333));
+    auto sst = make_sstable_for_this_shard(env.local().registry(), std::bind(new_sstable, std::ref(env.local()), dir.path(), 6666));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
    with_sstable_directory(dir.path(), 1,
@@ -379,7 +390,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
             // this is why it is annoying for the internal functions in the test infrastructure to
             // assume threaded execution
             return seastar::async([dir, i, &env] {
-                make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir, i));
+                make_sstable_for_this_shard(env.registry(), std::bind(new_sstable, std::ref(env), dir, i));
             });
         }).get();
     }
@@ -407,7 +418,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
             // this is why it is annoying for the internal functions in the test infrastructure to
             // assume threaded execution
             return seastar::async([dir, i, &env] {
-                make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir, i + 1));
+                make_sstable_for_this_shard(env.registry(), std::bind(new_sstable, std::ref(env), dir, i + 1));
             });
         }).get();
     }

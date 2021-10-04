@@ -24,6 +24,7 @@
 #include "mutation.hh"
 #include "cql3/cql3_type.hh"
 #include "schema.hh"
+#include "schema_registry.hh"
 
 namespace tests::data_model {
 
@@ -142,7 +143,7 @@ private:
     void remove_column(std::vector<column>& columns, const sstring& name);
     static void alter_column_type(std::vector<column>& columns, const sstring& name, data_type new_type);
 
-    schema_ptr build_schema() const;
+    schema_ptr build_schema(::schema_registry& registry) const;
 
     std::vector<mutation> build_mutations(schema_ptr s) const;
 public:
@@ -174,7 +175,7 @@ public:
         schema_ptr schema;
         std::vector<mutation> mutations;
     };
-    table build() const;
+    table build(::schema_registry& registry) const;
 };
 
 }

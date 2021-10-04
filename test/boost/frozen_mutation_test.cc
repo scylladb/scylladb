@@ -31,11 +31,12 @@
 #include "mutation_partition_view.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/schema_registry.hh"
 
 #include <seastar/core/thread.hh>
 
-static schema_builder new_table() {
-    return { "some_keyspace", "some_table" };
+static schema_builder new_table(schema_registry& registry) {
+    return { registry, "some_keyspace", "some_table" };
 }
 
 static api::timestamp_type new_timestamp() {
@@ -49,7 +50,8 @@ static tombstone new_tombstone() {
 
 SEASTAR_TEST_CASE(test_writing_and_reading) {
     return seastar::async([] {
-        for_each_mutation([](const mutation &m) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation(registry, [](const mutation &m) {
             auto frozen = freeze(m);
             BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
             assert_that(frozen.unfreeze(m.schema())).is_equal_to(m);
@@ -61,7 +63,8 @@ SEASTAR_TEST_CASE(test_writing_and_reading) {
 SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_applying_regular_mutation) {
     return seastar::async([] {
         mutation_application_stats app_stats;
-        schema_ptr s = new_table()
+        tests::schema_registry_wrapper registry;
+        schema_ptr s = new_table(registry)
                 .with_column("pk_col", bytes_type, column_kind::partition_key)
                 .with_column("ck_1", bytes_type, column_kind::clustering_key)
                 .with_column("reg_1", bytes_type)
@@ -103,7 +106,8 @@ SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_appl
 
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    for_each_mutation([&] (const mutation& m) {
+    tests::schema_registry_wrapper registry;
+    for_each_mutation(registry, [&] (const mutation& m) {
         auto& s = *m.schema();
         std::vector<mutation_fragment> mfs;
         auto rd = flat_mutation_reader_from_mutations(semaphore.make_permit(), { m });
@@ -125,27 +129,28 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
 
 SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
     return seastar::async([] {
-        schema_ptr s1 = new_table()
+        tests::schema_registry_wrapper registry;
+        schema_ptr s1 = new_table(registry)
             .with_column("pk_col", bytes_type, column_kind::partition_key)
             .with_column("reg_1", bytes_type)
             .with_column("reg_2", bytes_type)
             .build();
 
-        schema_ptr s2 = new_table()
+        schema_ptr s2 = new_table(registry)
             .with_column("pk_col", bytes_type, column_kind::partition_key)
             .with_column("reg_0", bytes_type)
             .with_column("reg_1", bytes_type)
             .with_column("reg_2", bytes_type)
             .build();
 
-        schema_ptr s3 = new_table()
+        schema_ptr s3 = new_table(registry)
             .with_column("pk_col", bytes_type, column_kind::partition_key)
             .with_column("reg_3", bytes_type)
             .without_column("reg_0", new_timestamp())
             .without_column("reg_1", new_timestamp())
             .build();
 
-        schema_ptr s4 = new_table()
+        schema_ptr s4 = new_table(registry)
             .with_column("pk_col", bytes_type, column_kind::partition_key)
             .with_column("reg_1", int32_type)
             .with_column("reg_2", int32_type)

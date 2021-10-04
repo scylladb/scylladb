@@ -39,6 +39,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/schema_registry.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -137,6 +138,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     // run_mutation_source_tests() to test it.
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        tests::schema_registry_wrapper registry;
 
         auto make_memtable = [] (dirty_memory_manager& mgr, table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
@@ -196,14 +198,15 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
             }
         };
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes));
     });
 }
 
 SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result) {
     return seastar::async([] {
-        auto common_builder = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto common_builder = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key);
 
         auto s1 = common_builder
@@ -254,7 +257,8 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
 
 SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        schema_ptr s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
@@ -319,7 +323,8 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
 // Reproducer for #1753
 SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happens) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        schema_ptr s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
@@ -388,7 +393,8 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
 // Reproducer for #1746
 SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        schema_ptr s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
@@ -441,7 +447,8 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
 // Reproducer for #2854
 SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        schema_ptr s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("col", bytes_type, column_kind::regular_column)
             .build();
@@ -470,7 +477,8 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
 
 SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
@@ -489,7 +497,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
 
 SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
@@ -511,7 +520,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
 
 SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         std::vector<mutation> ms = gen(2);
@@ -530,7 +540,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
 
 SEASTAR_TEST_CASE(test_hash_is_cached) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
@@ -608,11 +619,13 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
 
     auto td = tests::data_model::table_description({ { "pk", int32_type } }, { { "ck", utf8_type } });
 
+    tests::schema_registry_wrapper registry;
+
     auto td1 = td;
     td1.add_static_column("s1", int32_type);
     td1.add_regular_column("v1", int32_type);
     td1.add_regular_column("v2", int32_type);
-    auto built_schema = td1.build();
+    auto built_schema = td1.build(registry);
     auto s = built_schema.schema;
 
     auto md1 = tests::data_model::mutation_description({ to_bytes("pk1") });

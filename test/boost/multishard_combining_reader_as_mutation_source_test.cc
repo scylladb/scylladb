@@ -118,7 +118,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests(make_populate(false, false));
+        run_mutation_source_tests(make_populate(false, false), &env);
         return make_ready_future<>();
     }).get();
 }
@@ -130,7 +130,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests(make_populate(true, false));
+        run_mutation_source_tests(make_populate(true, false), &env);
         return make_ready_future<>();
     }).get();
 }
@@ -145,7 +145,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_plain(make_populate(true, true), true);
+        run_mutation_source_tests_plain(make_populate(true, true), &env, true);
         return make_ready_future<>();
     }).get();
 }
@@ -157,7 +157,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_dowgr
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_downgrade(make_populate(true, true), true);
+        run_mutation_source_tests_downgrade(make_populate(true, true), &env, true);
         return make_ready_future<>();
     }).get();
 }
@@ -169,7 +169,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_upgra
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_upgrade(make_populate(true, true), true);
+        run_mutation_source_tests_upgrade(make_populate(true, true), &env, true);
         return make_ready_future<>();
     }).get();
 }
@@ -181,7 +181,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_rever
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_reverse(make_populate(true, true), true);
+        run_mutation_source_tests_reverse(make_populate(true, true), &env, true);
         return make_ready_future<>();
     }).get();
 }

@@ -43,8 +43,8 @@
 
 using namespace std::literals::chrono_literals;
 
-static schema_ptr make_schema() {
-    return schema_builder("ks", "cf")
+static schema_ptr make_schema(schema_registry& registry) {
+    return schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key)
         .with_column("s1", bytes_type, column_kind::static_column)
@@ -101,7 +101,8 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto now = gc_clock::now();
 
@@ -152,7 +153,8 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
 
 SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto now = gc_clock::now();
 
@@ -200,7 +202,8 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 
 SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
     return seastar::async([] {
-        auto table_schema = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto table_schema = make_schema(registry);
         auto query_schema = table_schema->make_reversed();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto now = gc_clock::now();
@@ -389,7 +392,8 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
 SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto now = gc_clock::now();
 
@@ -410,7 +414,8 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
 
 SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
             .set_gc_grace_seconds(0)
@@ -461,7 +466,8 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 
 SEASTAR_TEST_CASE(test_result_row_count) {
     return seastar::async([] {
-            auto s = make_schema();
+            tests::schema_registry_wrapper registry;
+            auto s = make_schema(registry);
             tests::reader_concurrency_semaphore_wrapper semaphore;
             auto now = gc_clock::now();
             auto slice = partition_slice_builder(*s).build();
@@ -499,7 +505,8 @@ SEASTAR_TEST_CASE(test_result_row_count) {
 
 SEASTAR_TEST_CASE(test_partition_limit) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto now = gc_clock::now();
 
@@ -551,7 +558,8 @@ static void data_query(schema_ptr s, reader_permit permit, const mutation_source
 
 SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    tests::schema_registry_wrapper registry;
+    random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
     std::vector<mutation> mutations = gen(1);
     schema_ptr s = gen.schema();
     mutation_source source = make_source(std::move(mutations));

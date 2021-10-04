@@ -34,6 +34,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
 #include "test/boost/total_order_check.hh"
+#include "test/lib/schema_registry.hh"
 
 template <typename... Args>
 static
@@ -53,7 +54,8 @@ static int64_t long_from_token(dht::token token) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
@@ -92,7 +94,8 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_2) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", int32_type)
         .build();
@@ -231,7 +234,8 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
     auto prev_token = [] (dht::token token) {
         return token_from_long(long_from_token(token) - 1);
     };
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
@@ -323,7 +327,8 @@ normalize(dht::partition_range pr) {
 static
 void
 test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::partition_range&)> func_to_test) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
@@ -395,7 +400,8 @@ SEASTAR_THREAD_TEST_CASE(test_split_range_single_shard) {
 static
 void
 test_something_with_some_interesting_ranges_and_sharder_with_token_range(std::function<void (const dht::sharder&, const schema&, const dht::token_range&)> func_to_test) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)

@@ -34,6 +34,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/schema_registry.hh"
 #include <boost/test/unit_test.hpp>
 #include <array>
 
@@ -88,9 +89,15 @@ inline sstring get_test_dir(const sstring& name, const schema_ptr s)
     return seastar::format("test/resource/sstables/{}/{}/{}-1c6ace40fad111e7b9cf000000000002", name, s->ks_name(), s->cf_name());
 }
 
+namespace {
+
+static thread_local tests::schema_registry_wrapper _schema_registry;
+
+}
+
 inline schema_ptr composite_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "composite",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "composite",
         // partition key
         {{"name", bytes_type}, {"col1", bytes_type}},
         // clustering key
@@ -112,7 +119,7 @@ inline schema_ptr composite_schema() {
 inline schema_ptr set_schema() {
     static thread_local auto s = [] {
         auto my_set_type = set_type_impl::get_instance(bytes_type, false);
-        schema_builder builder(make_shared_schema({}, "tests", "set_pk",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "set_pk",
         // partition key
         {{"ss", my_set_type}},
         // clustering key
@@ -136,7 +143,7 @@ inline schema_ptr set_schema() {
 inline schema_ptr map_schema() {
     static thread_local auto s = [] {
         auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
-        schema_builder builder(make_shared_schema({}, "tests", "map_pk",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "map_pk",
         // partition key
         {{"ss", my_map_type}},
         // clustering key
@@ -160,7 +167,7 @@ inline schema_ptr map_schema() {
 inline schema_ptr list_schema() {
     static thread_local auto s = [] {
         auto my_list_type = list_type_impl::get_instance(bytes_type, false);
-        schema_builder builder(make_shared_schema({}, "tests", "list_pk",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "list_pk",
         // partition key
         {{"ss", my_list_type}},
         // clustering key
@@ -183,7 +190,7 @@ inline schema_ptr list_schema() {
 
 inline schema_ptr uncompressed_schema(int32_t min_index_interval = 0) {
     auto uncompressed = [=] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
+        schema_builder builder(make_shared_schema(_schema_registry, generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
         // partition key
         {{"name", utf8_type}},
         // clustering key
@@ -218,7 +225,7 @@ inline schema_ptr complex_schema() {
         auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
         auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
 
-        schema_builder builder(make_shared_schema({}, "tests", "complex_schema",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "complex_schema",
         // partition key
         {{"key", bytes_type}},
         // clustering key
@@ -245,7 +252,7 @@ inline schema_ptr complex_schema() {
 
 inline schema_ptr columns_schema() {
     static thread_local auto columns = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("name", "columns"), "name", "columns",
+        schema_builder builder(make_shared_schema(_schema_registry, generate_legacy_id("name", "columns"), "name", "columns",
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -273,7 +280,7 @@ inline schema_ptr columns_schema() {
 
 inline schema_ptr compact_simple_dense_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "compact_simple_dense",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "compact_simple_dense",
         // partition key
         {{"ks", bytes_type}},
         // clustering key
@@ -294,7 +301,7 @@ inline schema_ptr compact_simple_dense_schema() {
 
 inline schema_ptr compact_dense_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "compact_simple_dense",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "compact_simple_dense",
         // partition key
         {{"ks", bytes_type}},
         // clustering key
@@ -315,7 +322,7 @@ inline schema_ptr compact_dense_schema() {
 
 inline schema_ptr compact_sparse_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "compact_sparse",
+        schema_builder builder(make_shared_schema(_schema_registry, {}, "tests", "compact_sparse",
         // partition key
         {{"ks", bytes_type}},
         // clustering key
@@ -343,7 +350,7 @@ inline schema_ptr compact_sparse_schema() {
 //    sure we are testing the exact some one we have in our test dir.
 inline schema_ptr peers_schema() {
     static thread_local auto peers = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("system", "peers"), "system", "peers",
+        schema_builder builder(make_shared_schema(_schema_registry, generate_legacy_id("system", "peers"), "system", "peers",
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key

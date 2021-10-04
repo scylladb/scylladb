@@ -25,12 +25,13 @@
 
 #include "db/view/row_locking.hh"
 #include "schema_builder.hh"
+#include "test/lib/schema_registry.hh"
 
 static row_locker::stats row_locker_stats;
 
-static schema_ptr make_schema()
+static schema_ptr make_schema(schema_registry& registry)
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s", bytes_type, column_kind::static_column)
@@ -58,7 +59,8 @@ clustering_key_prefix make_ck(const schema_ptr&s, const sstring& ck) {
 // in the same partition.
 SEASTAR_TEST_CASE(test_nonblock_exclusive) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto ck = make_ck(s, "ck1") ;
@@ -95,7 +97,8 @@ SEASTAR_TEST_CASE(test_nonblock_exclusive) {
 // locked with either exclusive or shared lock).
 SEASTAR_TEST_CASE(test_nonblock_shared) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto ck = make_ck(s, "ck1") ;
@@ -144,7 +147,8 @@ SEASTAR_TEST_CASE(test_nonblock_shared) {
 // see we're not limited to that).
 SEASTAR_TEST_CASE(test_nonblock_many) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         std::vector<row_locker::lock_holder> locks;
         constexpr int N = 100;
@@ -174,9 +178,9 @@ SEASTAR_TEST_CASE(test_nonblock_many) {
     });
 }
 
-static schema_ptr make_alternative_schema()
+static schema_ptr make_alternative_schema(schema_registry& registry)
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s0", bytes_type, column_kind::static_column)
@@ -189,8 +193,9 @@ static schema_ptr make_alternative_schema()
 // Test schema change and upgrade (nonblocking test)
 SEASTAR_TEST_CASE(test_nonblock_upgrade) {
     return seastar::async([&] {
-        auto s = make_schema();
-        auto s2 = make_alternative_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
+        auto s2 = make_alternative_schema(registry);
         row_locker rl(s);
         auto lock = rl.lock_ck(make_pk(s, "pk1"), make_ck(s, "ck1"), true, db::timeout_clock::time_point::max(), row_locker_stats).get0();
         auto ignore = [] (auto) { };
@@ -221,7 +226,8 @@ SEASTAR_TEST_CASE(test_nonblock_upgrade) {
 // block until the first lock is released.
 SEASTAR_TEST_CASE(test_block_exclusive_twice_row) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto ck = make_ck(s, "ck1") ;
@@ -240,7 +246,8 @@ SEASTAR_TEST_CASE(test_block_exclusive_twice_row) {
 // block until the first lock is released.
 SEASTAR_TEST_CASE(test_block_exclusive_twice_partition) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto lock = rl.lock_pk(pk, true, db::timeout_clock::time_point::max(), row_locker_stats).get0();
@@ -255,7 +262,8 @@ SEASTAR_TEST_CASE(test_block_exclusive_twice_partition) {
 // should block the second lock until the first one is released.
 SEASTAR_TEST_CASE(test_block_exclusive_and_shared_row) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto ck = make_ck(s, "ck1") ;
@@ -276,7 +284,8 @@ SEASTAR_TEST_CASE(test_block_exclusive_and_shared_row) {
 }
 SEASTAR_TEST_CASE(test_block_exclusive_and_shared_partition) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto lock = rl.lock_pk(pk, false, db::timeout_clock::time_point::max(), row_locker_stats).get0();
@@ -296,7 +305,8 @@ SEASTAR_TEST_CASE(test_block_exclusive_and_shared_partition) {
 // is locked exclusive should block. And also in opposite order.
 SEASTAR_TEST_CASE(test_block_partition_row) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         row_locker rl(s);
         auto pk = make_pk(s, "pk1");
         auto ck = make_ck(s, "ck1") ;

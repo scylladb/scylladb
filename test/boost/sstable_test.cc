@@ -32,6 +32,7 @@
 #include "sstables/key.hh"
 #include "test/lib/sstable_utils.hh"
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "schema.hh"
 #include "compress.hh"
 #include "database.hh"
@@ -42,6 +43,7 @@
 #include "test/lib/test_services.hh"
 #include "cell_locking.hh"
 #include "sstables/sstable_mutation_reader.hh"
+#include "test/lib/schema_registry.hh"
 
 #include <boost/range/combine.hpp>
 
@@ -61,13 +63,14 @@ SEASTAR_TEST_CASE(uncompressed_data) {
     return test_using_working_sst(uncompressed_schema(), uncompressed_dir(), 1);
 }
 
-static auto make_schema_for_compressed_sstable() {
-    return make_shared_schema({}, "ks", "cf", {{"pk", utf8_type}}, {}, {}, {}, utf8_type);
+static auto make_schema_for_compressed_sstable(::schema_registry& registry) {
+    return make_shared_schema(registry, {}, "ks", "cf", {{"pk", utf8_type}}, {}, {}, {}, utf8_type);
 }
 
-SEASTAR_TEST_CASE(compressed_data) {
-    auto s = make_schema_for_compressed_sstable();
-    return test_using_working_sst(std::move(s), "test/resource/sstables/compressed", 1);
+SEASTAR_THREAD_TEST_CASE(compressed_data) {
+    tests::schema_registry_wrapper registry;
+    auto s = make_schema_for_compressed_sstable(registry);
+    test_using_working_sst(std::move(s), "test/resource/sstables/compressed", 1).get();
 }
 
 SEASTAR_TEST_CASE(composite_index) {
@@ -240,12 +243,13 @@ static future<> compare_files(sstdesc file1, sstdesc file2, component_type compo
 
 static future<> check_component_integrity(component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
-    auto s = make_schema_for_compressed_sstable();
+    auto registry = std::make_unique<tests::schema_registry_wrapper>();
+    auto s = make_schema_for_compressed_sstable(*registry);
     return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), 1).then([component, tmp] {
         return compare_files(sstdesc{"test/resource/sstables/compressed", 1 },
                              sstdesc{tmp->path().string(), 2 },
                              component);
-    }).then([tmp] {});
+    }).then([tmp, registry = std::move(registry)] {});
 }
 
 SEASTAR_TEST_CASE(check_compressed_info_func) {
@@ -263,7 +267,8 @@ write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> 
 }
 
 SEASTAR_TEST_CASE(check_summary_func) {
-    auto s = make_schema_for_compressed_sstable();
+    auto registry = std::make_unique<tests::schema_registry_wrapper>();
+    auto s = make_schema_for_compressed_sstable(*registry);
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_summary().then([sst1, sst2] {
             summary& sst1_s = sstables::test(sst1).get_summary();
@@ -276,7 +281,7 @@ SEASTAR_TEST_CASE(check_summary_func) {
             BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
             return make_ready_future<>();
         });
-    });
+    }).finally([registry = std::move(registry)] {});
 }
 
 SEASTAR_TEST_CASE(check_filter_func) {
@@ -284,7 +289,8 @@ SEASTAR_TEST_CASE(check_filter_func) {
 }
 
 SEASTAR_TEST_CASE(check_statistics_func) {
-    auto s = make_schema_for_compressed_sstable();
+    auto registry = std::make_unique<tests::schema_registry_wrapper>();
+    auto s = make_schema_for_compressed_sstable(*registry);
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_statistics().then([sst1, sst2] {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
@@ -299,11 +305,12 @@ SEASTAR_TEST_CASE(check_statistics_func) {
             // TODO: compare the field contents from both sstables.
             return make_ready_future<>();
         });
-    });
+    }).finally([registry = std::move(registry)] {});
 }
 
 SEASTAR_TEST_CASE(check_toc_func) {
-    auto s = make_schema_for_compressed_sstable();
+    auto registry = std::make_unique<tests::schema_registry_wrapper>();
+    auto s = make_schema_for_compressed_sstable(*registry);
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_toc().then([sst1, sst2] {
             auto& sst1_c = sstables::test(sst1).get_components();
@@ -312,7 +319,7 @@ SEASTAR_TEST_CASE(check_toc_func) {
             BOOST_REQUIRE(sst1_c == sst2_c);
             return make_ready_future<>();
         });
-    });
+    }).finally([registry = std::move(registry)] {});
 }
 
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {
@@ -327,13 +334,14 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 }
 
 SEASTAR_TEST_CASE(compressed_random_access_read) {
-    auto s = make_schema_for_compressed_sstable();
+    auto registry = std::make_unique<tests::schema_registry_wrapper>();
+    auto s = make_schema_for_compressed_sstable(*registry);
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [this] (auto& env, auto sstp) {
         return sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
         });
-    });
+    }).finally([registry = std::move(registry)] {});
 }
 
 
@@ -540,9 +548,10 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 // for a specific subset of columns. The test sstable for the read test was
 // generated in Cassandra.
 
-static schema_ptr large_partition_schema() {
-    static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(
+static schema_ptr large_partition_schema(::schema_registry& registry) {
+    return registry.get_or_load(db::system_keyspace::generate_schema_version("try1", "data"), [&registry] (table_schema_version v) {
+        schema_builder builder(
+                registry,
                 generate_legacy_id("try1", "data"), "try1", "data",
         // partition key
         {{"t1", utf8_type}},
@@ -556,14 +565,14 @@ static schema_ptr large_partition_schema() {
         utf8_type,
         // comment
         ""
-       ));
+       );
+       builder.with_version(v);
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return s;
+    });
 }
 
-static future<shared_sstable> load_large_partition_sst(test_env& env, const sstables::sstable::version_types version) {
-    auto s = large_partition_schema();
+static future<shared_sstable> load_large_partition_sst(::schema_registry& registry, test_env& env, const sstables::sstable::version_types version) {
+    auto s = large_partition_schema(registry);
     auto dir = get_test_dir("large_partition", s);
     return env.reusable_sst(std::move(s), std::move(dir), 3, version);
 }
@@ -573,10 +582,11 @@ static future<shared_sstable> load_large_partition_sst(test_env& env, const ssta
 // is read from disk, as an unparsed array, and doesn't actually use it to
 // search for anything.
 SEASTAR_TEST_CASE(promoted_index_read) {
-  return for_each_sstable_version([] (const sstables::sstable::version_types version) {
-    return test_env::do_with([version] (test_env& env) {
-      return load_large_partition_sst(env, version).then([&env] (auto sstp) {
-        schema_ptr s = large_partition_schema();
+  auto registry = std::make_unique<tests::schema_registry_wrapper>();
+  return for_each_sstable_version([registry = std::move(registry)] (const sstables::sstable::version_types version) {
+    return test_env::do_with([&registry = *registry, version] (test_env& env) {
+      return load_large_partition_sst(registry, env, version).then([&registry, &env] (auto sstp) {
+        schema_ptr s = large_partition_schema(registry);
         return sstables::test(sstp).read_indexes(env.make_reader_permit()).then([sstp] (std::vector<sstables::test::index_entry> vec) {
             BOOST_REQUIRE(vec.size() == 1);
             BOOST_REQUIRE(vec[0].promoted_index_size > 0);
@@ -684,10 +694,11 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
 // To verify that the promoted index was actually used to reduce the size
 // of read from disk, add printouts to the row reading code.
 SEASTAR_TEST_CASE(sub_partition_read) {
-  schema_ptr s = large_partition_schema();
-  return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
-    return test_env::do_with_async([s, version] (test_env& env) {
-        auto sstp = load_large_partition_sst(env, version).get();
+  auto registry = std::make_unique<tests::schema_registry_wrapper>();
+  schema_ptr s = large_partition_schema(*registry);
+  return for_each_sstable_version([registry = std::move(registry), s] (const sstables::sstable::version_types version) {
+    return test_env::do_with_async([&registry = *registry, s, version] (test_env& env) {
+        auto sstp = load_large_partition_sst(registry, env, version).get();
         {
             auto nrows = count_rows(env, sstp, s, "v1", "18wX", "18xB").get();
             // there should be 5 rows (out of 13520 = 20*26*26) in this range:
@@ -753,10 +764,11 @@ SEASTAR_TEST_CASE(sub_partition_read) {
 // to read parts of potentially more than one partition (in this particular
 // sstable, there is actually just one partition).
 SEASTAR_TEST_CASE(sub_partitions_read) {
-  schema_ptr s = large_partition_schema();
-  return for_each_sstable_version([s] (const sstables::sstable::version_types version) {
+  auto registry = std::make_unique<tests::schema_registry_wrapper>();
+  schema_ptr s = large_partition_schema(*registry);
+  return for_each_sstable_version([s, registry = std::move(registry)] (const sstables::sstable::version_types version) {
    return test_env::do_with_async([s, version] (test_env& env) {
-        auto sstp = load_large_partition_sst(env, version).get();
+        auto sstp = load_large_partition_sst(*s->registry(), env, version).get();
         auto nrows = count_rows(env, sstp, s, "18wX", "18xB").get();
         BOOST_REQUIRE(nrows == 5);
    });

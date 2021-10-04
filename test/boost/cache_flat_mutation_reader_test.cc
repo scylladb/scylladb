@@ -37,6 +37,7 @@
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/schema_registry.hh"
 
 #include <variant>
 
@@ -46,8 +47,10 @@
  * ===================
  */
 
+static thread_local tests::schema_registry_wrapper registry;
+
 static schema_ptr make_schema() {
-    return schema_builder("ks", "cf")
+    return schema_builder(registry, "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("v", int32_type)

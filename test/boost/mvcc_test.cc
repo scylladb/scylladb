@@ -38,6 +38,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/failure_injecting_allocation_strategy.hh"
 #include "test/lib/log.hh"
+#include "test/lib/schema_registry.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "real_dirty_memory_accounter.hh"
 
@@ -505,7 +506,8 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
     // and that continuity is not affected.
     return seastar::async([] {
         {
-            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            tests::schema_registry_wrapper registry;
+            random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
             auto s = gen.schema();
             mvcc_container ms(s);
 
@@ -575,7 +577,8 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
     // Tests that reading many versions using a cursor gives the logical mutation back.
     return seastar::async([] {
         {
-            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            tests::schema_registry_wrapper registry;
+            random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
             auto s = gen.schema();
             mvcc_container ms(s);
 
@@ -613,10 +616,11 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
 SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictable) {
     // Tests that reading many versions using a cursor gives the logical mutation back.
     return seastar::async([] {
+        tests::schema_registry_wrapper registry;
         logalloc::region r;
         mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
         with_allocator(r.allocator(), [&] {
-            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
             auto s = gen.schema();
 
             mutation m1 = gen();
@@ -903,17 +907,19 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
         });
     };
 
-    do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
-    do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    tests::schema_registry_wrapper registry;
+    do_test(random_mutation_generator(registry, random_mutation_generator::generate_counters::no));
+    do_test(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes));
     return make_ready_future<>();
 }
 
 SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
     return seastar::async([] {
+        tests::schema_registry_wrapper registry;
         logalloc::region r;
         mutation_cleaner cleaner(r, nullptr, app_stats_for_tests);
         with_allocator(r.allocator(), [&] {
-            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
             auto s = gen.schema();
 
             mutation m1 = gen();
@@ -972,7 +978,8 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
 // Reproducer of #4030
 SEASTAR_TEST_CASE(test_snapshot_merging_after_container_is_destroyed) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
 
         mutation m1 = gen();

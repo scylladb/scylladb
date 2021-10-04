@@ -34,6 +34,7 @@
 #include "memtable.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/schema_registry.hh"
 
 static const int update_iterations = 16;
 static const int cell_size = 128;
@@ -134,7 +135,8 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 }
 
 void test_small_partitions() {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
         .with_column("v2", bytes_type, column_kind::regular_column)
@@ -154,7 +156,8 @@ void test_small_partitions() {
 }
 
 void test_partition_with_lots_of_small_rows() {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
@@ -178,7 +181,8 @@ void test_partition_with_lots_of_small_rows() {
 }
 
 void test_partition_with_few_small_rows() {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
@@ -204,7 +208,8 @@ void test_partition_with_few_small_rows() {
 }
 
 void test_partition_with_lots_of_range_tombstones() {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)

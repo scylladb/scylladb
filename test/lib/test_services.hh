@@ -54,7 +54,7 @@ struct column_family_for_tests {
     };
     lw_shared_ptr<data> _data;
 
-    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager);
+    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_registry& registry);
 
     explicit column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s);
 

@@ -41,10 +41,10 @@ enum are_equal { no, yes };
 
 // Calls the provided function on mutation pairs, equal and not equal. Is supposed
 // to exercise all potential ways two mutations may differ.
-void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)>);
+void for_each_mutation_pair(schema_registry& registry, std::function<void(const mutation&, const mutation&, are_equal)>);
 
 // Calls the provided function on mutations. Is supposed to exercise as many differences as possible.
-void for_each_mutation(std::function<void(const mutation&)>);
+void for_each_mutation(schema_registry& registry, std::function<void(const mutation&)>);
 
 // Returns true if mutations in schema s1 can be upgraded to s2.
 inline bool can_upgrade_schema(schema_ptr from, schema_ptr to) {
@@ -63,7 +63,7 @@ public:
     // is no higher level tombstone will cover lower level tombstones and no
     // tombstone will cover data, i.e. compacting the mutation will not result
     // in any changes.
-    explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes,
+    explicit random_mutation_generator(schema_registry& registry, generate_counters, local_shard_only lso = local_shard_only::yes,
             generate_uncompactable uc = generate_uncompactable::no);
     ~random_mutation_generator();
     mutation operator()();

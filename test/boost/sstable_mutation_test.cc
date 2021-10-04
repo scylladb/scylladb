@@ -413,7 +413,7 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();
-        auto s = make_shared_schema({}, "ks", "cf",
+        auto s = make_shared_schema(env.registry(), {}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
         auto key = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
@@ -551,9 +551,9 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
   });
 }
 
-static schema_ptr tombstone_overlap_schema() {
-    static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("try1", "tab"), "try1", "tab",
+static schema_ptr tombstone_overlap_schema(schema_registry& registry) {
+    return registry.get_or_load(db::system_keyspace::generate_schema_version("try1", "tab"), [&registry] (table_schema_version v) {
+        schema_builder builder(registry, generate_legacy_id("try1", "tab"), "try1", "tab",
         // partition key
         {{"pk", utf8_type}},
         // clustering key
@@ -566,10 +566,10 @@ static schema_ptr tombstone_overlap_schema() {
         utf8_type,
         // comment
         ""
-       ));
+       );
+       builder.with_version(v);
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return s;
+    });
 }
 
 
@@ -589,8 +589,8 @@ static future<sstable_ptr> ka_sst(sstables::test_env& env, schema_ptr schema, ss
 //               ]
 SEASTAR_TEST_CASE(tombstone_in_tombstone) {
   return test_env::do_with_async([] (test_env& env) {
-    ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 1).then([&env] (auto sstp) {
-        auto s = tombstone_overlap_schema();
+    ka_sst(env, tombstone_overlap_schema(env.registry()), "test/resource/sstables/tombstone_overlap", 1).then([&env] (auto sstp) {
+        auto s = tombstone_overlap_schema(env.registry());
         return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader).then([s] (mutation_opt mut) {
@@ -654,8 +654,8 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
 // CQL, but we saw a similar thing is a real use case.
 SEASTAR_TEST_CASE(range_tombstone_reading) {
   return test_env::do_with_async([] (test_env& env) {
-    ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).then([&env] (auto sstp) {
-        auto s = tombstone_overlap_schema();
+    ka_sst(env, tombstone_overlap_schema(env.registry()), "test/resource/sstables/tombstone_overlap", 4).then([&env] (auto sstp) {
+        auto s = tombstone_overlap_schema(env.registry());
         return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader).then([s] (mutation_opt mut) {
@@ -711,9 +711,9 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
 //        ["aaa:bbb:ccc:!","aaa:bbb:ddd:!",1459438519950348,"t",1459438519],
 //        ["aaa:bbb:ddd:!","aaa:bbb:!",1459438519950348,"t",1459438519],
 //        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
-static schema_ptr tombstone_overlap_schema2() {
-    static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("try1", "tab2"), "try1", "tab2",
+static schema_ptr tombstone_overlap_schema2(schema_registry& registry) {
+    return registry.get_or_load(db::system_keyspace::generate_schema_version("try1", "tab2"), [&registry] (table_schema_version v) {
+        schema_builder builder(registry, generate_legacy_id("try1", "tab2"), "try1", "tab2",
         // partition key
         {{"pk", utf8_type}},
         // clustering key
@@ -726,15 +726,15 @@ static schema_ptr tombstone_overlap_schema2() {
         utf8_type,
         // comment
         ""
-       ));
+       );
+       builder.with_version(v);
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return s;
+    });
 }
 SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
   return test_env::do_with_async([] (test_env& env) {
-    ka_sst(env, tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).then([&env] (auto sstp) {
-        auto s = tombstone_overlap_schema2();
+    ka_sst(env, tombstone_overlap_schema2(env.registry()), "test/resource/sstables/tombstone_overlap", 3).then([&env] (auto sstp) {
+        auto s = tombstone_overlap_schema2(env.registry());
         return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader).then([s] (mutation_opt mut) {
@@ -793,9 +793,9 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
 }
 
 // Reproducer for #4783
-static schema_ptr buffer_overflow_schema() {
-    static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("test_ks", "test_tab"), "test_ks", "test_tab",
+static schema_ptr buffer_overflow_schema(schema_registry& registry) {
+    return registry.get_or_load(db::system_keyspace::generate_schema_version("test_ks", "test_tab"), [&registry] (table_schema_version v) {
+        schema_builder builder(registry, generate_legacy_id("test_ks", "test_tab"), "test_ks", "test_tab",
         // partition key
         {{"pk", int32_type}},
         // clustering key
@@ -808,14 +808,14 @@ static schema_ptr buffer_overflow_schema() {
         utf8_type,
         // comment
         ""
-       ));
+       );
+       builder.with_version(v);
        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return s;
+    });
 }
 SEASTAR_TEST_CASE(buffer_overflow) {
   return test_env::do_with_async([] (test_env& env) {
-    auto s = buffer_overflow_schema();
+    auto s = buffer_overflow_schema(env.registry());
     auto sstp = ka_sst(env, s, "test/resource/sstables/buffer_overflow", 5).get0();
     auto r = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
     auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
@@ -855,7 +855,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
+        schema_builder builder(env.registry(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
         builder.with_column("v", int32_type);
@@ -890,7 +890,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
             auto dir = tmpdir();
-            schema_builder builder("ks", "cf");
+            schema_builder builder(env.registry(), "ks", "cf");
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c", int32_type, column_kind::clustering_key);
             builder.with_column("v", int32_type);
@@ -936,7 +936,7 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return test_env::do_with_async([] (test_env& env) {
         auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
+        schema_builder builder(env.registry(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("c2", int32_type, column_kind::clustering_key);
@@ -980,7 +980,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
+        schema_builder builder(env.registry(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("c2", int32_type, column_kind::clustering_key);
@@ -1035,7 +1035,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
+        schema_builder builder(env.registry(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("v", int32_type);
@@ -1089,7 +1089,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
             const auto generation = id++;
-            schema_builder builder("ks", format("cf{:d}", generation));
+            schema_builder builder(env.registry(), "ks", format("cf{:d}", generation));
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c1", bytes_type, column_kind::clustering_key);
             builder.with_column("v", int32_type);
@@ -1131,7 +1131,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
+        schema_builder builder(env.registry(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
         builder.with_column("v", int32_type);
@@ -1167,7 +1167,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
         auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
+        schema_builder builder(env.registry(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
@@ -1428,7 +1428,7 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
     td1.add_static_column("s1", int32_type);
     td1.add_regular_column("v1", int32_type);
     td1.add_regular_column("v2", int32_type);
-    auto built_schema = td1.build();
+    auto built_schema = td1.build(env.registry());
     auto s = built_schema.schema;
 
     auto md1 = tests::data_model::mutation_description({ to_bytes("pk1") });
@@ -1524,7 +1524,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
   return test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
-    auto s = schema_builder("ks", "counter_test")
+    auto s = schema_builder(env.registry(), "ks", "counter_test")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("c1", counter_type)
@@ -1563,7 +1563,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
 SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
-            auto s = schema_builder("ks", "test")
+            auto s = schema_builder(env.registry(), "ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v1", int32_type)
                 .with_column("v2", int32_type)

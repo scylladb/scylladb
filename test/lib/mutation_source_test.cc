@@ -38,6 +38,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/schema_registry.hh"
 #include <boost/algorithm/string/join.hpp>
 #include "types/user.hh"
 #include "types/map.hh"
@@ -45,6 +46,7 @@
 #include "types/set.hh"
 #include <seastar/util/closeable.hh>
 #include "utils/UUID_gen.hh"
+#include "db/config.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -88,10 +90,10 @@ public:
 
 }
 
-static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s;
+    simple_schema s(registry);
 
     const sstring value = "v";
     constexpr unsigned ckey_count = 4;
@@ -365,14 +367,14 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
     }
 }
 
-static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
     // Generates few random mutations and row slices and verifies that using
     // fast_forward_to() over the slices gives the same mutations as using those
     // slices in partition_slice without forwarding.
 
-    random_mutation_generator gen(random_mutation_generator::generate_counters::no, local_shard_only::yes,
+    random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no, local_shard_only::yes,
             random_mutation_generator::generate_uncompactable::yes);
 
     for (int i = 0; i < 10; ++i) {
@@ -454,10 +456,10 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
     }
 }
 
-static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema table;
+    simple_schema table(registry);
     schema_ptr s = table.schema();
 
     // mutation will include odd keys
@@ -587,10 +589,10 @@ static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurren
 }
 
 // Reproduces https://github.com/scylladb/scylla/issues/2733
-static void test_fast_forwarding_across_partitions_to_empty_range(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_fast_forwarding_across_partitions_to_empty_range(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema table;
+    simple_schema table(registry);
     schema_ptr s = table.schema();
 
     std::vector<mutation> partitions;
@@ -661,10 +663,10 @@ static void test_fast_forwarding_across_partitions_to_empty_range(tests::reader_
         .produces_end_of_stream();
 }
 
-static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema table;
+    simple_schema table(registry);
     schema_ptr s = table.schema();
 
     mutation m(s, table.make_pkey());
@@ -752,10 +754,10 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(test
     }
 }
 
-static void test_streamed_mutation_forwarding_across_range_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_streamed_mutation_forwarding_across_range_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema table;
+    simple_schema table(registry);
     schema_ptr s = table.schema();
 
     mutation m(s, table.make_pkey());
@@ -853,10 +855,10 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
     rd.produces_end_of_stream();
 }
 
-static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
         .build();
@@ -985,12 +987,12 @@ static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& sema
     test_slice(inclusive_token_range(128, partitions.size() - 1));
 }
 
-void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
     const auto query_time = gc_clock::now();
 
-    for_each_mutation([&semaphore, &populate, query_time] (const mutation& m) mutable {
+    for_each_mutation(registry, [&semaphore, &populate, query_time] (const mutation& m) mutable {
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
         copy.partition().compact_for_compaction(*copy.schema(), always_gc, query_time);
@@ -998,10 +1000,10 @@ void test_all_data_is_read_back(tests::reader_concurrency_semaphore_wrapper& sem
     });
 }
 
-void test_mutation_reader_fragments_have_monotonic_positions(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_mutation_reader_fragments_have_monotonic_positions(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    for_each_mutation([&semaphore, &populate] (const mutation& m) {
+    for_each_mutation(registry, [&semaphore, &populate] (const mutation& m) {
         auto ms = populate(m.schema(), {m}, gc_clock::now());
 
         auto rd = ms.make_reader(m.schema(), semaphore.make_permit());
@@ -1012,10 +1014,10 @@ void test_mutation_reader_fragments_have_monotonic_positions(tests::reader_concu
     });
 }
 
-static void test_date_tiered_clustering_slicing(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_date_tiered_clustering_slicing(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema ss;
+    simple_schema ss(registry);
 
     auto s = schema_builder(ss.schema())
         .set_compaction_strategy(sstables::compaction_strategy_type::date_tiered)
@@ -1052,9 +1054,9 @@ static void test_date_tiered_clustering_slicing(tests::reader_concurrency_semaph
     }
 }
 
-static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("c1", int32_type, column_kind::clustering_key)
         .with_column("c2", int32_type, column_kind::clustering_key)
@@ -1207,10 +1209,10 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
     }
 }
 
-static void test_query_only_static_row(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_query_only_static_row(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s;
+    simple_schema s(registry);
 
     auto pkeys = s.make_pkeys(1);
 
@@ -1253,10 +1255,10 @@ static void test_query_only_static_row(tests::reader_concurrency_semaphore_wrapp
     }
 }
 
-static void test_query_no_clustering_ranges_no_static_columns(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_query_no_clustering_ranges_no_static_columns(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s(simple_schema::with_static::no);
+    simple_schema s(registry, simple_schema::with_static::no);
 
     auto pkeys = s.make_pkeys(1);
 
@@ -1297,10 +1299,10 @@ static void test_query_no_clustering_ranges_no_static_columns(tests::reader_conc
     }
 }
 
-void test_streamed_mutation_forwarding_succeeds_with_no_data(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_streamed_mutation_forwarding_succeeds_with_no_data(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s;
+    simple_schema s(registry);
     auto cks = s.make_ckeys(6);
 
     auto pkey = s.make_pkey();
@@ -1336,10 +1338,10 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(tests::reader_concu
 }
 
 static
-void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema ss;
+    simple_schema ss(registry);
     auto s = ss.schema();
 
     auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
@@ -1435,10 +1437,10 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
     }
 }
 
-void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s;
+    simple_schema s(registry);
     auto pkey = s.make_pkey();
     sstring value(256, 'v');
 
@@ -1461,10 +1463,10 @@ void test_downgrade_to_v1_clear_buffer(tests::reader_concurrency_semaphore_wrapp
             .produces_end_of_stream();      // Expect no active range tombstone at this point.
 }
 
-void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s;
+    simple_schema s(registry);
     auto pkey = s.make_pkey();
 
     std::vector<mutation> mutations;
@@ -1653,10 +1655,10 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
     }
 }
 
-void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    for_each_mutation([&] (const mutation& m) mutable {
+    for_each_mutation(registry, [&] (const mutation& m) mutable {
         const auto query_time = gc_clock::now();
 
         std::vector<mutation> mutations = { m };
@@ -1679,32 +1681,32 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
     });
 }
 
-void test_next_partition(tests::reader_concurrency_semaphore_wrapper&, populate_fn_ex);
+void test_next_partition(tests::reader_concurrency_semaphore_wrapper&, schema_registry& registry, populate_fn_ex);
 
-void run_mutation_reader_tests(populate_fn_ex populate, tests::reader_concurrency_semaphore_wrapper& semaphore, bool with_partition_range_forwarding) {
+void run_mutation_reader_tests(populate_fn_ex populate, tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    test_range_tombstones_v2(semaphore, populate);
-    test_downgrade_to_v1_clear_buffer(semaphore, populate);
-    test_reader_conversions(semaphore, populate);
-    test_date_tiered_clustering_slicing(semaphore, populate);
-    test_clustering_slices(semaphore, populate);
-    test_mutation_reader_fragments_have_monotonic_positions(semaphore, populate);
-    test_streamed_mutation_forwarding_across_range_tombstones(semaphore, populate);
-    test_streamed_mutation_forwarding_guarantees(semaphore, populate);
-    test_all_data_is_read_back(semaphore, populate);
-    test_streamed_mutation_slicing_returns_only_relevant_tombstones(semaphore, populate);
-    test_streamed_mutation_forwarding_is_consistent_with_slicing(semaphore, populate);
-    test_range_queries(semaphore, populate);
-    test_query_only_static_row(semaphore, populate);
-    test_query_no_clustering_ranges_no_static_columns(semaphore, populate);
-    test_next_partition(semaphore, populate);
-    test_streamed_mutation_forwarding_succeeds_with_no_data(semaphore, populate);
-    test_slicing_with_overlapping_range_tombstones(semaphore, populate);
+    test_range_tombstones_v2(semaphore, registry, populate);
+    test_downgrade_to_v1_clear_buffer(semaphore, registry, populate);
+    test_reader_conversions(semaphore, registry, populate);
+    test_date_tiered_clustering_slicing(semaphore, registry, populate);
+    test_clustering_slices(semaphore, registry, populate);
+    test_mutation_reader_fragments_have_monotonic_positions(semaphore, registry, populate);
+    test_streamed_mutation_forwarding_across_range_tombstones(semaphore, registry, populate);
+    test_streamed_mutation_forwarding_guarantees(semaphore, registry, populate);
+    test_all_data_is_read_back(semaphore, registry, populate);
+    test_streamed_mutation_slicing_returns_only_relevant_tombstones(semaphore, registry, populate);
+    test_streamed_mutation_forwarding_is_consistent_with_slicing(semaphore, registry, populate);
+    test_range_queries(semaphore, registry, populate);
+    test_query_only_static_row(semaphore, registry, populate);
+    test_query_no_clustering_ranges_no_static_columns(semaphore, registry, populate);
+    test_next_partition(semaphore, registry, populate);
+    test_streamed_mutation_forwarding_succeeds_with_no_data(semaphore, registry, populate);
+    test_slicing_with_overlapping_range_tombstones(semaphore, registry, populate);
     
     if (with_partition_range_forwarding) {
-        test_fast_forwarding_across_partitions_to_empty_range(semaphore, populate);
-        test_slicing_and_fast_forwarding(semaphore, populate);
+        test_fast_forwarding_across_partitions_to_empty_range(semaphore, registry, populate);
+        test_slicing_and_fast_forwarding(semaphore, registry, populate);
     }
 }
 
@@ -1713,13 +1715,34 @@ void run_mutation_reader_tests(populate_fn_ex populate, cql_test_env* test_env, 
 
     auto semaphore = test_env ? tests::reader_concurrency_semaphore_wrapper(test_env->local_db().get_reader_concurrency_semaphore()) : tests::reader_concurrency_semaphore_wrapper();
 
-    run_mutation_reader_tests(std::move(populate), semaphore, with_partition_range_forwarding);
+    std::optional<sharded<db::extensions>> extensions;
+    std::optional<sharded<schema_registry>> schema_registry;
+    auto stop = defer([&] {
+        if (schema_registry) {
+            schema_registry->stop().get();
+        }
+        if (extensions) {
+            extensions->stop().get();
+        }
+    });
+    if (!test_env) {
+        extensions.emplace();
+        extensions->start().get();
+        schema_registry.emplace();
+        schema_registry->start().get();
+        schema_registry->invoke_on_all([&] (::schema_registry& r) {
+            r.init(db::schema_ctxt(db::schema_ctxt::for_tests{}, extensions->local()));
+        }).get();
+    }
+    auto& local_registry = test_env ? test_env->local_db().get_schema_registry() : schema_registry->local();
+
+    run_mutation_reader_tests(std::move(populate), semaphore, local_registry, with_partition_range_forwarding);
 }
 
-void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore, schema_registry& registry, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    simple_schema s;
+    simple_schema s(registry);
     auto pkeys = s.make_pkeys(4);
 
     std::vector<mutation> mutations;
@@ -1849,12 +1872,12 @@ static tombstone new_tombstone() {
     return { new_timestamp(), gc_clock::now() + std::chrono::hours(10) };
 }
 
-static mutation_sets generate_mutation_sets() {
+static mutation_sets generate_mutation_sets(schema_registry& registry) {
     using mutations = std::vector<mutation>;
     mutation_sets result;
 
     {
-        auto common_schema = schema_builder("ks", "test")
+        auto common_schema = schema_builder(registry, "ks", "test")
                 .with_column("pk_col", bytes_type, column_kind::partition_key)
                 .with_column("ck_col_1", bytes_type, column_kind::clustering_key)
                 .with_column("ck_col_2", bytes_type, column_kind::clustering_key)
@@ -1992,7 +2015,7 @@ static mutation_sets generate_mutation_sets() {
     static constexpr auto rmg_iterations = 10;
 
     {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no, local_shard_only::yes,
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no, local_shard_only::yes,
                 random_mutation_generator::generate_uncompactable::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
@@ -2002,7 +2025,7 @@ static mutation_sets generate_mutation_sets() {
     }
 
     {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::yes, local_shard_only::yes,
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::yes, local_shard_only::yes,
                 random_mutation_generator::generate_uncompactable::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
@@ -2014,13 +2037,8 @@ static mutation_sets generate_mutation_sets() {
     return result;
 }
 
-static const mutation_sets& get_mutation_sets() {
-    static thread_local const auto ms = generate_mutation_sets();
-    return ms;
-}
-
-void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)> callback) {
-    auto&& ms = get_mutation_sets();
+void for_each_mutation_pair(schema_registry& registry, std::function<void(const mutation&, const mutation&, are_equal)> callback) {
+    auto&& ms = generate_mutation_sets(registry);
     for (auto&& mutations : ms.equal) {
         auto i = mutations.begin();
         assert(i != mutations.end());
@@ -2041,8 +2059,8 @@ void for_each_mutation_pair(std::function<void(const mutation&, const mutation&,
     }
 }
 
-void for_each_mutation(std::function<void(const mutation&)> callback) {
-    auto&& ms = get_mutation_sets();
+void for_each_mutation(schema_registry& registry, std::function<void(const mutation&)> callback) {
+    auto&& ms = generate_mutation_sets(registry);
     for (auto&& mutations : ms.equal) {
         for (auto&& m : mutations) {
             callback(m);
@@ -2072,6 +2090,7 @@ class random_mutation_generator::impl {
     };
 
 private:
+    schema_registry& _registry;
     friend class random_mutation_generator;
     generate_counters _generate_counters;
     local_shard_only _local_shard_only;
@@ -2093,7 +2112,7 @@ private:
     }
 
     schema_ptr do_make_schema(data_type type) {
-        auto builder = schema_builder("ks", "cf")
+        auto builder = schema_builder(_registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
                 .with_column("ck2", bytes_type, column_kind::clustering_key);
@@ -2115,8 +2134,8 @@ private:
                                   : do_make_schema(bytes_type);
     }
 public:
-    explicit impl(generate_counters counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no) : _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
+    explicit impl(schema_registry& registry, generate_counters counters, local_shard_only lso = local_shard_only::yes,
+            generate_uncompactable uc = generate_uncompactable::no) : _registry(registry), _generate_counters(counters), _local_shard_only(lso), _uncompactable(uc) {
         // In case of errors, reproduce using the --random-seed command line option with the test_runner seed.
         auto seed = tests::random::get_int<uint32_t>();
         std::cout << "random_mutation_generator seed: " << seed << "\n";
@@ -2390,8 +2409,8 @@ public:
 
 random_mutation_generator::~random_mutation_generator() {}
 
-random_mutation_generator::random_mutation_generator(generate_counters counters, local_shard_only lso, generate_uncompactable uc)
-    : _impl(std::make_unique<random_mutation_generator::impl>(counters, lso, uc))
+random_mutation_generator::random_mutation_generator(schema_registry& registry, generate_counters counters, local_shard_only lso, generate_uncompactable uc)
+    : _impl(std::make_unique<random_mutation_generator::impl>(registry, counters, lso, uc))
 { }
 
 mutation random_mutation_generator::operator()() {
@@ -2589,8 +2608,10 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
         s.unordered_mutations().emplace_back(std::move(m));
     }
 
+    tests::schema_registry_wrapper registry;
+
     // Transformations
-    auto base = s.build();
+    auto base = s.build(registry);
 
     std::vector<tests::data_model::table_description::table> schemas;
     schemas.emplace_back(base);
@@ -2615,12 +2636,12 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
      // Remove and add back all static columns
     for (auto& sc : static_columns) {
         s.remove_static_column(format("s{}", sc.id));
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     for (auto& sc : static_columns) {
         s.add_static_column(format("s{}", sc.id), uuid_type);
-        auto mutated = s.build();
-        schemas.emplace_back(s.build());
+        auto mutated = s.build(registry);
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2628,13 +2649,13 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Remove and add back all regular columns
     for (auto& rc : regular_columns) {
         s.remove_regular_column(format("r{}", rc.id));
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     auto temp_s = s;
     auto temp_schemas = schemas;
     for (auto& rc : regular_columns) {
         s.add_regular_column(format("r{}", rc.id), uuid_type);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2643,7 +2664,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Add back all regular columns as collections
     for (auto& rc : regular_columns) {
         s.add_regular_column(format("r{}", rc.id), map_of_int_to_bytes);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2652,7 +2673,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Add back all regular columns as frozen collections
     for (auto& rc : regular_columns) {
         s.add_regular_column(format("r{}", rc.id), frozen_map_of_int_to_int);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2660,7 +2681,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Add more static columns
     for (auto& sc : static_columns) {
         s.add_static_column(format("s{}", sc.id + 1), uuid_type);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2668,7 +2689,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Add more regular columns
     for (auto& rc : regular_columns) {
         s.add_regular_column(format("r{}", rc.id + 1), uuid_type);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2677,22 +2698,22 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     for (auto& sc : static_columns) {
         for (auto& target : sc.alter_to) {
             s.alter_static_column_type(format("s{}", sc.id), target);
-            schemas.emplace_back(s.build());
+            schemas.emplace_back(s.build(registry));
         }
     }
     for (auto& rc : regular_columns) {
         for (auto& target : rc.alter_to) {
             s.alter_regular_column_type(format("r{}", rc.id), target);
-            schemas.emplace_back(s.build());
+            schemas.emplace_back(s.build(registry));
         }
     }
     for (auto i = 1; i <= 3; i++) {
         s.alter_clustering_column_type(format("ck{}", i), bytes_type);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     for (auto i = 1; i <= 3; i++) {
         s.alter_partition_column_type(format("pk{}", i), bytes_type);
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2700,7 +2721,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Rename clustering key
     for (auto i = 1; i <= 3; i++) {
         s.rename_clustering_column(format("ck{}", i), format("ck{}", 100 - i));
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 
@@ -2708,7 +2729,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     // Rename partition key
     for (auto i = 1; i <= 3; i++) {
         s.rename_partition_column(format("pk{}", i), format("pk{}", 100 - i));
-        schemas.emplace_back(s.build());
+        schemas.emplace_back(s.build(registry));
     }
     test_mutated_schemas();
 }

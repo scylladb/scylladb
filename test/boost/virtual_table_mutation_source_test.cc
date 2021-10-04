@@ -87,5 +87,5 @@ SEASTAR_THREAD_TEST_CASE(test_streaming_vt_as_mutation_source) {
                 mutation_reader::forwarding) {
             return ms.make_reader(s, permit, pr, slice, pc, trace_state, stream_fwd, mutation_reader::forwarding::no);
         });
-    }, false /* with_partition_range_forwarding */);
+    }, nullptr, false /* with_partition_range_forwarding */);
 }

@@ -30,6 +30,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
+#include "test/lib/schema_registry.hh"
 
 namespace sstables {
 
@@ -45,11 +46,13 @@ class test_env {
     std::unique_ptr<cache_tracker> _cache_tracker;
     std::unique_ptr<test_env_sstables_manager> _mgr;
     std::unique_ptr<reader_concurrency_semaphore> _semaphore;
+    std::unique_ptr<tests::schema_registry_wrapper> _registry;
 public:
     explicit test_env()
         : _cache_tracker(std::make_unique<cache_tracker>())
         , _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service, *_cache_tracker))
-        , _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")) { }
+        , _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "sstables::test_env"))
+        , _registry(std::make_unique<tests::schema_registry_wrapper>()) { }
 
     future<> stop() {
         return _mgr->close().finally([this] {
@@ -88,6 +91,8 @@ public:
     reader_permit make_reader_permit(db::timeout_clock::time_point timeout = db::no_timeout) {
         return _semaphore->make_tracking_only_permit(nullptr, "test", timeout);
     }
+
+    schema_registry& registry() { return *_registry; }
 
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });

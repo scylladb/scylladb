@@ -110,7 +110,8 @@ static size_t count_fragments(mutation m) {
 SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        for_each_mutation([&] (const mutation& m) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation(registry, [&] (const mutation& m) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations(semaphore.make_permit(), {m});
@@ -133,6 +134,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
 SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        tests::schema_registry_wrapper registry;
         auto test = [&semaphore] (mutation m1, mutation m2) {
             size_t fragments_in_m1 = count_fragments(m1);
             size_t fragments_in_m2 = count_fragments(m2);
@@ -186,7 +188,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                 }
             }
         };
-        for_each_mutation_pair([&] (auto&& m, auto&& m2, are_equal) {
+        for_each_mutation_pair(registry, [&] (auto&& m, auto&& m2, are_equal) {
             if (m.decorated_key().less_compare(*m.schema(), m2.decorated_key())) {
                 test(m, m2);
             } else if (m2.decorated_key().less_compare(*m.schema(), m.decorated_key())) {
@@ -199,7 +201,8 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
 SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        for_each_mutation([&] (const mutation& m) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation(registry, [&] (const mutation& m) {
             std::vector<frozen_mutation> fms;
 
             fragment_and_freeze(flat_mutation_reader_from_mutations(semaphore.make_permit(), { mutation(m) }), [&] (auto fm, bool frag) {
@@ -288,8 +291,8 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
             }
         };
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes));
     });
 }
 
@@ -638,8 +641,10 @@ SEASTAR_TEST_CASE(test_consume_flat) {
             }
         };
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+        tests::schema_registry_wrapper registry;
+
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes));
     });
 }
 
@@ -709,7 +714,8 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
 SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        for_each_mutation([&] (const mutation& m) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation(registry, [&] (const mutation& m) {
             auto rd = flat_mutation_reader_from_mutations(semaphore.make_permit(), {mutation(m)});
             auto close_rd = deferred_close(rd);
             rd().get();

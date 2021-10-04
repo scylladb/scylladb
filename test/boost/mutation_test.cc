@@ -60,6 +60,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
+#include "test/lib/schema_registry.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -116,8 +117,9 @@ with_column_family(schema_ptr s, column_family::config cfg, noncopyable_function
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
+        tests::schema_registry_wrapper registry;
 
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+        auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -142,7 +144,8 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
 }
 
 SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
+    tests::schema_registry_wrapper registry;
+    auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
         {{"p1", utf8_type}},
         {{"c1", int32_type}, {"c2", int32_type}, {"c3", int32_type}},
         {{"r1", int32_type}}, {}, utf8_type);
@@ -177,7 +180,8 @@ SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
 }
 
 SEASTAR_TEST_CASE(test_row_tombstone_updates) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
+    tests::schema_registry_wrapper registry;
+    auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}, {"c2", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -219,10 +223,11 @@ collection_mutation_description make_collection_mutation(tombstone t, bytes key1
 
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
+        tests::schema_registry_wrapper registry;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+        auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type);
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -257,10 +262,11 @@ SEASTAR_TEST_CASE(test_map_mutations) {
 
 SEASTAR_TEST_CASE(test_set_mutations) {
     return seastar::async([] {
+        tests::schema_registry_wrapper registry;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+        auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type);
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -295,10 +301,11 @@ SEASTAR_TEST_CASE(test_set_mutations) {
 
 SEASTAR_TEST_CASE(test_list_mutations) {
     return seastar::async([] {
+        tests::schema_registry_wrapper registry;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+        auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type);
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -333,6 +340,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
+    tests::schema_registry_wrapper registry;
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     // (a int, b text, c long, d text)
@@ -341,7 +349,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
             {int32_type, utf8_type, long_type, utf8_type},
             true);
 
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
+    auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", ut}}, utf8_type);
     auto mt = make_lw_shared<memtable>(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -404,13 +412,14 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
 // operations like merging two collections and compaction query results
 // there are no allocations larger than our usual 128KB buffer size.
 SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
+    tests::schema_registry_wrapper registry;
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     const auto key_type = int32_type;
     const auto value_type = utf8_type;
     const auto collection_type = map_type_impl::get_instance(key_type, value_type, true);
 
-    auto schema = schema_builder("test", "test_large_collection_allocation")
+    auto schema = schema_builder(registry, "test", "test_large_collection_allocation")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("v", collection_type)
         .build();
@@ -494,7 +503,8 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
+    tests::schema_registry_wrapper registry;
+    auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<::cf_stats>();
@@ -543,7 +553,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 
 SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
   return sstables::test_env::do_with([] (sstables::test_env& env) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
         .build();
@@ -627,7 +638,8 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
+    tests::schema_registry_wrapper registry;
+    auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<::cf_stats>();
@@ -778,7 +790,8 @@ static query::partition_slice make_full_slice(const schema& s) {
 
 SEASTAR_TEST_CASE(test_querying_of_mutation) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
             .build();
@@ -804,7 +817,8 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
 
 SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_results) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -827,7 +841,8 @@ SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_resul
 
 SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_results_even_if_static_row_was_not_queried) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -853,7 +868,8 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
 
 SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("v1", bytes_type, column_kind::regular_column)
@@ -879,7 +895,8 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
 
 SEASTAR_TEST_CASE(test_row_counting) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -929,7 +946,8 @@ SEASTAR_TEST_CASE(test_row_counting) {
 }
 
 SEASTAR_TEST_CASE(test_tombstone_apply) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
             .build();
@@ -953,7 +971,8 @@ SEASTAR_TEST_CASE(test_tombstone_apply) {
 }
 
 SEASTAR_TEST_CASE(test_marker_apply) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("v", bytes_type, column_kind::regular_column)
@@ -1046,8 +1065,9 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
         });
     };
 
-    do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
-    do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    tests::schema_registry_wrapper registry;
+    do_test(random_mutation_generator(registry, random_mutation_generator::generate_counters::no));
+    do_test(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes));
     return make_ready_future<>();
 }
 
@@ -1055,8 +1075,10 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
     return seastar::async([] {
         mutation_application_stats app_stats;
 
+        tests::schema_registry_wrapper registry;
+
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -1162,9 +1184,10 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
 SEASTAR_TEST_CASE(test_large_blobs) {
     return seastar::async([] {
+        tests::schema_registry_wrapper registry;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+        auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type);
 
         auto mt = make_lw_shared<memtable>(s);
@@ -1205,7 +1228,8 @@ SEASTAR_TEST_CASE(test_large_blobs) {
 
 SEASTAR_TEST_CASE(test_mutation_equality) {
     return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [] (auto&& m1, auto&& m2, are_equal eq) {
             if (eq) {
                 assert_that(m1).is_equal_to(m2);
             } else {
@@ -1217,7 +1241,8 @@ SEASTAR_TEST_CASE(test_mutation_equality) {
 
 SEASTAR_TEST_CASE(test_mutation_hash) {
     return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [] (auto&& m1, auto&& m2, are_equal eq) {
             auto test_with_hasher = [&] (auto hasher) {
                 auto get_hash = [&] (const mutation &m) {
                     auto h = hasher;
@@ -1264,7 +1289,8 @@ SEASTAR_TEST_CASE(test_query_digest) {
             }
         };
 
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [&] (const mutation& m1, const mutation& m2, are_equal eq) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 return;
             }
@@ -1298,7 +1324,8 @@ SEASTAR_TEST_CASE(test_query_digest) {
 
 SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
     return seastar::async([] {
-        for_each_mutation_pair([](auto&& m1, auto&& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [](auto&& m1, auto&& m2, are_equal eq) {
             if (eq == are_equal::yes) {
                 assert_that(m1).is_upgrade_equivalent(m2.schema());
                 assert_that(m2).is_upgrade_equivalent(m1.schema());
@@ -1309,8 +1336,9 @@ SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
 
 SEASTAR_TEST_CASE(test_mutation_upgrade) {
     return seastar::async([] {
-        auto make_builder = [] {
-            return schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto make_builder = [&registry] {
+            return schema_builder(registry, "ks", "cf")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("ck", bytes_type, column_kind::clustering_key);
         };
@@ -1408,8 +1436,9 @@ SEASTAR_TEST_CASE(test_mutation_upgrade) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
-    auto make_builder = [] {
-        return schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto make_builder = [&registry] {
+        return schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key);
     };
@@ -1486,7 +1515,8 @@ SEASTAR_THREAD_TEST_CASE(test_row_marker_expiry) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .build();
@@ -1535,7 +1565,8 @@ SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
 
 SEASTAR_TEST_CASE(test_querying_expired_cells) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("s1", bytes_type, column_kind::static_column)
@@ -1624,7 +1655,8 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 }
 
 SEASTAR_TEST_CASE(test_tombstone_purge) {
-    auto builder = schema_builder("tests", "tombstone_purge")
+    tests::schema_registry_wrapper registry;
+    auto builder = schema_builder(registry, "tests", "tombstone_purge")
         .with_column("id", utf8_type, column_kind::partition_key)
         .with_column("value", int32_type);
     builder.set_gc_grace_seconds(0);
@@ -1648,7 +1680,8 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
 }
 
 SEASTAR_TEST_CASE(test_slicing_mutation) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("v", int32_type)
@@ -1725,7 +1758,8 @@ SEASTAR_TEST_CASE(test_slicing_mutation) {
 
 SEASTAR_TEST_CASE(test_trim_rows) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
                 .with_column("v", int32_type)
@@ -1776,7 +1810,8 @@ SEASTAR_TEST_CASE(test_trim_rows) {
 
 SEASTAR_TEST_CASE(test_collection_cell_diff) {
     return seastar::async([] {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+        tests::schema_registry_wrapper registry;
+        auto s = make_shared_schema(registry, {}, some_keyspace, some_column_family,
             {{"p", utf8_type}}, {}, {{"v", list_type_impl::get_instance(bytes_type, true)}}, {}, utf8_type);
 
         auto& col = s->column_at(column_kind::regular_column, 0);
@@ -1805,7 +1840,8 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
 
 SEASTAR_TEST_CASE(test_apply_is_commutative) {
     return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [] (auto&& m1, auto&& m2, are_equal eq) {
             auto s = m1.schema();
             if (s != m2.schema()) {
                 return; // mutations with different schemas not commutative
@@ -1824,7 +1860,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
         };
         const auto now = gc_clock::now();
         can_gc_fn never_gc = [] (tombstone) { return false; };
-        for_each_mutation_pair([&] (auto m1, auto m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [&] (auto m1, auto m2, are_equal eq) {
             mutation_application_stats app_stats;
             auto s = m1.schema();
             if (s != m2.schema()) {
@@ -1845,7 +1882,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
 }
 
 SEASTAR_TEST_CASE(test_continuity_merging_of_complete_mutations) {
-    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    tests::schema_registry_wrapper registry;
+    random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
 
     mutation m1 = gen();
     m1.partition().make_fully_continuous();
@@ -2072,7 +2110,8 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
 // after all MVCC versions are merged.
 // Overaccounting leads to assertion failure in ~flush_memory_accounter.
 SEASTAR_THREAD_TEST_CASE(test_row_size_is_immune_to_application_order) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v1", utf8_type)
             .with_column("v2", utf8_type)
@@ -3076,7 +3115,8 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
 
 // Reproducer for #4567: "appending_hash<row> ignores cells after first null"
 SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
-    auto s = schema_builder("ks", "cf")
+    tests::schema_registry_wrapper registry;
+    auto s = schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key)
         .with_column("r1", bytes_type)

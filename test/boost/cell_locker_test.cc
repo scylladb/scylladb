@@ -26,12 +26,13 @@
 #include "cell_locking.hh"
 #include "mutation.hh"
 #include "schema_builder.hh"
+#include "test/lib/schema_registry.hh"
 
 using namespace std::literals::chrono_literals;
 
-static schema_ptr make_schema()
+static schema_ptr make_schema(schema_registry& registry)
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s1", bytes_type, column_kind::static_column)
@@ -43,9 +44,9 @@ static schema_ptr make_schema()
             .build();
 }
 
-static schema_ptr make_alternative_schema()
+static schema_ptr make_alternative_schema(schema_registry& registry)
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s0", bytes_type, column_kind::static_column)
@@ -59,9 +60,9 @@ static schema_ptr make_alternative_schema()
             .build();
 }
 
-static schema_ptr make_schema_disjoint_with_others()
+static schema_ptr make_schema_disjoint_with_others(schema_registry& registry)
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(registry, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s8", bytes_type, column_kind::static_column)
@@ -101,7 +102,8 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
     return seastar::async([&] {
         auto destroy = [] (auto) { };
 
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         cell_locker_stats cl_stats;
         cell_locker cl(s, cl_stats);
 
@@ -121,7 +123,8 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
 
 SEASTAR_TEST_CASE(test_disjoint_mutations) {
     return seastar::async([&] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         cell_locker_stats cl_stats;
         cell_locker cl(s, cl_stats);
 
@@ -147,7 +150,8 @@ SEASTAR_TEST_CASE(test_single_cell_overlap) {
     return seastar::async([&] {
         auto destroy = [] (auto) { };
 
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         cell_locker_stats cl_stats;
         cell_locker cl(s, cl_stats);
 
@@ -180,8 +184,9 @@ SEASTAR_TEST_CASE(test_schema_change) {
     return seastar::async([&] {
         auto destroy = [] (auto) { };
 
-        auto s1 = make_schema();
-        auto s2 = make_alternative_schema();
+        tests::schema_registry_wrapper registry;
+        auto s1 = make_schema(registry);
+        auto s2 = make_alternative_schema(registry);
         cell_locker_stats cl_stats;
         cell_locker cl(s1, cl_stats);
 
@@ -212,7 +217,7 @@ SEASTAR_TEST_CASE(test_schema_change) {
         destroy(std::move(l1));
         auto l3 = f3.get0();
 
-        auto s3 = make_schema_disjoint_with_others();
+        auto s3 = make_schema_disjoint_with_others(registry);
         cl.set_schema(s3);
 
         auto m4 = make_mutation(s3, "0", { "s8", "s9"}, {
@@ -227,7 +232,8 @@ SEASTAR_TEST_CASE(test_timed_out) {
         return seastar::async([&] {
             auto destroy = [] (auto) { };
 
-            auto s = make_schema();
+            tests::schema_registry_wrapper registry;
+            auto s = make_schema(registry);
             cell_locker_stats cl_stats;
             cell_locker cl(s, cl_stats);
 
@@ -256,7 +262,8 @@ SEASTAR_TEST_CASE(test_locker_stats) {
     return seastar::async([&] {
         auto destroy = [] (auto) { };
 
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         cell_locker_stats cl_stats;
         cell_locker cl(s, cl_stats);
 

@@ -37,6 +37,7 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/schema_registry.hh"
 
 class size_calculator {
     using cells_type = row::sparse_array_type;
@@ -107,8 +108,8 @@ public:
 
 thread_local int size_calculator::nest::level = 0;
 
-static schema_ptr cassandra_stress_schema() {
-    return schema_builder("ks", "cf")
+static schema_ptr cassandra_stress_schema(schema_registry& registry) {
+    return schema_builder(registry, "ks", "cf")
         .with_column("KEY", bytes_type, column_kind::partition_key)
         .with_column("C0", bytes_type)
         .with_column("C1", bytes_type)
@@ -120,7 +121,8 @@ static schema_ptr cassandra_stress_schema() {
 
 [[gnu::unused]]
 static mutation make_cs_mutation() {
-    auto s = cassandra_stress_schema();
+    tests::schema_registry_wrapper registry;
+    auto s = cassandra_stress_schema(registry);
     mutation m(s, partition_key::from_single_value(*s, bytes_type->from_string("4b343050393536353531")));
     for (auto&& col : s->regular_columns()) {
         m.set_clustered_cell(clustering_key::make_empty(), col,
@@ -156,8 +158,8 @@ struct mutation_settings {
     size_t data_size;
 };
 
-static schema_ptr make_schema(const mutation_settings& settings) {
-    auto builder = schema_builder("ks", "cf")
+static schema_ptr make_schema(schema_registry& registry, const mutation_settings& settings) {
+    auto builder = schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key);
 
@@ -191,9 +193,9 @@ struct sizes {
     size_t query_result;
 };
 
-static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& settings) {
+static sizes calculate_sizes(schema_registry& registry, cache_tracker& tracker, const mutation_settings& settings) {
     sizes result;
-    auto s = make_schema(settings);
+    auto s = make_schema(registry, settings);
     auto mt = make_lw_shared<memtable>(s);
     row_cache cache(s, make_empty_snapshot_source(), tracker);
 
@@ -267,7 +269,7 @@ int main(int argc, char** argv) {
             settings.data_size = app.configuration()["data-size"].as<size_t>();
 
             auto& tracker = env.local_db().find_column_family("system", "local").get_row_cache().get_cache_tracker();
-            auto sizes = calculate_sizes(tracker, settings);
+            auto sizes = calculate_sizes(env.local_db().get_schema_registry(), tracker, settings);
 
             std::cout << "mutation footprint:" << "\n";
             std::cout << " - in cache:     " << sizes.cache << "\n";

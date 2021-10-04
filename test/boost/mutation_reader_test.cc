@@ -45,6 +45,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_position_reader_queue.hh"
+#include "test/lib/schema_registry.hh"
 
 #include "dht/sharder.hh"
 #include "mutation_reader.hh"
@@ -60,8 +61,8 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
-static schema_ptr make_schema() {
-    return schema_builder("ks", "cf")
+static schema_ptr make_schema(schema_registry& registry) {
+    return schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type, column_kind::regular_column)
         .build();
@@ -69,7 +70,8 @@ static schema_ptr make_schema() {
 
 SEASTAR_TEST_CASE(test_combining_two_readers_with_the_same_row) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
 
@@ -87,7 +89,8 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_the_same_row) {
 
 SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
 
@@ -107,7 +110,8 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
 
 SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
 
@@ -130,7 +134,8 @@ SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
 
 SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
 
@@ -242,7 +247,8 @@ static mutation make_mutation_with_key(schema_ptr s, const char* key) {
 
 SEASTAR_TEST_CASE(test_filtering) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto m1 = make_mutation_with_key(s, "key1");
@@ -310,7 +316,8 @@ SEASTAR_TEST_CASE(test_filtering) {
 
 SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
         mutation m1(s, partition_key::from_single_value(*s, "key1"));
@@ -324,7 +331,8 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
 
 SEASTAR_TEST_CASE(test_combining_two_empty_readers) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
         assert_that(make_combined_reader(s, permit, make_empty_flat_reader(s, permit), make_empty_flat_reader(s, permit)))
@@ -337,7 +345,8 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
         std::vector<flat_mutation_reader> v;
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         v.push_back(make_empty_flat_reader(s, permit));
         assert_that(make_combined_reader(s, permit, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
             .produces_end_of_stream();
@@ -362,7 +371,8 @@ std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorat
 
 SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto keys = generate_keys(s, 7);
@@ -944,7 +954,8 @@ static mutation compacted(const mutation& m) {
 
 SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicing) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         auto permit = env.make_reader_permit();
 
@@ -1207,7 +1218,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
             });
         };
 
-        run_mutation_source_tests(populate);
+        run_mutation_source_tests(populate, &env);
         return make_ready_future<>();
     }).get();
 }
@@ -1279,7 +1290,9 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
         }
     };
 
-    const auto schema = schema_builder("ks", get_name())
+    tests::schema_registry_wrapper registry;
+
+    const auto schema = schema_builder(registry, "ks", get_name())
             .with_column("p0", int32_type, column_kind::partition_key)
             .with_column("c0", int32_type, column_kind::clustering_key)
             .with_column("c1", int32_type, column_kind::clustering_key)
@@ -1554,7 +1567,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
-        simple_schema s;
+        simple_schema s(env.local_db().get_schema_registry());
         auto factory = [&shards_touched] (
                 schema_ptr s,
                 reader_permit permit,
@@ -1720,7 +1733,7 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
 
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         const auto shard_of_interest = (this_shard_id() + 1) % smp::count;
-        auto s = simple_schema();
+        auto s = simple_schema(env.local_db().get_schema_registry());
         auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] {
             using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
             using reader_type = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
@@ -1858,7 +1871,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
-        simple_schema s;
+        simple_schema s(env.local_db().get_schema_registry());
         auto sharder = std::make_unique<dht::sharder>(no_shards, 0);
         auto factory = [&shards_touched] (
                 schema_ptr s,
@@ -1900,7 +1913,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
-        simple_schema s;
+        simple_schema s(env.local_db().get_schema_registry());
         auto factory = [&shards_touched] (
                 schema_ptr s,
                 reader_permit permit,
@@ -1989,7 +2002,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        auto s = simple_schema();
+        auto s = simple_schema(env.local_db().get_schema_registry());
 
         auto reader_sharder_remote_controls__ = prepare_multishard_reader_for_read_ahead_test(s, make_reader_permit(env));
         auto&& reader = reader_sharder_remote_controls__.reader;
@@ -2047,7 +2060,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        auto s = simple_schema();
+        auto s = simple_schema(env.local_db().get_schema_registry());
 
         auto reader_sharder_remote_controls_pr = prepare_multishard_reader_for_read_ahead_test(s, make_reader_permit(env));
         auto&& reader = reader_sharder_remote_controls_pr.reader;
@@ -2236,7 +2249,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
         const size_t max_buffer_size = 512;
         const int pk = 0;
         const auto tombstone_deletion_time = gc_clock::now();
-        simple_schema s;
+        simple_schema s(env.local_db().get_schema_registry());
 
         // Validate that the generated fragments are fit for the very strict
         // requirement of this test.
@@ -2406,7 +2419,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
 
 SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto gen = random_mutation_generator(random_mutation_generator::generate_counters::no);
+    tests::schema_registry_wrapper registry;
+    auto gen = random_mutation_generator(registry, random_mutation_generator::generate_counters::no);
 
     const auto expected_muts = gen(20);
 
@@ -3655,12 +3669,12 @@ struct clustering_order_merger_test_generator {
     schema_ptr _s;
     partition_key _pk;
 
-    clustering_order_merger_test_generator(std::optional<sstring> pk = std::nullopt)
-        : _s(make_schema()), _pk(partition_key::from_single_value(*_s, utf8_type->decompose(pk ? *pk : make_local_key(make_schema()))))
+    clustering_order_merger_test_generator(schema_registry& registry, std::optional<sstring> pk = std::nullopt)
+        : _s(make_schema(registry)), _pk(partition_key::from_single_value(*_s, utf8_type->decompose(pk ? *pk : make_local_key(_s))))
     {}
 
-    static schema_ptr make_schema() {
-        return schema_builder("ks", "t")
+    static schema_ptr make_schema(schema_registry& registry) {
+        return schema_builder(registry, "ks", "t")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type, column_kind::regular_column)
@@ -3743,7 +3757,8 @@ struct clustering_order_merger_test_generator {
 
 SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    clustering_order_merger_test_generator g;
+    tests::schema_registry_wrapper registry;
+    clustering_order_merger_test_generator g(registry);
 
     auto make_authority = [s = g._s, &semaphore] (std::optional<mutation> mut, streamed_mutation::forwarding fwd) {
         auto permit = semaphore.make_permit();
@@ -3801,8 +3816,9 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 
 static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
   return sstables::test_env::do_with_async([reversed] (sstables::test_env& env) {
-    auto pkeys = make_local_keys(2, clustering_order_merger_test_generator::make_schema());
-    clustering_order_merger_test_generator g(pkeys[0]);
+    tests::schema_registry_wrapper registry;
+    auto pkeys = make_local_keys(2, clustering_order_merger_test_generator::make_schema(registry));
+    clustering_order_merger_test_generator g(registry, pkeys[0]);
     auto query_schema = g._s;
     auto table_schema = g._s;
 
@@ -4127,7 +4143,8 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
 
 // Regression test for #8445.
 SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
-    auto s = clustering_order_merger_test_generator::make_schema();
+    tests::schema_registry_wrapper registry;
+    auto s = clustering_order_merger_test_generator::make_schema(registry);
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     auto permit = semaphore.make_permit();

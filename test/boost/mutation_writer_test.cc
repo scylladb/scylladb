@@ -104,23 +104,25 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
             }
         };
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), 0);
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), 0);
+        auto& registry = e.local_db().get_schema_registry();
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), 1);
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), 1);
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no, local_shard_only::no), 0);
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes, local_shard_only::no), 0);
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions());
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions());
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no, local_shard_only::no), 1);
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes, local_shard_only::no), 1);
+
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions());
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions());
 
         try {
-            test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions(), generate_error::yes);
+            test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions(), generate_error::yes);
             BOOST_ASSERT(false);
         } catch (...) {
         }
 
         try {
-            test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions(), generate_error::yes);
+            test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions(), generate_error::yes);
             BOOST_ASSERT(false);
         } catch (...) {
         }
@@ -174,8 +176,10 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             }
         };
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::yes), 1000, generate_error::no);
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::yes), 1000, generate_error::yes);
+        auto& registry = e.local_db().get_schema_registry();
+
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no, local_shard_only::yes), 1000, generate_error::no);
+        test_random_streams(random_mutation_generator(registry, random_mutation_generator::generate_counters::no, local_shard_only::yes), 1000, generate_error::yes);
     });
 }
 

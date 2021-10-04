@@ -747,9 +747,9 @@ expiry_generator no_expiry_expiry_generator() {
 
 namespace {
 
-schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec) {
+schema_ptr build_random_schema(schema_registry& registry, uint32_t seed, random_schema_specification& spec) {
     auto engine = std::mt19937{seed};
-    auto builder = schema_builder(spec.keyspace_name(), spec.table_name(engine));
+    auto builder = schema_builder(registry, spec.keyspace_name(), spec.table_name(engine));
 
     auto pk_columns = spec.partition_key_columns(engine);
     assert(!pk_columns.empty()); // Let's not pull in boost::test here
@@ -925,7 +925,7 @@ data_model::mutation_description::key random_schema::make_clustering_key(uint32_
 }
 
 random_schema::random_schema(uint32_t seed, random_schema_specification& spec)
-    : _schema(build_random_schema(seed, spec)) {
+    : _schema(build_random_schema(_registry, seed, spec)) {
 }
 
 sstring random_schema::cql() const {

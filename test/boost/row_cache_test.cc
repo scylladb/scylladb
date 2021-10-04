@@ -42,20 +42,21 @@
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/schema_registry.hh"
 
 #include <boost/range/algorithm/min_element.hpp>
 
 using namespace std::chrono_literals;
 
-static schema_ptr make_schema() {
-    return schema_builder("ks", "cf")
+static schema_ptr make_schema(schema_registry& registry) {
+    return schema_builder(registry, "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type, column_kind::regular_column)
         .build();
 }
 
-static schema_ptr make_schema_with_extra_column() {
-    return schema_builder(make_schema())
+static schema_ptr make_schema_with_extra_column(schema_registry& registry) {
+    return schema_builder(make_schema(registry))
         .with_column("a", bytes_type, column_kind::regular_column)
         .build();
 }
@@ -130,7 +131,8 @@ void verify_has(row_cache& cache, const mutation& m) {
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         auto m = make_new_mutation(s);
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -146,7 +148,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
 
 SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
 
@@ -191,7 +194,8 @@ flat_mutation_reader make_counting_reader(flat_mutation_reader mr, int& counter)
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         int secondary_calls_count = 0;
         cache_tracker tracker;
@@ -223,7 +227,8 @@ dht::partition_range make_single_partition_range(schema_ptr& s, int pkey) {
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_partition_query) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         int secondary_calls_count = 0;
         cache_tracker tracker;
@@ -249,7 +254,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_part
 
 SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         int secondary_calls_count = 0;
         cache_tracker tracker;
@@ -311,7 +317,8 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
         test_cache_delegates_to_underlying_only_once_with_single_partition(s, semaphore, m,
@@ -321,7 +328,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range)
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_full_range) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
         test_cache_delegates_to_underlying_only_once_with_single_partition(s, semaphore, m, query::full_partition_range, 2);
@@ -330,7 +338,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_full_range) {
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto m = make_new_mutation(s);
         dht::partition_range::bound end = {dht::ring_position(m.decorated_key()), true};
@@ -353,7 +362,8 @@ static void require_no_token_duplicates(const std::vector<mutation>& partitions)
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutations) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("key", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type)
             .build();
@@ -555,7 +565,8 @@ static std::vector<mutation> make_ring(schema_ptr s, int n_mutations) {
 
 SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         std::vector<mutation> mutations = make_ring(s, 3);
@@ -605,7 +616,8 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
 
 SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto mt = make_lw_shared<memtable>(s);
@@ -646,7 +658,8 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
 // Reproducer for https://github.com/scylladb/scylla/issues/4236
 SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flushes) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         std::vector<mutation> mutations = make_ring(s, 3);
@@ -740,7 +753,8 @@ mutation make_fully_continuous(const mutation& m) {
 SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
     return seastar::async([] {
         cache_tracker tracker;
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         // The test primes the cache with m1, which has random continuity,
@@ -777,7 +791,8 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
 SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
     return seastar::async([] {
         cache_tracker tracker;
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
 
         memtable_snapshot_source underlying(gen.schema());
 
@@ -817,7 +832,8 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
 SEASTAR_TEST_CASE(test_random_partition_population) {
     return seastar::async([] {
         cache_tracker tracker;
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto m1 = make_fully_continuous(gen());
@@ -845,7 +861,8 @@ SEASTAR_TEST_CASE(test_random_partition_population) {
 
 SEASTAR_TEST_CASE(test_eviction) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto mt = make_lw_shared<memtable>(s);
 
@@ -882,12 +899,13 @@ SEASTAR_TEST_CASE(test_eviction) {
 
 SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         row_cache cache(gen.schema(), snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto prev_evictions = tracker.get_stats().partition_evictions;
@@ -933,8 +951,9 @@ SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
 
 SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
     return seastar::async([] {
-        auto s = make_schema();
-        auto s2 = make_schema_with_extra_column();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
+        auto s2 = make_schema_with_extra_column(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto mt = make_lw_shared<memtable>(s);
 
@@ -990,7 +1009,8 @@ void test_sliced_read_row_presence(flat_mutation_reader reader, schema_ptr s, st
 
 SEASTAR_TEST_CASE(test_single_partition_update) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)
@@ -1047,7 +1067,8 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
 
 SEASTAR_TEST_CASE(test_update) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto cache_mt = make_lw_shared<memtable>(s);
 
@@ -1155,7 +1176,8 @@ mutation make_new_mutation(schema_ptr s, int key) {
 
 SEASTAR_TEST_CASE(test_update_failure) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto cache_mt = make_lw_shared<memtable>(s);
 
@@ -1330,7 +1352,8 @@ static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
 
 SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
@@ -1386,7 +1409,8 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
 
 SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         memtable_snapshot_source memtables(s);
         throttle thr;
@@ -1465,7 +1489,8 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
 
 SEASTAR_TEST_CASE(test_invalidate) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto mt = make_lw_shared<memtable>(s);
 
@@ -1524,7 +1549,8 @@ SEASTAR_TEST_CASE(test_invalidate) {
 
 SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         memtable_snapshot_source memtables(s);
         throttle thr;
@@ -1666,7 +1692,8 @@ SEASTAR_TEST_CASE(test_mvcc) {
             assert_that(std::move(rd5)).produces(m12);
         };
 
-        for_each_mutation_pair([&] (const mutation& m1_, const mutation& m2_, are_equal) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [&] (const mutation& m1_, const mutation& m2_, are_equal) {
             if (m1_.schema() != m2_.schema()) {
                 return;
             }
@@ -1691,7 +1718,8 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
 SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)
@@ -1799,7 +1827,8 @@ static void evict_one_row(cache_tracker& tracker) {
 
 SEASTAR_TEST_CASE(test_lru) {
     return seastar::async([] {
-        auto s = make_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto cache_mt = make_lw_shared<memtable>(s);
 
@@ -2429,7 +2458,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
     return seastar::async([] {
         cache_tracker tracker;
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         memtable_snapshot_source underlying(s);
@@ -2804,7 +2834,8 @@ SEASTAR_TEST_CASE(test_random_row_population) {
 
 SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         memtable_snapshot_source underlying(gen.schema());
 
         auto m1 = gen();
@@ -2950,7 +2981,8 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
 
 SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck1", int32_type, column_kind::clustering_key)
             .with_column("ck2", int32_type, column_kind::clustering_key)
@@ -3196,7 +3228,8 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
 
 SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         memtable_snapshot_source underlying(gen.schema());
         schema_ptr s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -3369,7 +3402,8 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
     // are not affected by eviction in cache after their partition entries were moved to cache.
     // Reproduces https://github.com/scylladb/scylla/issues/3186
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         auto s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
@@ -3421,9 +3455,10 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
 SEASTAR_TEST_CASE(test_hash_is_cached) {
     return seastar::async([] {
         cache_tracker tracker;
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
 
-        auto s = make_schema();
+        auto s = make_schema(registry);
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto mut = make_new_mutation(s);
@@ -3492,7 +3527,8 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
 SEASTAR_TEST_CASE(test_random_population_with_many_versions) {
     return seastar::async([] {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        tests::schema_registry_wrapper registry;
+        random_mutation_generator gen(registry, random_mutation_generator::generate_counters::no);
         memtable_snapshot_source underlying(gen.schema());
         schema_ptr s = gen.schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;

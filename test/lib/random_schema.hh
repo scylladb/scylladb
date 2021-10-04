@@ -24,6 +24,7 @@
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
 #include "test/lib/data_model.hh"
+#include "test/lib/schema_registry.hh"
 
 ///
 /// Random schema and random data generation related utilities.
@@ -161,6 +162,7 @@ expiry_generator no_expiry_expiry_generator();
 /// The schema is generated when the class is constructed.
 /// The generation is deterministic, the same seed will generate the same schema.
 class random_schema {
+    tests::schema_registry_wrapper _registry;
     schema_ptr _schema;
 
 private:

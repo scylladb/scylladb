@@ -52,6 +52,7 @@
 #include "test/lib/data_model.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/schema_registry.hh"
 
 using namespace db;
 
@@ -664,6 +665,7 @@ using namespace std::chrono_literals;
 SEASTAR_TEST_CASE(test_commitlog_add_entries) {
     return cl_test([](commitlog& log) {
         return seastar::async([&] {
+            tests::schema_registry_wrapper registry;
             using force_sync = commitlog_entry_writer::force_sync;
 
             constexpr auto n = 10;
@@ -676,7 +678,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
                 mutations.reserve(n);
                 
                 for (auto i = 0; i < n; ++i) {
-                    random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+                    random_mutation_generator gen(registry, random_mutation_generator::generate_counters(false));
                     mutations.emplace_back(gen(1).front());
                     writers.emplace_back(gen.schema(), mutations.back(), fs);
                 }

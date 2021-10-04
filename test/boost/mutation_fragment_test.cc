@@ -145,7 +145,8 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
 
 SEASTAR_TEST_CASE(test_range_tombstones_stream) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck1", int32_type, column_kind::clustering_key)
                 .with_column("ck2", int32_type, column_kind::clustering_key)
@@ -267,7 +268,8 @@ position_in_partition position_after_prefixed(const clustering_key& ck) {
 
 SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck1", int32_type, column_kind::clustering_key)
             .with_column("ck2", int32_type, column_kind::clustering_key)
@@ -329,7 +331,8 @@ SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view) {
 
 SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view_in_a_dense_table) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        tests::schema_registry_wrapper registry;
+        auto s = schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck1", int32_type, column_kind::clustering_key)
             .with_column("ck2", int32_type, column_kind::clustering_key)
@@ -403,7 +406,8 @@ SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view_in_a
 SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        for_each_mutation_pair([&](const mutation& m1, const mutation& m2, are_equal eq) {
+        tests::schema_registry_wrapper registry;
+        for_each_mutation_pair(registry, [&](const mutation& m1, const mutation& m2, are_equal eq) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 

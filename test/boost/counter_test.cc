@@ -30,6 +30,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/random_utils.hh"
+#include "test/lib/schema_registry.hh"
 #include "schema_builder.hh"
 #include "keys.hh"
 #include "mutation.hh"
@@ -160,8 +161,8 @@ SEASTAR_TEST_CASE(test_apply) {
     });
 }
 
-schema_ptr get_schema() {
-    return schema_builder("ks", "cf")
+schema_ptr get_schema(schema_registry& registry) {
+    return schema_builder(registry, "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("s1", counter_type, column_kind::static_column)
@@ -196,7 +197,8 @@ atomic_cell_view get_static_counter_cell(mutation& m) {
 
 SEASTAR_TEST_CASE(test_counter_mutations) {
     return seastar::async([] {
-        auto s = get_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = get_schema(registry);
 
         auto id = generate_ids(4);
 
@@ -357,7 +359,8 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
 
 SEASTAR_TEST_CASE(test_counter_update_mutations) {
     return seastar::async([] {
-        auto s = get_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = get_schema(registry);
 
         auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
         auto ck = clustering_key::from_single_value(*s, int32_type->decompose(0));
@@ -405,7 +408,8 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
 
 SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
     return seastar::async([] {
-        auto s = get_schema();
+        tests::schema_registry_wrapper registry;
+        auto s = get_schema(registry);
 
         auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
         auto ck = clustering_key::from_single_value(*s, int32_type->decompose(0));

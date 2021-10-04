@@ -183,8 +183,8 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
 
-static schema_ptr make_counter_schema(std::string_view ks_name) {
-    return schema_builder(ks_name, "cf")
+static schema_ptr make_counter_schema(schema_registry& registry, std::string_view ks_name) {
+    return schema_builder(registry, ks_name, "cf")
             .with_column("KEY", bytes_type, column_kind::partition_key)
             .with_column("C0", counter_type)
             .with_column("C1", counter_type)
@@ -399,11 +399,12 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
     assert(cfg.frontend == test_config::frontend_type::cql);
 
     std::cout << "Running test with config: " << cfg << std::endl;
-    env.create_table([&cfg] (auto ks_name) {
+    env.create_table([&env, &cfg] (auto ks_name) {
+        auto& registry = env.local_db().get_schema_registry();
         if (cfg.counters) {
-            return *make_counter_schema(ks_name);
+            return *make_counter_schema(registry, ks_name);
         }
-        return *schema_builder(ks_name, "cf")
+        return *schema_builder(registry, ks_name, "cf")
                 .with_column("KEY", bytes_type, column_kind::partition_key)
                 .with_column("C0", bytes_type)
                 .with_column("C1", bytes_type)

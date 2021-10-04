@@ -412,9 +412,9 @@ SEASTAR_TEST_CASE(test_insert_statement) {
 
 SEASTAR_TEST_CASE(test_select_statement) {
    return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([](std::string_view ks_name) {
+        return e.create_table([&e](std::string_view ks_name) {
             // CQL: create table cf (p1 varchar, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2));
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("c2", int32_type, column_kind::clustering_key)
@@ -505,8 +505,8 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
                 });
         };
 
-        return e.create_table([](std::string_view ks_name) {
-            return *schema_builder(ks_name, "cf")
+        return e.create_table([&e](std::string_view ks_name) {
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("KEY", bytes_type, column_kind::partition_key)
                     .with_column("C0", bytes_type)
                     .with_column("C1", bytes_type)
@@ -530,8 +530,8 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
 
 SEASTAR_TEST_CASE(test_range_queries) {
    return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([](std::string_view ks_name) {
-            return *schema_builder(ks_name, "cf")
+        return e.create_table([&e](std::string_view ks_name) {
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("k", bytes_type, column_kind::partition_key)
                     .with_column("c0", bytes_type, column_kind::clustering_key)
                     .with_column("c1", bytes_type, column_kind::clustering_key)
@@ -627,8 +627,8 @@ SEASTAR_TEST_CASE(test_range_queries) {
 
 SEASTAR_TEST_CASE(test_ordering_of_composites_with_variable_length_components) {
     return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([](std::string_view ks) {
-            return *schema_builder(ks, "cf")
+        return e.create_table([&e](std::string_view ks) {
+            return *schema_builder(e.local_db().get_schema_registry(), ks, "cf")
                     .with_column("k", bytes_type, column_kind::partition_key)
                     // We need more than one clustering column so that the single-element tuple format optimisation doesn't kick in
                     .with_column("c0", bytes_type, column_kind::clustering_key)
@@ -974,9 +974,9 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
 
 SEASTAR_TEST_CASE(test_deletion_scenarios) {
     return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([](std::string_view ks) {
+        return e.create_table([&e](std::string_view ks) {
             // CQL: create table cf (k bytes, c bytes, v bytes, primary key (k, c));
-            return *schema_builder(ks, "cf")
+            return *schema_builder(e.local_db().get_schema_registry(), ks, "cf")
                     .with_column("k", bytes_type, column_kind::partition_key)
                     .with_column("c", bytes_type, column_kind::clustering_key)
                     .with_column("v", bytes_type)
@@ -1123,9 +1123,9 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto make_my_map_type = [] { return map_type_impl::get_instance(int32_type, int32_type, true); };
         auto my_map_type = make_my_map_type();
-        return e.create_table([make_my_map_type] (std::string_view ks_name) {
+        return e.create_table([&e, make_my_map_type] (std::string_view ks_name) {
             // CQL: create table cf (p1 varchar primary key, map1 map<int, int>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("map1", make_my_map_type())
                     .build();
@@ -1210,9 +1210,9 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto make_my_set_type = [] { return set_type_impl::get_instance(int32_type, true); };
         auto my_set_type = make_my_set_type();
-        return e.create_table([make_my_set_type](std::string_view ks_name) {
+        return e.create_table([&e, make_my_set_type](std::string_view ks_name) {
             // CQL: create table cf (p1 varchar primary key, set1 set<int>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("set1", make_my_set_type())
                     .build();
@@ -1446,11 +1446,11 @@ SEASTAR_TEST_CASE(test_tuples) {
     auto make_tt = [] { return tuple_type_impl::get_instance({int32_type, long_type, utf8_type}); };
     auto tt = make_tt();
     return do_with_cql_env([tt, make_tt] (cql_test_env& e) {
-        return e.create_table([make_tt] (std::string_view ks_name) {
+        return e.create_table([&e, make_tt] (std::string_view ks_name) {
             // this runs on all cores, so create a local tt for each core:
             auto tt = make_tt();
             // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("id", int32_type, column_kind::partition_key)
                     .with_column("t", tt)
                     .build();
@@ -1700,8 +1700,8 @@ SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto make_my_list_type = [] { return list_type_impl::get_instance(utf8_type, true); };
         auto my_list_type = make_my_list_type();
-        return e.create_table([make_my_list_type] (std::string_view ks_name) {
-            return *schema_builder(ks_name, "cf")
+        return e.create_table([&e, make_my_list_type] (std::string_view ks_name) {
+            return *schema_builder(e.local_db().get_schema_registry(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("r1", utf8_type)
                     .with_column("r2", utf8_type)
@@ -3845,7 +3845,7 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
         auto schema = e.local_db().find_schema("ks", "t");
 
         // Create a CQL-illegal view with two regular base columns in the view key
-        schema_builder view_builder("ks", "tv");
+        schema_builder view_builder(e.local_db().get_schema_registry(), "ks", "tv");
         view_builder.with_column(to_bytes("v1"), int32_type, column_kind::partition_key)
                 .with_column(to_bytes("v2"), int32_type, column_kind::clustering_key)
                 .with_column(to_bytes("p"), int32_type, column_kind::clustering_key)

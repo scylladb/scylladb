@@ -31,6 +31,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/schema_registry.hh"
 #include <boost/accumulators/framework/accumulator_set.hpp>
 #include <boost/accumulators/framework/features.hpp>
 #include <boost/accumulators/statistics/mean.hpp>
@@ -40,6 +41,7 @@
 using namespace sstables;
 
 class perf_sstable_test_env {
+    tests::schema_registry_wrapper _registry;
     test_env _env;
 
 public:
@@ -90,7 +92,7 @@ private:
             columns.push_back(schema::column{ to_bytes(format("column{:04d}", i)), utf8_type });
         }
 
-        schema_builder builder(make_shared_schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
+        schema_builder builder(make_shared_schema(_registry, generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
             // partition key
             {{"name", utf8_type}},
             // clustering key

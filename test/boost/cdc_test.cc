@@ -58,7 +58,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
         cquery_nofail(e, "CREATE TABLE ks.t (pk int, ck int, vstatic int static, vint int, "
                 "vmap map<int, int>, vfmap frozen<map<int, int>>, vut ut, vfut frozen<ut>, primary key (pk, ck))");
 
-        auto schema = schema_builder("ks", "t")
+        auto schema = schema_builder(e.local_db().get_schema_registry(), "ks", "t")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("vstatic", int32_type, column_kind::static_column)
             .with_column("ck", int32_type, column_kind::clustering_key)
