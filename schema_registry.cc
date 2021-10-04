@@ -342,9 +342,10 @@ schema_ptr global_schema_ptr::get() const {
         return _ptr;
     } else {
         auto registered_schema = [](const schema_registry_entry& e) {
-            schema_ptr ret = local_schema_registry().get_or_null(e.version());
+            auto& local_registry = e.registry().container().local();
+            schema_ptr ret = local_registry.get_or_null(e.version());
             if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
+                ret = local_registry.get_or_load(e.version(), [&e](table_schema_version) {
                     return e.frozen();
                 });
             }
