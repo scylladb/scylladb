@@ -1742,8 +1742,19 @@ void run_mutation_source_tests(populate_fn populate, bool with_partition_range_f
 }
 
 void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
-    run_mutation_reader_tests(populate, with_partition_range_forwarding);
+    run_mutation_source_tests_plain(populate, with_partition_range_forwarding);
+    run_mutation_source_tests_downgrade(populate, with_partition_range_forwarding);
+    run_mutation_source_tests_upgrade(populate, with_partition_range_forwarding);
+    run_mutation_source_tests_reverse(populate, with_partition_range_forwarding);
+    // Some tests call the sub-types individually, mind checking them
+    // if adding new stuff here
+}
 
+void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding) {
+    run_mutation_reader_tests(populate, with_partition_range_forwarding);
+}
+
+void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
     // ? -> v2 -> v1 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
@@ -1758,7 +1769,9 @@ void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_rang
                     ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
     }, with_partition_range_forwarding);
+}
 
+void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
     // ? -> v1 -> v2 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
@@ -1773,7 +1786,9 @@ void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_rang
                     ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
     }, with_partition_range_forwarding);
+}
 
+void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding) {
     // read in reverse
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         auto table_schema = s->make_reversed();
