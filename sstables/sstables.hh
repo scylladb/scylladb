@@ -63,7 +63,6 @@
 #include "mutation_fragment_stream_validator.hh"
 
 #include <seastar/util/optimized_optional.hh>
-#include <boost/intrusive/list.hpp>
 
 class sstable_assertions;
 class flat_mutation_reader;
@@ -124,15 +123,11 @@ private:
     friend class sstables_manager;
 };
 
-class sstable_tracker;
-
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
-    friend sstable_tracker;
 public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
-    using tracker_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
     using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
@@ -535,7 +530,6 @@ private:
     sstables_manager& _manager;
 
     sstables_stats _stats;
-    tracker_link_type _tracker_link;
     manager_link_type _manager_link;
 
     // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,

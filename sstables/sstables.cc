@@ -96,20 +96,6 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
-namespace bi = boost::intrusive;
-
-class sstable_tracker {
-    bi::list<sstable,
-        bi::member_hook<sstable, sstable::tracker_link_type, &sstable::_tracker_link>,
-        bi::constant_time_size<false>> _sstables;
-public:
-    void add(sstable& sst) {
-        _sstables.push_back(sst);
-    }
-};
-
-static thread_local sstable_tracker tracker;
-
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
 struct noop_write_monitor final : public write_monitor {
@@ -3050,7 +3036,6 @@ sstable::sstable(schema_ptr schema,
     , _large_data_handler(large_data_handler)
     , _manager(manager)
 {
-    tracker.add(*this);
     manager.add(this);
 }
 
