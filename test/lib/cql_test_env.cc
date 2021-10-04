@@ -578,7 +578,7 @@ public:
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<schema_registry> schema_registry;
-            schema_registry.start().get();
+            schema_registry.start(std::cref(*cfg)).get();
             auto stop_schema_registry = defer([&schema_registry] {
                 schema_registry.stop().get();
             });

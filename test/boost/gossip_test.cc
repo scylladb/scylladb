@@ -118,7 +118,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         });
 
         sharded<schema_registry> schema_registry;
-        schema_registry.start().get();
+        schema_registry.start(std::cref(*cfg)).get();
         auto stop_schema_registry = defer([&schema_registry] {
             schema_registry.stop().get();
         });

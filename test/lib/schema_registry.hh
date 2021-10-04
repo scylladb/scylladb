@@ -37,9 +37,8 @@ public:
         : _registry(registry) {
     }
     schema_registry_wrapper()
-        : _stored_registry(std::in_place_t{})
+        : _stored_registry(std::in_place_t{}, db::schema_ctxt(db::schema_ctxt::for_tests{}, _extensions))
         , _registry(*_stored_registry) {
-        _registry.init(db::schema_ctxt(db::schema_ctxt::for_tests{}, _extensions));
     }
     schema_registry_wrapper(const schema_registry_wrapper&) = delete;
     schema_registry_wrapper(schema_registry_wrapper&&) = delete;

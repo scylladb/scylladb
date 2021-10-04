@@ -73,7 +73,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         locator::i_endpoint_snitch::create_snitch(cfg.endpoint_snitch()).get();
     }
 
-    schema_registry registry;
+    schema_registry registry(cfg);
 
     database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata, registry, as, sst_dir_sem);
     auto stop_db = deferred_stop(db);

@@ -75,12 +75,9 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     });
 }
 
-schema_registry::schema_registry() = default;
+schema_registry::schema_registry(const db::schema_ctxt& ctxt) : _ctxt(std::make_unique<db::schema_ctxt>(ctxt)) { }
+schema_registry::schema_registry(const db::config& cfg) : schema_registry(db::schema_ctxt(cfg)) { }
 schema_registry::~schema_registry() = default;
-
-void schema_registry::init(const db::schema_ctxt& ctxt) {
-    _ctxt = std::make_unique<db::schema_ctxt>(ctxt);
-}
 
 schema_ptr schema_registry::learn(const schema_ptr& s) {
     if (s->registry_entry()) {

@@ -1729,10 +1729,7 @@ void run_mutation_reader_tests(populate_fn_ex populate, cql_test_env* test_env, 
         extensions.emplace();
         extensions->start().get();
         schema_registry.emplace();
-        schema_registry->start().get();
-        schema_registry->invoke_on_all([&] (::schema_registry& r) {
-            r.init(db::schema_ctxt(db::schema_ctxt::for_tests{}, extensions->local()));
-        }).get();
+        schema_registry->start(sharded_parameter([] (db::extensions& e) { return db::schema_ctxt(db::schema_ctxt::for_tests{}, e); }, std::ref(*extensions))).get();
     }
     auto& local_registry = test_env ? test_env->local_db().get_schema_registry() : schema_registry->local();
 

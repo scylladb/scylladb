@@ -29,6 +29,7 @@
 #include "frozen_schema.hh"
 
 namespace db {
+class config;
 class schema_ctxt;
 }
 
@@ -138,10 +139,9 @@ class schema_registry : public peering_sharded_service<schema_registry> {
     schema_ptr get_or_load(table_schema_version, std::function<schema_ptr(schema_registry_entry&)> loader);
 
 public:
-    schema_registry();
+    explicit schema_registry(const db::schema_ctxt&);
+    explicit schema_registry(const db::config&);
     ~schema_registry();
-    // workaround to this object being magically appearing from nowhere.
-    void init(const db::schema_ctxt&);
 
     db::schema_ctxt& get_context() { return *_ctxt; }
 
