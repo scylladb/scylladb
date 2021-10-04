@@ -45,18 +45,29 @@ struct bufsize_mismatch_exception : malformed_sstable_exception {
     {}
 };
 
-class compaction_stop_exception : public std::exception {
+class compaction_job_exception : public std::exception {
     sstring _msg;
-    bool _retry;
 public:
-    compaction_stop_exception(sstring ks, sstring cf, sstring reason, bool retry = false) :
-        _msg(format("Compaction for {}/{} was stopped due to: {}", ks, cf, reason)), _retry(retry) {}
-    bool retry() const {
-        return _retry;
-    }
+    compaction_job_exception(sstring msg) noexcept : _msg(std::move(msg)) {}
     const char *what() const noexcept {
         return _msg.c_str();
     }
+};
+
+// Indicates that compaction was stopped via an external event,
+// E.g. shutdown or api call.
+class compaction_stopped_exception : public compaction_job_exception {
+public:
+    compaction_stopped_exception(sstring ks, sstring cf, sstring reason)
+        : compaction_job_exception(format("Compaction for {}/{} was stopped due to: {}", ks, cf, reason)) {}
+};
+
+// Indicates that compaction hit an unrecoverable error
+// and should be aborted.
+class compaction_aborted_exception : public compaction_job_exception {
+public:
+    compaction_aborted_exception(sstring ks, sstring cf, sstring reason)
+        : compaction_job_exception(format("Compaction for {}/{} was aborted due to: {}", ks, cf, reason)) {}
 };
 
 }

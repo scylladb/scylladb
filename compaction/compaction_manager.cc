@@ -274,9 +274,8 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
         try {
             f.get();
             _stats.completed_tasks++;
-        } catch (sstables::compaction_stop_exception& e) {
+        } catch (sstables::compaction_stopped_exception& e) {
             cmlog.info("major compaction stopped, reason: {}", e.what());
-            _stats.errors++;
         } catch (...) {
             cmlog.error("major compaction failed, reason: {}", std::current_exception());
             _stats.errors++;
@@ -315,7 +314,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
         _tasks.remove(task);
         try {
             f.get();
-        } catch (sstables::compaction_stop_exception& e) {
+        } catch (sstables::compaction_stopped_exception& e) {
             cmlog.info("{} was abruptly stopped, reason: {}", task->type, e.what());
             throw;
         } catch (...) {
@@ -464,7 +463,7 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
             return this->task_stop(task).then_wrapped([](future <> f) {
                 try {
                     f.get();
-                } catch (sstables::compaction_stop_exception& e) {
+                } catch (sstables::compaction_stopped_exception& e) {
                     // swallow stop exception if a given procedure decides to propagate it to the caller,
                     // as it happens with reshard and reshape.
                 } catch (...) {
@@ -534,28 +533,22 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
 
 inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration will_stop) {
     bool retry = false;
-    const char* stop_msg = "stopping";
-    const char* retry_msg = "retrying";
-    const char* decision_msg = will_stop ? stop_msg : retry_msg;
 
     try {
         f.get();
-    } catch (sstables::compaction_stop_exception& e) {
-        // We want compaction stopped here to be retried because this may have
-        // happened at user request (using nodetool stop), and to mimic C*
-        // behavior, compaction is retried later on.
-        // The compaction might request to not try again (e.retry()), in this
-        // case we won't retry.
-        retry = e.retry();
-        decision_msg = !retry ? stop_msg : decision_msg;
-        cmlog.info("compaction info: {}: {}", e.what(), decision_msg);
+    } catch (sstables::compaction_stopped_exception& e) {
+        cmlog.info("compaction info: {}: stopping", e.what());
+    } catch (sstables::compaction_aborted_exception& e) {
+        cmlog.error("compaction info: {}: stopping", e.what());
+        _stats.errors++;
     } catch (storage_io_error& e) {
+        _stats.errors++;
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
-        retry = false;
         do_stop();
     } catch (...) {
-        cmlog.error("compaction failed: {}: {}", std::current_exception(), decision_msg);
-        retry = true;
+        _stats.errors++;
+        retry = (will_stop == stop_iteration::no);
+        cmlog.error("compaction failed: {}: {}", std::current_exception(), retry ? "retrying" : "stopping");
     }
     return retry;
 }
@@ -613,7 +606,6 @@ void compaction_manager::submit(column_family* cf) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 if (maybe_stop_on_error(std::move(f))) {
-                    _stats.errors++;
                     _stats.pending_tasks++;
                     return put_task_to_sleep(task).then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -659,8 +651,11 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                     try {
                         f.get();
                         _stats.completed_tasks++;
-                    } catch (sstables::compaction_stop_exception& e) {
-                        cmlog.info("off-strategy compaction was abruptly stopped, reason: {}", e.what());
+                    } catch (sstables::compaction_stopped_exception& e) {
+                        cmlog.info("off-strategy compaction: {}", e.what());
+                    } catch (sstables::compaction_aborted_exception& e) {
+                        _stats.errors++;
+                        cmlog.error("off-strategy compaction: {}", e.what());
                     } catch (...) {
                         _stats.errors++;
                         _stats.pending_tasks++;
@@ -748,7 +743,6 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 if (maybe_stop_on_error(std::move(f))) {
-                    _stats.errors++;
                     _stats.pending_tasks++;
                     return put_task_to_sleep(task).then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -800,7 +794,7 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* 
                             sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
                     return compact_sstables(std::move(desc), cf);
                 });
-            } catch (sstables::compaction_stop_exception&) {
+            } catch (sstables::compaction_stopped_exception&) {
                 throw; // let run_custom_job() handle this
             } catch (storage_io_error&) {
                 throw; // let run_custom_job() handle this

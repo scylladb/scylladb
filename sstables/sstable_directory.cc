@@ -365,7 +365,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table
             }).then_wrapped([&table] (future<> f) {
                 try {
                     f.get();
-                } catch (sstables::compaction_stop_exception& e) {
+                } catch (sstables::compaction_stopped_exception& e) {
                     dirlog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
