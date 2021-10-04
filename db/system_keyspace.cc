@@ -2052,8 +2052,7 @@ future<utils::UUID> system_keyspace::load_local_host_id() {
     sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
     auto msg = co_await qctx->execute_cql(req, sstring(LOCAL));
     if (msg->empty() || !msg->one().has("host_id")) {
-        auto host_id = utils::make_random_uuid();
-        co_return co_await set_local_host_id(host_id);
+        co_return co_await set_local_host_id(utils::make_random_uuid());
     } else {
         auto host_id = msg->one().get_as<utils::UUID>("host_id");
         co_await smp::invoke_on_all([host_id] { _local_cache.local()._cached_local_host_id = host_id; });
@@ -2061,7 +2060,7 @@ future<utils::UUID> system_keyspace::load_local_host_id() {
     }
 }
 
-future<utils::UUID> system_keyspace::set_local_host_id(const utils::UUID& host_id) {
+future<utils::UUID> system_keyspace::set_local_host_id(utils::UUID host_id) {
     sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
     co_await qctx->execute_cql(req, sstring(LOCAL), host_id);
     co_await force_blocking_flush(LOCAL);
