@@ -254,7 +254,7 @@ if __name__ == "__main__":
                     disk_properties["read_bandwidth"] = 2650 * mbs
                     disk_properties["write_iops"] = 360000
                     disk_properties["write_bandwidth"] = 1400 * mbs
-                elif nr_disks == "16":
+                elif nr_disks == 16:
                     disk_properties["read_iops"] = 1600000
                     disk_properties["read_bandwidth"] = 4521251328
                     #below is google, above is our measured
@@ -263,7 +263,7 @@ if __name__ == "__main__":
                     disk_properties["write_bandwidth"] = 2759452672
                     #below is google, above is our measured
                     #disk_properties["write_bandwidth"] = 3120 * mbs
-                elif nr_disks == "24":
+                elif nr_disks == 24:
                     disk_properties["read_iops"] = 2400000
                     disk_properties["read_bandwidth"] = 5921532416
                     #below is google, above is our measured
