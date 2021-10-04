@@ -77,6 +77,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     });
 }
 
+schema_registry::schema_registry() = default;
 schema_registry::~schema_registry() = default;
 
 void schema_registry::init(const db::schema_ctxt& ctxt) {

@@ -138,6 +138,7 @@ class schema_registry {
     schema_ptr get_or_load(table_schema_version, std::function<schema_ptr(schema_registry_entry&)> loader);
 
 public:
+    schema_registry();
     ~schema_registry();
     // workaround to this object being magically appearing from nowhere.
     void init(const db::schema_ctxt&);
