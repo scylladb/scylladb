@@ -87,6 +87,10 @@ public:
     schema_ctxt(distributed<database>&);
     schema_ctxt(distributed<service::storage_proxy>&);
 
+    // For tests *only*.
+    class for_tests {};
+    schema_ctxt(for_tests, db::extensions&);
+
     const db::extensions& extensions() const {
         return _extensions;
     }

@@ -135,6 +135,12 @@ schema_ctxt::schema_ctxt(distributed<service::storage_proxy>& proxy)
     : schema_ctxt(proxy.local().get_db())
 {}
 
+schema_ctxt::schema_ctxt(for_tests, db::extensions& ext)
+    : _extensions(ext)
+    , _murmur3_partitioner_ignore_msb_bits(12)
+    , _schema_registry_grace_period(1)
+{}
+
 namespace schema_tables {
 
 logging::logger slogger("schema_tables");
