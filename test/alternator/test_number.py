@@ -41,7 +41,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from util import random_string
+from util import random_string, client_no_transform
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
@@ -154,3 +154,29 @@ def test_update_expression_plus_imprecise(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET b = :val1 + :val2',
             ExpressionAttributeValues={':val1': Decimal("1e50"), ':val2': Decimal("1")})
+
+# Test that invalid strings cannot be stored as numbers and produce the
+# expected error. This includes random non-numeric strings (e.g., "dog"),
+# various syntax errors, and also the strings "NaN" and "Infinity", which
+# although may be legal numbers in other systems (including Python), are
+# not supported by DynamoDB. Spurious spaces are also not allowed.
+def test_invalid_numbers(test_table_s):
+    p = random_string()
+    # We cannot write this test using boto3's high-level API because it
+    # reformats and validates the numeric parameter before sending it to
+    # the server, but we can test this using the client_no_transform trick.
+    # Note that client_no_transform, the number 3 should be passed as
+    # {'N': '3'}.
+    with client_no_transform(test_table_s.meta.client) as client:
+        for s in ['NaN', 'Infinity', '-Infinity', '-NaN', 'dog', '-dog', ' 1', '1 ']:
+            with pytest.raises(ClientError, match='ValidationException.*numeric'):
+                client.update_item(TableName=test_table_s.name,
+                    Key={'p': {'S': p}},
+                    UpdateExpression='SET a = :val',
+                    ExpressionAttributeValues={':val': {'N': s}})
+        # As a sanity check, check that *allowed* numbers are fine:
+        for s in ['3', '-7.1234', '-17e5', '-17.4E37']:
+            client.update_item(TableName=test_table_s.name,
+                Key={'p': {'S': p}},
+                UpdateExpression='SET a = :val',
+                ExpressionAttributeValues={':val': {'N': s}})
