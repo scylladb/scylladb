@@ -625,6 +625,24 @@ public:
         }
     }
 
+    // Call after a reverse index skip is performed during reversed reads.
+    void reset_after_reversed_read_skip() {
+        // We must not reset `_in_progress_row` since rows are always consumed fully
+        // during reversed reads. We also don't need to reset any state that may change
+        // when moving between partitions as reversed skips are only performed within
+        // a partition.
+        // We must only reset the stored tombstone. A range tombstone may be stored in forwarding
+        // mode, when the parser gets ahead of the currently forwarded-to range and provides
+        // us (the consumer) a tombstone positioned after the range; we store it so we can
+        // process it again when (if) the read gets forwarded to a range containing this
+        // tombstone. But a successful index skip means that the source jumped to a later
+        // position, so to a position past the stored tombstone's (if there is one) position.
+        // The stored tombstone may no longer be relevant for the position we're at. The correct
+        // active tombstone, if any, is obtained from the index and will be set using
+        // `set_range_tombstone`.
+        _stored_tombstone.reset();
+    }
+
     position_in_partition_view position() {
         if (_inside_static_row) {
             return position_in_partition_view(position_in_partition_view::static_row_tag_t{});
@@ -1210,6 +1228,15 @@ public:
         throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
     }
 
+    // Call after a reverse index skip is performed during reversed reads.
+    void reset_after_reversed_read_skip() {
+        // During reversed reads the source is always returning whole rows
+        // even when we perform an index skip in the middle of a row.
+        // Thus we must not reset the parser state as we do in regular reset.
+        // We need only to inform the consumer.
+        _consumer.reset_after_reversed_read_skip();
+    }
+
     reader_permit& permit() {
         return _consumer.permit();
     }
@@ -1282,9 +1309,6 @@ public:
                         // Not only in the reader, they are disabled in CQL.
                         "mx reader: multi-partition reversed queries are not supported yet;"
                         " partition range: {}", pr));
-            }
-            if (fwd != streamed_mutation::forwarding::no) {
-                on_internal_error(sstlog, "mx reader: forwarding not yet supported in reversed queries");
             }
             // FIXME: if only the defaults were better...
             //assert(fwd_mr == mutation_reader::forwarding::no);
@@ -1434,10 +1458,13 @@ private:
                     auto ip = _index_reader->data_file_positions();
                     if (ip.end >= *_reversed_read_sstable_position) {
                         // The reversing data source was already ahead (in reverse - its position was smaller)
-                        // than the index. We must not update the current range tombstone in this case,
-                        // as it already is at least as up to date as the one given by the index end_open_marker.
+                        // than the index. We must not update the current range tombstone in this case
+                        // or reset the context since all fragments up to the new position of the index
+                        // will be (or already have been) provided to the context by the source.
                         return;
                     }
+
+                    _context->reset_after_reversed_read_skip();
 
                     _sst->get_stats().on_partition_seek();
                     auto open_end_marker = _index_reader->reverse_end_open_marker();
@@ -1633,11 +1660,6 @@ public:
         // If _ds is not created then next_partition() has no effect because there was no partition_start emitted yet.
     }
     virtual future<> fast_forward_to(position_range cr) override {
-        if (reversed()) {
-            // FIXME
-            on_internal_error(sstlog, "mx reader: fast_forward_to(position_range) not supported for reversed queries");
-        }
-
         forward_buffer_to(cr.start());
         if (!_partition_finished) {
             _end_of_stream = false;
