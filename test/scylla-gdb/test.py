@@ -39,6 +39,7 @@ dos('databases')
 dos('column_families')
 dos('keyspaces')
 dos('active-sstables')
+dos('sstables')
 dos('memtables')
 # there are no repairs, but at least check that the command doesn't crash:
 dos('repairs')
