@@ -46,6 +46,7 @@
 #include "auth/authorizer.hh"
 #include "auth/common.hh"
 #include "cql3/result_set.hh"
+#include "cql3/column_identifier.hh"
 #include "transport/messages/result_message.hh"
 
 cql3::statements::list_permissions_statement::list_permissions_statement(

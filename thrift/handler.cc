@@ -45,6 +45,7 @@
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/column_identifier.hh"
 #include "timeout_config.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
