@@ -418,7 +418,6 @@ public:
         raft::snapshot_id id;
     };
 
-    // This is the only function of `raft::rpc` which actually expects a response.
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id dst, const raft::install_snapshot& ins, seastar::abort_source&) override {
         auto it = _snapshots.find(ins.snp.id);
         if (it == _snapshots.end()) {
