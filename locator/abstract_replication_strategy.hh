@@ -85,6 +85,8 @@ protected:
     }
 
 public:
+    using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
+
     abstract_replication_strategy(
         const shared_token_metadata& stm,
         snitch_ptr& snitch,
@@ -99,7 +101,7 @@ public:
     virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
 
     virtual ~abstract_replication_strategy() {}
-    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options);
+    static ptr_type create_replication_strategy(const sstring& strategy_name, const shared_token_metadata& stm, const replication_strategy_config_options& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
                                               const shared_token_metadata& stm,

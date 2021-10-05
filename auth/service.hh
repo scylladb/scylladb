@@ -88,11 +88,11 @@ class service final : public seastar::peering_sharded_service<service> {
 
     ::service::migration_notifier& _mnotifier;
 
-    std::unique_ptr<authorizer> _authorizer;
+    authorizer::ptr_type _authorizer;
 
-    std::unique_ptr<authenticator> _authenticator;
+    authenticator::ptr_type _authenticator;
 
-    std::unique_ptr<role_manager> _role_manager;
+    role_manager::ptr_type _role_manager;
 
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;

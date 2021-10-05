@@ -106,6 +106,7 @@ public:
     // i.e: given attribute name  'a' this map holds role name and it's assigned
     // value of 'a'.
     using attribute_vals = std::unordered_map<sstring, sstring>;
+    using ptr_type = std::unique_ptr<role_manager>;
 public:
     virtual ~role_manager() = default;
 

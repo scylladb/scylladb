@@ -132,5 +132,5 @@ std::map<sstring, sstring> zstd_processor::options() const {
     return {{COMPRESSION_LEVEL, std::to_string(_compression_level)}};
 }
 
-static const class_registrator<compressor_ptr, zstd_processor, const compressor::opt_getter&>
+static const class_registrator<compressor, zstd_processor, const compressor::opt_getter&>
     registrator(COMPRESSOR_NAME);

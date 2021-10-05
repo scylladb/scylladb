@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -123,14 +123,6 @@ class large_data_handler;
 future<> system_keyspace_make(database& db, service::storage_service& ss);
 
 }
-
-namespace locator {
-
-using replication_strategy_config_options = std::map<sstring, sstring>;
-
-class abstract_replication_strategy;
-
-} // namespace locator
 
 namespace wasm {
 class engine;
@@ -1162,7 +1154,7 @@ public:
         size_t view_update_concurrency_semaphore_limit;
     };
 private:
-    std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
+    locator::abstract_replication_strategy::ptr_type _replication_strategy;
     lw_shared_ptr<keyspace_metadata> _metadata;
     shared_promise<> _populated;
     config _config;

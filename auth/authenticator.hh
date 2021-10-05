@@ -74,6 +74,8 @@ class authenticated_user;
 ///
 class authenticator {
 public:
+    using ptr_type = std::unique_ptr<authenticator>;
+
     ///
     /// The name of the key to be used for the user-name part of password authentication with \ref authenticate.
     ///
