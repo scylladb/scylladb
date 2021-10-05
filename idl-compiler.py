@@ -28,6 +28,7 @@ from numbers import Number
 from pprint import pformat
 from copy import copy
 from typing import List
+import os.path
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -123,6 +124,11 @@ class BasicType(ASTBase):
     def __repr__(self):
         return self.__str__()
 
+    def to_string(self):
+        if self.is_const:
+            return 'const ' + self.name
+        return self.name
+
 
 class TemplateType(ASTBase):
     '''AST node representing template types, for example: `std::vector<T>`.
@@ -143,6 +149,12 @@ class TemplateType(ASTBase):
 
     def __repr__(self):
         return self.__str__()
+
+    def to_string(self):
+        res = self.name + '<'
+        res += ', '.join([p.to_string() for p in self.template_parameters])
+        res += '>'
+        return res
 
 
 class EnumValue(ASTBase):
@@ -198,7 +210,7 @@ template<typename Input>
 }}""")
 
 
-class Attribute(ASTBase):
+class Attributes(ASTBase):
     ''' AST node for representing class and field attributes.
 
     The following attributes are supported:
@@ -206,14 +218,18 @@ class Attribute(ASTBase):
        for a class.
      - `[[version id]] field attribute, marks that a field is available starting
        from a specific version.'''
-    def __init__(self, name):
-        super().__init__(name)
+    def __init__(self, attr_items=[]):
+        super().__init__('attributes')
+        self.attr_items = attr_items
 
     def __str__(self):
-        return f"[[{self.name}]]"
+        return f"[[{', '.join([a for a in self.attr_items])}]]"
 
     def __repr__(self):
         return self.__str__()
+
+    def empty(self):
+        return not self.attr_items
 
 
 class DataClassMember(ASTBase):
@@ -374,6 +390,164 @@ void serializer<{name}{self.template_param_names_str}>::skip(Input& buf) {{
         fprintln(cout, """ });\n}""")
 
 
+class RpcVerbParam(ASTBase):
+    """AST element representing a single argument in an RPC verb declaration.
+    Consists of:
+    * Argument type
+    * Argument name (optional)
+    * Additional attributes (only [[version]] attribute is supported).
+
+    If the name is omitted, then this argument will have a placeholder name of form `_N`, where N is the index
+    of the argument in the argument list for an RPC verb.
+
+    If the [[version]] attribute is specified, then handler function signature for an RPC verb will contain this
+    argument as an `rpc::optional<>`."""
+    def __init__(self, type, name, attributes=Attributes()):
+        self.type = type
+        self.name = name
+        self.attributes = attributes
+
+    def __str__(self):
+        return f"<RpcVerbParam(type={self.type}, name={self.name}, attributes={self.attributes})>"
+
+    def __repr__(self):
+        return self.__str__()
+
+    def is_optional(self):
+        return bool([a.startswith('version') for a in self.attributes.attr_items])
+
+    def to_string(self):
+        res = self.type.to_string()
+        if self.is_optional():
+            res = 'rpc::optional<' + res + '>'
+        if self.name:
+            res += ' '
+            res += self.name
+        return res
+
+    def to_string_send_fn_signature(self):
+        return self.to_string() if not self.is_optional() else self.type.to_string() + ' ' + self.name
+
+
+class RpcVerb(ASTBase):
+    """AST element representing an RPC verb declaration.
+
+    `my_verb` RPC verb declaration corresponds to the
+    `netw::messaging_verb::MY_VERB` enumeration value to identify the
+    new RPC verb.
+
+    For a given `idl_module.idl.hh` file, a registrator class named
+    `idl_module_rpc_verbs` will be created if there are any RPC verbs
+    registered within the IDL module file.
+
+    These are the methods being created for each RPC verb:
+
+            static void register_my_verb(netw::messaging_service* ms, std::function<return_type(args...)>&&);
+            static future<> unregister_my_verb(netw::messaging_service* ms);
+            static future<> send_my_verb(netw::messaging_service* ms, netw::msg_addr id, args...);
+
+    Each method accepts a pointer to an instance of messaging_service
+    object, which contains the underlying seastar RPC protocol
+    implementation, that is used to register verbs and pass messages.
+
+    There is also a method to unregister all verbs at once:
+
+            static future<> unregister(netw::messaging_service* ms);
+
+    The following attributes are supported when declaring an RPC verb
+    in the IDL:
+
+    - [[with_client_info]] - the handler will contain a const reference to
+      an `rpc::client_info` as the first argument.
+    - [[with_timeout]] - an additional time_point parameter is supplied
+      to the handler function and send* method uses send_message_*_timeout
+      variant of internal function to actually send the message.
+    - [[one_way]] - the handler function is annotated by
+      future<rpc::no_wait_type> return type to designate that a client
+      doesn't need to wait for an answer.
+
+    The `-> return_type` clause is optional for two-way messages. If omitted,
+    the return type is set to be `future<>`.
+    For one-way verbs, the use of return clause is prohibited and the
+    signature of `send*` function always returns `future<>`."""
+    def __init__(self, name, parameters, return_type, with_client_info, with_timeout, one_way):
+        super().__init__(name)
+        self.params = parameters
+        self.return_type = return_type
+        self.with_client_info = with_client_info
+        self.with_timeout = with_timeout
+        self.one_way = one_way
+
+    def __str__(self):
+        return f"<RpcVerb(name={self.name}, params={self.params}, return_type={self.return_type}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, one_way={self.one_way})>"
+
+    def __repr__(self):
+        return self.__str__()
+
+    def send_function_name(self):
+        send_fn = 'send_message'
+        if self.one_way:
+            send_fn += '_oneway'
+        if self.with_timeout:
+            send_fn += '_timeout'
+        return send_fn
+
+    def handler_function_return_type(self):
+        if self.one_way:
+            return 'future<rpc::no_wait_type>'
+        return f"future<{self.return_type.to_string() if self.return_type else ''}>"
+
+    def send_function_return_type(self):
+        if self.one_way:
+            return 'future<>'
+        return self.handler_function_return_type()
+
+    def messaging_verb_enum_case(self):
+        return f'netw::messaging_verb::{self.name.upper()}'
+
+    def handler_function_parameters_str(self):
+        res = []
+        if self.with_client_info:
+            res.append(RpcVerbParam(type=BasicType(name='rpc::client_info&', is_const=True), name='info'))
+        if self.with_timeout:
+            res.append(RpcVerbParam(type=BasicType(name='rpc::opt_time_point'), name='timeout'))
+        if self.params:
+            res.extend(self.params)
+        return ', '.join([p.to_string() for p in res])
+
+    def send_function_signature_params_list(self, include_placeholder_names):
+        res = 'netw::messaging_service* ms, netw::msg_addr id'
+        if self.with_timeout:
+            res += ', netw::messaging_service::clock_type::time_point timeout'
+        if self.params:
+            for idx, p in enumerate(self.params):
+                res += ', ' + p.to_string_send_fn_signature()
+                if include_placeholder_names and not p.name:
+                    res += f' _{idx + 1}'
+        return res
+
+    def send_message_argument_list(self):
+        res = f'ms, '
+        if self.with_timeout and self.one_way:
+            # For some reason the timeout argument position in
+            # `send_message_oneway_timeout` is different from `send_message_timeout`.
+            res += f'timeout, {self.messaging_verb_enum_case()}, id'
+        else:
+            res += f'{self.messaging_verb_enum_case()}, id'
+            if self.with_timeout:
+                res += ', timeout'
+        if self.params:
+            for idx, p in enumerate(self.params):
+                res += ', ' + f'std::move({p.name if p.name else f"_{idx + 1}"})'
+        return res
+
+    def send_function_invocation(self):
+        res = 'return ' + self.send_function_name()
+        if not (self.one_way and self.with_timeout):
+            res += '<' + self.send_function_return_type() + '>'
+        res += '(' + self.send_message_argument_list() + ');'
+        return res
+
 class NamespaceDef(ASTBase):
     '''AST node representing a namespace scope.
 
@@ -433,13 +607,18 @@ def enum_def_parse_action(tokens):
     return EnumDef(name=tokens['name'], underlying_type=tokens['underlying_type'], members=tokens['enum_values'].asList())
 
 
-def attribute_parse_action(tokens):
-    return Attribute(name=tokens[0])
+def attributes_parse_action(tokens):
+    items = []
+    for attr_clause in tokens:
+        # Split individual attributes inside each attribute clause by commas and strip extra whitespace characters
+        items += [arg.strip() for arg in attr_clause.split(',')]
+    return Attributes(attr_items=items)
 
 
 def class_member_parse_action(tokens):
     member_name = tokens['name']
-    attribute = tokens['attribute'][0] if 'attribute' in tokens else None
+    raw_attrs = tokens['attributes']
+    attribute = raw_attrs.attr_items[0] if not raw_attrs.empty() else None
     default = tokens['default'][0] if 'default' in tokens else None
     if not isinstance(member_name, str): # accessor function declaration
         return FunctionClassMember(type=tokens["type"], name=member_name[0], attribute=attribute, default_value=default)
@@ -451,11 +630,31 @@ def class_def_parse_action(tokens):
     is_final = 'final' in tokens
     is_stub = 'stub' in tokens
     class_members = tokens['members'].asList() if 'members' in tokens else []
-    attribute = tokens['attribute'][0] if 'attribute' in tokens else None
+    raw_attrs = tokens['attributes']
+    attribute = raw_attrs.attr_items[0] if not raw_attrs.empty() else None
     template_params = None
     if 'template' in tokens:
         template_params = [ClassTemplateParam(typename=tp[0], name=tp[1]) for tp in tokens['template']]
     return ClassDef(name=tokens['name'], members=class_members, final=is_final, stub=is_stub, attribute=attribute, template_params=template_params)
+
+
+def rpc_verb_param_parse_action(tokens):
+    type = tokens['type']
+    name = tokens['ident'] if 'ident' in tokens else None
+    attrs = tokens['attrs']
+    return RpcVerbParam(type=type, name=name, attributes=attrs)
+
+
+def rpc_verb_parse_action(tokens):
+    name = tokens['name']
+    raw_attrs = tokens['attributes']
+    params = tokens['params'] if 'params' in tokens else []
+    with_timeout = not raw_attrs.empty() and 'with_timeout' in raw_attrs.attr_items
+    with_client_info = not raw_attrs.empty() and 'with_client_info' in raw_attrs.attr_items
+    one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
+    if one_way and 'return_type' in tokens:
+        raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
+    return RpcVerb(name=name, parameters=params, return_type=tokens.get('return_type'), with_client_info=with_client_info, with_timeout=with_timeout, one_way=one_way)
 
 
 def namespace_parse_action(tokens):
@@ -489,6 +688,7 @@ def parse_file(file_name):
     ns_qualified_ident = pp.delimitedList(identifier, "::", combine=True)
     enum_lit = pp.Keyword('enum').suppress()
     ns = pp.Keyword("namespace").suppress()
+    verb = pp.Keyword("verb").suppress()
 
     btype = ns_qualified_ident.copy()
     btype.setParseAction(basic_type_parse_action)
@@ -514,27 +714,36 @@ def parse_file(file_name):
     content = pp.Forward()
 
     attrib = lbrack - lbrack - pp.SkipTo(']') - rbrack - rbrack
-    attrib.setParseAction(attribute_parse_action)
-    opt_attribute = pp.Optional(attrib)("attribute")
+    opt_attributes = pp.ZeroOrMore(attrib)("attributes")
+    opt_attributes.setParseAction(attributes_parse_action)
 
     default_value = equals - pp.SkipTo(';')
     member_name = pp.Combine(identifier - pp.Optional(lparen - rparen)("function_marker"))
-    class_member = type("type") - member_name("name") - opt_attribute - pp.Optional(default_value)("default") - semi
+    class_member = type("type") - member_name("name") - opt_attributes - pp.Optional(default_value)("default") - semi
     class_member.setParseAction(class_member_parse_action)
 
     template_param = pp.Group(identifier("type") - identifier("name"))
     template_def = template - langle - pp.delimitedList(template_param)("params") - rangle
     class_content = pp.Forward()
     class_def = pp.Optional(template_def)("template") + (cls | struct) - ns_qualified_ident("name") - \
-        pp.Optional(final)("final") - pp.Optional(stub)("stub") - opt_attribute - \
+        pp.Optional(final)("final") - pp.Optional(stub)("stub") - opt_attributes - \
         lbrace - pp.ZeroOrMore(class_content)("members") - rbrace - pp.Optional(semi)
     class_content <<= enum | class_def | class_member
     class_def.setParseAction(class_def_parse_action)
 
+    rpc_verb_param = type("type") - pp.Optional(identifier)("ident") - opt_attributes("attrs")
+    rpc_verb_param.setParseAction(rpc_verb_param_parse_action)
+    rpc_verb_params = pp.delimitedList(rpc_verb_param)
+
+    rpc_verb = verb - opt_attributes - identifier("name") - \
+        lparen.suppress() - pp.Optional(rpc_verb_params("params")) - rparen.suppress() - \
+        pp.Optional(pp.Literal("->").suppress() - type("return_type")) - pp.Optional(semi)
+    rpc_verb.setParseAction(rpc_verb_parse_action)
+
     namespace = ns - identifier("name") - lbrace - pp.OneOrMore(content)("ns_members") - rbrace
     namespace.setParseAction(namespace_parse_action)
 
-    content <<= enum | class_def | namespace
+    content <<= enum | class_def | rpc_verb | namespace
 
     for varname in ("enum", "class_def", "class_member", "content", "namespace", "template_def"):
         locals()[varname].setName(varname)
@@ -603,6 +812,7 @@ def flat_type(t):
 
 local_types = {}
 local_writable_types = {}
+rpc_verbs = {}
 
 
 def resolve_basic_type_ref(type: BasicType):
@@ -1076,11 +1286,16 @@ def register_local_type(cls):
 def register_writable_local_type(cls):
     global local_writable_types
     global stubs
-    if not cls.attribute or cls.attribute.name != 'writable':
+    if not cls.attribute or cls.attribute != 'writable':
         return
     local_writable_types[cls.name] = cls
     if cls.stub:
         stubs.add(cls.name)
+
+
+def register_rpc_verb(verb):
+    global rpc_verbs
+    rpc_verbs[verb.name] = verb
 
 
 def sort_dependencies():
@@ -1289,8 +1504,55 @@ def handle_objects(tree, hout, cout):
             handle_enum(obj, hout, cout)
         elif isinstance(obj, NamespaceDef):
             handle_objects(obj.members, hout, cout)
+        elif isinstance(obj, RpcVerb):
+            pass
         else:
             print(f"Unknown type: {obj}")
+
+
+def generate_rpc_verbs_declarations(hout, module_name):
+    fprintln(hout, f"\n// RPC verbs defined in the '{module_name}' module\n")
+    fprintln(hout, f'struct {module_name}_rpc_verbs {{')
+    for name, verb in rpc_verbs.items():
+        fprintln(hout, reindent(4, f'''static void register_{name}(netw::messaging_service* ms,
+    std::function<{verb.handler_function_return_type()} ({verb.handler_function_parameters_str()})>&&);
+static future<> unregister_{name}(netw::messaging_service* ms);
+static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False)});
+'''))
+
+    fprintln(hout, reindent(4, 'static future<> unregister(netw::messaging_service* ms);'))
+    fprintln(hout, '};\n')
+
+
+def generate_rpc_verbs_definitions(cout, module_name):
+    fprintln(cout, f"\n// RPC verbs defined in the '{module_name}' module")
+    for name, verb in rpc_verbs.items():
+        fprintln(cout, f'''
+void {module_name}_rpc_verbs::register_{name}(netw::messaging_service* ms,
+        std::function<{verb.handler_function_return_type()} ({verb.handler_function_parameters_str()})>&& f) {{
+    register_handler(ms, {verb.messaging_verb_enum_case()}, std::move(f));
+}}
+
+future<> {module_name}_rpc_verbs::unregister_{name}(netw::messaging_service* ms) {{
+    return ms->unregister_handler({verb.messaging_verb_enum_case()});
+}}
+
+{verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True)}) {{
+    {verb.send_function_invocation()}
+}}''')
+
+    fprintln(cout, f'''
+future<> {module_name}_rpc_verbs::unregister(netw::messaging_service* ms) {{
+    return when_all_succeed({', '.join([f'unregister_{v}(ms)' for v in rpc_verbs.keys()])}).discard_result();
+}}
+''')
+
+
+def generate_rpc_verbs(hout, cout, module_name):
+    if not rpc_verbs:
+        return
+    generate_rpc_verbs_declarations(hout, module_name)
+    generate_rpc_verbs_definitions(cout, module_name)
 
 
 def handle_types(tree):
@@ -1301,6 +1563,8 @@ def handle_types(tree):
         if isinstance(obj, ClassDef):
             register_local_type(obj)
             register_writable_local_type(obj)
+        elif isinstance(obj, RpcVerb):
+            register_rpc_verb(obj)
         elif isinstance(obj, EnumDef):
             pass
         elif isinstance(obj, NamespaceDef):
@@ -1369,6 +1633,10 @@ def load_file(name):
         setup_additional_metadata(data)
         handle_types(data)
         handle_objects(data, hout, cout)
+
+        module_name = os.path.basename(name)
+        module_name = module_name[:module_name.find('.')]
+        generate_rpc_verbs(hout, cout, module_name)
     add_visitors(cout)
     if config.ns != '':
         fprintln(hout, f"}} // {config.ns}")
