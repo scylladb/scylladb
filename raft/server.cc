@@ -660,21 +660,25 @@ future<> server_impl::io_fiber(index_t last_stable) {
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
     seastar::abort_source as;
     uint64_t id = _next_snapshot_transfer_id++;
-    future<> f = _rpc->send_snapshot(dst, std::move(snp), as).then_wrapped([this, dst, id] (future<snapshot_reply> f) {
-        if (_aborted_snapshot_transfers.erase(id)) {
-            // The transfer was aborted
-            f.ignore_ready_future();
-            return;
-        }
-        _snapshot_transfers.erase(dst);
-        auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
-        if (f.failed()) {
-            logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
-        } else {
-            logger.trace("[{}] Transferred snapshot to {}", _id, dst);
-            reply = f.get();
-        }
-        _fsm->step(dst, std::move(reply));
+    // Use `later()` to ensure that `_rpc->send_snapshot` is called after we emplace `f` in `_snapshot_transfers`.
+    // This also catches any exceptions from `_rpc->send_snapshot` into `f`.
+    future<> f = later().then([this, &as, dst, id, snp = std::move(snp)] () mutable {
+        return _rpc->send_snapshot(dst, std::move(snp), as).then_wrapped([this, dst, id] (future<snapshot_reply> f) {
+            if (_aborted_snapshot_transfers.erase(id)) {
+                // The transfer was aborted
+                f.ignore_ready_future();
+                return;
+            }
+            _snapshot_transfers.erase(dst);
+            auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
+            if (f.failed()) {
+                logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
+            } else {
+                logger.trace("[{}] Transferred snapshot to {}", _id, dst);
+                reply = f.get();
+            }
+            _fsm->step(dst, std::move(reply));
+        });
     });
     auto res = _snapshot_transfers.emplace(dst, snapshot_transfer{std::move(f), std::move(as), id});
     assert(res.second);
