@@ -19,8 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef DATABASE_HH_
-#define DATABASE_HH_
+#pragma once
 
 #include "locator/token_metadata.hh"
 #include "index/secondary_index_manager.hh"
@@ -1644,5 +1643,3 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
         std::function<std::optional<dht::partition_range>()> range_generator);
 
 bool is_internal_keyspace(std::string_view name);
-
-#endif /* DATABASE_HH_ */
