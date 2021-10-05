@@ -129,6 +129,9 @@ raft::server_address_set address_set(std::vector<node_id> nodes) noexcept;
 //  - Configuration change
 struct entries {
     size_t n;
+    // If provided, use this server to add entries.
+    std::optional<size_t> server;
+    entries(size_t n_arg, std::optional<size_t> server_arg = {}) :n(n_arg), server(server_arg) {}
 };
 struct new_leader {
     size_t id;
@@ -340,7 +343,7 @@ public:
     void cancel_ticker(size_t id);
     void set_ticker_callback(size_t id) noexcept;
     void init_tick_delays(size_t n);
-    future<> add_entries(size_t n);
+    future<> add_entries(size_t n, std::optional<size_t> server = std::nullopt);
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
     future<> wait_log(::wait_log followers);
@@ -887,20 +890,16 @@ void raft_cluster<Clock>::connect_all() {
 
 // Add consecutive integer entries to a leader
 template <typename Clock>
-future<> raft_cluster<Clock>::add_entries(size_t n) {
+future<> raft_cluster<Clock>::add_entries(size_t n, std::optional<size_t> server) {
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
-            co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
+            auto& at = _servers[server ? *server : _leader].server;
+            co_await at->add_entry(create_command(_next_val), raft::wait_type::committed);
             _next_val++;
-        } catch (raft::not_a_leader& e) {
-            // leader stepped down, update with new leader if present
-            if (e.leader != raft::server_id{}) {
-                _leader = to_int_id(e.leader.id);
-            }
         } catch (raft::commit_status_unknown& e) {
         } catch (raft::dropped_entry& e) {
-            // retry if an entry is dropped because the leader have changed after it was submitetd
+            // retry if an entry is dropped because the leader have changed after it was submitted
         }
     }
 }
@@ -1384,7 +1383,7 @@ struct run_test {
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
             [&rafts] (entries update) -> future<> {
-                co_await rafts.add_entries(update.n);
+                co_await rafts.add_entries(update.n, update.server);
             },
             [&rafts] (new_leader update) -> future<> {
                 co_await rafts.elect_new_leader(update.id);
