@@ -42,6 +42,7 @@
 #include "list_users_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
+#include "cql3/column_identifier.hh"
 #include "auth/common.hh"
 #include "transport/messages/result_message.hh"
 

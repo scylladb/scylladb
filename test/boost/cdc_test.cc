@@ -41,6 +41,8 @@
 #include "types/set.hh"
 #include "types/user.hh"
 
+#include "cql3/column_identifier.hh"
+
 #include "utils/UUID_gen.hh"
 
 using namespace std::string_literals;

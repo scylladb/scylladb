@@ -21,6 +21,7 @@
 
 #include "seastarx.hh"
 #include "cql3/statements/list_service_level_statement.hh"
+#include "cql3/column_identifier.hh"
 #include "service/qos/service_level_controller.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/overloaded_functor.hh"

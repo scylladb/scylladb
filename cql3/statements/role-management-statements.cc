@@ -46,6 +46,7 @@
 #include "auth/common.hh"
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/alter_role_statement.hh"
 #include "cql3/statements/create_role_statement.hh"

@@ -45,6 +45,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 #include "cql3/selection/selection.hh"
+#include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
@@ -85,6 +86,41 @@ query::partition_slice::option_set selection::get_query_options() {
             std::mem_fn(&column_definition::is_clustering_key)));
 
     return opts;
+}
+
+bool selection::contains_only_static_columns() const {
+    if (!contains_static_columns()) {
+        return false;
+    }
+
+    if (is_wildcard()) {
+        return false;
+    }
+
+    for (auto&& def : _columns) {
+        if (!def->is_partition_key() && !def->is_static()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+int32_t selection::index_of(const column_definition& def) const {
+    auto i = std::find(_columns.begin(), _columns.end(), &def);
+    if (i == _columns.end()) {
+        return -1;
+    }
+    return std::distance(_columns.begin(), i);
+}
+
+bool selection::has_column(const column_definition& def) const {
+    return std::find(_columns.begin(), _columns.end(), &def) != _columns.end();
+}
+
+bool selection::processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
+    return std::any_of(raw_selectors.begin(), raw_selectors.end(),
+        [] (auto&& s) { return s->processes_selection(); });
 }
 
 // Special cased selection for when no function is used (this save some allocations).

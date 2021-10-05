@@ -45,14 +45,15 @@
 #include "schema_fwd.hh"
 #include "query-result-reader.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/selection/selector.hh"
 #include "exceptions/exceptions.hh"
-#include "cql3/selection/raw_selector.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
 
 namespace cql3 {
 
 class result_set;
+class result_set_builder;
 class metadata;
 class query_options;
 
@@ -62,6 +63,7 @@ class statement_restrictions;
 
 namespace selection {
 
+class raw_selector;
 class selector_factories;
 
 class selectors {
@@ -122,23 +124,7 @@ public:
      * Checks if this selection contains only static columns.
      * @return <code>true</code> if this selection contains only static columns, <code>false</code> otherwise;
      */
-    bool contains_only_static_columns() const {
-        if (!contains_static_columns()) {
-            return false;
-        }
-
-        if (is_wildcard()) {
-            return false;
-        }
-
-        for (auto&& def : _columns) {
-            if (!def->is_partition_key() && !def->is_static()) {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    bool contains_only_static_columns() const;
 
     /**
      * Returns the index of the specified column.
@@ -146,17 +132,9 @@ public:
      * @param def the column definition
      * @return the index of the specified column
      */
-    int32_t index_of(const column_definition& def) const {
-        auto i = std::find(_columns.begin(), _columns.end(), &def);
-        if (i == _columns.end()) {
-            return -1;
-        }
-        return std::distance(_columns.begin(), i);
-    }
+    int32_t index_of(const column_definition& def) const;
 
-    bool has_column(const column_definition& def) const {
-        return std::find(_columns.begin(), _columns.end(), &def) != _columns.end();
-    }
+    bool has_column(const column_definition& def) const;
 
     ::shared_ptr<const metadata> get_result_metadata() const {
         return _metadata;
@@ -173,10 +151,7 @@ public:
 
     query::partition_slice::option_set get_query_options();
 private:
-    static bool processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
-        return std::any_of(raw_selectors.begin(), raw_selectors.end(),
-            [] (auto&& s) { return s->processes_selection(); });
-    }
+    static bool processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors);
 
     static std::vector<lw_shared_ptr<column_specification>> collect_metadata(const schema& schema,
         const std::vector<::shared_ptr<raw_selector>>& raw_selectors, const selector_factories& factories);
