@@ -27,75 +27,73 @@
 #include "schema_registry.hh"
 #include "schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/schema_registry.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "types/list.hh"
+#include "utils/UUID_gen.hh"
+
+static table_schema_version random_schema_version() {
+    return utils::UUID_gen::get_time_UUID();
+}
 
 static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
 }
 
-static schema_ptr random_schema() {
-    return schema_builder("ks", "cf")
+static schema_ptr random_schema(schema_registry& registry, table_schema_version v) {
+    return schema_builder(registry, "ks", "cf")
            .with_column("pk", bytes_type, column_kind::partition_key)
            .with_column(random_column_name(), bytes_type)
+           .with_version(v)
            .build();
 }
 
-struct dummy_init {
-    std::unique_ptr<db::config> config;
-
-    dummy_init() {
-        config = std::make_unique<db::config>();
-        local_schema_registry().init(*config);
-    }
-};
-
 SEASTAR_THREAD_TEST_CASE(test_load_with_non_nantive_type) {
-    dummy_init dummy;
+    tests::schema_registry_wrapper registry;
     auto my_list_type = list_type_impl::get_instance(utf8_type, true);
 
-    auto s = schema_builder("ks", "cf")
-           .with_column("pk", bytes_type, column_kind::partition_key)
-           .with_column("val", my_list_type)
-           .build();
+    auto version = random_schema_version();
 
-    local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) {
-        return make_ready_future<frozen_schema>(frozen_schema(s));
+    registry->get_or_load(version, [&] (table_schema_version v) {
+        return schema_builder(registry, "ks", "cf")
+               .with_column("pk", bytes_type, column_kind::partition_key)
+               .with_column("val", my_list_type)
+               .with_version(v)
+               .build();
     }).get();
 }
 
 SEASTAR_TEST_CASE(test_async_loading) {
     return seastar::async([] {
-        dummy_init dummy;
-        auto s1 = random_schema();
-        auto s2 = random_schema();
+        tests::schema_registry_wrapper registry;
+        auto v1 = random_schema_version();
+        auto v2 = random_schema_version();
 
-        auto s1_loaded = local_schema_registry().get_or_load(s1->version(), [s1] (table_schema_version) {
-            return make_ready_future<frozen_schema>(frozen_schema(s1));
+        auto s1_loaded = registry->get_or_load(v1, [&registry] (table_schema_version v) {
+            return make_ready_future<frozen_schema>(frozen_schema(random_schema(registry, v)));
         }).get0();
 
         BOOST_REQUIRE(s1_loaded);
-        BOOST_REQUIRE(s1_loaded->version() == s1->version());
-        auto s1_later = local_schema_registry().get_or_null(s1->version());
+        BOOST_REQUIRE(s1_loaded->version() == v1);
+        auto s1_later = registry->get_or_null(v1);
         BOOST_REQUIRE(s1_later);
 
-        auto s2_loaded = local_schema_registry().get_or_load(s2->version(), [s2] (table_schema_version) {
-            return later().then([s2] { return frozen_schema(s2); });
+        auto s2_loaded = registry->get_or_load(v2, [&registry] (table_schema_version v) {
+            return later().then([&registry, v] { return frozen_schema(random_schema(registry, v)); });
         }).get0();
 
         BOOST_REQUIRE(s2_loaded);
-        BOOST_REQUIRE(s2_loaded->version() == s2->version());
-        auto s2_later = local_schema_registry().get_or_null(s2_loaded->version());
+        BOOST_REQUIRE(s2_loaded->version() == v2);
+        auto s2_later = registry->get_or_null(s2_loaded->version());
         BOOST_REQUIRE(s2_later);
     });
 }
 
 SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
     return seastar::async([] {
-        dummy_init dummy;
-        auto s = random_schema();
-        s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
+        tests::schema_registry_wrapper registry;
+        auto s = registry->get_or_load(random_schema_version(), [&registry] (table_schema_version v) { return random_schema(registry, v); });
         BOOST_REQUIRE(!s->is_synced());
         s->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
         BOOST_REQUIRE(s->is_synced());
@@ -104,9 +102,8 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
 
 SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
     return seastar::async([] {
-        dummy_init dummy;
-        auto s = random_schema();
-        s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
+        tests::schema_registry_wrapper registry;
+        auto s = registry->get_or_load(random_schema_version(), [&registry] (table_schema_version v) { return random_schema(registry, v); });
         BOOST_REQUIRE(!s->is_synced());
         s->registry_entry()->maybe_sync([] { return later(); }).get();
         BOOST_REQUIRE(s->is_synced());
@@ -115,9 +112,8 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
 
 SEASTAR_TEST_CASE(test_failed_sync_can_be_retried) {
     return seastar::async([] {
-        dummy_init dummy;
-        auto s = random_schema();
-        s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
+        tests::schema_registry_wrapper registry;
+        auto s = registry->get_or_load(random_schema_version(), [&registry] (table_schema_version v) { return random_schema(registry, v); });
         BOOST_REQUIRE(!s->is_synced());
 
         promise<> fail_sync;
