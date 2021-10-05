@@ -69,8 +69,12 @@ private:
     // in the system table).
     sstable_version_types _format = sstable_version_types::mc;
 
+    // _active and _undergoing_close are used in scylla-gdb.py to fetch all sstables
+    // on current shard using "scylla sstables" command. If those fields are renamed,
+    // update scylla-gdb.py as well.
     list_type _active;
     list_type _undergoing_close;
+
     bool _closing = false;
     promise<> _done;
     cache_tracker& _cache_tracker;
