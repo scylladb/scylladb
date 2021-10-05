@@ -707,13 +707,8 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     auto sstables_ptr = sstables.get();
     _stats.pending_tasks += sstables->size();
 
-    task->compaction_done = do_until([sstables_ptr] { return sstables_ptr->empty(); }, [this, task, options, sstables_ptr, compacting, can_purge] () mutable {
-
-        // FIXME: lock cf here
-        if (!can_proceed(task)) {
-            return make_ready_future<>();
-        }
-
+    task->compaction_done = do_until([this, sstables_ptr, task] { return sstables_ptr->empty() || !can_proceed(task); },
+             [this, task, options, sstables_ptr, compacting, can_purge] () mutable {
         auto sst = sstables_ptr->back();
         sstables_ptr->pop_back();
 
