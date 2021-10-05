@@ -3504,7 +3504,12 @@ def find_sstables_attached_to_tables():
 
 def find_sstables():
     """A generator which yields pointers to all live sstable objects on current shard."""
-    for sst in intrusive_list(gdb.parse_and_eval('sstables::tracker._sstables'), link='_tracker_link'):
+    db = find_db(current_shard())
+    user_sstables_manager = std_unique_ptr(db["_user_sstables_manager"]).get()
+    system_sstables_manager = std_unique_ptr(db["_system_sstables_manager"]).get()
+    for sst in intrusive_list(user_sstables_manager["_active"], link='_manager_link'):
+        yield sst.address
+    for sst in intrusive_list(system_sstables_manager["_active"], link='_manager_link'):
         yield sst.address
 
 class scylla_sstables(gdb.Command):
