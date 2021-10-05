@@ -20,6 +20,7 @@
  */
 
 #include "utils/base64.hh"
+#include "utils/rjson.hh"
 #include "log.hh"
 #include "serialization.hh"
 #include "error.hh"
@@ -68,7 +69,7 @@ struct from_json_visitor {
         bo.write(t.from_string(rjson::to_string_view(v)));
     }
     void operator()(const bytes_type_impl& t) const {
-        bo.write(base64_decode(v));
+        bo.write(rjson::base64_decode(v));
     }
     void operator()(const boolean_type_impl& t) const {
         bo.write(boolean_type->decompose(v.GetBool()));
@@ -196,7 +197,7 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
                 format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
     }
     if (column.type == bytes_type) {
-        return base64_decode(it->value);
+        return rjson::base64_decode(it->value);
     } else {
         return column.type->from_string(rjson::to_string_view(it->value));
     }
