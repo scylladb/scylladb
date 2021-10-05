@@ -45,7 +45,7 @@
 static std::list<dummy_sharder> keep_alive_sharder;
 
 static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer) {
-    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
+    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) mutable {
         // We need to group mutations that have the same token so they land on the same shard.
         std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
 
@@ -135,6 +135,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
     }).get();
 }
 
+// Single fragment buffer tests are extremely slow, so the
+// run_mutation_source_tests execution is split
+
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
@@ -142,7 +145,43 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests(make_populate(true, true));
+        run_mutation_source_tests_plain(make_populate(true, true), true);
+        return make_ready_future<>();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_dowgrade) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+        run_mutation_source_tests_downgrade(make_populate(true, true), true);
+        return make_ready_future<>();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_upgrade) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+        run_mutation_source_tests_upgrade(make_populate(true, true), true);
+        return make_ready_future<>();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_reverse) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+        run_mutation_source_tests_reverse(make_populate(true, true), true);
         return make_ready_future<>();
     }).get();
 }
