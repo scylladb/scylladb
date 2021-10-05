@@ -153,12 +153,6 @@ def test_ttl_disable(dynamodb):
             'TimeToLiveStatus': 'DISABLED'}
 
 # Test various errors in the UpdateTimeToLive request.
-# Unfortunately, the boto3 library catches most incorrect inputs on the
-# client side, so we can't check the following errors here :-(
-# 1. Missing UpdateTimeToLive parameters AttributeName or Enabled
-# 2. Wrong types for them (e.g., string for Enabled)
-# 3. Empty string for AttributeName
-# There are only a few things that boto3 doesn't guard, so we can check them:
 def test_update_ttl_errors(dynamodb):
     client = dynamodb.meta.client
     # Can't set TTL on a non-existent table
@@ -169,12 +163,29 @@ def test_update_ttl_errors(dynamodb):
     with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
             AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
-        # AttributeName must be between 1 and 255 characters long. We
-        # can't check 0 (boto3 guards against this in the client), but
-        # can check >255.
+        # AttributeName must be between 1 and 255 characters long.
         with pytest.raises(ClientError, match='ValidationException.*length'):
             client.update_time_to_live(TableName=table.name,
                 TimeToLiveSpecification={'AttributeName': 'x'*256, 'Enabled': True})
+        with pytest.raises(ClientError, match='ValidationException.*length'):
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': '', 'Enabled': True})
+        # Missing mandatory UpdateTimeToLive parameters - AttributeName or Enabled
+        with pytest.raises(ClientError, match='ValidationException.*[aA]ttributeName'):
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'Enabled': True})
+        with pytest.raises(ClientError, match='ValidationException.*[eE]nabled'):
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 'hello'})
+        # Wrong types for these mandatory parameters (e.g., string for Enabled)
+        # The error type is currently a bit different in Alternator
+        # (ValidationException) and in DynamoDB (SerializationException).
+        with pytest.raises(ClientError):
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 'hello', 'Enabled': 'dog'})
+        with pytest.raises(ClientError):
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 3, 'Enabled': True})
 
 # Basic test that expiration indeed expires items that should be expired,
 # and doesn't expire items which shouldn't be expired.

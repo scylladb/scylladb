@@ -83,15 +83,9 @@ def test_recreate_table(dynamodb):
 # and match the regex [a-zA-Z0-9._-]+. Names not matching these rules should
 # be rejected, and no table be created.
 def test_create_table_unsupported_names(dynamodb):
-    from botocore.exceptions import ParamValidationError, ClientError
-    # Intererstingly, the boto library tests for names shorter than the
-    # minimum length (3 characters) immediately, and failure results in
-    # ParamValidationError. But the other invalid names are passed to
-    # DynamoDB, which returns an HTTP response code, which results in a
-    # CientError exception.
-    with pytest.raises(ParamValidationError):
+    with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, 'n')
-    with pytest.raises(ParamValidationError):
+    with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, 'nn')
     with pytest.raises(ClientError, match='ValidationException'):
         create_table(dynamodb, 'n' * 256)

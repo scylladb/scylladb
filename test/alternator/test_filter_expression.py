@@ -20,7 +20,7 @@
 # "ScanFilter" syntax.
 
 import pytest
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 import random
 from util import full_query, full_scan, random_string, random_bytes, multiset
 

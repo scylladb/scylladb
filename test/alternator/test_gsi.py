@@ -23,7 +23,7 @@
 
 import pytest
 import time
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
 
 # GSIs only support eventually consistent reads, so tests that involve
@@ -857,14 +857,9 @@ def create_gsi(dynamodb, index_name):
 # names, because both table name and index name, together, have to fit in
 # 221 characters. But we don't verify here this specific limitation.
 def test_gsi_unsupported_names(dynamodb):
-    # Unfortunately, the boto library tests for names shorter than the
-    # minimum length (3 characters) immediately, and failure results in
-    # ParamValidationError. But the other invalid names are passed to
-    # DynamoDB, which returns an HTTP response code, which results in a
-    # CientError exception.
-    with pytest.raises(ParamValidationError):
+    with pytest.raises(ClientError, match='ValidationException.*3'):
         create_gsi(dynamodb, 'n')
-    with pytest.raises(ParamValidationError):
+    with pytest.raises(ClientError, match='ValidationException.*3'):
         create_gsi(dynamodb, 'nn')
     with pytest.raises(ClientError, match='ValidationException.*nnnnn'):
         create_gsi(dynamodb, 'n' * 256)

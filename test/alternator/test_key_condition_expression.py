@@ -20,7 +20,7 @@
 # syntax. That older syntax is tested in test_query.py and test_key_conditions.py.
 
 import pytest
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 import random
 from util import random_string, full_query, multiset
 
