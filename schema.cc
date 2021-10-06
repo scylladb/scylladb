@@ -1423,11 +1423,16 @@ schema::static_upper_bound(const bytes& name) const {
     return boost::upper_bound(static_columns(), name, column_less_comparator());
 }
 data_type
-schema::column_name_type(const column_definition& def) const {
+schema::column_name_type(const column_definition& def, const data_type& regular_column_name_type) {
     if (def.kind == column_kind::regular_column) {
-        return _raw._regular_column_name_type;
+        return regular_column_name_type;
     }
     return utf8_type;
+}
+
+data_type
+schema::column_name_type(const column_definition& def) const {
+    return column_name_type(def, _raw._regular_column_name_type);
 }
 
 const column_definition&
