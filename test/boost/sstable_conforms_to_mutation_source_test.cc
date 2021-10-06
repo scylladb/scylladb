@@ -261,12 +261,14 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
                 auto r1 = source.make_reader(s, semaphore.make_permit(), prange,
                         slice, default_priority_class(), nullptr,
                         streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                auto close_r1 = deferred_action([&r1] { r1.close().get(); });
 
                 auto rev_slice = native_reverse_slice_to_legacy_reverse_slice(*s, slice);
                 rev_slice.options.set(query::partition_slice::option::reversed);
                 auto r2 = rev_source.make_reader(s, semaphore.make_permit(), prange,
                         rev_slice, default_priority_class(), nullptr,
                         streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                close_r1.cancel();
 
                 compare_readers(*s, std::move(r1), std::move(r2));
             }
