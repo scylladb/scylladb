@@ -27,6 +27,7 @@
 #include "query-request.hh"
 
 #include <optional>
+#include <cstdlib>
 
 inline
 lexicographical_relation relation_for_lower_bound(composite_view v) {
@@ -69,6 +70,7 @@ bound_weight reversed(bound_weight w) {
         case bound_weight::after_all_prefixed:
             return bound_weight::before_all_prefixed;
     }
+    std::abort();
 }
 
 inline

@@ -1700,6 +1700,7 @@ constant evaluate(const collection_constructor& collection, const query_options&
         case collection_constructor::style_type::map:
             return evaluate_map(collection, options);
     }
+    std::abort();
 }
 
 constant evaluate(const usertype_constructor& user_val, const query_options& options) {

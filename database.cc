@@ -1575,6 +1575,7 @@ query::max_result_size database::get_unlimited_query_max_result_size() const {
         case query_class::maintenance:
             return query::max_result_size(query::result_memory_limiter::unlimited_result_size);
     }
+    std::abort();
 }
 
 reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
@@ -1583,6 +1584,7 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
         case query_class::system: return _system_read_concurrency_sem;
         case query_class::maintenance: return _streaming_concurrency_sem;
     }
+    std::abort();
 }
 
 future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout) {
