@@ -142,7 +142,7 @@ to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identif
 
 template <typename Visitor>
 concept visitor_with_binary_operator_context = requires (Visitor v) {
-    { v.current_binary_operator } -> std::same_as<const expr::binary_operator*>;
+    { v.current_binary_operator } -> std::convertible_to<const expr::binary_operator*>;
 };
 
 void with_current_binary_operator(
