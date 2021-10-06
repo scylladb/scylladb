@@ -581,7 +581,11 @@ future<> cql_server::connection::process_request() {
         const bool allow_shedding = _client_state.get_workload_type() == service::client_state::workload_type::interactive;
         if (allow_shedding && _shed_incoming_requests) {
             ++_server._stats.requests_shed;
-            return _read_buf.skip(f.length);
+            return _read_buf.skip(f.length).then([this, stream = f.stream] {
+                write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
+                        "request shed due to coordinator overload", tracing::trace_state_ptr()));
+                return make_ready_future<>();
+            });
         }
 
         tracing_request_type tracing_requested = tracing_request_type::not_requested;
