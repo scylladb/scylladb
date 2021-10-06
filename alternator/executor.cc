@@ -2825,7 +2825,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
-        ::shared_ptr<const attrs_to_get> attrs_to_get;
+        ::shared_ptr<const alternator::attrs_to_get> attrs_to_get;
         struct single_request {
             partition_key pk;
             clustering_key ck;
