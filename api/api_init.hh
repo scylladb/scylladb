@@ -49,6 +49,7 @@ class config;
 }
 namespace netw { class messaging_service; }
 class repair_service;
+namespace cdc { class generation_service; }
 
 namespace gms {
 
@@ -79,7 +80,7 @@ struct http_context {
 future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx, const db::config& cfg);
 future<> set_server_snitch(http_context& ctx);
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<cdc::generation_service>& cdc_gs);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);

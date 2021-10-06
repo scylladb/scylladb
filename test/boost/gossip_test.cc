@@ -108,8 +108,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             std::ref(migration_manager), std::ref(token_metadata),
             std::ref(_messaging),
             std::ref(cdc_generation_service), std::ref(repair),
-            std::ref(raft_gr), std::ref(elc_notif),
-            true).get();
+            std::ref(raft_gr), std::ref(elc_notif)).get();
         auto stop_ss = defer([&] { ss.stop().get(); });
 
         sharded<semaphore> sst_dir_semaphore;
@@ -121,7 +120,8 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore)).get();
         auto stop_db = defer([&] { db.stop().get(); });
 
-        cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();
+        cdc::generation_service::config cdc_cfg;
+        cdc_generation_service.start(std::move(cdc_cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
         auto stop_cdc_generation_service = defer([&cdc_generation_service] {
             cdc_generation_service.stop().get();
         });

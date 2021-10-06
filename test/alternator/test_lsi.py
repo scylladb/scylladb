@@ -23,7 +23,7 @@
 
 import pytest
 import time
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables
 
 # LSIs support strongly-consistent reads, so the following functions do not

@@ -59,13 +59,13 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
             for (const auto& c : cm.get_compactions()) {
                 cm::summary s;
-                s.id = c->compaction_uuid.to_sstring();
-                s.ks = c->ks_name;
-                s.cf = c->cf_name;
+                s.id = c.compaction_uuid.to_sstring();
+                s.ks = c.ks_name;
+                s.cf = c.cf_name;
                 s.unit = "keys";
-                s.task_type = sstables::compaction_name(c->type);
-                s.completed = c->total_keys_written;
-                s.total = c->total_partitions;
+                s.task_type = sstables::compaction_name(c.type);
+                s.completed = c.total_keys_written;
+                s.total = c.total_partitions;
                 summaries.push_back(std::move(s));
             }
             return summaries;

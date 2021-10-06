@@ -2108,10 +2108,19 @@ sstable::make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon) {
-    if (_version >= version_types::mc) {
+    const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+    if (_version >= version_types::mc && (!reversed || (range.is_singular() && !fwd))) {
         return mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
     }
-    return upgrade_to_v2(kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
+
+    // The following are not yet supported natively in the mx reader:
+    // - multi-partition reversed queries
+    // - position fast-forwarding in (single-partition) reversed queries
+    // Therefore for these cases we delegate to make_reader_v1 which handles them (by using
+    // `make_reversing_reader` or `make_forwardable` appropriately which right now work only with the v1 format).
+    // FIXME: remove these workarounds eventually.
+
+    return upgrade_to_v2(make_reader_v1(std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon));
 }
 
 flat_mutation_reader
@@ -2126,26 +2135,39 @@ sstable::make_reader_v1(
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon) {
     const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
-    auto fwd_sm = fwd;
-    if (reversed) {
-        fwd_sm = streamed_mutation::forwarding::no;
-        schema = schema->make_reversed();
-    }
+    auto max_result_size = permit.max_result_size();
+    auto fwd_sm = reversed ? streamed_mutation::forwarding::no : fwd;
 
-    flat_mutation_reader rd(nullptr);
     if (_version >= version_types::mc) {
-        rd = downgrade_to_v1(mx::make_reader(shared_from_this(), std::move(schema), permit, range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon));
-    } else {
-        rd = kl::make_reader(shared_from_this(), std::move(schema), permit, range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon);
+        auto rd = (reversed && !range.is_singular())
+            // The mx reader does not support multi-partition reversed queries.
+            // Perform a forward query on it, then reverse the result.
+            ?  make_reversing_reader(downgrade_to_v1(mx::make_reader(shared_from_this(), schema->make_reversed(), std::move(permit),
+                        range, half_reverse_slice(*schema, slice), pc, std::move(trace_state), fwd_sm, fwd_mr, mon)),
+                    max_result_size)
+            : downgrade_to_v1(mx::make_reader(shared_from_this(), schema, std::move(permit),
+                        range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon));
+        if (reversed && fwd) {
+            // FIXME: the mx reader does not support fast-forwarding in reverse mode yet.
+            rd = make_forwardable(std::move(rd));
+        }
+        return rd;
     }
 
     if (reversed) {
-        rd = make_reversing_reader(std::move(rd), permit.max_result_size());
+        // The kl reader does not support reversed queries at all.
+        // Perform a forward query on it, then reverse the result.
+        // Note: we can pass a half-reversed slice, the kl reader performs an unreversed query nevertheless.
+        auto rd = make_reversing_reader(kl::make_reader(shared_from_this(), schema->make_reversed(), std::move(permit),
+                    range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon), max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
+        return rd;
     }
-    return rd;
+
+    return kl::make_reader(shared_from_this(), schema, std::move(permit),
+                range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr, mon);
 }
 
 flat_mutation_reader_v2

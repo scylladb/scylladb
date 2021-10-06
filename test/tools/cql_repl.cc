@@ -40,6 +40,7 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/type_json.hh"
+#include "cql3/column_identifier.hh"
 #include "test/lib/exception_utils.hh"
 #include "alternator/tags_extension.hh"
 #include "cdc/cdc_extension.hh"

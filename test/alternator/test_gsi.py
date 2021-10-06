@@ -23,8 +23,8 @@
 
 import pytest
 import time
-from botocore.exceptions import ClientError, ParamValidationError
-from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables
+from botocore.exceptions import ClientError
+from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -694,18 +694,18 @@ def wait_for_gsi(table, gsi_name):
     start_time = time.time()
     # Surprisingly, even for tiny tables this can take a very long time
     # on DynamoDB - often many minutes!
-    for i in range(300):
+    for i in range(600):
         time.sleep(1)
         desc = table.meta.client.describe_table(TableName=table.name)
         table_status = desc['Table']['TableStatus']
         if table_status != 'ACTIVE':
-            print('%d Table status still %s' % (i, table_status))
+            print(f'{i} Table {table.name} status still {table_status}')
             continue
         index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
         assert len(index_desc) == 1
         index_status = index_desc[0]['IndexStatus']
         if index_status != 'ACTIVE':
-            print('%d Index status still %s' % (i, index_status))
+            print(f'{i} Index {gsi_name} status still {index_status}')
             continue
         # When the index is ACTIVE, this must be after backfilling completed
         assert not 'Backfilling' in index_desc[0]
@@ -717,18 +717,18 @@ def wait_for_gsi(table, gsi_name):
 # this function waits for a GSI to be finally deleted.
 def wait_for_gsi_gone(table, gsi_name):
     start_time = time.time()
-    for i in range(300):
+    for i in range(600):
         time.sleep(1)
         desc = table.meta.client.describe_table(TableName=table.name)
         table_status = desc['Table']['TableStatus']
         if table_status != 'ACTIVE':
-            print('%d Table status still %s' % (i, table_status))
+            print(f'{i} Table {table.name} status still {table_status}')
             continue
         if 'GlobalSecondaryIndexes' in desc['Table']:
             index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
             if len(index_desc) != 0:
                 index_status = index_desc[0]['IndexStatus']
-                print('%d Index status still %s' % (i, index_status))
+                print(f'{i} Index {gsi_name} status still {index_status}')
                 continue
         print('wait_for_gsi_gone took %d seconds' % (time.time() - start_time))
         return
@@ -742,7 +742,8 @@ def wait_for_gsi_gone(table, gsi_name):
 # the wrong type are silently ignored and not added to the index (it would
 # not have been possible to add such items if the GSI was already configured
 # when they were added).
-@pytest.mark.xfail(reason="GSI not supported")
+# Reproduces issue #5022.
+@pytest.mark.xfail(reason="issue #5022")
 def test_gsi_backfill(dynamodb):
     # First create, and fill, a table without GSI. The items in items1
     # will have the appropriate string type for 'x' and will later get
@@ -795,7 +796,8 @@ def test_gsi_backfill(dynamodb):
     table.delete()
 
 # Test deleting an existing GSI using UpdateTable
-@pytest.mark.xfail(reason="GSI not supported")
+# Reproduces issue #5022.
+@pytest.mark.xfail(reason="issue #5022")
 def test_gsi_delete(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -855,14 +857,9 @@ def create_gsi(dynamodb, index_name):
 # names, because both table name and index name, together, have to fit in
 # 221 characters. But we don't verify here this specific limitation.
 def test_gsi_unsupported_names(dynamodb):
-    # Unfortunately, the boto library tests for names shorter than the
-    # minimum length (3 characters) immediately, and failure results in
-    # ParamValidationError. But the other invalid names are passed to
-    # DynamoDB, which returns an HTTP response code, which results in a
-    # CientError exception.
-    with pytest.raises(ParamValidationError):
+    with pytest.raises(ClientError, match='ValidationException.*3'):
         create_gsi(dynamodb, 'n')
-    with pytest.raises(ParamValidationError):
+    with pytest.raises(ClientError, match='ValidationException.*3'):
         create_gsi(dynamodb, 'nn')
     with pytest.raises(ClientError, match='ValidationException.*nnnnn'):
         create_gsi(dynamodb, 'n' * 256)
@@ -922,3 +919,62 @@ def test_gsi_list_tables(dynamodb, test_table_gsi_random_name):
         assert not index_name in name
     # But of course, the table's name should be in the list:
     assert table.name in tables
+
+# As noted above in test_gsi_empty_value(), setting an indexed string column
+# to an empty string is rejected, since keys (including GSI keys) are not
+# allowed to be empty strings or binary blobs.
+# However, empty strings *are* legal for ordinary non-indexed attributes, so
+# if the user adds a GSI to an existing table with pre-existing data, it might
+# contain empty string values for the indexed keys. Such values should be
+# skipped while filling the GSI - even if Scylla actually capable of
+# representing such empty view keys (see issue #9375).
+# Reproduces issue #5022 and #9424.
+@pytest.mark.xfail(reason="issue #5022, #9424")
+def test_gsi_backfill_empty_string(dynamodb):
+    # First create, and fill, a table without GSI:
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                                   { 'AttributeName': 'c', 'AttributeType': 'S' } ]) as table:
+        p1 = random_string()
+        p2 = random_string()
+        c = random_string()
+        # Create two items, one has an empty "x" attribute, the other is
+        # non-empty.
+        table.put_item(Item={'p': p1, 'c': c, 'x': 'hello'})
+        table.put_item(Item={'p': p2, 'c': c, 'x': ''})
+        # Now use UpdateTable to create two GSIs. In one of them "x" will be
+        # the partition key, and in the other "x" will be a sort key.
+        # DynamoDB limits the number of indexes that can be added in one
+        # UpdateTable command to just one, so we need to do it in two separate
+        # commands and wait for each to complete.
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index1',
+                              'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index1')
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index2',
+                              'KeySchema': [{ 'AttributeName': 'c', 'KeyType': 'HASH' },
+                                            { 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index2')
+        # Verify that the items with the empty-string x are missing from both
+        # GSIs, so only the one item with x != '' should appear in both.
+        # Note that we don't need to retry the reads here (i.e., use the
+        # assert_index_scan() or assert_index_query() functions) because after
+        # we waited for backfilling to complete, we know all the pre-existing
+        # data is already in the index.
+        assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index1')
+        assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index2')

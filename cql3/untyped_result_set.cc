@@ -45,6 +45,7 @@
 #include <stdexcept>
 #include "untyped_result_set.hh"
 #include "result_set.hh"
+#include "cql3/column_identifier.hh"
 #include "transport/messages/result_message.hh"
 
 cql3::untyped_result_set_row::untyped_result_set_row(const index_map& index, const cql3::metadata& metadata, data_views data)

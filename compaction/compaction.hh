@@ -54,19 +54,18 @@ namespace sstables {
     compaction_type to_compaction_type(sstring type_name);
 
     struct compaction_info {
+        utils::UUID compaction_uuid;
         compaction_type type = compaction_type::Compaction;
-        table* cf = nullptr;
         sstring ks_name;
         sstring cf_name;
-        size_t sstables = 0;
-        uint64_t start_size = 0;
-        uint64_t end_size = 0;
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
-        int64_t ended_at;
-        std::vector<shared_sstable> new_sstables;
+    };
+
+    struct compaction_data {
+        uint64_t total_partitions = 0;
+        uint64_t total_keys_written = 0;
         sstring stop_requested;
-        utils::UUID run_identifier;
         utils::UUID compaction_uuid;
         struct replacement {
             const std::vector<shared_sstable> removed;
@@ -83,6 +82,12 @@ namespace sstables {
         }
     };
 
+    struct compaction_result {
+        std::vector<sstables::shared_sstable> new_sstables;
+        std::chrono::time_point<db_clock> ended_at;
+        uint64_t end_size = 0;
+    };
+
     // Compact a list of N sstables into M sstables.
     // Returns info about the finished compaction, which includes vector to new sstables.
     //
@@ -95,7 +100,7 @@ namespace sstables {
     // If descriptor.cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf);
+    future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& info, column_family& cf);
 
     // Return list of expired sstables for column family cf.
     // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
@@ -109,5 +114,5 @@ namespace sstables {
     flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode);
 
     // For tests, can drop after we virtualize sstables.
-    future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader rd, const compaction_info& info);
+    future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader rd, const compaction_data& info);
 }

@@ -29,7 +29,6 @@
 
 namespace db {
 class system_distributed_keyspace;
-class config;
 }
 
 namespace gms {
@@ -50,18 +49,26 @@ namespace cdc {
 class generation_service : public peering_sharded_service<generation_service>
                          , public async_sharded_service<generation_service>
                          , public gms::i_endpoint_state_change_subscriber {
+public:
+    struct config {
+        unsigned ignore_msb_bits;
+        std::chrono::milliseconds ring_delay;
+        bool dont_rewrite_streams = false;
+    };
 
+private:
     bool _stopped = false;
 
     // The node has joined the token ring. Set to `true` on `after_join` call.
     bool _joined = false;
 
-    const db::config& _cfg;
+    config _cfg;
     gms::gossiper& _gossiper;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     abort_source& _abort_src;
     const locator::shared_token_metadata& _token_metadata;
     gms::feature_service& _feature_service;
+    database& _db;
 
     /* Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
      * Updated in response to certain gossip events (see the handle_cdc_generation function).
@@ -82,9 +89,9 @@ class generation_service : public peering_sharded_service<generation_service>
      */
     std::optional<cdc::generation_id> _gen_id;
 public:
-    generation_service(const db::config&, gms::gossiper&,
+    generation_service(config cfg, gms::gossiper&,
             sharded<db::system_distributed_keyspace>&, abort_source&, const locator::shared_token_metadata&,
-            gms::feature_service&);
+            gms::feature_service&, database& db);
 
     future<> stop();
     ~generation_service();
@@ -115,6 +122,27 @@ public:
     virtual void on_change(gms::inet_address, gms::application_state, const gms::versioned_value&) override;
 
     future<> check_and_repair_cdc_streams();
+
+    /* Generate a new set of CDC streams and insert it into the internal distributed CDC generations table.
+     * Returns the ID of this new generation.
+     *
+     * Should be called when starting the node for the first time (i.e., joining the ring).
+     *
+     * Assumes that the system_distributed_keyspace service is initialized.
+     * `cluster_supports_generations_v2` must be `true` if and only if the `CDC_GENERATIONS_V2` feature is enabled.
+     *
+     * If `CDC_GENERATIONS_V2` is enabled, the new generation will be inserted into
+     * `system_distributed_everywhere.cdc_generation_descriptions_v2` and the returned ID will be in the v2 format.
+     * Otherwise the new generation will be limited in size, causing suboptimal stream distribution, it will be inserted
+     * into `system_distributed.cdc_generation_descriptions` and the returned ID will be in the v1 format.
+     * The second case should happen only when we create new generations in a mixed cluster.
+     *
+     * The caller of this function is expected to insert the ID into the gossiper as fast as possible,
+     * so that other nodes learn about the generation before their clocks cross the generation's timestamp
+     * (not guaranteed in the current implementation, but expected to be the common case;
+     *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
+     */
+    future<cdc::generation_id> make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay);
 
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
@@ -147,6 +175,13 @@ private:
      * we need to check if the instance is still there. Storing the shared pointer will keep it alive.
      */
     shared_ptr<db::system_distributed_keyspace> get_sys_dist_ks();
+
+    /* Part of the upgrade procedure. Useful in case where the version of Scylla that we're upgrading from
+     * used the "cdc_streams_descriptions" table. This procedure ensures that the new "cdc_streams_descriptions_v2"
+     * table contains streams of all generations that were present in the old table and may still contain data
+     * (i.e. there exist CDC log tables that may contain rows with partition keys being the stream IDs from
+     * these generations). */
+    future<> maybe_rewrite_streams_descriptions();
 };
 
 } // namespace cdc

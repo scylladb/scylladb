@@ -234,6 +234,7 @@ public:
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
 
     // Call under allocating_section.
+    // For sstable versions >= mc the returned cursor will be of type `bsearch_clustered_cursor`.
     std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
         reader_permit,
         tracing::trace_state_ptr,

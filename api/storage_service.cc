@@ -26,6 +26,7 @@
 #include "utils/hash.hh"
 #include <sstream>
 #include <time.h>
+#include <algorithm>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -37,6 +38,7 @@
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 #include "seastar/http/exception.hh"
+#include <seastar/core/coroutine.hh>
 #include "repair/repair.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
@@ -294,7 +296,7 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::load_local_host_id().then([](const utils::UUID& id) {
             return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -489,8 +491,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 req.get_query_param("key")));
     });
 
-    ss::cdc_streams_check_and_repair.set(r, [&ctx, &ss] (std::unique_ptr<request> req) {
-        return ss.local().get_cdc_generation_service().check_and_repair_cdc_streams().then([] {
+    ss::cdc_streams_check_and_repair.set(r, [&ctx, &cdc_gs] (std::unique_ptr<request> req) {
+        if (!cdc_gs.local_is_initialized()) {
+            throw std::runtime_error("get_cdc_generation_service: not initialized yet");
+        }
+        return cdc_gs.local().check_and_repair_cdc_streams().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
@@ -501,14 +506,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
-        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
-            std::vector<column_family*> column_families_vec;
-            for (auto cf : column_families) {
-                column_families_vec.push_back(&db.find_column_family(keyspace, cf));
-            }
-            return parallel_for_each(column_families_vec, [] (column_family* cf) {
-                    return cf->compact_all_sstables();
+        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) -> future<> {
+            auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& cf_name) {
+                return db.find_uuid(keyspace, cf_name);
+            }));
+            // major compact smaller tables first, to increase chances of success if low on space.
+            std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+                return db.find_column_family(id).get_stats().live_disk_space_used;
             });
+            // as a table can be dropped during loop below, let's find it before issuing major compaction request.
+            for (auto& id : table_ids) {
+                co_await db.find_column_family(id).compact_all_sstables();
+            }
+            co_return;
         }).then([]{
                 return make_ready_future<json::json_return_type>(json_void());
         });

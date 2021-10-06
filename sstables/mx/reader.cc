@@ -265,7 +265,7 @@ public:
     void setup_for_partition(const partition_key& pk) {
         sstlog.trace("mp_row_consumer_m {}: setup_for_partition({})", fmt::ptr(this), pk);
         _is_mutation_end = false;
-        _mf_filter.emplace(*_schema, _slice, pk, _fwd);
+        _mf_filter.emplace(*_schema, query::clustering_key_filter_ranges(_slice.row_ranges(*_schema, pk)), _fwd);
     }
 
     std::optional<position_in_partition_view> fast_forward_to(position_range r) {
@@ -558,6 +558,16 @@ public:
         } else {
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
+            }
+            if (_slice.options.contains(query::partition_slice::option::reversed) &&
+                    // we always consume whole rows (i.e. `consume_row_end` is always called) when reading in reverse,
+                    // even when `consume_row_start` requested to ignore the row. This happens because for reversed reads
+                    // skipping is performed in the intermediary reversing data source (not in the reader) and the source
+                    // always returns whole rows.
+                    // Hence we must again check what the filtering result for this row was, even though we already
+                    // checked it in `consume_row_start`; otherwise we would incorrectly emit rows that were filtered out.
+                    _mf_filter->apply(_in_progress_row->position()).action != mutation_fragment_filter::result::emit) {
+                return proceed(!_reader->is_buffer_full() && !need_preempt());
             }
             _reader->push_mutation_fragment(mutation_fragment_v2(
                     *_schema, permit(), *std::exchange(_in_progress_row, {})));
@@ -1107,9 +1117,9 @@ private:
             goto column_label;
         range_tombstone_body_label:
             co_yield read_unsigned_vint(*_processing_data);
-            // Ignore result
+            // Ignore result (marker_body_size or row_body_size)
             co_yield read_unsigned_vint(*_processing_data);
-            // Ignore result
+            // Ignore result (prev_unfiltered_size)
             co_yield read_unsigned_vint(*_processing_data);
             _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
             co_yield read_unsigned_vint(*_processing_data);
@@ -1205,10 +1215,28 @@ public:
     }
 };
 
+template <typename T>
+struct value_or_reference {
+    std::optional<T> _opt;
+    const T& _ref;
+
+    value_or_reference(T&& v) : _opt(std::move(v)), _ref(*_opt) {}
+    value_or_reference(const T& v) : _ref(v) {}
+
+    value_or_reference(value_or_reference&& o) : _opt(std::move(o._opt)), _ref(_opt ? *_opt : o._ref) {}
+    value_or_reference(const value_or_reference& o) : _opt(o._opt), _ref(_opt ? *_opt : o._ref) {}
+
+    const T& get() const {
+        return _ref;
+    }
+};
+
 class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     using DataConsumeRowsContext = data_consume_rows_context_m;
     using Consumer = mp_row_consumer_m;
     static_assert(RowConsumer<Consumer>);
+    value_or_reference<query::partition_slice> _slice_holder;
+    const query::partition_slice& _slice;
     Consumer _consumer;
     bool _will_likely_slice = false;
     bool _read_enabled = true;
@@ -1217,32 +1245,51 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
     const dht::partition_range& _pr;
-    const query::partition_slice& _slice;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
+
+    // For reversed (single partition) reads, points to the current position in the sstable
+    // of the reversing data source used underneath (see `partition_reversing_data_source`).
+    // Engaged after `_context` is engaged, i.e. after `initialize()`.
+    const uint64_t* _reversed_read_sstable_position;
 public:
     mx_sstable_mutation_reader(shared_sstable sst,
                             schema_ptr schema,
                             reader_permit permit,
                             const dht::partition_range& pr,
-                            const query::partition_slice& slice,
+                            value_or_reference<query::partition_slice> slice,
                             const io_priority_class& pc,
                             tracing::trace_state_ptr trace_state,
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
             : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
-            , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
+            , _slice_holder(std::move(slice))
+            , _slice(_slice_holder.get())
+            , _consumer(this, _schema, std::move(permit), _slice, pc, std::move(trace_state), fwd, _sst)
             // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
             // but can't because many call sites use the default value for
             // `mutation_reader::forwarding` which is `yes`.
             , _single_partition_read(pr.is_singular())
             , _pr(pr)
-            , _slice(slice)
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
-            , _monitor(mon) { }
+            , _monitor(mon) {
+        if (reversed()) {
+            if (!_single_partition_read) {
+                on_internal_error(sstlog, format(
+                        // Not only in the reader, they are disabled in CQL.
+                        "mx reader: multi-partition reversed queries are not supported yet;"
+                        " partition range: {}", pr));
+            }
+            if (fwd != streamed_mutation::forwarding::no) {
+                on_internal_error(sstlog, "mx reader: forwarding not yet supported in reversed queries");
+            }
+            // FIXME: if only the defaults were better...
+            //assert(fwd_mr == mutation_reader::forwarding::no);
+        }
+    }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     mx_sstable_mutation_reader(mx_sstable_mutation_reader&&) = delete;
@@ -1369,26 +1416,55 @@ private:
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
+                // FIXME reversed multi partition reads
                 return get_index_reader().advance_to(*_current_partition_key);
             }
             return make_ready_future();
-        }().then([this, pos] {
-            return get_index_reader().advance_to(*pos).then([this] {
-                index_reader& idx = *_index_reader;
-                auto index_position = idx.data_file_positions();
-                if (index_position.start <= _context->position()) {
-                    return make_ready_future<>();
-                }
-                return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+        }().then([this, pos = *pos] {
+            if (reversed()) {
+                // The position `pos` conforms to the query schema (it is the start of a reversed range),
+                // which is reversed w.r.t. the table schema. We use the table schema in index_reader,
+                // so we need to unreverse `pos` before passing it into index_reader.
+                auto rev_pos = pos.reversed();
+                return get_index_reader().advance_reverse(std::move(rev_pos)).then([this] {
+                    // The reversing data source will notice the skip and update the data ranges
+                    // from which it prepares the data given to us.
+
+                    assert(_reversed_read_sstable_position);
+                    auto ip = _index_reader->data_file_positions();
+                    if (ip.end >= *_reversed_read_sstable_position) {
+                        // The reversing data source was already ahead (in reverse - its position was smaller)
+                        // than the index. We must not update the current range tombstone in this case,
+                        // as it already is at least as up to date as the one given by the index end_open_marker.
+                        return;
+                    }
+
                     _sst->get_stats().on_partition_seek();
-                    auto open_end_marker = idx.end_open_marker();
+                    auto open_end_marker = _index_reader->reverse_end_open_marker();
                     if (open_end_marker) {
                         _consumer.set_range_tombstone(open_end_marker->tomb);
                     } else {
                         _consumer.set_range_tombstone({});
                     }
                 });
-            });
+            } else {
+                return get_index_reader().advance_to(pos).then([this] {
+                    index_reader& idx = *_index_reader;
+                    auto index_position = idx.data_file_positions();
+                    if (index_position.start <= _context->position()) {
+                        return make_ready_future<>();
+                    }
+                    return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                        _sst->get_stats().on_partition_seek();
+                        auto open_end_marker = idx.end_open_marker();
+                        if (open_end_marker) {
+                            _consumer.set_range_tombstone(open_end_marker->tomb);
+                        } else {
+                            _consumer.set_range_tombstone({});
+                        }
+                    });
+                });
+            }
         });
     }
     bool is_initialized() const {
@@ -1407,6 +1483,9 @@ private:
             }
 
             _sst->get_filter_tracker().add_true_positive();
+            if (reversed()) {
+                co_await _index_reader->advance_reverse_to_next_partition();
+            }
         } else {
             _sst->get_stats().on_range_partition_read();
             co_await get_index_reader().advance_to(_pr);
@@ -1417,7 +1496,14 @@ private:
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
-            _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end });
+            if (reversed()) {
+                auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
+                        *_schema, _sst, *_index_reader, _consumer, { begin, *end });
+                _context = std::move(reversed_context.the_context);
+                _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
+            } else {
+                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end });
+            }
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
@@ -1443,6 +1529,9 @@ private:
         _context->reset(el);
         return _context->skip_to(begin);
     }
+    bool reversed() const {
+        return _slice.options.contains(query::partition_slice::option::reversed);
+    }
 public:
     void on_out_of_clustering_range() override {
         if (_fwd == streamed_mutation::forwarding::yes) {
@@ -1453,6 +1542,11 @@ public:
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        if (reversed()) {
+            // FIXME
+            on_internal_error(sstlog, "mx reader: fast_forward_to(partition_range) not supported for reversed queries");
+        }
+
         return ensure_initialized().then([this, &pr] {
             if (!is_initialized()) {
                 _end_of_stream = true;
@@ -1539,6 +1633,11 @@ public:
         // If _ds is not created then next_partition() has no effect because there was no partition_start emitted yet.
     }
     virtual future<> fast_forward_to(position_range cr) override {
+        if (reversed()) {
+            // FIXME
+            on_internal_error(sstlog, "mx reader: fast_forward_to(position_range) not supported for reversed queries");
+        }
+
         forward_buffer_to(cr.start());
         if (!_partition_finished) {
             _end_of_stream = false;
@@ -1569,6 +1668,32 @@ public:
     }
 };
 
+static flat_mutation_reader_v2 make_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        value_or_reference<query::partition_slice> slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& monitor) {
+    // If we're provided a reversed slice we must fix it since currently callers
+    // provide them in a 'half-reversed' format: the order of ranges in the slice is reversed,
+    // but the ranges themselves are not.
+    // FIXME: drop this workaround when callers are fixed to provide the slice
+    // in 'native-reversed' format (if ever).
+    if (slice.get().options.contains(query::partition_slice::option::reversed)) {
+        return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
+            std::move(sstable), std::move(schema), std::move(permit), range,
+            legacy_reverse_slice_to_native_reverse_slice(*schema, slice.get()), pc, std::move(trace_state), fwd, fwd_mr, monitor);
+    }
+
+    return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
+        std::move(sstable), std::move(schema), std::move(permit), range,
+        std::move(slice), pc, std::move(trace_state), fwd, fwd_mr, monitor);
+}
 
 flat_mutation_reader_v2 make_reader(
         shared_sstable sstable,
@@ -1581,8 +1706,23 @@ flat_mutation_reader_v2 make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
-        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
+    return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
+            value_or_reference(slice), pc, std::move(trace_state), fwd, fwd_mr, monitor);
+}
+
+flat_mutation_reader_v2 make_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        query::partition_slice&& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& monitor) {
+    return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
+            value_or_reference(std::move(slice)), pc, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
 class mx_crawling_sstable_mutation_reader : public mp_row_consumer_reader_mx {

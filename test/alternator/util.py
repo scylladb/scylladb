@@ -22,6 +22,7 @@ import random
 import collections
 import time
 from contextlib import contextmanager
+from botocore.hooks import HierarchicalEmitter
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))
@@ -193,3 +194,21 @@ def list_tables(dynamodb, limit=100):
         # still cause an endless loop getting the same tables again and again.
         pos = newpos
     return ret
+
+# Boto3 conveniently transforms native Python types to DynamoDB JSON and back,
+# for example one can use the string 'x' as a key and it is transparently
+# transformed to the map {'S': 'x'} that Boto3 uses to represent a string.
+# While these transformations are very convenient, they prevent us from
+# checking various *errors* in the format of API parameters, because boto3
+# verifies and/or modifies these parameters for us.
+# So the following contextmanager presents a boto3 client which is modifed
+# to *not* do these transformations or validations at all.
+@contextmanager
+def client_no_transform(client):
+    # client.meta.events is an "emitter" object listing various hooks, which
+    # by default boto3 sets up as explained above. Here we temporarily
+    # override it with an empty emitter:
+    old_events = client.meta.events
+    client.meta.events = HierarchicalEmitter()
+    yield client
+    client.meta.events = old_events

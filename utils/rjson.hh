@@ -41,6 +41,7 @@
 
 #include <string>
 #include <stdexcept>
+#include "utils/base64.hh"
 
 namespace rjson {
 class error : public std::exception {
@@ -302,6 +303,10 @@ rjson::value from_string_map(const std::map<sstring, sstring>& map);
 
 // The function operates on sstrings for historical reasons.
 sstring quote_json_string(const sstring& value);
+
+inline bytes base64_decode(const value& v) {
+  return ::base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
+}
 
 } // end namespace rjson
 

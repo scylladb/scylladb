@@ -20,7 +20,7 @@
 # which is tested in test_filter_expression.py.
 
 import pytest
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 import random
 from util import full_query, full_query_and_counts, random_string, random_bytes
 

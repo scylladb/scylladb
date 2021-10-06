@@ -335,6 +335,7 @@ manager::end_point_hints_manager::end_point_hints_manager(end_point_hints_manage
     , _file_update_mutex(*_file_update_mutex_ptr)
     , _state(other._state)
     , _hints_dir(std::move(other._hints_dir))
+    , _last_written_rp(other._last_written_rp)
     , _sender(other._sender, *this)
 {}
 

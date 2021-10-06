@@ -29,6 +29,7 @@
 #include "utils/rjson.hh"
 #include "serialization.hh"
 #include "utils/base64.hh"
+#include "utils/rjson.hh"
 #include <stdexcept>
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -262,7 +263,7 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
     if (kv1.name == "S" && kv2.name == "S") {
         return rjson::to_string_view(kv1.value).find(rjson::to_string_view(kv2.value)) != std::string_view::npos;
     } else if (kv1.name == "B" && kv2.name == "B") {
-        return base64_decode(kv1.value).find(base64_decode(kv2.value)) != bytes::npos;
+        return rjson::base64_decode(kv1.value).find(rjson::base64_decode(kv2.value)) != bytes::npos;
     } else if (is_set_of(kv1.name, kv2.name)) {
         for (auto i = kv1.value.Begin(); i != kv1.value.End(); ++i) {
             if (*i == kv2.value) {
@@ -386,7 +387,7 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
                    std::string_view(kv2.value.GetString(), kv2.value.GetStringLength()));
     }
     if (kv1.name == "B") {
-        return cmp(base64_decode(kv1.value), base64_decode(kv2.value));
+        return cmp(rjson::base64_decode(kv1.value), rjson::base64_decode(kv2.value));
     }
     // cannot reach here, as check_comparable_type() verifies the type is one
     // of the above options.
@@ -476,7 +477,7 @@ static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const r
                              bounds_from_query);
     }
     if (kv_v.name == "B") {
-        return check_BETWEEN(base64_decode(kv_v.value), base64_decode(kv_lb.value), base64_decode(kv_ub.value), bounds_from_query);
+        return check_BETWEEN(rjson::base64_decode(kv_v.value), rjson::base64_decode(kv_lb.value), rjson::base64_decode(kv_ub.value), bounds_from_query);
     }
     if (v_from_query) {
         throw api_error::validation(

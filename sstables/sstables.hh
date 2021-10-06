@@ -74,6 +74,10 @@ namespace mc {
 class writer;
 }
 
+namespace mx {
+class partition_reversing_data_source_impl;
+}
+
 namespace fs = std::filesystem;
 
 extern logging::logger sstlog;
@@ -198,7 +202,11 @@ public:
         return _generation;
     }
 
-    // Returns a mutation_reader for given range of partitions
+    // Returns a mutation_reader for given range of partitions.
+    //
+    // Precondition: if the slice is reversed, the schema must be reversed as well.
+    // Reversed slices must be provided in the 'half-reversed' format (the order of ranges
+    // being reversed, but the ranges themselves are not).
     flat_mutation_reader_v2 make_reader(
             schema_ptr schema,
             reader_permit permit,
@@ -210,6 +218,9 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor());
 
+    // Precondition: if the slice is reversed, the schema must be reversed as well.
+    // Reversed slices must be provided in the 'half-reversed' format (the order of ranges
+    // being reversed, but the ranges themselves are not).
     flat_mutation_reader make_reader_v1(
             schema_ptr schema,
             reader_permit permit,
@@ -850,6 +861,7 @@ public:
     friend class promoted_index;
     friend class compaction;
     friend class sstables_manager;
+    friend class mx::partition_reversing_data_source_impl;
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);

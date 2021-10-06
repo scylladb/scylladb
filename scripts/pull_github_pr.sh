@@ -25,7 +25,10 @@ NL=$'\n'
 
 PR_NUM=$1
 # convert full repo URL to its project/repo part:
-PROJECT=`git config --get remote.origin.url | sed 's/git@github.com://;s#https://github.com/##;s/\.git$//;'`
+REMOTE_SLASH_BRANCH="$(git rev-parse --abbrev-ref --symbolic-full-name  @{upstream})"
+REMOTE="${REMOTE_SLASH_BRANCH%/*}"
+REMOTE_URL="$(git config --get "remote.$REMOTE.url")"
+PROJECT=`sed 's/git@github.com://;s#https://github.com/##;s/\.git$//;' <<<"${REMOTE_URL}"`
 PR_PREFIX=https://api.github.com/repos/$PROJECT/pulls
 
 echo "Fetching info on PR #$PR_NUM... "
@@ -45,7 +48,7 @@ echo -n "Fetching full name of author $PR_LOGIN... "
 USER_NAME=$(curl -s "https://api.github.com/users/$PR_LOGIN" | jq -r .name)
 echo "$USER_NAME"
 
-git fetch origin pull/$PR_NUM/head
+git fetch "$REMOTE" pull/$PR_NUM/head
 
 nr_commits=$(git log --pretty=oneline HEAD..FETCH_HEAD | wc -l)
 

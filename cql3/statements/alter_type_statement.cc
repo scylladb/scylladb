@@ -40,6 +40,7 @@
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/column_identifier.hh"
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"

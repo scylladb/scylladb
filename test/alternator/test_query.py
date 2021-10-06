@@ -25,7 +25,7 @@
 
 import random
 import pytest
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 from decimal import Decimal
 from util import random_string, random_bytes, full_query, multiset
 from boto3.dynamodb.conditions import Key, Attr
@@ -300,9 +300,8 @@ def test_query_limit(test_table_sn):
         assert len(got_items) == min(limit, len(numbers))
         got_sort_keys = [x['c'] for x in got_items]
         assert got_sort_keys == numbers[0:limit]
-    # Unfortunately, the boto3 library forbids a Limit of 0 on its own,
-    # before even sending a request, so we can't test how the server responds.
-    with pytest.raises(ParamValidationError):
+    # Limit 0 is not allowed:
+    with pytest.raises(ClientError, match='ValidationException.*[lL]imit'):
         test_table_sn.query(ConsistentRead=True, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=0)
 
 # In test_query_limit we tested just that Limit allows to stop the result

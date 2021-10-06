@@ -1100,8 +1100,12 @@ int main(int ac, char** av) {
              * every time it accesses it (because it may have been stopped already), then take local_shared()
              * which will prevent sys_dist_ks from being destroyed while the service operates on it.
              */
-            cdc_generation_service.start(std::ref(*cfg), std::ref(gossiper), std::ref(sys_dist_ks),
-                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service)).get();
+            cdc::generation_service::config cdc_config;
+            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
+            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
+            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks),
+                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
             });
@@ -1124,7 +1128,7 @@ int main(int ac, char** av) {
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss, gossiper).get();
+            api::set_server_storage_service(ctx, ss, gossiper, cdc_generation_service).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();

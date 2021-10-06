@@ -414,10 +414,15 @@ public:
         ), std::move(payload));
     }
 
-    // This is the only function of `raft::rpc` which actually expects a response.
+    struct snapshot_not_found {
+        raft::snapshot_id id;
+    };
+
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id dst, const raft::install_snapshot& ins, seastar::abort_source&) override {
         auto it = _snapshots.find(ins.snp.id);
-        assert(it != _snapshots.end());
+        if (it == _snapshots.end()) {
+            throw snapshot_not_found{ .id = ins.snp.id };
+        }
 
         auto id = _counter++;
         promise<raft::snapshot_reply> p;
@@ -1059,7 +1064,9 @@ public:
 
     void deliver(raft::server_id src, const typename rpc<typename M::state_t>::message_t& m) {
         assert(_started);
-        _queue->push(src, m);
+        if (!_gate.is_closed()) {
+            _queue->push(src, m);
+        }
     }
 
 private:
@@ -1241,8 +1248,12 @@ auto with_env_and_ticker(environment_config cfg, F f) {
             auto& env = env_;
             auto& t = t_;
 
-            co_await t->abort();
+            // We abort the environment before the ticker as the environment may require time to advance
+            // in order to finish (e.g. some operations may need to timeout).
             co_await env->abort();
+            tlogger.trace("environment aborted");
+            co_await t->abort();
+            tlogger.trace("ticker aborted");
         });
     });
 }
@@ -1319,8 +1330,12 @@ std::ostream& operator<<(std::ostream& os, const ExReg::exchange& e) {
     return os << format("xng{{{}}}", e.x);
 }
 
-// Wait until either one of `nodes` in `env` becomes a leader, or duration `d` expires according to `timer` (whichever happens first).
+// Wait until either one of `nodes` in `env` becomes a leader, or time point `timeout` is reached according to `timer` (whichever happens first).
 // If the leader is found, returns it. Otherwise throws a `logical_timer::timed_out` exception.
+//
+// Note: the returned node may have been a leader the moment we found it, but may have just stepped down
+// the moment we return it. It may be useful to call this function multiple times during cluster
+// stabilization periods in order to find a node that will successfully answer calls.
 template <PureStateMachine M>
 struct wait_for_leader {
     // FIXME: change into free function after clang bug #50345 is fixed
@@ -1328,8 +1343,8 @@ struct wait_for_leader {
             environment<M>& env,
             std::vector<raft::server_id> nodes,
             logical_timer& timer,
-            raft::logical_clock::duration d) {
-        auto l = co_await timer.with_timeout(timer.now() + d, [] (weak_ptr<environment<M>> env, std::vector<raft::server_id> nodes) -> future<raft::server_id> {
+            raft::logical_clock::time_point timeout) {
+        auto l = co_await timer.with_timeout(timeout, [] (weak_ptr<environment<M>> env, std::vector<raft::server_id> nodes) -> future<raft::server_id> {
             while (true) {
                 if (!env) {
                     co_return raft::server_id{};
@@ -1345,7 +1360,9 @@ struct wait_for_leader {
         }(env.weak_from_this(), std::move(nodes)));
 
         assert(l != raft::server_id{});
-        assert(env.get_server(l).is_leader());
+
+        // Note: `l` may no longer be a leader at this point if there was a yield at the `co_await` above
+        // and `l` decided to step down, was restarted, or just got removed from the configuration.
 
         co_return l;
     }
@@ -1373,7 +1390,7 @@ SEASTAR_TEST_CASE(basic_test) {
         auto leader_id = co_await env.new_server(true);
 
         // Wait at most 1000 ticks for the server to elect itself as a leader.
-        assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, 1000_t) == leader_id);
+        assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
 
         auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
             return env.get_server(leader_id).call(std::move(input),  timer.now() + timeout, timer);
@@ -1447,7 +1464,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
         // It's easier to catch the problem when we send entries one by one, not in batches.
                     .append_request_threshold = 1,
                 });
-        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, 1000_t) == id1);
+        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
 
         auto id2 = co_await env.new_server(true,
                 raft::server::configuration{
@@ -1478,7 +1495,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
         env.get_network().remove_grudge(id2, id1);
         env.get_network().remove_grudge(id1, id2);
 
-        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, 1000_t);
+        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
         tlogger.trace("last leader: {}", l);
 
         // Now the current term is greater than the term of the first couple of entries.
@@ -1528,7 +1545,7 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
                     .snapshot_threshold = 5,
                     .snapshot_trailing = 1,
                 });
-        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, 1000_t) == id1);
+        assert(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
 
         auto id2 = co_await env.new_server(false,
                 raft::server::configuration{
@@ -1561,7 +1578,7 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
         env.get_network().remove_grudge(id1, id2);
 
         // With the bug this would timeout, the cluster is unable to elect a leader without the configuration.
-        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, 1000_t);
+        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
         tlogger.trace("last leader: {}", l);
     });
 }
@@ -1989,7 +2006,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         auto leader_id = co_await env.new_server(true);
 
         // Wait for the server to elect itself as a leader.
-        assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, 1000_t) == leader_id);
+        assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
 
 
         size_t no_servers = 5;
@@ -2102,20 +2119,53 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             consistency_checker{}};
         co_await interp.run();
 
-        // All network partitions are healed, this should succeed:
-        auto last_leader = co_await wait_for_leader<AppendReg>{}(env, std::vector<raft::server_id>{servers.begin(), servers.end()}, timer, 10000_t)
-                .handle_exception_type([] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
-            tlogger.error("Failed to find a leader after 10000 ticks at the end of test (network partitions are healed).");
-            assert(false);
-        });
+        tlogger.debug("Finished generator run, time: {}", timer.now());
 
-        // Should also succeed
-        auto last_res = co_await env.get_server(last_leader).call(AppendReg::append{-1}, timer.now() + 10000_t, timer);
-        if (!std::holds_alternative<typename AppendReg::ret>(last_res)) {
-            tlogger.error(
-                    "Expected success on the last call in the test (after electing a leader; network partitions are healed)."
-                    " Got: {}", last_res);
-            assert(false);
+        // Liveness check: we must be able to obtain a final response after all the nemeses have stopped.
+        // Due to possible multiple leaders at this point and the cluster stabilizing (for example there
+        // may be no leader right now, the current leader may be stepping down etc.) we may need to try
+        // sending requests multiple times to different servers to obtain the last result.
+
+        auto limit = timer.now() + 10000_t;
+        size_t cnt = 0;
+        for (; timer.now() < limit; ++cnt) {
+            tlogger.debug("Trying to obtain last result: attempt number {}", cnt + 1);
+
+            auto now = timer.now();
+            auto leader = co_await wait_for_leader<AppendReg>{}(env,
+                        std::vector<raft::server_id>{servers.begin(), servers.end()}, timer, limit)
+                    .handle_exception_type([&timer, now] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
+                tlogger.error("Failed to find a leader after {} ticks at the end of test.", timer.now() - now);
+                assert(false);
+            });
+
+            if (env.get_server(leader).is_leader()) {
+                tlogger.debug("Leader {} found after {} ticks", leader, timer.now() - now);
+            } else {
+                tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
+                continue;
+            }
+
+            for (auto& s: servers) {
+                auto& srv = env.get_server(s);
+                if (srv.is_leader() && s != leader) {
+                    tlogger.debug("There is another leader: {}", s);
+                }
+            }
+
+            auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
+                return env.get_server(id).call(AppendReg::append{-1}, timer.now() + 200_t, timer);
+            }}(timer, known, leader, known.size() + 1, 10_t, 10_t);
+
+            if (std::holds_alternative<typename AppendReg::ret>(res)) {
+                tlogger.debug("Last result: {}", res);
+                co_return;
+            }
+
+            tlogger.warn("Failed to obtain last result at end of test: {} returned by {}", res, last_attempted_server);
         }
+
+        tlogger.error("Failed to obtain a final successful response at the end of the test. Number of attempts: {}", cnt);
+        assert(false);
     });
 }
