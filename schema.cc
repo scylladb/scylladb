@@ -1020,7 +1020,8 @@ schema_builder& schema_builder::remove_column(bytes name)
     if(it == _raw._columns.end()) {
         throw std::out_of_range(format("Cannot remove: column {} not found.", name));
     }
-    without_column(it->name_as_text(), it->type, api::new_timestamp());
+    auto name_as_text = it->column_specification ? it->name_as_text() : schema::column_name_type(*it, _raw._regular_column_name_type)->get_string(it->name());
+    without_column(name_as_text, it->type, api::new_timestamp());
     _raw._columns.erase(it);
     return *this;
 }
