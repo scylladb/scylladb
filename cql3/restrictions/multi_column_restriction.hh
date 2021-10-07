@@ -355,17 +355,17 @@ public:
 class multi_column_restriction::slice final : public multi_column_restriction {
     using restriction_shared_ptr = ::shared_ptr<clustering_key_restrictions>;
     using mode = expr::comparison_order;
-    term_slice _slice;
+    bounds_slice _slice;
     mode _mode;
 
-    slice(schema_ptr schema, std::vector<const column_definition*> defs, term_slice slice, mode m)
+    slice(schema_ptr schema, std::vector<const column_definition*> defs, bounds_slice slice, mode m)
         : multi_column_restriction(schema, std::move(defs))
         , _slice(slice)
         , _mode(m)
     { }
 public:
     slice(schema_ptr schema, std::vector<const column_definition*> defs, statements::bound bound, bool inclusive, shared_ptr<term> term, mode m = mode::cql)
-        : slice(schema, defs, term_slice::new_instance(bound, inclusive, term), m)
+        : slice(schema, defs, bounds_slice::new_instance(bound, inclusive, term.get() != nullptr ? std::make_optional(expr::to_expression(term)) : std::nullopt), m)
     {
         expression = expr::binary_operator{
             column_definitions_as_tuple_constructor(defs),

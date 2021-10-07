@@ -43,7 +43,7 @@
 #include "restriction.hh"
 #include "primary_key_restrictions.hh"
 #include "exceptions/exceptions.hh"
-#include "term_slice.hh"
+#include "bounds_slice.hh"
 #include "keys.hh"
 
 class column_definition;
