@@ -77,14 +77,14 @@ public:
     const column_definition& column;
 
 protected:
-    // Term involved in the operation. In theory this should not be here since some operation
+    // Value involved in the operation. In theory this should not be here since some operation
     // may require none of more than one term, but most need 1 so it simplify things a bit.
-    const ::shared_ptr<term> _t;
+    std::optional<expr::expression> _e;
 
 public:
-    operation(const column_definition& column_, ::shared_ptr<term> t)
+    operation(const column_definition& column_, std::optional<expr::expression> e)
         : column{column_}
-        , _t{t}
+        , _e(std::move(e))
     { }
 
     virtual ~operation() {}
@@ -107,9 +107,9 @@ public:
      * @param meta the list of column specification where to collect the
      * bind variables of this term in.
      */
-    virtual void fill_prepare_context(prepare_context& ctx) const {
-        if (_t) {
-            _t->fill_prepare_context(ctx);
+    virtual void fill_prepare_context(prepare_context& ctx) {
+        if (_e.has_value()) {
+            expr::fill_prepare_context(*_e, ctx);
         }
     }
 

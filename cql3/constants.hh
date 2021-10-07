@@ -122,8 +122,8 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = expr::evaluate_to_raw_view(_t, params._options);
-            execute(m, prefix, params, column, std::move(value));
+            auto value = expr::evaluate(*_e, params._options);
+            execute(m, prefix, params, column, value.view());
         }
 
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value) {
@@ -139,13 +139,13 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = expr::evaluate_to_raw_view(_t, params._options);
+            auto value = expr::evaluate(*_e, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
             } else if (value.is_unset_value()) {
                 return;
             }
-            auto increment = value.deserialize<int64_t>(*long_type);
+            auto increment = value.view().deserialize<int64_t>(*long_type);
             m.set_cell(prefix, column, params.make_counter_update_cell(increment));
         }
     };
@@ -154,13 +154,13 @@ public:
         using operation::operation;
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
-            auto value = expr::evaluate_to_raw_view(_t, params._options);
+            auto value = expr::evaluate(*_e, params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
             } else if (value.is_unset_value()) {
                 return;
             }
-            auto increment = value.deserialize<int64_t>(*long_type);
+            auto increment = value.view().deserialize<int64_t>(*long_type);
             if (increment == std::numeric_limits<int64_t>::min()) {
                 throw exceptions::invalid_request_exception(format("The negation of {:d} overflows supported counter precision (signed 8 bytes integer)", increment));
             }
@@ -171,7 +171,7 @@ public:
     class deleter : public operation {
     public:
         deleter(const column_definition& column)
-            : operation(column, {})
+            : operation(column, std::nullopt)
         { }
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;

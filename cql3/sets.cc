@@ -176,7 +176,7 @@ expr::expression sets::marker::to_expression() {
 
 void
 sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    expr::constant value = expr::evaluate(_t, params._options);
+    expr::constant value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, std::move(value));
 }
 
@@ -196,7 +196,7 @@ sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 
 void
 sets::adder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(_t, params._options);
+    const expr::constant value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -239,7 +239,7 @@ void
 sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
 
-    expr::constant svalue = expr::evaluate(_t, params._options);
+    expr::constant svalue = expr::evaluate(*_e, params._options);
     if (svalue.is_null_or_unset()) {
         return;
     }
@@ -257,7 +257,7 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
 void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params)
 {
     assert(column.type->is_multi_cell() && "Attempted to remove items from a frozen set");
-    expr::constant elt = expr::evaluate(_t, params._options);
+    expr::constant elt = expr::evaluate(*_e, params._options);
     if (elt.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null set element");
     }

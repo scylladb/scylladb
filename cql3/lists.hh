@@ -118,8 +118,8 @@ public:
 public:
     class setter : public operation {
     public:
-        setter(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        setter(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const expr::constant& value);
@@ -127,20 +127,20 @@ public:
 
     class setter_by_index : public operation {
     protected:
-        shared_ptr<term> _idx;
+        expr::expression _idx;
     public:
-        setter_by_index(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
-            : operation(column, std::move(t)), _idx(std::move(idx)) {
+        setter_by_index(const column_definition& column, expr::expression idx, expr::expression e)
+            : operation(column, std::move(e)), _idx(std::move(idx)) {
         }
         virtual bool requires_read() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
+        virtual void fill_prepare_context(prepare_context& ctx) override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class setter_by_uuid : public setter_by_index {
     public:
-        setter_by_uuid(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
-            : setter_by_index(column, std::move(idx), std::move(t)) {
+        setter_by_uuid(const column_definition& column, expr::expression idx, expr::expression e)
+            : setter_by_index(column, std::move(idx), std::move(e)) {
         }
         virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
@@ -166,8 +166,8 @@ public:
 
     class discarder : public operation {
     public:
-        discarder(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        discarder(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
         virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
@@ -175,7 +175,7 @@ public:
 
     class discarder_by_index : public operation {
     public:
-        discarder_by_index(const column_definition& column, shared_ptr<term> idx)
+        discarder_by_index(const column_definition& column, expr::expression idx)
                 : operation(column, std::move(idx)) {
         }
         virtual bool requires_read() const override;

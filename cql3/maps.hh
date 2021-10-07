@@ -99,8 +99,8 @@ public:
 
     class setter : public operation {
     public:
-        setter(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        setter(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
@@ -108,19 +108,19 @@ public:
     };
 
     class setter_by_key : public operation {
-        const shared_ptr<term> _k;
+        expr::expression _k;
     public:
-        setter_by_key(const column_definition& column, shared_ptr<term> k, shared_ptr<term> t)
-            : operation(column, std::move(t)), _k(std::move(k)) {
+        setter_by_key(const column_definition& column, expr::expression k, expr::expression e)
+            : operation(column, std::move(e)), _k(std::move(k)) {
         }
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
+        virtual void fill_prepare_context(prepare_context& ctx) override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class putter : public operation {
     public:
-        putter(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) {
+        putter(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
@@ -130,7 +130,7 @@ public:
 
     class discarder_by_key : public operation {
     public:
-        discarder_by_key(const column_definition& column, shared_ptr<term> k)
+        discarder_by_key(const column_definition& column, expr::expression k)
                 : operation(column, std::move(k)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;

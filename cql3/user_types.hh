@@ -107,8 +107,8 @@ public:
     class setter_by_field : public operation {
         size_t _field_idx;
     public:
-        setter_by_field(const column_definition& column, size_t field_idx, shared_ptr<term> t)
-            : operation(column, std::move(t)), _field_idx(field_idx) {
+        setter_by_field(const column_definition& column, size_t field_idx, expr::expression e)
+            : operation(column, std::move(e)), _field_idx(field_idx) {
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
@@ -118,7 +118,7 @@ public:
         size_t _field_idx;
     public:
         deleter_by_field(const column_definition& column, size_t field_idx)
-            : operation(column, nullptr), _field_idx(field_idx) {
+            : operation(column, std::nullopt), _field_idx(field_idx) {
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;

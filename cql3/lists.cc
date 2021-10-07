@@ -202,7 +202,7 @@ expr::expression lists::marker::to_expression() {
 
 void
 lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    auto value = expr::evaluate(_t, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     execute(m, prefix, params, column, std::move(value));
 }
 
@@ -227,9 +227,9 @@ lists::setter_by_index::requires_read() const {
 }
 
 void
-lists::setter_by_index::fill_prepare_context(prepare_context& ctx) const {
+lists::setter_by_index::fill_prepare_context(prepare_context& ctx) {
     operation::fill_prepare_context(ctx);
-    _idx->fill_prepare_context(ctx);
+    expr::fill_prepare_context(_idx, ctx);
 }
 
 void
@@ -237,19 +237,19 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto index = expr::evaluate_to_raw_view(_idx, params._options);
+    auto index = expr::evaluate(_idx, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
     if (index.is_unset_value()) {
         throw exceptions::invalid_request_exception("Invalid unset value for list index");
     }
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
 
-    auto idx = index.deserialize<int32_t>(*int32_type);
+    auto idx = index.view().deserialize<int32_t>(*int32_type);
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
@@ -266,11 +266,11 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     collection_mutation_description mut;
     mut.cells.reserve(1);
-    if (!value) {
+    if (value.is_null()) {
         mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
     } else {
         mut.cells.emplace_back(std::move(eidx),
-                params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
+                params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -286,11 +286,15 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto index = expr::evaluate_to_raw_view(_idx, params._options);
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto index = expr::evaluate(_idx, params._options);
+    auto value = expr::evaluate(*_e, params._options);
 
-    if (!index) {
+    if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
+    }
+
+    if (index.is_unset_value()) {
+        throw exceptions::invalid_request_exception("Invalid unset value for list index");
     }
 
     auto ltype = static_cast<const list_type_impl*>(column.type.get());
@@ -298,10 +302,12 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     collection_mutation_description mut;
     mut.cells.reserve(1);
 
-    if (!value) {
-        mut.cells.emplace_back(to_bytes(index), params.make_dead_cell());
+    if (value.is_null()) {
+        mut.cells.emplace_back(std::move(index.value).to_bytes(), params.make_dead_cell());
     } else {
-        mut.cells.emplace_back(to_bytes(index), params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
+        mut.cells.emplace_back(
+                    std::move(index.value).to_bytes(),
+                    params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -309,7 +315,7 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 
 void
 lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(_t, params._options);
+    const expr::constant value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -363,7 +369,7 @@ lists::do_append(const expr::constant& list_value,
 void
 lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
-    expr::constant lvalue = expr::evaluate(_t, params._options);
+    expr::constant lvalue = expr::evaluate(*_e, params._options);
     if (lvalue.is_null_or_unset()) {
         return;
     }
@@ -419,7 +425,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
 
     auto&& existing_list = params.get_prefetched_list(m.key(), prefix, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
-    expr::constant lvalue = expr::evaluate(_t, params._options);
+    expr::constant lvalue = expr::evaluate(*_e, params._options);
 
     if (!existing_list) {
         return;
@@ -468,7 +474,7 @@ lists::discarder_by_index::requires_read() const {
 void
 lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
-    expr::constant index = expr::evaluate(_t, params._options);
+    expr::constant index = expr::evaluate(*_e, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }

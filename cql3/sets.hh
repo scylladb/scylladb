@@ -96,8 +96,8 @@ public:
 
     class setter : public operation {
     public:
-        setter(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        setter(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value);
@@ -105,8 +105,8 @@ public:
 
     class adder : public operation {
     public:
-        adder(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) {
+        adder(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
@@ -116,16 +116,16 @@ public:
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
     class discarder : public operation {
     public:
-        discarder(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) {
+        discarder(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 
     class element_discarder : public operation {
     public:
-        element_discarder(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) { }
+        element_discarder(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) { }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 };

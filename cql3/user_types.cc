@@ -152,7 +152,7 @@ expr::expression user_types::marker::to_expression() {
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(_t, params._options);
+    const expr::constant value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, value);
 }
 
@@ -210,7 +210,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -218,8 +218,8 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
     auto& type = static_cast<const user_type_impl&>(*column.type);
 
     collection_mutation_description mut;
-    mut.cells.emplace_back(serialize_field_index(_field_idx), value
-                ? params.make_cell(*type.type(_field_idx), value, atomic_cell::collection_member::yes)
+    mut.cells.emplace_back(serialize_field_index(_field_idx), !value.is_null()
+                ? params.make_cell(*type.type(_field_idx), value.view(), atomic_cell::collection_member::yes)
                 : params.make_dead_cell());
 
     m.set_cell(row_key, column, mut.serialize(type));

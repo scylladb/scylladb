@@ -216,7 +216,7 @@ expr::expression maps::marker::to_expression() {
 
 void
 maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    expr::constant value = expr::evaluate(_t, params._options);
+    expr::constant value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, value);
 }
 
@@ -235,30 +235,32 @@ maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 }
 
 void
-maps::setter_by_key::fill_prepare_context(prepare_context& ctx) const {
+maps::setter_by_key::fill_prepare_context(prepare_context& ctx) {
     operation::fill_prepare_context(ctx);
-    _k->fill_prepare_context(ctx);
+    expr::fill_prepare_context(_k, ctx);
 }
 
 void
 maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     using exceptions::invalid_request_exception;
     assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
-    auto key = expr::evaluate_to_raw_view(_k, params._options);
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto key = expr::evaluate(_k, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
     if (key.is_unset_value()) {
         throw invalid_request_exception("Invalid unset map key");
     }
-    if (!key) {
+    if (key.is_null()) {
         throw invalid_request_exception("Invalid null map key");
     }
     auto ctype = static_cast<const map_type_impl*>(column.type.get());
-    auto avalue = value ? params.make_cell(*ctype->get_values_type(), value, atomic_cell::collection_member::yes) : params.make_dead_cell();
+    auto avalue = !value.is_null() ?
+                     params.make_cell(*ctype->get_values_type(), value.view(), atomic_cell::collection_member::yes)
+                    : params.make_dead_cell();
     collection_mutation_description update;
-    update.cells.emplace_back(to_bytes(key), std::move(avalue));
+    update.cells.emplace_back(std::move(key.value).to_bytes(), std::move(avalue));
 
     m.set_cell(prefix, column, update.serialize(*ctype));
 }
@@ -266,7 +268,7 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
 void
 maps::putter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
-    expr::constant value = expr::evaluate(_t, params._options);
+    expr::constant value = expr::evaluate(*_e, params._options);
     if (!value.is_unset_value()) {
         do_put(m, prefix, params, value, column);
     }
@@ -301,7 +303,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 void
 maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
-    expr::constant key = expr::evaluate(_t, params._options);
+    expr::constant key = expr::evaluate(*_e, params._options);
     if (key.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null map key");
     }
