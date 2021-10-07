@@ -202,7 +202,8 @@ public:
         , _read_context(ctx)    // ctx is owned by the caller, who's responsible for closing it.
         , _next_row(*_schema, *_snp, false, _read_context.is_reversed())
     {
-        clogger.trace("csm {}: table={}.{}, reversed={}", fmt::ptr(this), _schema->ks_name(), _schema->cf_name(), _read_context.is_reversed());
+        clogger.trace("csm {}: table={}.{}, reversed={}, snap={}", fmt::ptr(this), _schema->ks_name(), _schema->cf_name(), _read_context.is_reversed(),
+                      fmt::ptr(&*_snp));
         push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), _snp->partition_tombstone()));
     }
     cache_flat_mutation_reader(schema_ptr s,
@@ -356,7 +357,7 @@ future<> cache_flat_mutation_reader::do_fill_buffer() {
             }
         }
         _next_row.maybe_refresh();
-        clogger.trace("csm {}: next={}, cont={}", fmt::ptr(this), _next_row.position(), _next_row.continuous());
+        clogger.trace("csm {}: next={}", fmt::ptr(this), _next_row);
         _lower_bound_changed = false;
         while (_state == state::reading_from_cache) {
             copy_from_cache_to_buffer();
