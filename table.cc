@@ -864,8 +864,8 @@ void table::try_trigger_compaction() noexcept {
 }
 
 void table::do_trigger_compaction() {
-    // But only submit if we're not locked out
-    if (!_compaction_disabled) {
+    // But not if we're locked out or stopping
+    if (!_compaction_disabled && !_async_gate.is_closed()) {
         _compaction_manager.submit(this);
     }
 }
