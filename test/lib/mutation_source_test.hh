@@ -24,16 +24,18 @@
 #include "mutation_reader.hh"
 #include "test/lib/sstable_utils.hh"
 
+class cql_test_env;
+
 using populate_fn = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&)>;
 using populate_fn_ex = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&, gc_clock::time_point)>;
 
 // Must be run in a seastar thread
-void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding = true);
-void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding = true);
-void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding = true);
-void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_partition_range_forwarding = true);
-void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partition_range_forwarding = true);
-void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests(populate_fn populate, cql_test_env* test_env = nullptr, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests(populate_fn_ex populate, cql_test_env* test_env = nullptr, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_plain(populate_fn_ex populate, cql_test_env* test_env = nullptr, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_downgrade(populate_fn_ex populate, cql_test_env* test_env = nullptr, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_upgrade(populate_fn_ex populate, cql_test_env* test_env = nullptr, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_reverse(populate_fn_ex populate, cql_test_env* test_env = nullptr, bool with_partition_range_forwarding = true);
 
 enum are_equal { no, yes };
 

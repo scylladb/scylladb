@@ -37,6 +37,7 @@
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/lib/cql_test_env.hh"
 #include <boost/algorithm/string/join.hpp>
 #include "types/user.hh"
 #include "types/map.hh"
@@ -1680,10 +1681,8 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
 
 void test_next_partition(tests::reader_concurrency_semaphore_wrapper&, populate_fn_ex);
 
-void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
+void run_mutation_reader_tests(populate_fn_ex populate, tests::reader_concurrency_semaphore_wrapper& semaphore, bool with_partition_range_forwarding) {
     testlog.info(__PRETTY_FUNCTION__);
-
-    tests::reader_concurrency_semaphore_wrapper semaphore;
 
     test_range_tombstones_v2(semaphore, populate);
     test_downgrade_to_v1_clear_buffer(semaphore, populate);
@@ -1707,6 +1706,12 @@ void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_rang
         test_fast_forwarding_across_partitions_to_empty_range(semaphore, populate);
         test_slicing_and_fast_forwarding(semaphore, populate);
     }
+}
+
+void run_mutation_reader_tests(populate_fn_ex populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
+    auto semaphore = test_env ? tests::reader_concurrency_semaphore_wrapper(test_env->local_db().get_reader_concurrency_semaphore()) : tests::reader_concurrency_semaphore_wrapper();
+
+    run_mutation_reader_tests(std::move(populate), semaphore, with_partition_range_forwarding);
 }
 
 void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
@@ -1744,27 +1749,27 @@ void test_next_partition(tests::reader_concurrency_semaphore_wrapper& semaphore,
         .produces_end_of_stream();
 }
 
-void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding) {
+void run_mutation_source_tests(populate_fn populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
     auto populate_ex = [populate = std::move(populate)] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
         return populate(std::move(s), muts);
     };
-    run_mutation_source_tests(std::move(populate_ex), with_partition_range_forwarding);
+    run_mutation_source_tests(std::move(populate_ex), test_env, with_partition_range_forwarding);
 }
 
-void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding) {
-    run_mutation_source_tests_plain(populate, with_partition_range_forwarding);
-    run_mutation_source_tests_downgrade(populate, with_partition_range_forwarding);
-    run_mutation_source_tests_upgrade(populate, with_partition_range_forwarding);
-    run_mutation_source_tests_reverse(populate, with_partition_range_forwarding);
+void run_mutation_source_tests(populate_fn_ex populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
+    run_mutation_source_tests_plain(populate, test_env, with_partition_range_forwarding);
+    run_mutation_source_tests_downgrade(populate, test_env, with_partition_range_forwarding);
+    run_mutation_source_tests_upgrade(populate, test_env, with_partition_range_forwarding);
+    run_mutation_source_tests_reverse(populate, test_env, with_partition_range_forwarding);
     // Some tests call the sub-types individually, mind checking them
     // if adding new stuff here
 }
 
-void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding) {
-    run_mutation_reader_tests(populate, with_partition_range_forwarding);
+void run_mutation_source_tests_plain(populate_fn_ex populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
+    run_mutation_reader_tests(populate, test_env, with_partition_range_forwarding);
 }
 
-void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
+void run_mutation_source_tests_downgrade(populate_fn_ex populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
     // ? -> v2 -> v1 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
@@ -1778,10 +1783,10 @@ void run_mutation_source_tests_downgrade(populate_fn_ex populate, bool with_part
             return downgrade_to_v1(
                     ms.make_reader_v2(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
-    }, with_partition_range_forwarding);
+    }, test_env, with_partition_range_forwarding);
 }
 
-void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partition_range_forwarding) {
+void run_mutation_source_tests_upgrade(populate_fn_ex populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
     // ? -> v1 -> v2 -> *
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         return mutation_source([ms = populate(s, m, t)] (schema_ptr s,
@@ -1795,10 +1800,10 @@ void run_mutation_source_tests_upgrade(populate_fn_ex populate, bool with_partit
             return upgrade_to_v2(
                     ms.make_reader(s, std::move(permit), pr, slice, pc, std::move(tr), fwd, mr_fwd));
         });
-    }, with_partition_range_forwarding);
+    }, test_env, with_partition_range_forwarding);
 }
 
-void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding) {
+void run_mutation_source_tests_reverse(populate_fn_ex populate, cql_test_env* test_env, bool with_partition_range_forwarding) {
     // read in reverse
     run_mutation_reader_tests([populate] (schema_ptr s, const std::vector<mutation>& m, gc_clock::time_point t) -> mutation_source {
         auto table_schema = s->make_reversed();
@@ -1825,7 +1830,7 @@ void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partit
 
             return ms.make_reader(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
         });
-    }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
+    }, test_env, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }
 
 struct mutation_sets {
