@@ -659,7 +659,7 @@ public:
                 out << ", ";
             }
             first = false;
-            out << v.version_no;
+            out << "{v=" << v.version_no << ", pos=" << v.it->position() << ", cont=" << v.continuous << "}";
         }
         out << "], heap=[\n  ";
         first = true;
