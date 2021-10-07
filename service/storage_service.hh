@@ -208,7 +208,6 @@ public:
 
 private:
     future<token_metadata_lock> get_token_metadata_lock() noexcept;
-    future<> with_token_metadata_lock(std::function<future<> ()>) noexcept;
 
     // Acquire the token_metadata lock and get a mutable_token_metadata_ptr.
     // Pass that ptr to \c func, and when successfully done,

@@ -3179,21 +3179,12 @@ future<locator::token_metadata_lock> storage_service::get_token_metadata_lock() 
     return _shared_token_metadata.get_lock();
 }
 
-future<> storage_service::with_token_metadata_lock(std::function<future<> ()> func) noexcept {
-    assert(this_shard_id() == 0);
-    return get_token_metadata_lock().then([func = std::move(func)] (token_metadata_lock tmlock) {
-        return func().finally([tmlock = std::move(tmlock)] {});
-    });
-}
-
 future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept {
-    return with_token_metadata_lock([this, func = std::move(func)] () mutable {
-        return get_mutable_token_metadata_ptr().then([this, func = std::move(func)] (mutable_token_metadata_ptr tmptr) mutable {
-            return func(tmptr).then([this, tmptr = std::move(tmptr)] () mutable {
-                return replicate_to_all_cores(std::move(tmptr));
-            });
-        });
-    });
+    assert(this_shard_id() == 0);
+    auto tmlock = co_await get_token_metadata_lock();
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
+    co_await func(tmptr);
+    co_await replicate_to_all_cores(std::move(tmptr));
 }
 
 future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason) {
