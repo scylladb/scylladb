@@ -926,6 +926,9 @@ future<> compaction_manager::remove(column_family* cf) {
     return parallel_for_each(*tasks_to_stop, [this, cf] (auto& task) {
         return this->task_stop(task, "column family removal");
     }).then([this, cf, tasks_to_stop] {
+#ifdef DEBUG
+        assert(std::find_if(_tasks.begin(), _tasks.end(), [cf] (auto& task) { return task->compacting_cf == cf; }) == _tasks.end());
+#endif
         _compaction_locks.erase(cf);
     });
 }
