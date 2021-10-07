@@ -213,14 +213,14 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
 
     auto muts = tests::generate_random_mutations(random_schema).get();
 
+    // FIXME: workaround for #9352. The index pages for reversed source would sometimes be different
+    // from the forward source, causing one source to hit the bug from #9352 but not the other.
+    muts.erase(std::remove_if(muts.begin(), muts.end(), [] (auto& m) { return m.decorated_key().token() == dht::token::from_int64(0); }));
+
     std::vector<mutation> reversed_muts;
     for (auto& m : muts) {
         reversed_muts.push_back(reverse(m));
     }
-
-    // FIXME: workaround for #9352. The index pages for reversed source would sometimes be different
-    // from the forward source, causing one source to hit the bug from #9352 but not the other.
-    muts.erase(std::remove_if(muts.begin(), muts.end(), [] (auto& m) { return m.decorated_key().token() == dht::token::from_int64(0); }));
 
     sstables::test_env::do_with([
             s = random_schema.schema(), muts = std::move(muts), reversed_muts = std::move(reversed_muts),
