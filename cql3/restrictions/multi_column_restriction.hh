@@ -196,15 +196,15 @@ public:
 
 class multi_column_restriction::EQ final : public multi_column_restriction {
 private:
-    ::shared_ptr<term> _value;
+    expr::expression _value;
 public:
-    EQ(schema_ptr schema, std::vector<const column_definition*> defs, ::shared_ptr<term> value)
+    EQ(schema_ptr schema, std::vector<const column_definition*> defs, expr::expression value)
         : multi_column_restriction(schema, std::move(defs))
         , _value(std::move(value))
     {
         using namespace expr;
         expression = binary_operator{
-            column_definitions_as_tuple_constructor(_column_defs), oper_t::EQ, expr::to_expression(_value)};
+            column_definitions_as_tuple_constructor(_column_defs), oper_t::EQ, _value};
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -309,11 +309,11 @@ public:
  */
 class multi_column_restriction::IN_with_values final : public multi_column_restriction::IN {
 private:
-    std::vector<::shared_ptr<term>> _values;
+    std::vector<expr::expression> _value;
 public:
-    IN_with_values(schema_ptr schema, std::vector<const column_definition*> defs, std::vector<::shared_ptr<term>> value)
+    IN_with_values(schema_ptr schema, std::vector<const column_definition*> defs, std::vector<expr::expression> value)
         : multi_column_restriction::IN(schema, std::move(defs))
-        , _values(std::move(value))
+        , _value(std::move(value))
     {
         std::vector<data_type> column_types;
         column_types.reserve(defs.size());
@@ -325,11 +325,17 @@ public:
         data_type list_elements_type = tuple_type_impl::get_instance(std::move(column_types));
         data_type in_list_type = list_type_impl::get_instance(std::move(list_elements_type), false);
 
+        expr::collection_constructor values_list {
+            .style = expr::collection_constructor::style_type::list,
+            .elements = _value,
+            .type = std::move(in_list_type)
+        };
+
         using namespace expr;
         expression = binary_operator{
             column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
-            expr::to_expression(::make_shared<lists::delayed_value>(_values, std::move(in_list_type)))};
+            std::move(values_list)};
     }
 };
 
@@ -472,8 +478,7 @@ private:
      */
     ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
                                                              std::size_t column_pos, const managed_bytes_opt& value) const {
-        expr::expression e = expr::to_expression(
-            ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value), _column_defs[column_pos]->type));
+        expr::expression e = expr::constant(cql3::raw_value::make_value(value), _column_defs[column_pos]->type);
         using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);

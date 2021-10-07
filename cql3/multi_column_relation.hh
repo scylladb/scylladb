@@ -160,7 +160,7 @@ protected:
             return cs->column_specification;
         });
         auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
-        return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, t);
+        return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, expr::to_expression(t));
     }
 
     virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
@@ -180,9 +180,13 @@ protected:
             auto ts = to_terms(col_specs, raws, db, schema->ks_name(), ctx);
             // Convert a single-item IN restriction to an EQ restriction
             if (ts.size() == 1) {
-                return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, std::move(ts[0]));
+                return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, expr::to_expression(ts[0]));
             }
-            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema, rs, ts);
+            std::vector<expr::expression> es;
+            for (const ::shared_ptr<term>& t : ts) {
+                es.push_back(expr::to_expression(t));
+            }
+            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema, rs, std::move(es));
         }
     }
 
