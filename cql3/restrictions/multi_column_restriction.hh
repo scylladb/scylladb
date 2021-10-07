@@ -346,15 +346,15 @@ public:
  */
 class multi_column_restriction::IN_with_marker final : public multi_column_restriction::IN {
 private:
-    shared_ptr<abstract_marker> _marker;
+    expr::bind_variable _marker;
 public:
-    IN_with_marker(schema_ptr schema, std::vector<const column_definition*> defs, shared_ptr<abstract_marker> marker)
+    IN_with_marker(schema_ptr schema, std::vector<const column_definition*> defs, expr::bind_variable marker)
         : IN(schema, std::move(defs)), _marker(marker) {
         using namespace expr;
         expression = binary_operator{
             column_definitions_as_tuple_constructor(_column_defs),
             oper_t::IN,
-            expr::to_expression(std::move(marker))};
+            expr::expression(std::move(marker))};
     }
 };
 
@@ -370,13 +370,13 @@ class multi_column_restriction::slice final : public multi_column_restriction {
         , _mode(m)
     { }
 public:
-    slice(schema_ptr schema, std::vector<const column_definition*> defs, statements::bound bound, bool inclusive, shared_ptr<term> term, mode m = mode::cql)
-        : slice(schema, defs, bounds_slice::new_instance(bound, inclusive, term.get() != nullptr ? std::make_optional(expr::to_expression(term)) : std::nullopt), m)
+    slice(schema_ptr schema, std::vector<const column_definition*> defs, statements::bound bound, bool inclusive, expr::expression e, mode m = mode::cql)
+        : slice(schema, defs, bounds_slice::new_instance(bound, inclusive, e), m)
     {
         expression = expr::binary_operator{
             column_definitions_as_tuple_constructor(defs),
             expr::pick_operator(bound, inclusive),
-            expr::to_expression(std::move(term)),
+            std::move(e),
             m};
     }
 

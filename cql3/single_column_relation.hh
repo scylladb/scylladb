@@ -115,9 +115,9 @@ public:
     }
 
 protected:
-    virtual ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                          const expr::expression& raw, database& db, const sstring& keyspace,
-                          prepare_context& ctx) const override;
+    virtual expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
+                                           const expr::expression& raw, database& db, const sstring& keyspace,
+                                           prepare_context& ctx) const override;
 
 #if 0
     public SingleColumnRelation withNonStrictOperator()
@@ -169,7 +169,7 @@ protected:
             throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
         }
 
-        auto e = expr::to_expression(to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx));
+        auto e = to_expression(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         r->expression = expr::binary_operator{expr::column_value{&column_def}, _relation_type, std::move(e)};
         return r;
@@ -179,7 +179,7 @@ protected:
                                                  prepare_context& ctx,
                                                  bool is_key) override {
         auto&& column_def = to_column_definition(*schema, *_entity);
-        auto e = expr::to_expression(to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx));
+        auto e = to_expression(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), ctx);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         r->expression = expr::binary_operator{
                 expr::column_value{&column_def}, is_key ? expr::oper_t::CONTAINS_KEY : expr::oper_t::CONTAINS, std::move(e)};
