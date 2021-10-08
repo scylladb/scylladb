@@ -51,7 +51,6 @@
 #include "cql3/relation.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/expression.hh"
-#include "cql3/term.hh"
 #include "types/collection.hh"
 
 namespace cql3 {

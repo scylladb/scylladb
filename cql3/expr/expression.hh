@@ -52,7 +52,6 @@ namespace query {
 } // namespace query
 
 namespace cql3 {
-struct term;
 struct prepare_context;
 
 class column_identifier_raw;
@@ -706,22 +705,9 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 
 std::optional<bool> get_bool_value(const constant&);
 
-// Takes a prepared expression and calculates its value.
-// Later term will be replaced with expression.
-constant evaluate(const ::shared_ptr<term>&, const query_options&);
-constant evaluate(term*, const query_options&);
-constant evaluate(term&, const query_options&);
-
 // Similar to evaluate(), but ignores any NULL values in the final list value.
 // In an IN restriction nulls can be ignored, because nothing equals NULL.
-constant evaluate_IN_list(const ::shared_ptr<term>&, const query_options&);
-constant evaluate_IN_list(term*, const query_options&);
-constant evaluate_IN_list(term&, const query_options&);
 constant evaluate_IN_list(const expression&, const query_options&);
-
-// Calls evaluate() on the term and then converts the constant to raw_value_view
-cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
-cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
 
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
@@ -755,8 +741,6 @@ void fill_prepare_context(expression&, cql3::prepare_context&);
 // there can be other things that prevent immediate evaluation of an expression.
 // For example an expression can contain calls to nonpure functions.
 bool contains_bind_marker(const expression& e);
-
-expression to_expression(const ::shared_ptr<term>&);
 } // namespace expr
 
 } // namespace cql3

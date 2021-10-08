@@ -97,11 +97,9 @@ options {
 #include "cql3/lists.hh"
 #include "cql3/role_name.hh"
 #include "cql3/role_options.hh"
-#include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
 #include "cql3/ut_name.hh"
 #include "cql3/functions/function_name.hh"
-#include "cql3/functions/function_call.hh"
 #include "cql3/expr/expression.hh"
 #include <seastar/core/sstring.hh>
 #include "CqlLexer.hpp"

@@ -42,7 +42,6 @@
 #include "cql3/prepare_context.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
-#include "cql3/functions/function_call.hh"
 
 namespace cql3 {
 
@@ -99,29 +98,11 @@ void prepare_context::set_bound_variables(const std::vector<shared_ptr<column_id
 }
 
 void prepare_context::clear_pk_function_calls_cache() {
-    for (::shared_ptr<cql3::functions::function_call>& fun_call : _pk_fn_calls) {
-        fun_call->set_id(std::nullopt);
-    }
-
     for (::shared_ptr<std::optional<uint8_t>>& cache_id : _pk_function_calls_cache_ids) {
         if (cache_id.get() != nullptr) {
             *cache_id = std::nullopt;
         }
     }
-}
-
-void prepare_context::add_pk_function_call(::shared_ptr<cql3::functions::function_call> fn) {
-    constexpr auto fn_limit = std::numeric_limits<uint8_t>::max();
-    if (_pk_function_calls_cache_ids.size() == fn_limit) {
-        throw exceptions::invalid_request_exception(
-            format("Too many function calls within one statement. Max supported number is {}", fn_limit));
-    }
-
-    fn->set_id(_pk_function_calls_cache_ids.size());
-
-    _pk_fn_calls.emplace_back(std::move(fn));
-    // Workaround for now, this will be removed later along with this method
-    _pk_function_calls_cache_ids.push_back({});
 }
 
 void prepare_context::add_pk_function_call(expr::function_call& fn) {

@@ -44,7 +44,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include "exceptions/exceptions.hh"
 #include "database_fwd.hh"
-#include "term.hh"
 #include "update_parameters.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/expression.hh"

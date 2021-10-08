@@ -20,14 +20,13 @@
  */
 
 #include "expression.hh"
-#include "cql3/functions/function_call.hh"
+#include "cql3/functions/functions.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/constants.hh"
 #include "cql3/abstract_marker.hh"
 #include "cql3/lists.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
-#include "cql3/tuples.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
@@ -814,6 +813,95 @@ cast_prepare_expression(const cast& c, database& db, const sstring& keyspace, lw
     return prepare_expression(c.arg, db, keyspace, receiver);
 }
 
+expr::expression
+prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+    auto&& fun = std::visit(overloaded_functor{
+        [] (const shared_ptr<functions::function>& func) {
+            return func;
+        },
+        [&] (const functions::function_name& name) {
+            auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
+            auto fun = functions::functions::get(db, keyspace, name, args, receiver->ks_name, receiver->cf_name, receiver.get());
+            if (!fun) {
+                throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
+            }
+            return fun;
+        },
+    }, fc.func);
+    if (fun->is_aggregate()) {
+        throw exceptions::invalid_request_exception("Aggregation function are not supported in the where clause");
+    }
+
+    // Can't use static_pointer_cast<> because function is a virtual base class of scalar_function
+    auto&& scalar_fun = dynamic_pointer_cast<functions::scalar_function>(fun);
+
+    // Functions.get() will complain if no function "name" type check with the provided arguments.
+    // We still have to validate that the return type matches however
+    if (!receiver->type->is_value_compatible_with(*scalar_fun->return_type())) {
+        throw exceptions::invalid_request_exception(format("Type error: cannot assign result of function {} (type {}) to {} (type {})",
+                                                    fun->name(), fun->return_type()->as_cql3_type(),
+                                                    receiver->name, receiver->type->as_cql3_type()));
+    }
+
+    if (scalar_fun->arg_types().size() != fc.args.size()) {
+        throw exceptions::invalid_request_exception(format("Incorrect number of arguments specified for function {} (expected {:d}, found {:d})",
+                                                    fun->name(), fun->arg_types().size(), fc.args.size()));
+    }
+
+    std::vector<expr::expression> parameters;
+    parameters.reserve(fc.args.size());
+    bool all_terminal = true;
+    for (size_t i = 0; i < fc.args.size(); ++i) {
+        expr::expression e = prepare_expression(fc.args[i], db, keyspace,
+                                                functions::functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+        if (!expr::is<expr::constant>(e)) {
+            all_terminal = false;
+        }
+        parameters.push_back(std::move(e));
+    }
+
+    // If all parameters are terminal and the function is pure, we can
+    // evaluate it now, otherwise we'd have to wait execution time
+    expr::function_call fun_call {
+        .func = fun,
+        .args = std::move(parameters),
+        .lwt_cache_id = fc.lwt_cache_id
+    };
+    if (all_terminal && scalar_fun->is_pure()) {
+        return expr::evaluate(fun_call, query_options::DEFAULT);
+    } else {
+        return fun_call;
+    }
+}
+
+assignment_testable::test_result
+test_assignment_function_call(const cql3::expr::function_call& fc, database& db, const sstring& keyspace, const column_specification& receiver) {
+    // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
+    // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
+    // of another, existing, function. In that case, we return true here because we'll throw a proper exception
+    // later with a more helpful error message that if we were to return false here.
+    try {
+        auto&& fun = std::visit(overloaded_functor{
+            [&] (const functions::function_name& name) {
+                auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
+                return functions::functions::get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
+            },
+            [] (const shared_ptr<functions::function>& func) {
+                return func;
+            },
+        }, fc.func);
+        if (fun && receiver.type == fun->return_type()) {
+            return assignment_testable::test_result::EXACT_MATCH;
+        } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())) {
+            return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+        } else {
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
+        }
+    } catch (exceptions::invalid_request_exception& e) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+}
+
 expression
 prepare_expression(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
@@ -839,7 +927,7 @@ prepare_expression(const expression& expr, database& db, const sstring& keyspace
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::prepare()");
         },
         [&] (const function_call& fc) -> expression {
-            return functions::prepare_function_call(fc, db, keyspace, std::move(receiver));
+            return prepare_function_call(fc, db, keyspace, std::move(receiver));
         },
         [&] (const cast& c) -> expression {
             return cast_prepare_expression(c, db, keyspace, receiver);
@@ -927,7 +1015,7 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
             on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::test_assignment()");
         },
         [&] (const function_call& fc) -> test_result {
-            return functions::test_assignment_function_call(fc, db, keyspace, receiver);
+            return test_assignment_function_call(fc, db, keyspace, receiver);
         },
         [&] (const cast& c) -> test_result {
             return cast_test_assignment(c, db, keyspace, receiver);

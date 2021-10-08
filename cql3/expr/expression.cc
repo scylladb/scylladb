@@ -35,7 +35,6 @@
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/statements/request_validations.hh"
-#include "cql3/tuples.hh"
 #include "cql3/selection/selection.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/list.hh"
@@ -49,7 +48,6 @@
 #include "cql3/maps.hh"
 #include "cql3/user_types.hh"
 #include "cql3/functions/scalar_function.hh"
-#include "cql3/functions/function_call.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -1312,40 +1310,6 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
-constant evaluate(term* term_ptr, const query_options& options) {
-    if (term_ptr == nullptr) {
-        return constant::make_null();
-    }
-
-    return evaluate(term_ptr->to_expression(), options);
-}
-
-constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& options) {
-    return evaluate(term_ptr.get(), options);
-}
-
-constant evaluate(term& term_ref, const query_options& options) {
-    return evaluate(&term_ref, options);
-}
-
-constant evaluate_IN_list(const ::shared_ptr<term>& term_ptr, const query_options& options) {
-    return evaluate_IN_list(term_ptr.get(), options);
-}
-
-constant evaluate_IN_list(term& term_ref, const query_options& options) {
-    return evaluate_IN_list(&term_ref, options);
-}
-
-cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, const query_options& options) {
-    constant value = evaluate(term_ptr, options);
-    return cql3::raw_value_view::make_temporary(std::move(value.value));
-}
-
-cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& options) {
-    constant value = evaluate(term_ref, options);
-    return cql3::raw_value_view::make_temporary(std::move(value.value));
-}
-
 constant evaluate(const expression& e, const query_options& options) {
     return expr::visit(overloaded_functor {
         [](const binary_operator&) -> constant {
@@ -1781,16 +1745,6 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
     return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
 }
 
-constant evaluate_IN_list(term* term_ptr, const query_options& options) {
-    if (term_ptr == nullptr) {
-        return constant::make_null();
-    }
-
-    expression e = term_ptr->to_expression();
-
-    return evaluate_IN_list(e, options);
-}
-
 constant evaluate_IN_list(const expression& e, const query_options& options) {
     if (auto collection = expr::as_if<collection_constructor>(&e)) {
         if (collection->style == collection_constructor::style_type::list) {
@@ -1967,14 +1921,6 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
 bool contains_bind_marker(const expression& e) {
     const bind_variable* search_res = find_in_expression<bind_variable>(e, [](const bind_variable&) { return true; });
     return search_res != nullptr;
-}
-
-expression to_expression(const ::shared_ptr<term>& term_ptr) {
-    if (term_ptr.get() == nullptr) {
-        return constant::make_null();
-    }
-
-    return term_ptr->to_expression();
 }
 } // namespace expr
 } // namespace cql3

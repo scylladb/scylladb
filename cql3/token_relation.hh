@@ -47,7 +47,6 @@
 
 #include "relation.hh"
 #include "column_identifier.hh"
-#include "term.hh"
 #include "restrictions/restriction.hh"
 #include "expr/expression.hh"
 

@@ -41,7 +41,6 @@
 #include "restrictions/token_restriction.hh"
 #include "token_relation.hh"
 #include "column_identifier.hh"
-#include "term.hh"
 #include "to_string.hh"
 
 std::vector<const column_definition*> cql3::token_relation::get_column_definitions(const schema& s) {

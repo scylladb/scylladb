@@ -50,18 +50,4 @@
 #include "types/list.hh"
 
 namespace cql3 {
-
-abstract_marker::abstract_marker(int32_t bind_index, lw_shared_ptr<column_specification>&& receiver)
-    : _bind_index{bind_index}
-    , _receiver{std::move(receiver)}
-{ }
-
-void abstract_marker::fill_prepare_context(prepare_context& ctx) const {
-    ctx.add_variable_specification(_bind_index, _receiver);
-}
-
-bool abstract_marker::contains_bind_marker() const {
-    return true;
-}
-
 }

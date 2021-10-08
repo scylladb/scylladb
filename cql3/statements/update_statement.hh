@@ -48,8 +48,6 @@
 
 namespace cql3 {
 
-class term;
-
 namespace statements {
 
 /**

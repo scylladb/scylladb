@@ -41,7 +41,6 @@
 
 #pragma once
 
-#include "cql3/tuples.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/statements/request_validations.hh"
@@ -50,6 +49,7 @@
 #include "cql3/lists.hh"
 #include "cql3/expr/expression.hh"
 #include "types/list.hh"
+#include "types/tuple.hh"
 
 namespace cql3 {
 

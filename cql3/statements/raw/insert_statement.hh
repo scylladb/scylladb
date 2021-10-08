@@ -43,9 +43,7 @@
 
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/column_identifier.hh"
-#include "cql3/term.hh"
 #include "cql3/expr/expression.hh"
-
 #include "database_fwd.hh"
 
 #include <vector>

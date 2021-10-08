@@ -43,9 +43,6 @@
 
 #include "cql3/expr/expression.hh"
 #include "cql3/relation.hh"
-#include "cql3/term.hh"
-#include "cql3/tuples.hh"
-
 #include "cql3/restrictions/multi_column_restriction.hh"
 
 #include <ranges>
@@ -245,11 +242,16 @@ protected:
         return names;
     }
 
+    template <typename T>
+    static sstring tuple_to_string(const std::vector<T>& items) {
+        return format("({})", join(", ", items));
+    }
+
     virtual sstring to_string() const override {
-        sstring str = tuples::tuple_to_string(_entities);
+        sstring str = tuple_to_string(_entities);
         if (is_IN()) {
             str += " IN ";
-            str += !_in_marker ? "?" : tuples::tuple_to_string(_in_values);
+            str += !_in_marker ? "?" : tuple_to_string(_in_values);
             return str;
         }
         return format("{} {} {}", str, _relation_type, *_values_or_marker);

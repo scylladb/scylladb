@@ -41,26 +41,9 @@
 
 #pragma once
 
-#include "cql3/term.hh"
-
 namespace cql3 {
 
 class column_specification;
 class prepare_context;
-
-/**
- * A single bind marker.
- */
-class abstract_marker : public non_terminal {
-protected:
-    const int32_t _bind_index;
-    const lw_shared_ptr<column_specification> _receiver;
-public:
-    abstract_marker(int32_t bind_index, lw_shared_ptr<column_specification>&& receiver);
-
-    virtual void fill_prepare_context(prepare_context& ctx) const override;
-
-    virtual bool contains_bind_marker() const override;
-};
 
 }

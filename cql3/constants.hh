@@ -45,7 +45,6 @@
 #include "cql3/update_parameters.hh"
 #include "cql3/operation.hh"
 #include "cql3/values.hh"
-#include "cql3/term.hh"
 #include "mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 
@@ -60,63 +59,6 @@ public:
     private static final Logger logger = LoggerFactory.getLogger(Constants.class);
 #endif
 public:
-    /**
-    * A constant value, i.e. a ByteBuffer.
-    */
-    class value : public terminal {
-    public:
-        cql3::raw_value _bytes;
-        value(cql3::raw_value bytes_, data_type my_type) : terminal(std::move(my_type)), _bytes(std::move(bytes_)) {}
-        virtual cql3::raw_value get(const query_options& options) override { return _bytes; }
-        virtual sstring to_string() const override { return _bytes.to_view().with_value([] (const FragmentedView auto& v) { return to_hex(v); }); }
-    };
-
-    static thread_local const ::shared_ptr<value> UNSET_VALUE;
-
-    class null_value final : public value {
-    public:
-        null_value() : value(cql3::raw_value::make_null(), empty_type) {}
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
-        virtual sstring to_string() const override { return "null"; }
-    };
-
-    static thread_local const ::shared_ptr<terminal> NULL_VALUE;
-
-    class marker : public abstract_marker {
-    public:
-        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
-            : abstract_marker{bind_index, std::move(receiver)}
-        {
-            assert(!_receiver->type->is_collection() && !_receiver->type->is_user_type());
-        }
-
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            auto bytes = bind_and_get_internal(options);
-            if (bytes.is_null()) {
-                return ::shared_ptr<terminal>{};
-            }
-            if (bytes.is_unset_value()) {
-                return UNSET_VALUE;
-            }
-            return ::make_shared<constants::value>(cql3::raw_value::make_value(bytes), _receiver->type);
-        }
-
-        virtual expr::expression to_expression() override;
-    private:
-        cql3::raw_value_view bind_and_get_internal(const query_options& options) {
-            try {
-                auto value = options.get_value_at(_bind_index);
-                if (value) {
-                    value.validate(*_receiver->type, options.get_cql_serialization_format());
-                }
-                return value;
-            } catch (const marshal_exception& e) {
-                throw exceptions::invalid_request_exception(
-                        format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
-            }
-        }
-    };
-
     class setter : public operation {
     public:
         using operation::operation;

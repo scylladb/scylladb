@@ -41,7 +41,6 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/single_column_relation.hh"
 #include "cql3/statements/request_validations.hh"
-#include "cql3/tuples.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
