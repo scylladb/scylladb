@@ -1954,6 +1954,11 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
     }, e);
 }
 
+bool contains_bind_marker(const expression& e) {
+    const bind_variable* search_res = find_in_expression<bind_variable>(e, [](const bind_variable&) { return true; });
+    return search_res != nullptr;
+}
+
 expression to_expression(const ::shared_ptr<term>& term_ptr) {
     if (term_ptr.get() == nullptr) {
         return constant::make_null();
