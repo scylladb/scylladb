@@ -23,6 +23,7 @@
 
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
+#include "seastar/core/coroutine.hh"
 
 namespace mutation_writer {
 
@@ -48,34 +49,45 @@ public:
 
 template <typename Writer>
 requires MutationFragmentConsumer<Writer, future<>>
-future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
-    return do_with(std::move(rd), std::move(wr), [] (flat_mutation_reader& rd, Writer& wr) {
-        return rd.fill_buffer().then([&rd, &wr] {
-            return do_until([&rd] { return rd.is_buffer_empty() && rd.is_end_of_stream(); }, [&rd, &wr] {
-                auto f1 = rd.pop_mutation_fragment().consume(wr);
-                auto f2 = rd.is_buffer_empty() ? rd.fill_buffer() : make_ready_future<>();
-                return when_all_succeed(std::move(f1), std::move(f2)).discard_result();
-            });
-        }).then_wrapped([&wr] (future<> f) {
-            if (f.failed()) {
-                auto ex = f.get_exception();
-                wr.abort(ex);
-                return wr.close().then_wrapped([ex = std::move(ex)] (future<> f) mutable {
-                    if (f.failed()) {
-                        // The consumer is expected to fail when aborted,
-                        // so just ignore any exception.
-                        (void)f.get_exception();
-                    }
-                    return make_exception_future<>(std::move(ex));
-                });
-            } else {
-                wr.consume_end_of_stream();
-                return wr.close();
+future<> feed_writer(flat_mutation_reader&& rd_ref, Writer wr) {
+    // Only move in reader if stack was successfully allocated, so caller can close reader otherwise.
+    auto rd = std::move(rd_ref);
+    std::exception_ptr ex;
+    try {
+        while (!rd.is_end_of_stream()) {
+            co_await rd.fill_buffer();
+            while (!rd.is_buffer_empty()) {
+                co_await rd.pop_mutation_fragment().consume(wr);
             }
-        }).finally([&rd] {
-            return rd.close();
-        });
-    });
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await rd.close();
+
+    try {
+        if (ex) {
+            wr.abort(ex);
+        } else {
+            wr.consume_end_of_stream();
+        }
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
+        }
+    }
+
+    try {
+        co_await wr.close();
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
+        }
+    }
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }
 
 }
