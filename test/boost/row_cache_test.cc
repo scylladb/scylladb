@@ -3352,6 +3352,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         random_mutation_generator gen(random_mutation_generator::generate_counters::no);
         memtable_snapshot_source underlying(gen.schema());
         schema_ptr s = gen.schema();
+        schema_ptr rev_s = s->make_reversed();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto m0 = gen();
@@ -3367,7 +3368,8 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
         auto pr = dht::partition_range::make_singular(m0.decorated_key());
         auto make_reader = [&] (const query::partition_slice& slice) {
-            auto rd = cache.make_reader(s, semaphore.make_permit(), pr, slice);
+            auto reversed = slice.options.contains<query::partition_slice::option::reversed>();
+            auto rd = cache.make_reader(reversed ? rev_s : s, semaphore.make_permit(), pr, slice);
             rd.set_max_buffer_size(3);
             rd.fill_buffer().get();
             return rd;
@@ -3391,9 +3393,18 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     generations[id] = oldest_generation;
                     gc_versions();
 
+                    bool reversed = tests::random::get_bool();
+
+                    auto fwd_ranges = gen.make_random_ranges(1);
                     auto slice = partition_slice_builder(*s)
-                        .with_ranges(gen.make_random_ranges(1))
+                        .with_ranges(fwd_ranges)
                         .build();
+
+                    auto native_slice = slice;
+                    if (reversed) {
+                        slice = make_legacy_reversed(s, std::move(slice));
+                        native_slice = query::legacy_reverse_slice_to_native_reverse_slice(*s, slice);
+                    }
 
                     auto rd = make_reader(slice);
                     auto close_rd = deferred_close(rd);
@@ -3401,13 +3412,16 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     BOOST_REQUIRE(actual_opt);
                     auto actual = *actual_opt;
 
-                    auto&& ranges = slice.row_ranges(*s, actual.key());
-                    actual.partition().mutable_row_tombstones().trim(*s, ranges);
+                    auto&& ranges = native_slice.row_ranges(*rd.schema(), actual.key());
+                    actual.partition().mutable_row_tombstones().trim(*rd.schema(), ranges);
 
                     auto n_to_consider = last_generation - oldest_generation + 1;
                     auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());
                     if (!boost::algorithm::any_of(possible_versions, [&] (const mutation& m) {
-                        auto m2 = m.sliced(ranges);
+                        auto m2 = m.sliced(fwd_ranges);
+                        if (reversed) {
+                            m2 = reverse(std::move(m2));
+                        }
                         if (n_to_consider == 1) {
                             assert_that(actual).is_equal_to(m2);
                         }
