@@ -270,7 +270,7 @@ class interpreter {
     const operation::thread_set _all_threads;
     operation::thread_set _free_threads; // a subset of _all_threads
 
-    raft::logical_clock::duration _poll_timeout;
+    raft::logical_clock::duration _poll_timeout{0};
     const raft::logical_clock::duration _max_pending_interval;
 
     future_set<std::pair<operation::execute_result<Op>, operation::thread_id>> _invocations;
