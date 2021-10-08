@@ -838,7 +838,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , cdc_dont_rewrite_streams(this, "cdc_dont_rewrite_streams", value_status::Used, false,
             "Disable rewriting streams from cdc_streams_descriptions to cdc_streams_descriptions_v2. Should not be necessary, but the procedure is expensive and prone to failures; this config option is left as a backdoor in case some user requires manual intervention.")
     , strict_allow_filtering(this, "strict_allow_filtering", liveness::LiveUpdate, value_status::Used, strict_allow_filtering_default(), "Match Cassandra in requiring ALLOW FILTERING on slow queries. Can be true, false, or warn. When false, Scylla accepts some slow queries even without ALLOW FILTERING that Cassandra rejects. Warn is same as false, but with warning.")
-    , reversed_reads_auto_bypass_cache(this, "reversed_reads_auto_bypass_cache", liveness::LiveUpdate, value_status::Used, true,
+    , reversed_reads_auto_bypass_cache(this, "reversed_reads_auto_bypass_cache", liveness::LiveUpdate, value_status::Used, false,
             "Bypass in-memory data cache (the row cache) when performing reversed queries.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
