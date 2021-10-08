@@ -225,7 +225,7 @@ struct dropped_entry : public error {
 };
 
 struct commit_status_unknown : public error {
-    commit_status_unknown() : error("Commit staus of the entry is unknown") {}
+    commit_status_unknown() : error("Commit status of the entry is unknown") {}
 };
 
 struct stopped_error : public error {
