@@ -62,7 +62,7 @@ single_column_relation::to_expression(const std::vector<lw_shared_ptr<column_spe
                                       prepare_context& ctx) const {
     // TODO: optimize vector away, accept single column_specification
     assert(receivers.size() == 1);
-    auto expr = prepare_term(raw, db, keyspace, receivers[0]);
+    auto expr = prepare_expression(raw, db, keyspace, receivers[0]);
     expr::fill_prepare_context(expr, ctx);
     return expr;
 }

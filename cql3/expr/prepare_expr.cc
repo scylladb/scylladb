@@ -84,7 +84,7 @@ usertype_constructor_test_assignment(const usertype_constructor& u, database& db
 
 static
 expression
-usertype_constructor_prepare_term(const usertype_constructor& u, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+usertype_constructor_prepare_expression(const usertype_constructor& u, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     usertype_constructor_validate_assignable_to(u, db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
@@ -101,7 +101,7 @@ usertype_constructor_prepare_term(const usertype_constructor& u, database& db, c
             raw = iraw->second;
             ++found_values;
         }
-        expression value = prepare_term(raw, db, keyspace, usertype_field_spec_of(*receiver, i));
+        expression value = prepare_expression(raw, db, keyspace, usertype_field_spec_of(*receiver, i));
 
         if (!is<constant>(value)) {
             all_terminal = false;
@@ -202,7 +202,7 @@ map_test_assignment(const collection_constructor& c, database& db, const sstring
 
 static
 expression
-map_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+map_prepare_expression(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     map_validate_assignable_to(c, db, keyspace, *receiver);
 
     auto key_spec = maps::key_spec_of(*receiver);
@@ -215,8 +215,8 @@ map_prepare_term(const collection_constructor& c, database& db, const sstring& k
         if (entry_tuple.elements.size() != 2) {
             on_internal_error(expr_logger, "map element is not a tuple of arity 2");
         }
-        expression k = prepare_term(entry_tuple.elements[0], db, keyspace, key_spec);
-        expression v = prepare_term(entry_tuple.elements[1], db, keyspace, value_spec);
+        expression k = prepare_expression(entry_tuple.elements[0], db, keyspace, key_spec);
+        expression v = prepare_expression(entry_tuple.elements[1], db, keyspace, value_spec);
 
         if (contains_bind_marker(k) || contains_bind_marker(k)) {
             throw exceptions::invalid_request_exception(format("Invalid map literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -297,7 +297,7 @@ set_test_assignment(const collection_constructor& c, database& db, const sstring
 
 static
 expression
-set_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+set_prepare_expression(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     set_validate_assignable_to(c, db, keyspace, *receiver);
 
     if (c.elements.empty()) {
@@ -328,7 +328,7 @@ set_prepare_term(const collection_constructor& c, database& db, const sstring& k
     bool all_terminal = true;
     for (auto& e : c.elements)
     {
-        expression elem = prepare_term(e, db, keyspace, value_spec);
+        expression elem = prepare_expression(e, db, keyspace, value_spec);
 
         if (contains_bind_marker(elem)) {
             throw exceptions::invalid_request_exception(format("Invalid set literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -397,7 +397,7 @@ list_test_assignment(const collection_constructor& c, database& db, const sstrin
 
 static
 expression
-list_prepare_term(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+list_prepare_expression(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -413,7 +413,7 @@ list_prepare_term(const collection_constructor& c, database& db, const sstring& 
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto& e : c.elements) {
-        expression elem = prepare_term(e, db, keyspace, value_spec);
+        expression elem = prepare_expression(e, db, keyspace, value_spec);
 
         if (contains_bind_marker(elem)) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: bind variables are not supported inside collection literals", *receiver->name));
@@ -484,7 +484,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, database& db, co
     std::vector<expression> values;
     bool all_terminal = true;
     for (size_t i = 0; i < tc.elements.size(); ++i) {
-        expression value = prepare_term(tc.elements[i], db, keyspace, component_spec_of(*receiver, i));
+        expression value = prepare_expression(tc.elements[i], db, keyspace, component_spec_of(*receiver, i));
         if (!is<constant>(value)) {
             all_terminal = false;
         }
@@ -512,7 +512,7 @@ tuple_constructor_prepare_tuple(const tuple_constructor& tc, database& db, const
     std::vector<data_type> types;
     bool all_terminal = true;
     for (size_t i = 0; i < tc.elements.size(); ++i) {
-        expression elem = prepare_term(tc.elements[i], db, keyspace, receivers[i]);
+        expression elem = prepare_expression(tc.elements[i], db, keyspace, receivers[i]);
         if (!is<constant>(elem)) {
             all_terminal = false;
         }
@@ -641,7 +641,7 @@ untyped_constant_test_assignment(const untyped_constant& uc, database& db, const
 
 static
 constant
-untyped_constant_prepare_term(const untyped_constant& uc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
+untyped_constant_prepare_expression(const untyped_constant& uc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
@@ -659,7 +659,7 @@ bind_variable_test_assignment(const bind_variable& bv, database& db, const sstri
 
 static
 bind_variable
-bind_variable_scalar_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
+bind_variable_scalar_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {   
     return bind_variable {
         .shape = bind_variable::shape_type::scalar,
@@ -677,7 +677,7 @@ bind_variable_scalar_in_make_receiver(const column_specification& receiver) {
 
 static
 bind_variable
-bind_variable_scalar_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+bind_variable_scalar_in_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return bind_variable {
         .shape = bind_variable::shape_type::scalar,
         .bind_index = bv.bind_index,
@@ -707,7 +707,7 @@ bind_variable_tuple_make_receiver(const std::vector<lw_shared_ptr<column_specifi
 
 static
 bind_variable
-bind_variable_tuple_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+bind_variable_tuple_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return bind_variable {
         .shape = bind_variable::shape_type::tuple,
         .bind_index = bv.bind_index,
@@ -742,7 +742,7 @@ bind_variable_tuple_in_make_receiver(const std::vector<lw_shared_ptr<column_spec
 
 static
 bind_variable
-bind_variable_tuple_in_prepare_term(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+bind_variable_tuple_in_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return bind_variable {
         .shape = bind_variable::shape_type::tuple_in,
         .bind_index = bv.bind_index,
@@ -762,7 +762,7 @@ null_test_assignment(database& db,
 
 static
 constant
-null_prepare_term(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+null_prepare_expression(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     if (!is_assignable(null_test_assignment(db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
     }
@@ -803,7 +803,7 @@ cast_test_assignment(const cast& c, database& db, const sstring& keyspace, const
 
 static
 expression
-cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+cast_prepare_expression(const cast& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     if (!is_assignable(test_assignment(c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
         throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
@@ -811,11 +811,11 @@ cast_prepare_term(const cast& c, database& db, const sstring& keyspace, lw_share
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
-    return prepare_term(c.arg, db, keyspace, receiver);
+    return prepare_expression(c.arg, db, keyspace, receiver);
 }
 
 expression
-prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+prepare_expression(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
         [] (const constant&) -> expression {
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
@@ -842,52 +842,52 @@ prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_s
             return functions::prepare_function_call(fc, db, keyspace, std::move(receiver));
         },
         [&] (const cast& c) -> expression {
-            return cast_prepare_term(c, db, keyspace, receiver);
+            return cast_prepare_expression(c, db, keyspace, receiver);
         },
         [&] (const field_selection&) -> expression {
             on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::prepare()");
         },
         [&] (const null&) -> expression {
-            return null_prepare_term(db, keyspace, receiver);
+            return null_prepare_expression(db, keyspace, receiver);
         },
         [&] (const bind_variable& bv) -> expression {
             switch (bv.shape) {
-            case expr::bind_variable::shape_type::scalar:  return bind_variable_scalar_prepare_term(bv, db, keyspace, receiver);
-            case expr::bind_variable::shape_type::scalar_in: return bind_variable_scalar_in_prepare_term(bv, db, keyspace, receiver);
-            case expr::bind_variable::shape_type::tuple: on_internal_error(expr_logger, "prepare_term(bind_variable(tuple))");
-            case expr::bind_variable::shape_type::tuple_in: on_internal_error(expr_logger, "prepare_term(bind_variable(tuple_in))");
+            case expr::bind_variable::shape_type::scalar:  return bind_variable_scalar_prepare_expression(bv, db, keyspace, receiver);
+            case expr::bind_variable::shape_type::scalar_in: return bind_variable_scalar_in_prepare_expression(bv, db, keyspace, receiver);
+            case expr::bind_variable::shape_type::tuple: on_internal_error(expr_logger, "prepare_expression(bind_variable(tuple))");
+            case expr::bind_variable::shape_type::tuple_in: on_internal_error(expr_logger, "prepare_expression(bind_variable(tuple_in))");
             }
             on_internal_error(expr_logger, "unexpected shape in bind_variable");
         },
         [&] (const untyped_constant& uc) -> expression {
-            return untyped_constant_prepare_term(uc, db, keyspace, receiver);
+            return untyped_constant_prepare_expression(uc, db, keyspace, receiver);
         },
         [&] (const tuple_constructor& tc) -> expression {
             return tuple_constructor_prepare_nontuple(tc, db, keyspace, receiver);
         },
         [&] (const collection_constructor& c) -> expression {
             switch (c.style) {
-            case collection_constructor::style_type::list: return list_prepare_term(c, db, keyspace, receiver);
-            case collection_constructor::style_type::set: return set_prepare_term(c, db, keyspace, receiver);
-            case collection_constructor::style_type::map: return map_prepare_term(c, db, keyspace, receiver);
+            case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, receiver);
+            case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, receiver);
+            case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, receiver);
             }
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
         [&] (const usertype_constructor& uc) -> expression {
-            return usertype_constructor_prepare_term(uc, db, keyspace, receiver);
+            return usertype_constructor_prepare_expression(uc, db, keyspace, receiver);
         },
     }, expr);
 }
 
 expression
-prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+prepare_expression_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return expr::visit(overloaded_functor{
         [&] (const bind_variable& bv) -> expression {
             switch (bv.shape) {
-            case expr::bind_variable::shape_type::scalar: on_internal_error(expr_logger, "prepare_term_multi_column(bind_variable(scalar))");
-            case expr::bind_variable::shape_type::scalar_in: on_internal_error(expr_logger, "prepare_term_multi_column(bind_variable(scalar_in))");
-            case expr::bind_variable::shape_type::tuple: return bind_variable_tuple_prepare_term(bv, db, keyspace, receivers);
-            case expr::bind_variable::shape_type::tuple_in: return bind_variable_tuple_in_prepare_term(bv, db, keyspace, receivers);
+            case expr::bind_variable::shape_type::scalar: on_internal_error(expr_logger, "prepare_expression_multi_column(bind_variable(scalar))");
+            case expr::bind_variable::shape_type::scalar_in: on_internal_error(expr_logger, "prepare_expression_multi_column(bind_variable(scalar_in))");
+            case expr::bind_variable::shape_type::tuple: return bind_variable_tuple_prepare_expression(bv, db, keyspace, receivers);
+            case expr::bind_variable::shape_type::tuple_in: return bind_variable_tuple_in_prepare_expression(bv, db, keyspace, receivers);
             }
             on_internal_error(expr_logger, "unexpected shape in bind_variable");
         },
@@ -895,7 +895,7 @@ prepare_term_multi_column(const expression& expr, database& db, const sstring& k
             return tuple_constructor_prepare_tuple(tc, db, keyspace, receivers);
         },
         [] (const auto& default_case) -> expression {
-            on_internal_error(expr_logger, fmt::format("prepare_term_multi_column({})", typeid(default_case).name()));
+            on_internal_error(expr_logger, fmt::format("prepare_expression_multi_column({})", typeid(default_case).name()));
         },
     }, expr);
 }

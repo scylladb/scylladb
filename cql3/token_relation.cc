@@ -134,7 +134,7 @@ cql3::expr::expression cql3::token_relation::to_expression(
         const std::vector<lw_shared_ptr<column_specification>>& receivers,
         const expr::expression& raw, database& db, const sstring& keyspace,
         prepare_context& ctx) const {
-    auto e = expr::prepare_term(raw, db, keyspace, receivers.front());
+    auto e = expr::prepare_expression(raw, db, keyspace, receivers.front());
     expr::fill_prepare_context(e, ctx);
     return e;
 }

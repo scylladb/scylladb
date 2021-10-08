@@ -218,7 +218,7 @@ protected:
     virtual expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                            const expr::expression& raw, database& db, const sstring& keyspace,
                                            prepare_context& ctx) const override {
-        auto e = prepare_term_multi_column(raw, db, keyspace, receivers);
+        auto e = prepare_expression_multi_column(raw, db, keyspace, receivers);
         expr::fill_prepare_context(e, ctx);
         return e;
     }

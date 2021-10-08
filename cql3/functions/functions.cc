@@ -608,7 +608,7 @@ prepare_function_call(const expr::function_call& fc, database& db, const sstring
     parameters.reserve(fc.args.size());
     bool all_terminal = true;
     for (size_t i = 0; i < fc.args.size(); ++i) {
-        expr::expression e = prepare_term(fc.args[i], db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+        expr::expression e = prepare_expression(fc.args[i], db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
         if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
         }
