@@ -55,6 +55,8 @@ struct partition_reversing_data_source {
 // We ignore the value of `ir.data_file_positions().start`.
 //
 // We assume that `ir.current_clustered_cursor()`, if engaged, is of type `sstables::mc::bsearch_clustered_cursor*`.
+//
+// The source must be closed before destruction unless `get()` was never called.
 partition_reversing_data_source make_partition_reversing_data_source(
     const schema& s, shared_sstable sst, index_reader& ir, uint64_t pos, size_t len,
     reader_permit permit, const io_priority_class& io_priority, tracing::trace_state_ptr trace_state);
