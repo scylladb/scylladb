@@ -154,15 +154,15 @@ std::unique_ptr<attributes> attributes::raw::prepare(database& db, const sstring
     std::optional<expr::expression> ts, ttl, to;
 
     if (timestamp.has_value()) {
-        ts = expr::to_expression(prepare_term(*timestamp, db, ks_name, timestamp_receiver(ks_name, cf_name)));
+        ts = prepare_term(*timestamp, db, ks_name, timestamp_receiver(ks_name, cf_name));
     }
 
     if (time_to_live.has_value()) {
-        ttl = expr::to_expression(prepare_term(*time_to_live, db, ks_name, time_to_live_receiver(ks_name, cf_name)));
+        ttl = prepare_term(*time_to_live, db, ks_name, time_to_live_receiver(ks_name, cf_name));
     }
 
     if (timeout.has_value()) {
-        to = expr::to_expression(prepare_term(*timeout, db, ks_name, timeout_receiver(ks_name, cf_name)));
+        to = prepare_term(*timeout, db, ks_name, timeout_receiver(ks_name, cf_name));
     }
 
     return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to)}};

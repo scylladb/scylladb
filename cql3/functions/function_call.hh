@@ -84,7 +84,7 @@ private:
     cql3::raw_value_view bind_and_get_internal(const query_options& options);
 };
 
-::shared_ptr<term> prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+expr::expression prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
 
 assignment_testable::test_result test_assignment_function_call(const cql3::expr::function_call& fc, database& db, const sstring& keyspace, const column_specification& receiver);
 

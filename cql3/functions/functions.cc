@@ -67,7 +67,6 @@ bool as_json_function::requires_thread() const { return false; }
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
 
 static bytes_opt execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params);
-static bytes_opt execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters);
 static shared_ptr<terminal> make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf);
 
 void functions::clear_functions() noexcept {
@@ -570,7 +569,7 @@ make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serializatio
     ));
 }
 
-::shared_ptr<term>
+expr::expression
 prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<function>& func) {
@@ -605,38 +604,29 @@ prepare_function_call(const expr::function_call& fc, database& db, const sstring
                                                     fun->name(), fun->arg_types().size(), fc.args.size()));
     }
 
-    std::vector<shared_ptr<term>> parameters;
+    std::vector<expr::expression> parameters;
     parameters.reserve(fc.args.size());
     bool all_terminal = true;
     for (size_t i = 0; i < fc.args.size(); ++i) {
-        auto&& t = prepare_term(fc.args[i], db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
-        if (dynamic_cast<non_terminal*>(t.get())) {
+        expr::expression e = prepare_term(fc.args[i], db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+        if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
         }
-        parameters.push_back(t);
+        parameters.push_back(std::move(e));
     }
 
     // If all parameters are terminal and the function is pure, we can
     // evaluate it now, otherwise we'd have to wait execution time
+    expr::function_call fun_call {
+        .func = fun,
+        .args = std::move(parameters),
+        .lwt_cache_id = fc.lwt_cache_id
+    };
     if (all_terminal && scalar_fun->is_pure()) {
-        return make_terminal(scalar_fun, cql3::raw_value::make_value(execute(*scalar_fun, parameters)), query_options::DEFAULT.get_cql_serialization_format());
+        return expr::evaluate(fun_call, query_options::DEFAULT);
     } else {
-        return ::make_shared<function_call>(scalar_fun, parameters);
+        return fun_call;
     }
-}
-
-static
-bytes_opt
-execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters) {
-    std::vector<bytes_opt> buffers;
-    buffers.reserve(parameters.size());
-    for (auto&& t : parameters) {
-        assert(dynamic_cast<terminal*>(t.get()));
-        auto&& param = static_cast<terminal*>(t.get())->get(query_options::DEFAULT);
-        buffers.push_back(to_bytes_opt(param));
-    }
-
-    return execute_internal(cql_serialization_format::internal(), fun, buffers);
 }
 
 assignment_testable::test_result

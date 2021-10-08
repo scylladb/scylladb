@@ -669,8 +669,8 @@ extern expression replace_token(const expression&, const column_definition*);
 extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
-extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
-extern ::shared_ptr<term> prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
+extern expression prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+extern expression prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
 
 
 /**
