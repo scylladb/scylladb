@@ -456,6 +456,13 @@ private:
             std::copy(first_del_time.begin(), first_del_time.end(), _cached_read.get_write() + to_cache_offset(info.first_deletion_time_offset) + second_del_time.size());
         }
     }
+
+    future<> emplace_row_skipping_context(input_stream<char> row_stream, uint64_t row_start, uint64_t row_end) {
+        if (_row_skipping_context) {
+            co_await _row_skipping_context->close();
+        }
+        _row_skipping_context.emplace(std::move(row_stream), row_start, row_end - row_start, _permit, _cached_column_translation);
+    }
 public:
     partition_reversing_data_source_impl(const schema& s,
             shared_sstable sst,
@@ -516,7 +523,7 @@ public:
                 }
                 look_in_last_block = true;
             } else {
-                _row_skipping_context.emplace(data_stream(_row_start, _row_end), _row_start, _row_end - _row_start, _permit, _cached_column_translation);
+                co_await emplace_row_skipping_context(data_stream(_row_start, _row_end), _row_start, _row_end);
                 co_await _row_skipping_context->consume_input();
                 if (_row_skipping_context->end_of_partition()) {
                     look_in_last_block = true;
@@ -535,7 +542,7 @@ public:
                     _row_start = _clustering_range_start;
                 }
                 uint64_t last_row_start = _row_start;
-                _row_skipping_context.emplace(data_stream(_row_start, _partition_end), _row_start, _partition_end - _row_start, _permit, _cached_column_translation);
+                co_await emplace_row_skipping_context(data_stream(_row_start, _partition_end), _row_start, _partition_end);
                 co_await _row_skipping_context->consume_input();
                 while (!_row_skipping_context->end_of_partition()) {
                     last_row_start = _row_start;
@@ -569,7 +576,7 @@ public:
             [[fallthrough]];
         }
         case state::ROWS: {
-            _row_skipping_context.emplace(co_await last_row_stream(_row_end - _row_start), _row_start, _row_end - _row_start, _permit, _cached_column_translation);
+            co_await emplace_row_skipping_context(co_await last_row_stream(_row_end - _row_start), _row_start, _row_end);
             co_await _row_skipping_context->consume_input();
             if (_row_skipping_context->current_tombstone_reversing_info()) {
                 // TODO: modify `ret`, not `_cached_read`
@@ -597,8 +604,11 @@ public:
         on_internal_error(sstlog, "partition_reversing_data_source does not support skipping");
     }
 
-    virtual future<> close() override {
-        return make_ready_future<>();
+    // Must not be run concurrently with `get()`.
+    virtual future<> close() noexcept override {
+        auto close_partition_header_context = _partition_header_context ? _partition_header_context->close() : make_ready_future<>();
+        auto close_row_skipping_context = _row_skipping_context ? _row_skipping_context->close() : make_ready_future();
+        co_await when_all(std::move(close_partition_header_context), std::move(close_row_skipping_context));
     }
 
     // Points to the current position of the source over the sstable file, which
