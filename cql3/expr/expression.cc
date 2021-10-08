@@ -1603,6 +1603,16 @@ static constant evaluate_set(const collection_constructor& collection, const que
             return constant::make_unset_value(collection.type);
         }
 
+        if (evaluated_element.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            // TODO: Behaviour copied from sets::delayed_value::bind(), but this seems incorrect
+            // The original reasoning is:
+            // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
+            // but CQL uses int32_t to encode length of a set value length
+            throw exceptions::invalid_request_exception(format("Set value is too long. Set values are limited to {:d} bytes but {:d} bytes value provided",
+                                                std::numeric_limits<uint16_t>::max(),
+                                                evaluated_element.view().size_bytes()));
+        }
+
         evaluated_elements.emplace(std::move(evaluated_element).value.to_managed_bytes());
     }
 
