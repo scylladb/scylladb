@@ -44,7 +44,7 @@ namespace raft {
 struct active_read {
     read_id id;
     index_t idx;
-    promise<read_barrier_reply> promise;
+    seastar::promise<read_barrier_reply> promise;
 };
 
 static const seastar::metrics::label server_id_label("id");
