@@ -1928,6 +1928,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_timeout_now) {
     BOOST_CHECK_EQUAL(output.messages.size(), 1);
     BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
     auto timeout_now_msg = std::get<raft::timeout_now>(output.messages.back().second);
+    (void)timeout_now_msg;
     // ... and lose it.
 
     // By now, B and C should both remain in the follower state.

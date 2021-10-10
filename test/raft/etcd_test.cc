@@ -196,7 +196,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     const raft::log_entry_ptr le = msg.entries.back();
     size_t current_entry = 0;
     BOOST_CHECK(le->idx == ++current_entry);
-    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(le->data));
+    BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
 
     // When this append is acked, we change to replicate state and can
     // send multiple messages at once. (PIPELINE)
@@ -505,7 +505,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1);
     lep = output.log_entries.back();
-    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(lep->data));
     output = fsm.get_output();
     BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
 
@@ -772,7 +772,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     BOOST_CHECK(fsm1.is_leader());
     output1 = fsm1.get_output();
     lep = output1.log_entries.back();
-    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(lep->data));
 
     // fsm1 dummy, send, gets specified number of replies (would commit if quorum)
     BOOST_CHECK(output1.messages.size() == nodes - 1);
