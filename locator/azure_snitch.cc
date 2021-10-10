@@ -51,8 +51,8 @@
 
 namespace locator {
 
-const auto azure_snitch::REGION_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "location");
-const auto azure_snitch::ZONE_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "zone");
+const std::string azure_snitch::REGION_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "location");
+const std::string azure_snitch::ZONE_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "zone");
 
 azure_snitch::azure_snitch(const sstring& fname, unsigned io_cpuid) : production_snitch_base(fname) {
     if (this_shard_id() == io_cpuid) {
