@@ -3611,13 +3611,6 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             }
         };
 
-        auto assert_replication_not_contains = [&] (const sstring& ks, const std::vector<sstring>& keys) {
-            auto repl = get_replication(ks);
-            return std::none_of(keys.begin(), keys.end(), [&] (const sstring& k) {
-                return repl.HasMember(std::string(k.c_str(), k.size()));
-            });
-        };
-
         e.execute_cql("CREATE KEYSPACE rf_expand_1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}").get();
         assert_replication_contains("rf_expand_1", {
             {"class", network_topology},
