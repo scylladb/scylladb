@@ -198,7 +198,6 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
 }
 
 future<std::optional<service_level_options>> service_level_controller::find_service_level(auth::role_set roles) {
-    static auto sl_compare = std::less<sstring>();
     auto& role_manager = _auth_service.local().underlying_role_manager();
 
     // converts a list of roles into the chosen service level.
