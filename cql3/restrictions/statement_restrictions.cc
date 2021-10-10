@@ -1252,8 +1252,8 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
                 high_inclusive = end->is_inclusive();
             }
 
-            query::clustering_range::bound lower_bound(std::vector{int64_to_be_bytes(token_low)}, low_inclusive);
-            query::clustering_range::bound upper_bound(std::vector{int64_to_be_bytes(token_high)}, high_inclusive);
+            query::clustering_range::bound lower_bound(std::vector({int64_to_be_bytes(token_low)}), low_inclusive);
+            query::clustering_range::bound upper_bound(std::vector({int64_to_be_bytes(token_high)}), high_inclusive);
 
             std::vector<query::clustering_range> ck_ranges;
 
@@ -1269,8 +1269,8 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
             if (token_low >= 0 || token_high < 0) {
                 ck_ranges.emplace_back(std::move(lower_bound), std::move(upper_bound));
             } else {
-                query::clustering_range::bound zero_bound(std::vector{int64_to_be_bytes(0)});
-                query::clustering_range::bound min1_bound(std::vector{int64_to_be_bytes(-1)});
+                query::clustering_range::bound zero_bound(std::vector({int64_to_be_bytes(0)}));
+                query::clustering_range::bound min1_bound(std::vector({int64_to_be_bytes(-1)}));
 
                 ck_ranges.reserve(2);
 
