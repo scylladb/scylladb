@@ -80,8 +80,7 @@ class printer {
         __builtin_unreachable();
     }
 
-    template <>
-    static void print<inner_node_t>(const inner_node_t& n, unsigned depth) {
+    static void print(const inner_node_t& n, unsigned depth) {
         switch (n._base._head._base_layout) {
         case layout::direct_dynamic: return print_direct(n._base._head, n._base._layouts._this, depth, node_id(n._base._head));
         default: break;
