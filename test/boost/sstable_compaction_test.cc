@@ -2041,7 +2041,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
 
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
             BOOST_REQUIRE(ret.new_sstables.front()->get_estimated_key_count() >= total_partitions);
-            BOOST_REQUIRE((ret.new_sstables.front()->get_estimated_key_count() - total_partitions) <= s->min_index_interval());
+            BOOST_REQUIRE((ret.new_sstables.front()->get_estimated_key_count() - total_partitions) <= uint64_t(s->min_index_interval()));
             BOOST_REQUIRE(ret.new_sstables.front()->run_identifier() == run_identifier);
         });
     });
@@ -3749,7 +3749,7 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == s->max_compaction_threshold());
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == uint64_t(s->max_compaction_threshold()));
         }
         // single sstable
         {
@@ -3810,8 +3810,8 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         constexpr size_t rows_per_window = 10;
 
         auto mt = make_lw_shared<memtable>(s);
-        for (auto i = 1; i <= target_windows_span; i++) {
-            for (auto j = 0; j < rows_per_window; j++) {
+        for (unsigned i = 1; i <= target_windows_span; i++) {
+            for (unsigned j = 0; j < rows_per_window; j++) {
                 mt->apply(make_row(std::chrono::hours(i)));
             }
         }
@@ -3916,7 +3916,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
-            for (auto i = 0; i < disjoint_sstable_count; i++) {
+            for (unsigned i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(1))});
                 sstables.push_back(std::move(sst));
             }
@@ -3929,12 +3929,12 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
-            for (auto i = 0; i < disjoint_sstable_count; i++) {
+            for (unsigned i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(0, std::chrono::hours(1))});
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == s->max_compaction_threshold());
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == uint64_t(s->max_compaction_threshold()));
         }
     });
 }
@@ -3978,7 +3978,7 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
 
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
-            for (auto i = 0; i < disjoint_sstable_count; i++) {
+            for (unsigned i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(i)});
                 sstables.push_back(std::move(sst));
             }
@@ -3991,12 +3991,12 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
 
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
-            for (auto i = 0; i < disjoint_sstable_count; i++) {
+            for (unsigned i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(0)});
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == s->max_compaction_threshold());
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == uint64_t(s->max_compaction_threshold()));
         }
     });
 }

@@ -72,7 +72,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
 
     const raft::follower_progress& fprogress = fsm.get_progress(id1);
 
-    for (int i = 1; i < 6; ++i) {
+    for (unsigned i = 1; i < 6; ++i) {
         // NOTE: in etcd leader's own progress seems to be PIPELINE
         BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
         BOOST_CHECK(fprogress.match_idx == i);
@@ -741,7 +741,7 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     BOOST_CHECK(compare_log_entries(res1, fsm3.get_log(), 1, 4));
 }
 
-void handle_proposal(int nodes, std::vector<int> accepting_int) {
+void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     std::unordered_set<raft::server_id> accepting;
     raft::fsm_output output1;
     raft::append_request areq;
@@ -752,7 +752,7 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     }
 
     server_address_set ids;     // ids of leader 1 .. #nodes
-    for (int i = 1; i < nodes + 1; ++i) {
+    for (unsigned i = 1; i < nodes + 1; ++i) {
         ids.insert({.id = raft::server_id{utils::UUID(0, i)}});
     }
 

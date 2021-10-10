@@ -4835,7 +4835,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
         auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
         e.execute_cql("CREATE TABLE tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))").get();
 
-        const unsigned num_rows = 20;
+        const int num_rows = 20;
         const sstring val(100 * 1024, 'a');
         const auto id = e.prepare(format("INSERT INTO tbl (pk, ck, v) VALUES (0, ?, '{}')", val)).get0();
         for (int ck = 0; ck < num_rows; ++ck) {

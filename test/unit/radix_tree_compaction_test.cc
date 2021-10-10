@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
                             compact_radix_tree::printer<test_data, unsigned>::show(*t);
                         }
 
-                        int nr = 0;
+                        unsigned nr = 0;
                         auto ti = t->begin();
                         while (ti != t->end()) {
                             assert(ti->value() == ti.key());

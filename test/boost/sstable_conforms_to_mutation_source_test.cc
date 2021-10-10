@@ -183,7 +183,7 @@ static std::vector<query::clustering_range> random_ranges(const std::vector<clus
         ckp_sample.pop_back();
     }
 
-    for (int i = 0; i + 1 < ckp_sample.size(); i += 2) {
+    for (unsigned i = 0; i + 1 < ckp_sample.size(); i += 2) {
         ranges.emplace_back(
                 query::clustering_range::bound{ckp_sample[i], tests::random::get_bool(engine)},
                 query::clustering_range::bound{ckp_sample[i+1], tests::random::get_bool(engine)});
