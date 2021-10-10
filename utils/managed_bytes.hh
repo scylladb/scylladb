@@ -450,9 +450,12 @@ public:
     }
 
     // Allow casting mutable views to immutable views.
-    friend class managed_bytes_basic_view<mutable_view::no>;
-    managed_bytes_basic_view(const managed_bytes_basic_view<mutable_view::yes>& other)
-    requires (is_mutable == mutable_view::no)
+    template <mutable_view Other>
+    friend class managed_bytes_basic_view;
+
+    template <mutable_view Other>
+    managed_bytes_basic_view(const managed_bytes_basic_view<Other>& other)
+    requires (is_mutable == mutable_view::no) && (Other == mutable_view::yes)
         : _current_fragment(other._current_fragment.data(), other._current_fragment.size())
         , _next_fragments(other._next_fragments)
         , _size(other._size)
