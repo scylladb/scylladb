@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
             .with_column("c1", int32_type, column_kind::clustering_key);
 
         std::vector<sstring> cnames;
-        for (int i = 0; i < column_count; i++) {
+        for (size_t i = 0; i < column_count; i++) {
             cnames.push_back(fmt::format("r{}", i + 1));
             builder.with_column(to_bytes(cnames.back()), int32_type);
         }

@@ -2127,9 +2127,6 @@ sstring deserialize_value(const string_type_impl&, View v) {
 }
 
 template<typename T>
-requires requires (const T& t, bytes_view v) {
-    deserialize_value(t, single_fragmented_view(v));
-}
 decltype(auto) deserialize_value(const T& t, bytes_view v) {
     return deserialize_value(t, single_fragmented_view(v));
 }

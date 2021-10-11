@@ -3611,13 +3611,6 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             }
         };
 
-        auto assert_replication_not_contains = [&] (const sstring& ks, const std::vector<sstring>& keys) {
-            auto repl = get_replication(ks);
-            return std::none_of(keys.begin(), keys.end(), [&] (const sstring& k) {
-                return repl.HasMember(std::string(k.c_str(), k.size()));
-            });
-        };
-
         e.execute_cql("CREATE KEYSPACE rf_expand_1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}").get();
         assert_replication_contains("rf_expand_1", {
             {"class", network_topology},
@@ -4835,7 +4828,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
         auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
         e.execute_cql("CREATE TABLE tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))").get();
 
-        const unsigned num_rows = 20;
+        const int num_rows = 20;
         const sstring val(100 * 1024, 'a');
         const auto id = e.prepare(format("INSERT INTO tbl (pk, ck, v) VALUES (0, ?, '{}')", val)).get0();
         for (int ck = 0; ck < num_rows; ++ck) {

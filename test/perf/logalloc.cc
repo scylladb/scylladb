@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
 
             std::random_device rd;
             std::mt19937 g(rd());
-            for (int i = 0; i < nr_sizes; i++) {
+            for (unsigned i = 0; i < nr_sizes; i++) {
                 sizes[i] = i;
             }
 
@@ -65,20 +65,20 @@ int main(int argc, char** argv) {
 
             std::chrono::duration<double> total;
 
-            for (int iter = 0; iter < nr_iterations; iter++) {
+            for (unsigned iter = 0; iter < nr_iterations; iter++) {
                 std::shuffle(sizes.begin(), sizes.end(), g);
 
                 void* mem = allocator.alloc<piggie>(sizeof(piggie) + sizes[0]);
                 objects[0] = new (mem) piggie(sizes[0]);
 
                 auto start = std::chrono::steady_clock::now();
-                for (int i = 1; i < nr_seq_allocations; i++) {
+                for (unsigned i = 1; i < nr_seq_allocations; i++) {
                     void* mem = allocator.alloc<piggie>(sizeof(piggie) + sizes[i % nr_sizes]);
                     objects[i] = new (mem) piggie(sizes[i % nr_sizes]);
                 }
                 total += std::chrono::steady_clock::now() - start;
 
-                for (int i = 0; i < nr_seq_allocations; i++) {
+                for (unsigned i = 0; i < nr_seq_allocations; i++) {
                     allocator.destroy(objects[i]);
                 }
 

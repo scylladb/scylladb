@@ -603,7 +603,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     auto stop_sem = deferred_stop(semaphore);
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
-            std::experimental::source_location sl = std::experimental::source_location::current()) {
+            seastar::compat::source_location sl = seastar::compat::source_location::current()) {
         testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
         const auto stats_before = semaphore.get_stats();
 

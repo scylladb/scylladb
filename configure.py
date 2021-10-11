@@ -1315,6 +1315,10 @@ warnings = [
     '-Wno-uninitialized-const-reference',
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
     '-Wno-psabi',
+    '-Wno-narrowing',
+    '-Wno-array-bounds',
+    '-Wno-nonnull',
+    '-Wno-catch-value',
 ]
 
 warnings = [w

@@ -308,7 +308,7 @@ size_t limit_of_streams_in_topology_description() {
 
 // non-static for testing
 topology_description limit_number_of_streams_if_needed(topology_description&& desc) {
-    int64_t streams_count = 0;
+    uint64_t streams_count = 0;
     for (auto& tr_desc : desc.entries()) {
         streams_count += tr_desc.streams.size();
     }

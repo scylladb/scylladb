@@ -24,6 +24,12 @@
 #include <seastar/core/coroutine.hh>
 #include "sstables/consumer.hh"
 
+#if __cpp_impl_coroutine >= 201902L
+#  define COROUTINE_NS std
+#else
+#  define COROUTINE_NS std::experimental
+#endif
+
 /* To construct an processing_result_generator object, you need a function that is a coroutine (uses co_yield)
  * and has return type of this class. The execution of the coroutine can be then controlled using this class.
  * To execute a fragment of the coroutine that ends at an co_yield, and get the yielded value use generate().
@@ -44,22 +50,22 @@ public:
         data_consumer::read_status _rs;
         read_awaiter(data_consumer::read_status rs) : _rs(rs) {}
         constexpr bool await_ready() const noexcept { return _rs == data_consumer::read_status::ready; }
-        constexpr void await_suspend(std::experimental::coroutine_handle<promise_type>) const noexcept {}
+        constexpr void await_suspend(COROUTINE_NS::coroutine_handle<promise_type>) const noexcept {}
         constexpr void await_resume() const noexcept {}
     };
     struct promise_type {
-        using handle_type = std::experimental::coroutine_handle<promise_type>;
+        using handle_type = COROUTINE_NS::coroutine_handle<promise_type>;
         processing_result_generator get_return_object() {
             return processing_result_generator{handle_type::from_promise(*this)};
         }
         // the coroutine doesn't start running until the first handle::resume() call
-        static std::experimental::suspend_always initial_suspend() noexcept {
+        static COROUTINE_NS::suspend_always initial_suspend() noexcept {
             return {};
         }
-        static std::experimental::suspend_always final_suspend() noexcept {
+        static COROUTINE_NS::suspend_always final_suspend() noexcept {
             return {};
         }
-        std::experimental::suspend_always yield_value(data_consumer::processing_result value) noexcept {
+        COROUTINE_NS::suspend_always yield_value(data_consumer::processing_result value) noexcept {
             current_value = std::move(value);
             return {};
         }
@@ -81,9 +87,9 @@ public:
         std::exception_ptr caught_exception;
     };
 private:
-    std::experimental::coroutine_handle<promise_type> _coro_handle;
+    COROUTINE_NS::coroutine_handle<promise_type> _coro_handle;
 public:
-    explicit processing_result_generator(const std::experimental::coroutine_handle<promise_type> coroutine)
+    explicit processing_result_generator(const COROUTINE_NS::coroutine_handle<promise_type> coroutine)
         : _coro_handle{coroutine}
     {}
 
@@ -122,6 +128,6 @@ public:
 };
 
 template<typename... Args>
-struct std::experimental::coroutine_traits<processing_result_generator, Args...> {
+struct COROUTINE_NS::coroutine_traits<processing_result_generator, Args...> {
     using promise_type = processing_result_generator::promise_type;
 };

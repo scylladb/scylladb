@@ -311,6 +311,7 @@ private:
             case bucket::hours:
                 return duration_cast<microseconds>(duration_cast<hours>(microseconds(ts))).count();
         }
+        std::abort();
     }
     void collect_timestamp(api::timestamp_type ts) {
         ts = timestamp_bucket(ts);
