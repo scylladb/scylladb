@@ -592,6 +592,19 @@ class aws_instance:
         dev = self.__instance_metadata('block-device-mapping/' + devname)
         return dev.replace("sd", "xvd")
 
+    def __filter_nvmes(self, dev, dev_type):
+        nvme_re = re.compile(r"(nvme\d+)n\d+$")
+        match = nvme_re.match(dev)
+        if not match:
+            return False
+        nvme_name = match.group(1)
+        with open(f'/sys/class/nvme/{nvme_name}/model') as f:
+            model = f.read().strip()
+        if dev_type == 'ephemeral':
+            return model != 'Amazon Elastic Block Store'
+        else:
+            return model == 'Amazon Elastic Block Store'
+
     def _non_root_nvmes(self):
         nvme_re = re.compile(r"nvme\d+n\d+$")
 
@@ -602,8 +615,9 @@ class aws_instance:
         root_dev = root_dev_candidates[0].device
         if root_dev == '/dev/root':
             root_dev = run('findmnt -n -o SOURCE /', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
-        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
-        return {"root": [ root_dev ], "ephemeral": [ x for x in nvmes_present if not root_dev.startswith(os.path.join("/dev/", x)) ] }
+        ephemeral_present = list(filter(lambda x: self.__filter_nvmes(x, 'ephemeral'), os.listdir("/dev")))
+        ebs_present = list(filter(lambda x: self.__filter_nvmes(x, 'ebs'), os.listdir("/dev")))
+        return {"root": [ root_dev ], "ephemeral": ephemeral_present, "ebs": [ x for x in ebs_present if not root_dev.startswith(os.path.join("/dev/", x))] }
 
     def __populate_disks(self):
         devmap = self.__instance_metadata("block-device-mapping")
