@@ -1725,6 +1725,19 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     });
 }
 
+future<std::unordered_map<sstring, sstring>>
+view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
+    return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([this] (std::unordered_map<utils::UUID, sstring> status) {
+        auto& endpoint_to_host_id = service::get_local_storage_proxy().get_token_metadata_ptr()->get_endpoint_to_host_id_map_for_reading();
+        return boost::copy_range<std::unordered_map<sstring, sstring>>(endpoint_to_host_id
+                | boost::adaptors::transformed([&status] (const std::pair<gms::inet_address, utils::UUID>& p) {
+                    auto it = status.find(p.second);
+                    auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
+                    return std::pair(p.first.to_sstring(), std::move(s));
+                }));
+    });
+}
+
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});

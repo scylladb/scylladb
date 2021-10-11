@@ -55,6 +55,8 @@
 #include "cdc/generation_service.hh"
 #include "service/storage_proxy.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "sstables_loader.hh"
+#include "db/view/view_builder.hh"
 
 extern logging::logger apilog;
 
@@ -141,7 +143,23 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, serv
         tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
     }
 
-    return ss.set_tables_autocompaction(keyspace, tables, enabled).then([]{
+    apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
+    return do_with(keyspace, std::move(tables), [&ctx, enabled] (const sstring &keyspace, const std::vector<sstring>& tables) {
+        return ctx.db.invoke_on(0, [&ctx, &keyspace, &tables, enabled] (database& db) {
+            auto g = database::autocompaction_toggle_guard(db);
+            return ctx.db.invoke_on_all([&keyspace, &tables, enabled] (database& db) {
+                return parallel_for_each(tables, [&db, &keyspace, enabled] (const sstring& table) {
+                    column_family& cf = db.find_column_family(keyspace, table);
+                    if (enabled) {
+                        cf.enable_auto_compaction();
+                    } else {
+                        cf.disable_auto_compaction();
+                    }
+                    return make_ready_future<>();
+                });
+            }).finally([g = std::move(g)] {});
+        });
+    }).then([] {
         return make_ready_future<json::json_return_type>(json_void());
     });
 }
@@ -294,6 +312,53 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::repair_await_completion.unset(r);
     ss::force_terminate_all_repair_sessions.unset(r);
     ss::force_terminate_all_repair_sessions_new.unset(r);
+}
+
+void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
+    ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<request> req) {
+        auto ks = validate_keyspace(ctx, req->param);
+        auto cf = req->get_query_param("cf");
+        auto stream = req->get_query_param("load_and_stream");
+        auto primary_replica = req->get_query_param("primary_replica_only");
+        boost::algorithm::to_lower(stream);
+        boost::algorithm::to_lower(primary_replica);
+        bool load_and_stream = stream == "true" || stream == "1";
+        bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
+        // No need to add the keyspace, since all we want is to avoid always sending this to the same
+        // CPU. Even then I am being overzealous here. This is not something that happens all the time.
+        auto coordinator = std::hash<sstring>()(cf) % smp::count;
+        return sst_loader.invoke_on(coordinator,
+                [ks = std::move(ks), cf = std::move(cf),
+                load_and_stream, primary_replica_only] (sstables_loader& loader) {
+            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
+        }).then_wrapped([] (auto&& f) {
+            if (f.failed()) {
+                auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
+                return make_exception_future<json::json_return_type>(httpd::server_error_exception(msg));
+            }
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+}
+
+void unset_sstables_loader(http_context& ctx, routes& r) {
+    ss::load_new_ss_tables.unset(r);
+}
+
+void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb) {
+    ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<request> req) {
+        auto keyspace = validate_keyspace(ctx, req->param);
+        auto view = req->param["view"];
+        return vb.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
+            std::vector<storage_service_json::mapper> res;
+            return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
+        });
+    });
+
+}
+
+void unset_view_builder(http_context& ctx, routes& r) {
+    ss::view_build_statuses.unset(r);
 }
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs) {
@@ -828,31 +893,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::load_new_ss_tables.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        auto ks = validate_keyspace(ctx, req->param);
-        auto cf = req->get_query_param("cf");
-        auto stream = req->get_query_param("load_and_stream");
-        auto primary_replica = req->get_query_param("primary_replica_only");
-        boost::algorithm::to_lower(stream);
-        boost::algorithm::to_lower(primary_replica);
-        bool load_and_stream = stream == "true" || stream == "1";
-        bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
-        // No need to add the keyspace, since all we want is to avoid always sending this to the same
-        // CPU. Even then I am being overzealous here. This is not something that happens all the time.
-        auto coordinator = std::hash<sstring>()(cf) % smp::count;
-        return ss.invoke_on(coordinator,
-                [ks = std::move(ks), cf = std::move(cf),
-                load_and_stream, primary_replica_only] (service::storage_service& s) {
-            return s.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
-        }).then_wrapped([] (auto&& f) {
-            if (f.failed()) {
-                auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
-                return make_exception_future<json::json_return_type>(httpd::server_error_exception(msg));
-            }
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
     ss::sample_key_range.set(r, [](std::unique_ptr<request> req) {
         //TBD
         unimplemented();
@@ -1037,15 +1077,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ss.local().effective_ownership(keyspace_name).then([] (auto&& ownership) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
-    });
-
-    ss::view_build_statuses.set(r, [&ctx, &ss] (std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto view = req->param["view"];
-        return ss.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
         });
     });
 

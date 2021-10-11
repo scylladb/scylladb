@@ -43,10 +43,6 @@
 #include "compaction/compaction_manager.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 
-namespace db::view {
-class view_update_generator;
-}
-
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
@@ -56,7 +52,6 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<service::migration_notifier> mm_notif;
         sharded<abort_source> abort_sources;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
-        sharded<db::view::view_update_generator> view_update_generator;
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
         sharded<locator::shared_token_metadata> token_metadata;
@@ -103,7 +98,6 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         ss.start(std::ref(abort_sources),
             std::ref(db), std::ref(gms::get_gossiper()),
             std::ref(sys_dist_ks),
-            std::ref(view_update_generator),
             std::ref(feature_service), sscfg,
             std::ref(migration_manager), std::ref(token_metadata),
             std::ref(_messaging),

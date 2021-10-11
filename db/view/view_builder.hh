@@ -222,6 +222,8 @@ public:
     // For tests
     future<> wait_until_built(const sstring& ks_name, const sstring& view_name);
 
+    future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
+
 private:
     build_step& get_or_create_build_step(utils::UUID);
     future<> initialize_reader_at_current_token(build_step&);

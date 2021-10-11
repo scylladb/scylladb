@@ -34,6 +34,8 @@ class storage_service;
 
 } // namespace service
 
+class sstables_loader;
+
 namespace locator {
 
 class token_metadata;
@@ -46,6 +48,9 @@ class thrift_controller;
 namespace db {
 class snapshot_ctl;
 class config;
+namespace view {
+class view_builder;
+}
 }
 namespace netw { class messaging_service; }
 class repair_service;
@@ -81,6 +86,10 @@ future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx, const db::config& cfg);
 future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<cdc::generation_service>& cdc_gs);
+future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
+future<> unset_server_sstables_loader(http_context& ctx);
+future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb);
+future<> unset_server_view_builder(http_context& ctx);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
