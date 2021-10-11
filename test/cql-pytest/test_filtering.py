@@ -26,6 +26,7 @@
 import pytest
 from util import new_test_table
 from cassandra.protocol import InvalidRequest
+from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.
@@ -51,10 +52,27 @@ def test_filter_on_unset(cql, test_keyspace):
 # all results, it should read all these pages and give us the one result.
 # The bug is that the iteration stops prematurely (it seems after the second
 # empty page) and an empty result set is returned.
+# It turns out that this was a bug in the Python driver, not in Scylla,
+# which was fixed by
+# https://github.com/datastax/python-driver/commit/1d9077d3f4c937929acc14f45c7693e76dde39a9
+# So below we check if the driver version is recent enough (the Datastax
+# and Scylla versions have different version numbers), and if not, we skip
+# this test.
 
 # Reproducer for issue #8203, partition-range (whole-table) scan case
-@pytest.mark.xfail(reason="issue #8203")
 def test_filtering_contiguous_nonmatching_partition_range(cql, test_keyspace):
+    # Verify that the Python driver is recent enough to contain the fix for
+    # the driver bug that caused this issue. If it's too old, this test cannot
+    # succeed, and we just skip it. Scylla drivers 3.24.5 or newer contain
+    # this fix, Datastax drivers 3.25.1 or newer contain it. The fix was
+    # introduced in the following commits:
+    # https://github.com/scylladb/python-driver/commit/6ed53d9f7004177e18d9f2ea000a7d159ff9278e,
+    # https://github.com/datastax/python-driver/commit/1d9077d3f4c937929acc14f45c7693e76dde39a9
+    scylla_driver = 'Scylla' in DRIVER_NAME
+    driver_version = tuple(int(x) for x in DRIVER_VERSION.split('.'))
+    if (scylla_driver and driver_version < (3, 24, 5) or
+            not scylla_driver and driver_version <= (3, 25, 0)):
+        pytest.skip("Python driver too old to run this test")
     # The bug depends on the amount of data being scanned passing some
     # page size limit, so it doesn't matter if the reproducer has a lot of
     # small rows or fewer long rows - and inserting fewer long rows is
@@ -74,8 +92,12 @@ def test_filtering_contiguous_nonmatching_partition_range(cql, test_keyspace):
         assert list(cql.execute(f"SELECT p FROM {table} WHERE v={v} ALLOW FILTERING")) == [(p,)]
 
 # Reproducer for issue #8203, single-partition scan case
-@pytest.mark.xfail(reason="issue #8203")
 def test_filtering_contiguous_nonmatching_single_partition(cql, test_keyspace):
+    scylla_driver = 'Scylla' in DRIVER_NAME
+    driver_version = tuple(int(x) for x in DRIVER_VERSION.split('.'))
+    if (scylla_driver and driver_version < (3, 24, 5) or
+            not scylla_driver and driver_version <= (3, 25, 0)):
+        pytest.skip("Python driver too old to run this test")
     count = 100
     long='x'*60000
     with new_test_table(cql, test_keyspace,
