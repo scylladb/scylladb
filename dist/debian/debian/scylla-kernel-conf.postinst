@@ -12,6 +12,7 @@ else
     sysctl -p/usr/lib/sysctl.d/99-scylla-vm.conf || :
     sysctl -p/usr/lib/sysctl.d/99-scylla-inotify.conf || :
     sysctl -p/usr/lib/sysctl.d/99-scylla-aio.conf || :
+    sysctl -p/usr/lib/sysctl.d/99-scylla-filemax.conf || :
 fi
 
 #DEBHELPER#
