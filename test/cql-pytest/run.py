@@ -212,8 +212,12 @@ def run_scylla_cmd(pid, dir):
         '--truncate-request-timeout-in-ms', '300000',
         '--write-request-timeout-in-ms', '300000',
         '--request-timeout-in-ms', '300000',
-        # Allow testing experimental features
-        '--experimental', '1', '--enable-user-defined-functions', '1',
+        # Allow testing experimental features. Following issue #9467, we need
+        # to add here specific experimental features as they are introduced.
+        # Note that Alternator-specific experimental features are listed in
+        # test/alternator/run.
+        '--experimental-features=udf',
+        '--enable-user-defined-functions', '1',
         # Set up authentication in order to allow testing this module
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',

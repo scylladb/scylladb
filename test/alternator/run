@@ -35,6 +35,12 @@ def run_alternator_cmd(pid, dir):
         '--alternator-write-isolation', 'always_use_lwt',
         '--alternator-streams-time-window-s', '0',
         '--alternator-timeout-in-ms', '30000',
+        # Allow testing experimental features. Following issue #9467, we need
+        # to add here specific experimental features as they are introduced.
+        # We only list here Alternator-specific experimental features - CQL
+        # ones are listed in test/cql-pytest/run.py.
+        '--experimental-features=alternator-streams',
+        '--experimental-features=alternator-ttl',
     ]
     if '--https' in sys.argv:
         run.setup_ssl_certificate(dir)
