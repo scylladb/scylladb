@@ -741,6 +741,239 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
     fmt::print("{{stream_end}}\n");
 }
 
+class text_dumper {
+    sstables::sstable_version_types _version;
+    std::function<std::string_view(const void* const)> _name_resolver;
+
+private:
+    template <typename Number>
+    requires std::is_arithmetic_v<Number>
+    void visit(Number& val) {
+        if constexpr (std::is_same_v<std::remove_cv_t<Number>, int8_t>) {
+            fmt::print(" {}", static_cast<signed int>(val));
+        } else if (std::is_same_v<std::remove_cv_t<Number>, uint8_t>) {
+            fmt::print(" {}", static_cast<unsigned int>(val));
+        } else {
+            fmt::print(" {}", val);
+        }
+    }
+
+    template <typename Integer>
+    void visit(const sstables::disk_string<Integer>& val) {
+        fmt::print(" {}", disk_string_to_string(val));
+    }
+
+    template <typename Integer, typename T>
+    void visit(const sstables::disk_array<Integer, T>& val) {
+        fmt::print("\n");
+        for (size_t i = 0; i != val.elements.size(); ++i) {
+            fmt::print("[{}]: ", i);
+            visit(val.elements[i]);
+            fmt::print("\n");
+        }
+    }
+
+    void visit(const sstables::disk_string_vint_size& val) {
+        fmt::print(" {}", sstring(val.value.begin(), val.value.end()));
+    }
+
+    template <typename T>
+    void visit(const sstables::disk_array_vint_size<T>& val) {
+        fmt::print("\n");
+        for (size_t i = 0; i != val.elements.size(); ++i) {
+            fmt::print("[{}]: ", i);
+            visit(val.elements[i]);
+            fmt::print("\n");
+        }
+    }
+
+    void visit(const utils::estimated_histogram& val) {
+        fmt::print("\n");
+        for (size_t i = 0; i < val.buckets.size(); i++) {
+            auto offset = val.bucket_offsets[i == 0 ? 0 : i - 1];
+            auto bucket = val.buckets[i];
+            fmt::print("[{}]: offset: {}, value={}}}\n", i, offset, bucket);
+        }
+    }
+
+    void visit(const utils::streaming_histogram& val) {
+        fmt::print("\n");
+        for (const auto& [k, v] : val.bin) {
+            fmt::print("[{}]: {}\n", k, v);
+        }
+    }
+
+    void visit(const db::replay_position& val) {
+        fmt::print(" id: {}, pos: {}", val.id, val.pos);
+    }
+
+    void visit(const sstables::commitlog_interval& val) {
+        fmt::print(" {{start: ");
+        visit(val.start);
+        fmt::print("}}");
+
+        fmt::print(" {{end: ");
+        visit(val.end);
+        fmt::print("}}");
+    }
+
+    template <typename Integer>
+    void visit(const sstables::vint<Integer>& val) {
+        fmt::print("{}", val.value);
+    }
+
+    void visit(const sstables::serialization_header::column_desc& val) {
+        text_dumper dumper(_version, [&val] (const void* const field) {
+            if (field == &val.name) { return "name"; }
+            else if (field == &val.type_name) { return "type_name"; }
+            else { throw std::invalid_argument("invalid field offset"); }
+        });
+        const_cast<sstables::serialization_header::column_desc&>(val).describe_type(_version, std::ref(dumper));
+    }
+
+    template <typename FieldType>
+    void visit_field(FieldType& field) {
+        const auto name = _name_resolver(&field);
+        fmt::print("{{{}:", name);
+        visit(field);
+        fmt::print("}}\n");
+    }
+
+    text_dumper(sstables::sstable_version_types version, std::function<std::string_view(const void* const)> name_resolver)
+        : _version(version), _name_resolver(std::move(name_resolver)) {
+    }
+
+public:
+    template <typename Arg1>
+    void operator()(Arg1& arg1) {
+        visit_field(arg1);
+    }
+
+    template <typename Arg1, typename... Arg>
+    void operator()(Arg1& arg1, Arg&... arg) {
+        visit_field(arg1);
+        (*this)(arg...);
+    }
+
+    template <typename T>
+    static void dump(sstables::sstable_version_types version, const T& obj, std::string_view name,
+            std::function<std::string_view(const void* const)> name_resolver) {
+        text_dumper dumper(version, std::move(name_resolver));
+        fmt::print("{{{}_start}}\n", name);
+        const_cast<T&>(obj).describe_type(version, std::ref(dumper));
+        fmt::print("{{{}_end}}\n", name);
+    }
+};
+
+void dump_validation_metadata(sstables::sstable_version_types version, const sstables::validation_metadata& metadata) {
+    text_dumper::dump(version, metadata, "validation", [&metadata] (const void* const field) {
+        if (field == &metadata.partitioner) { return "partitioner"; }
+        else if (field == &metadata.filter_chance) { return "filter_chance"; }
+        else { throw std::invalid_argument("invalid field offset"); }
+    });
+}
+
+void dump_compaction_metadata(sstables::sstable_version_types version, const sstables::compaction_metadata& metadata) {
+    text_dumper::dump(version, metadata, "compaction", [&metadata] (const void* const field) {
+        if (field == &metadata.ancestors) { return "ancestors"; }
+        else if (field == &metadata.cardinality) { return "cardinality"; }
+        else { throw std::invalid_argument("invalid field offset"); }
+    });
+}
+
+void dump_stats_metadata(sstables::sstable_version_types version, const sstables::stats_metadata& metadata) {
+    text_dumper::dump(version, metadata, "stats", [&metadata] (const void* const field) {
+        if (field == &metadata.estimated_partition_size) { return "estimated_partition_size"; }
+        else if (field == &metadata.estimated_cells_count) { return "estimated_cells_count"; }
+        else if (field == &metadata.position) { return "position"; }
+        else if (field == &metadata.min_timestamp) { return "min_timestamp"; }
+        else if (field == &metadata.max_timestamp) { return "max_timestamp"; }
+        else if (field == &metadata.min_local_deletion_time) { return "min_local_deletion_time"; }
+        else if (field == &metadata.max_local_deletion_time) { return "max_local_deletion_time"; }
+        else if (field == &metadata.min_ttl) { return "min_ttl"; }
+        else if (field == &metadata.max_ttl) { return "max_ttl"; }
+        else if (field == &metadata.compression_ratio) { return "compression_ratio"; }
+        else if (field == &metadata.estimated_tombstone_drop_time) { return "estimated_tombstone_drop_time"; }
+        else if (field == &metadata.sstable_level) { return "sstable_level"; }
+        else if (field == &metadata.repaired_at) { return "repaired_at"; }
+        else if (field == &metadata.min_column_names) { return "min_column_names"; }
+        else if (field == &metadata.max_column_names) { return "max_column_names"; }
+        else if (field == &metadata.has_legacy_counter_shards) { return "has_legacy_counter_shards"; }
+        else if (field == &metadata.columns_count) { return "columns_count"; }
+        else if (field == &metadata.rows_count) { return "rows_count"; }
+        else if (field == &metadata.commitlog_lower_bound) { return "commitlog_lower_bound"; }
+        else if (field == &metadata.commitlog_intervals) { return "commitlog_intervals"; }
+        else { throw std::invalid_argument("invalid field offset"); }
+    });
+}
+
+void dump_serialization_header(sstables::sstable_version_types version, const sstables::serialization_header& metadata) {
+    text_dumper::dump(version, metadata, "serialization_header", [&metadata] (const void* const field) {
+        if (field == &metadata.min_timestamp_base) { return "min_timestamp_base"; }
+        else if (field == &metadata.min_local_deletion_time_base) { return "min_local_deletion_time_base"; }
+        else if (field == &metadata.min_ttl_base) { return "min_ttl_base"; }
+        else if (field == &metadata.pk_type_name) { return "pk_type_name"; }
+        else if (field == &metadata.clustering_key_types_names) { return "clustering_key_types_names"; }
+        else if (field == &metadata.static_columns) { return "static_columns"; }
+        else if (field == &metadata.regular_columns) { return "regular_columns"; }
+        else { throw std::invalid_argument("invalid field offset"); }
+    });
+}
+
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
+        const options& opts, const operation_specific_options& op_opts) {
+    check_flags_unusable_for_component_dump("statistics", partitions, opts);
+
+    auto to_string = [] (sstables::metadata_type t) {
+        switch (t) {
+            case sstables::metadata_type::Validation: return "validation";
+            case sstables::metadata_type::Compaction: return "compaction";
+            case sstables::metadata_type::Stats: return "stats";
+            case sstables::metadata_type::Serialization: return "serialization";
+        }
+        std::abort();
+    };
+
+    fmt::print("{{stream_start}}\n");
+    for (auto& sst : sstables) {
+        auto& statistics = sst->get_statistics();
+
+        fmt::print("{{sstable_statistics_start: {}}}\n", sst->get_filename());
+        fmt::print("{{offsets: ");
+        if (!statistics.offsets.elements.empty()) {
+            auto it = statistics.offsets.elements.begin();
+            const auto end = statistics.offsets.elements.end();
+            fmt::print("{}={}", to_string(it->first), it->second);
+            for (++it; it != end; ++it) {
+                fmt::print(", {}={}", to_string(it->first), it->second);
+            }
+        }
+        fmt::print("}}\n");
+        fmt::print("{{contents_start}}\n");
+        const auto version = sst->get_version();
+        for (const auto& [type, _] : statistics.offsets.elements) {
+            const auto& metadata_ptr = statistics.contents.at(type);
+            switch (type) {
+                case sstables::metadata_type::Validation:
+                    dump_validation_metadata(version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
+                    break;
+                case sstables::metadata_type::Compaction:
+                    dump_compaction_metadata(version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                    break;
+                case sstables::metadata_type::Stats:
+                    dump_stats_metadata(version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
+                    break;
+                case sstables::metadata_type::Serialization:
+                    dump_serialization_header(version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
+                    break;
+            }
+        }
+        fmt::print("{{contents_end}}\n");
+        fmt::print("{{sstable_statistics_end}}\n");
+    }
+    fmt::print("{{stream_end}}\n");
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) {
@@ -757,6 +990,7 @@ const std::vector<operation> operations{
     {"dump-index", "Dump content of sstable index(es).", dump_index_operation},
     {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
     {"dump-summary", "Dump content of sstable summary(es).", dump_summary_operation},
+    {"dump-statistics", "Dump content of sstable statistics(s).", dump_statistics_operation},
     {"writetime-histogram",
             "Generate a histogram (bucket=month) of all the timestamps (writetime), written to histogram.json.",
             {{"bucket", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"}},
