@@ -229,7 +229,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         m.set_cell(row_key, column, mut.serialize(set_type));
     } else if (!value.is_null()) {
         // for frozen sets, we're overwriting the whole cell
-        m.set_cell(row_key, column, params.make_cell(*column.type, value.value.to_view()));
+        m.set_cell(row_key, column, params.make_cell(*column.type, value.view()));
     } else {
         m.set_cell(row_key, column, params.make_dead_cell());
     }

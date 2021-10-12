@@ -355,7 +355,7 @@ lists::do_append(const expr::constant& list_value,
         if (list_value.is_null()) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
-            m.set_cell(prefix, column, params.make_cell(*column.type, list_value.value.to_view()));
+            m.set_cell(prefix, column, params.make_cell(*column.type, list_value.view()));
         }
     }
 }
@@ -477,7 +477,7 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     }
 
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
-    int32_t idx = index.value.to_view().deserialize<int32_t>(*int32_type);
+    int32_t idx = index.view().deserialize<int32_t>(*int32_type);
 
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");

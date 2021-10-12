@@ -293,7 +293,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
         if (map_value.is_null()) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
-            m.set_cell(prefix, column, params.make_cell(*column.type, map_value.value.to_view()));
+            m.set_cell(prefix, column, params.make_cell(*column.type, map_value.view()));
         }
     }
 }

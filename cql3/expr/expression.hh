@@ -330,6 +330,8 @@ struct constant {
     bool is_unset_value() const;
     bool is_null_or_unset() const;
     bool has_empty_value_bytes() const;
+
+    cql3::raw_value_view view() const;
 };
 
 // Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.

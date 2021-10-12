@@ -955,7 +955,7 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
     expr::visit(overloaded_functor{
-            [&] (const constant& v) { os << v.value.to_view(); },
+            [&] (const constant& v) { os << v.view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
                 os << "(" << opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
@@ -1283,6 +1283,10 @@ bool constant::is_null_or_unset() const {
     return is_null() || is_unset_value();
 }
 
+cql3::raw_value_view constant::view() const {
+    return value.to_view();
+}
+
 std::optional<bool> get_bool_value(const constant& constant_val) {
     if (constant_val.type->get_kind() != abstract_type::kind::boolean) {
         return std::nullopt;
@@ -1296,7 +1300,7 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
         return std::nullopt;
     }
 
-    return constant_val.value.to_view().deserialize<bool>(*boolean_type);
+    return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
 constant evaluate(term* term_ptr, const query_options& options) {
@@ -1657,14 +1661,14 @@ static constant evaluate_map(const collection_constructor& collection, const que
                 return constant::make_unset_value(collection.type);
             }
 
-            if (key.value.to_view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            if (key.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
                 // TODO: Behaviour copied from maps::delayed_value::bind(), but this seems incorrect
                 // The original reasoning is:
                 // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
                 // but CQL uses int32_t to encode length of a map key
                 throw exceptions::invalid_request_exception(format("Map key is too long. Map keys are limited to {:d} bytes but {:d} bytes keys provided",
                                                    std::numeric_limits<uint16_t>::max(),
-                                                   key.value.to_view().size_bytes()));
+                                                   key.view().size_bytes()));
             }
 
             evaluated_elements.emplace(std::move(key.value).to_managed_bytes(),
@@ -1833,7 +1837,7 @@ static void ensure_can_get_value_elements(const constant& val,
 utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::list, "expr::get_list_elements");
 
-    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
     });
 }
@@ -1841,7 +1845,7 @@ utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
 utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::set, "expr::get_set_elements");
 
-    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
     });
 }
@@ -1849,7 +1853,7 @@ utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
 std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::map, "expr::get_map_elements");
 
-    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
     });
 }
@@ -1857,7 +1861,7 @@ std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cons
 std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::tuple, "expr::get_tuple_elements");
 
-    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([&](const FragmentedView auto& value_bytes) {
         const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val.type->without_reversed());
         return ttype.split_fragmented(value_bytes);
     });
@@ -1866,7 +1870,7 @@ std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
 std::vector<managed_bytes_opt> get_user_type_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::user, "expr::get_user_type_elements");
 
-    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([&](const FragmentedView auto& value_bytes) {
         const user_type_impl& utype = static_cast<const user_type_impl&>(val.type->without_reversed());
         return utype.split_fragmented(value_bytes);
     });

@@ -200,7 +200,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         m.set_cell(row_key, column, mut.serialize(type));
     } else {
         if (!ut_value.is_null()) {
-            m.set_cell(row_key, column, params.make_cell(type, ut_value.value.to_view()));
+            m.set_cell(row_key, column, params.make_cell(type, ut_value.view()));
         } else {
             m.set_cell(row_key, column, params.make_dead_cell());
         }
