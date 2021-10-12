@@ -95,6 +95,7 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "alternator/controller.hh"
+#include "alternator/ttl.hh"
 
 #include "service/raft/raft_group_registry.hh"
 
@@ -1357,11 +1358,28 @@ int main(int ac, char** av) {
             });
 
             alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, *cfg);
+            sharded<alternator::expiration_service> es;
+            std::any stop_expiration_service;
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {
                     return alternator_ctl.start_server();
                 }).get();
+                // Start the expiration service on all shards.
+                // Currently we only run it if Alternator is enabled, because
+                // only Alternator uses it for its TTL feature. But in the
+                // future if we add a CQL interface to it, we may want to
+                // start this outside the Alternator if().
+                if (cfg->check_experimental(db::experimental_features_t::ALTERNATOR_TTL)) {
+                    supervisor::notify("starting the expiration service");
+                    es.start(std::ref(db), std::ref(proxy)).get();
+                    stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
+                        es.stop().get();
+                    });
+                    with_scheduling_group(maintenance_scheduling_group, [&es] {
+                        return es.invoke_on_all(&alternator::expiration_service::start);
+                    }).get();
+                }
             }
             ss.local().register_protocol_server(alternator_ctl);
 

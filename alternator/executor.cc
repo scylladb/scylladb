@@ -3350,6 +3350,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 
+    // FIXME: should be moved above, set on opts, so get_max_result_size knows it?
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
