@@ -2196,7 +2196,7 @@ sstable::make_crawling_reader_v1(
     return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), pc, std::move(trace_state), monitor);
 }
 
-entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
+static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
     static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
@@ -2206,30 +2206,40 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
 
     sstable::version_types version;
 
+    const auto ks_cf_provided = provided_ks && provided_cf;
+
     sstring generation;
     sstring format;
     sstring component;
     sstring ks;
     sstring cf;
+    if (ks_cf_provided) {
+        ks = std::move(*provided_ks);
+        cf = std::move(*provided_cf);
+    }
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
     if (std::regex_match(s, match, la_mx)) {
         std::string sdir(sstdir);
         std::smatch dirmatch;
-        if (std::regex_match(sdir, dirmatch, dir)) {
-            ks = dirmatch[1].str();
-            cf = dirmatch[2].str();
-        } else {
-            throw malformed_sstable_exception(seastar::format("invalid path for file {}: {}. Path doesn't match known pattern.", fname, sstdir));
+        if (!ks_cf_provided) {
+            if (std::regex_match(sdir, dirmatch, dir)) {
+                ks = dirmatch[1].str();
+                cf = dirmatch[2].str();
+            } else {
+                throw malformed_sstable_exception(seastar::format("invalid path for file {}: {}. Path doesn't match known pattern.", fname, sstdir));
+            }
         }
         version = from_string(match[1].str());
         generation = match[2].str();
         format = sstring(match[3].str());
         component = sstring(match[4].str());
     } else if (std::regex_match(s, match, ka)) {
-        ks = match[1].str();
-        cf = match[2].str();
+        if (!ks_cf_provided) {
+            ks = match[1].str();
+            cf = match[2].str();
+        }
         version = sstable::version_types::ka;
         format = sstring("big");
         generation = match[3].str();
@@ -2238,6 +2248,14 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
     return entry_descriptor(sstdir, ks, cf, boost::lexical_cast<unsigned long>(generation), version, sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
+}
+
+entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
+    return make_entry_descriptor(std::move(sstdir), std::move(fname), nullptr, nullptr);
+}
+
+entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname, sstring ks, sstring cf) {
+    return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
 }
 
 sstable::version_types sstable::version_from_sstring(sstring &s) {

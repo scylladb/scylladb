@@ -44,6 +44,10 @@ struct entry_descriptor {
 
     static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
 
+    // Use the given ks and cf and don't attempt to extract it from the dir path.
+    // This allows loading sstables from any path, but the filename still has to be valid.
+    static entry_descriptor make_descriptor(sstring sstdir, sstring fname, sstring ks, sstring cf);
+
     entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation,
                      sstable_version_types version, sstable_format_types format,
                      component_type component)

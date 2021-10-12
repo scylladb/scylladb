@@ -146,7 +146,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         const auto dir_path = std::filesystem::path(sst_path).remove_filename();
         const auto sst_filename = sst_path.filename();
 
-        auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str());
+        auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str(), schema->ks_name(), schema->cf_name());
         auto sst = sst_man.make_sstable(schema, dir_path.c_str(), ed.generation, ed.version, ed.format);
 
         co_await sst->load();
