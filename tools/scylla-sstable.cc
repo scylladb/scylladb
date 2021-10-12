@@ -650,6 +650,44 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
     std::cout << "{stream_end}" << std::endl;
 }
 
+template <typename Integer>
+sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
+    return sstring(ds.value.begin(), ds.value.end());
+}
+
+void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
+        const options& opts, const operation_specific_options& op_opts) {
+    check_flags_unusable_for_component_dump("compression-info", partitions, opts);
+    fmt::print("{{stream_start}}\n");
+
+    for (auto& sst : sstables) {
+        const auto& compression = sst->get_compression();
+
+        fmt::print("{{sstable_compression_info_start: {}}}\n", sst->get_filename());
+        fmt::print("{{name: {}}}\n", disk_string_to_string(compression.name));
+        fmt::print("{{options:");
+        if (!compression.options.elements.empty()) {
+            auto it = compression.options.elements.begin();
+            const auto end = compression.options.elements.end();
+            fmt::print(" {}={}", disk_string_to_string(it->key), disk_string_to_string(it->value));
+            for (++it; it != end; ++it) {
+                fmt::print(", {}={}", disk_string_to_string(it->key), disk_string_to_string(it->value));
+            }
+        }
+        fmt::print("}}\n");
+        fmt::print("{{chunk_len: {}}}\n", compression.chunk_len);
+        fmt::print("{{data_len: {}}}\n", compression.data_len);
+        fmt::print("{{offsets_start}}\n");
+        size_t i = 0;
+        for (const auto& offset : compression.offsets) {
+            fmt::print("[{}]: {}\n", i++, offset);
+        }
+        fmt::print("{{offsets_end}}\n");
+        fmt::print("{{sstable_compression_info_end}}\n");
+    }
+    fmt::print("{{stream_end}}\n");
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) {
@@ -664,6 +702,7 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
 const std::vector<operation> operations{
     {"dump", "Dump content of sstable(s).", sstable_consumer_operation<dumping_consumer>},
     {"dump-index", "Dump content of sstable index(es).", dump_index_operation},
+    {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
     {"writetime-histogram",
             "Generate a histogram (bucket=month) of all the timestamps (writetime), written to histogram.json.",
             {{"bucket", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"}},
