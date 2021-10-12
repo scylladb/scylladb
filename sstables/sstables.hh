@@ -754,6 +754,9 @@ public:
         return t;
     }
 
+    const statistics& get_statistics() const {
+        return _components->statistics;
+    }
     const stats_metadata& get_stats_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Stats);
         if (entry == _components->statistics.contents.end()) {
