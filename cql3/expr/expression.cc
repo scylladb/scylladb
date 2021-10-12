@@ -1379,45 +1379,6 @@ constant evaluate(const expression& e, const query_options& options) {
     }, e);
 }
 
-// Serializes a map using the internal cql serialization format
-// Takes a range of pair<managed_bytes, managed_bytes>
-template <std::ranges::range Range>
-requires std::convertible_to<std::ranges::range_value_t<Range>, std::pair<const managed_bytes, managed_bytes>>
-static managed_bytes serialize_map(const Range& map_range) {
-    size_t serialized_len = 4;
-    size_t map_size = 0;
-    for (const std::pair<const managed_bytes, managed_bytes>& elem : map_range) {
-        serialized_len += 4 + elem.first.size() + 4 + elem.second.size();
-        map_size += 1;
-    }
-
-    if (map_size > std::numeric_limits<int32_t>::max()) {
-        throw exceptions::invalid_request_exception(
-            fmt::format("Map size too large: {} > {}", map_size, std::numeric_limits<int32_t>::max()));
-    }
-
-    managed_bytes result(managed_bytes::initialized_later(), serialized_len);
-    managed_bytes_mutable_view out(result);
-
-    write_collection_size(out, map_size, cql_serialization_format::internal());
-    for (const std::pair<const managed_bytes, managed_bytes>& elem : map_range) {
-        if (elem.first.size() > std::numeric_limits<int32_t>::max()) {
-            throw exceptions::invalid_request_exception(
-                fmt::format("Map key size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
-        }
-
-        if (elem.second.size() > std::numeric_limits<int32_t>::max()) {
-            throw exceptions::invalid_request_exception(
-                fmt::format("Map value size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
-        }
-
-        write_collection_value(out, cql_serialization_format::internal(), elem.first);
-        write_collection_value(out, cql_serialization_format::internal(), elem.second);
-    }
-
-    return result;
-}
-
 // Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
 template <FragmentedView View>
 static managed_bytes reserialize_value(View value_bytes,
@@ -1486,7 +1447,7 @@ static managed_bytes reserialize_value(View value_bytes,
             values_map.emplace(std::move(element));
         }
 
-       return serialize_map(values_map);
+       return map_type_impl::serialize_to_managed_bytes(values_map);
     }
 
     if (type.is_tuple() || type.is_user_type()) {
@@ -1685,7 +1646,8 @@ static constant evaluate_map(const collection_constructor& collection, const que
         }
     }
 
-    return constant(raw_value::make_value(serialize_map(evaluated_elements)), collection.type);
+    managed_bytes serialized_map = map_type_impl::serialize_to_managed_bytes(evaluated_elements);
+    return constant(raw_value::make_value(std::move(serialized_map)), collection.type);
 }
 
 constant evaluate(const collection_constructor& collection, const query_options& options) {

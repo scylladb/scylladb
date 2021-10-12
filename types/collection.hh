@@ -31,6 +31,7 @@
 #include "schema_fwd.hh"
 #include "log.hh"
 #include "cql_serialization_format.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 
