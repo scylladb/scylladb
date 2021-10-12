@@ -614,17 +614,22 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     });
 }
 
-void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
-        const options& opts, const operation_specific_options& op_opts) {
+void check_flags_unusable_for_component_dump(const char* dump_name, const partition_set& partitions, const options& opts) {
     if (!partitions.empty()) {
-        sst_log.warn("partition-filter is not supported for dump-index, ignoring");
+        sst_log.warn("partition-filter is not supported for dump-{}, ignoring", dump_name);
     }
     if (opts.merge) {
-        sst_log.warn("--merge not supported for dump-index, ignoring");
+        sst_log.warn("--merge not supported for dump-{}, ignoring", dump_name);
     }
     if (opts.no_skips) {
-        sst_log.warn("--no-skips not supported for dump-index, ignoring");
+        sst_log.warn("--no-skips not supported for dump-{}, ignoring", dump_name);
     }
+}
+
+void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
+        const options& opts, const operation_specific_options& op_opts) {
+    check_flags_unusable_for_component_dump("index", partitions, opts);
+
     std::cout << "{stream_start}" << std::endl;
     for (auto& sst : sstables) {
         sstables::index_reader idx_reader(sst, permit, default_priority_class(), {}, sstables::use_caching::yes);
