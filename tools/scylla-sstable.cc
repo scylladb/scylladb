@@ -974,6 +974,114 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
     fmt::print("{{stream_end}}\n");
 }
 
+const char* to_string(sstables::scylla_metadata_type t) {
+    switch (t) {
+        case sstables::scylla_metadata_type::Sharding: return "Sharding";
+        case sstables::scylla_metadata_type::Features: return "Features";
+        case sstables::scylla_metadata_type::ExtensionAttributes: return "ExtensionAttributes";
+        case sstables::scylla_metadata_type::RunIdentifier: return "RunIdentifier";
+        case sstables::scylla_metadata_type::LargeDataStats: return "LargeDataStats";
+        case sstables::scylla_metadata_type::SSTableOrigin: return "SSTableOrigin";
+    }
+    std::abort();
+}
+
+const char* to_string(sstables::large_data_type t) {
+    switch (t) {
+        case sstables::large_data_type::partition_size: return "partition_size";
+        case sstables::large_data_type::row_size: return "row_size";
+        case sstables::large_data_type::cell_size: return "cell_size";
+        case sstables::large_data_type::rows_in_partition: return "rows_in_partition";
+    }
+    std::abort();
+}
+
+struct scylla_metadata_visitor : public boost::static_visitor<> {
+    void operator()(const sstables::sharding_metadata& val) const {
+        fmt::print("\n");
+        for (const auto& e : val.token_ranges.elements) {
+            fmt::print("{}{}, {}{}\n",
+                    e.left.exclusive ? "(" : "[",
+                    disk_string_to_string(e.left.token),
+                    e.right.exclusive ? ")" : "]",
+                    disk_string_to_string(e.right.token));
+        }
+    }
+    void operator()(const sstables::sstable_enabled_features& val) const {
+        std::pair<sstables::sstable_feature, const char*> all_features[] = {
+                {sstables::sstable_feature::NonCompoundPIEntries, "NonCompoundPIEntries"},
+                {sstables::sstable_feature::NonCompoundRangeTombstones, "NonCompoundRangeTombstones"},
+                {sstables::sstable_feature::ShadowableTombstones, "ShadowableTombstones"},
+                {sstables::sstable_feature::CorrectStaticCompact, "CorrectStaticCompact"},
+                {sstables::sstable_feature::CorrectEmptyCounters, "CorrectEmptyCounters"},
+                {sstables::sstable_feature::CorrectUDTsInCollections, "CorrectUDTsInCollections"},
+        };
+        fmt::print(" ({}): ", val.enabled_features);
+        bool first = true;
+        for (const auto& [mask, name] : all_features) {
+            if (mask & val.enabled_features) {
+                if (first) {
+                    first = false;
+                } else {
+                    fmt::print(" |");
+                }
+                fmt::print(" {}", name);
+            }
+        }
+    }
+    void operator()(const sstables::scylla_metadata::extension_attributes& val) const {
+        fmt::print("\n");
+        for (const auto& [k, v] : val.map) {
+            fmt::print("{}: {}\n", disk_string_to_string(k), disk_string_to_string(v));
+        }
+    }
+    void operator()(const sstables::run_identifier& val) const {
+        fmt::print(" {}", val.id);
+    }
+    void operator()(const sstables::scylla_metadata::large_data_stats& val) const {
+        fmt::print("\n");
+        for (const auto& [k, v] : val.map) {
+            fmt::print("{}: {{max_value: {}, threshold: {}, above_threshold: {}}}\n",
+                    to_string(k),
+                    v.max_value,
+                    v.threshold,
+                    v.above_threshold);
+        }
+    }
+    void operator()(const sstables::scylla_metadata::sstable_origin& val) const {
+        fmt::print(" {}", disk_string_to_string(val));
+    }
+
+    template <sstables::scylla_metadata_type E, typename T>
+    void operator()(const sstables::disk_tagged_union_member<sstables::scylla_metadata_type, E, T>& m) const {
+        fmt::print("{{{}:", to_string(E));
+        (*this)(m.value);
+        fmt::print("}}\n");
+    }
+
+    scylla_metadata_visitor() = default;
+};
+
+void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables, const partition_set& partitions,
+        const options& opts, const operation_specific_options& op_opts) {
+    check_flags_unusable_for_component_dump("scylla_metadata", partitions, opts);
+
+    fmt::print("{{stream_start}}\n");
+    for (auto& sst : sstables) {
+        fmt::print("{{sstable_scylla_metadata_start: {}}}\n", sst->get_filename());
+        auto m = sst->get_scylla_metadata();
+        if (!m) {
+            fmt::print("{{sstable_scylla_metadata_end}}\n");
+            continue;
+        }
+        for (const auto& [k, v] : m->data.data) {
+            boost::apply_visitor(scylla_metadata_visitor{}, v);
+        }
+        fmt::print("{{sstable_scylla_metadata_end}}\n");
+    }
+    fmt::print("{{stream_end}}\n");
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         const partition_set& partitions, const options& opts, const operation_specific_options& op_opts) {
@@ -991,6 +1099,7 @@ const std::vector<operation> operations{
     {"dump-compression-info", "Dump content of sstable compression info(s).", dump_compression_info_operation},
     {"dump-summary", "Dump content of sstable summary(es).", dump_summary_operation},
     {"dump-statistics", "Dump content of sstable statistics(s).", dump_statistics_operation},
+    {"dump-scylla-metadata", "Dump content of sstable scylla metadata(s).", dump_scylla_metadata_operation},
     {"writetime-histogram",
             "Generate a histogram (bucket=month) of all the timestamps (writetime), written to histogram.json.",
             {{"bucket", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"}},
