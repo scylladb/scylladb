@@ -110,14 +110,10 @@ html_style = ''
 # documentation.
 #
 html_theme_options = {
-    'header_links': [
-    ('Scylla Developer Notes', 'https://scylla.docs.scylladb.com'),
-    ('Scylla University', 'https://university.scylladb.com/'),
-    ('ScyllaDB Home', 'https://www.scylladb.com/')],
     'github_issues_repository': 'scylladb/scylla',
     'hide_version_dropdown': ['master'],
     'default_branch': 'stable',
-    'show_sidebar_index': True,
+    'hide_sidebar_index': 'False',
 }
 
 extlinks = {}

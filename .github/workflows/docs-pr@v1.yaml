@@ -1,0 +1,28 @@
+name: "Build docs on pull requests"
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "docs/**"
+
+jobs:
+  release:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v1
+        with:
+          python-version: 3.7
+      - name: Build docs
+        run: |
+          export PATH=$PATH:~/.local/bin
+          cd docs
+          make test
