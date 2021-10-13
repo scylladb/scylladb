@@ -45,6 +45,16 @@ using range = wrapping_range<T>;
 using ring_position = dht::ring_position;
 using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
+// If `range` was supposed to be used with a comparator `cmp`, then
+// `reverse(range)` is supposed to be used with a reversed comparator `c`.
+// For instance, if it does make sense to do
+//   range.contains(point, cmp);
+// then it also makes sense to do
+//   reversed(range).contains(point, [](auto x, auto y) { return cmp(y, x); });
+// but it doesn't make sense to do
+//   reversed(range).contains(point, cmp);
+clustering_range reverse(const clustering_range& range);
+
 extern const dht::partition_range full_partition_range;
 extern const clustering_range full_clustering_range;
 

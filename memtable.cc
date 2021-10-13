@@ -26,6 +26,18 @@
 #include "partition_builder.hh"
 #include "mutation_partition_view.hh"
 
+static flat_mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
+        bool is_reversed,
+        reader_permit permit,
+        dht::decorated_key dk,
+        query::clustering_key_filter_ranges crr,
+        partition_snapshot_ptr snp,
+        bool digest_requested,
+        logalloc::region& region,
+        logalloc::allocating_section& read_section,
+        boost::any pointer_to_container,
+        streamed_mutation::forwarding fwd, memtable& memtable);
+
 void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
     if (ts != api::missing_timestamp) {
         encoding_stats_collector::update_timestamp(ts);
@@ -462,11 +474,15 @@ public:
                     });
                     if (key_and_snp) {
                         update_last(key_and_snp->first);
-                        auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), _slice, key_and_snp->first.key());
+
+                        const query::clustering_row_ranges& ranges = _slice.row_ranges(*schema(), key_and_snp->first.key());
+                        // TODO: when the slice passed from query finally changes format from half-reversed into native reversed, this line needs to change.
+                        auto cr = query::clustering_key_filter_ranges(ranges);
+
                         auto snp_schema = key_and_snp->second->schema();
                         bool digest_requested = _slice.options.contains<query::partition_slice::option::with_digest>();
-                        auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_read_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
-                                        std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *mtbl());
+                        bool is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
+                        auto mpsr = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, _permit, std::move(key_and_snp->first), std::move(cr), std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *mtbl());
                         mpsr.upgrade_schema(schema());
                         _delegate = std::move(mpsr);
                     } else {
@@ -582,6 +598,25 @@ public:
     }
 };
 
+static flat_mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
+        bool is_reversed,
+        reader_permit permit,
+        dht::decorated_key dk,
+        query::clustering_key_filter_ranges crr,
+        partition_snapshot_ptr snp,
+        bool digest_requested,
+        logalloc::region& region,
+        logalloc::allocating_section& read_section,
+        boost::any pointer_to_container,
+        streamed_mutation::forwarding fwd, memtable& memtable) {
+    if (is_reversed) {
+        schema_ptr rev_snp_schema = snp->schema()->make_reversed();
+        return make_partition_snapshot_flat_reader<true, partition_snapshot_read_accounter>(std::move(rev_snp_schema), std::move(permit), std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, pointer_to_container, fwd, memtable);
+    } else {
+        return make_partition_snapshot_flat_reader<false, partition_snapshot_read_accounter>(snp->schema(), std::move(permit), std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, pointer_to_container, fwd, memtable);
+    }
+}
+
 class flush_reader final : public flat_mutation_reader::impl, private iterator_reader {
     // FIXME: Similarly to scanning_reader we have an underlying
     // flat_mutation_reader for each partition. This is suboptimal.
@@ -618,7 +653,7 @@ private:
             update_last(key_and_snp->first);
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
-            auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_flush_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
+            auto mpsr = make_partition_snapshot_flat_reader<false, partition_snapshot_flush_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
                             std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *snp_schema, _flushed_memory);
             mpsr.upgrade_schema(schema());
             _partition_reader = std::move(mpsr);
@@ -671,7 +706,7 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
 }
 
 flat_mutation_reader
-memtable::do_make_flat_reader(schema_ptr s,
+memtable::make_flat_reader(schema_ptr s,
                       reader_permit permit,
                       const dht::partition_range& range,
                       const query::partition_slice& slice,
@@ -679,6 +714,7 @@ memtable::do_make_flat_reader(schema_ptr s,
                       tracing::trace_state_ptr trace_state_ptr,
                       streamed_mutation::forwarding fwd,
                       mutation_reader::forwarding fwd_mr) {
+    bool is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
         auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
@@ -694,47 +730,23 @@ memtable::do_make_flat_reader(schema_ptr s,
             return make_empty_flat_reader(std::move(s), std::move(permit));
         }
         auto dk = pos.as_decorated_key();
-        auto cr = query::clustering_key_filter_ranges::get_ranges(*s, slice, dk.key());
-        auto snp_schema = snp->schema();
+
+        const query::clustering_row_ranges& ranges = slice.row_ranges(*s, dk.key());
+        // TODO: when the slice passed from query finally changes format from half-reversed into native reversed, this line needs to change.
+        auto cr = query::clustering_key_filter_ranges(ranges);
+
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
-        auto rd = make_partition_snapshot_flat_reader<partition_snapshot_read_accounter>(snp_schema, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested,
-                        *this, _read_section, shared_from_this(), fwd, *this);
+        auto rd = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _read_section, shared_from_this(), fwd, *this);
         rd.upgrade_schema(s);
         return rd;
     } else {
-        return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, pc, fwd_mr);
+        auto res = make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, pc, fwd_mr);
+        if (fwd == streamed_mutation::forwarding::yes) {
+            return make_forwardable(std::move(res));
+        } else {
+            return res;
+        }
     }
-}
-
-flat_mutation_reader
-memtable::make_flat_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& query_slice,
-        const io_priority_class& pc, tracing::trace_state_ptr trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
-    // When the memtable is flushed while a scanning read is ongoing, an sstable
-    // reader is created to replace the memtable reader mid-air. This sstable
-    // reader will get the memtable's slice. We don't want this sstable reader
-    // to read in reverse as we are reversing the stream on top of the memtable
-    // reader. Unreverse the slice here so when it is passed to the sstable
-    // reader it doesn't try to read in reverse. This is not required technically
-    // for single partition reads, but we do it anyway to keep things simple.
-    std::unique_ptr<query::partition_slice> unreversed_slice;
-    const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
-    auto fwd_sm = fwd;
-    if (reversed) {
-        fwd_sm = streamed_mutation::forwarding::no;
-        s = s->make_reversed();
-        unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));
-    }
-    const auto& slice = reversed ? *unreversed_slice : query_slice;
-
-    auto rd = do_make_flat_reader(std::move(s), permit, range, slice, pc, std::move(trace_state_ptr), fwd_sm, fwd_mr);
-
-    if (reversed) {
-        rd = make_reversing_reader(std::move(rd), permit.max_result_size(), std::move(unreversed_slice));
-    }
-    if (fwd && (reversed || !query::is_single_partition(range) || fwd_mr)) {
-        rd = make_forwardable(std::move(rd));
-    }
-    return rd;
 }
 
 flat_mutation_reader
