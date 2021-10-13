@@ -899,8 +899,21 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
 {
     co_await with_merge_lock([&] () mutable -> future<> {
         bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
-        co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
-        co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+        try {
+            co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
+            co_await update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+        } catch (...) {
+            // Failing to merge schema locally is fatal, because either:
+            // 1. the new information was already persisted in local schema tables, thus, it's better to restart
+            // and reload up-to-date information from disk than to continue operating with an inconsistent state
+            // - especially that schema digest  is computed from system tables' contents, not from in-memory information.
+            // or
+            // 2. the information was not fully persisted in local schema tables (e.g. flushing failed),
+            // in which case we're in inconsistent state even for schema tables, and a restart would force
+            // pulling up-to-date schema from other nodes.
+            slogger.error("Failed to update schema information, aborting: {}", std::current_exception());
+            abort();
+        }
     });
 }
 
