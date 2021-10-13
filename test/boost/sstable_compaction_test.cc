@@ -3930,6 +3930,19 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         }
 
         {
+            // create set of 256 disjoint ssts that belong to different windows and expect that twcs reshape allows them all to be compacted at once
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0; i < disjoint_sstable_count; i++) {
+                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(i + 1)), make_row(i, std::chrono::hours(i + 2))});
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == disjoint_sstable_count);
+        }
+
+        {
             // create set of 256 overlapping ssts that belong to the same time window and expect that twcs reshape allows only 32 to be compacted at once
 
             std::vector<sstables::shared_sstable> sstables;
