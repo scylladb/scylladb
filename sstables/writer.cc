@@ -38,6 +38,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     if (cfg.sstable_level) {
         _impl->_collector.set_sstable_level(cfg.sstable_level.value());
     }
+    sst.get_stats().on_open_for_writing();
 }
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
@@ -87,6 +88,10 @@ void sstable_writer::consume_end_of_stream() {
 
 sstable_writer::sstable_writer(sstable_writer&& o) = default;
 sstable_writer& sstable_writer::operator=(sstable_writer&& o) = default;
-sstable_writer::~sstable_writer() = default;
+sstable_writer::~sstable_writer() {
+    if (_impl) {
+        _impl->_sst.get_stats().on_close_for_writing();
+    }
+}
 
 } // namespace sstables

@@ -1355,7 +1355,6 @@ future<> sstable::create_data() noexcept {
     opt.sloppy_size = true;
     return open_or_create_data(oflags, std::move(opt)).then([this, oflags] {
         _open_mode.emplace(oflags);
-        _stats.on_open_for_writing();
     });
 }
 
@@ -2468,8 +2467,6 @@ future<> sstable::close_files() {
         if (_open_mode) {
             if (_open_mode.value() == open_flags::ro) {
                 _stats.on_close_for_reading();
-            } else {
-                _stats.on_close_for_writing();
             }
         }
         _open_mode.reset();
