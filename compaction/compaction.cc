@@ -1114,18 +1114,18 @@ protected:
     }
 
 private:
-    cleanup_compaction(database& db, column_family& cf, compaction_descriptor descriptor, compaction_data& info)
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, dht::token_range_vector owned_ranges)
         : regular_compaction(cf, std::move(descriptor), info)
-        , _owned_ranges(db.get_keyspace_local_ranges(_schema->ks_name()))
+        , _owned_ranges(std::move(owned_ranges))
         , _owned_ranges_checker(_owned_ranges)
     {
     }
 
 public:
     cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::cleanup opts)
-        : cleanup_compaction(opts.db, cf, std::move(descriptor), info) {}
+        : cleanup_compaction(cf, std::move(descriptor), info, opts.owned_ranges) {}
     cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::upgrade opts)
-        : cleanup_compaction(opts.db, cf, std::move(descriptor), info) {}
+        : cleanup_compaction(cf, std::move(descriptor), info, opts.owned_ranges) {}
 
     flat_mutation_reader make_sstable_reader() const override {
         return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());

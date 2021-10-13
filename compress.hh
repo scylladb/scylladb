@@ -74,13 +74,14 @@ public:
     // to cheaply bridge sstable compression options / maps
     using opt_string = std::optional<sstring>;
     using opt_getter = std::function<opt_string(const sstring&)>;
+    using ptr_type = shared_ptr<compressor>;
 
-    static shared_ptr<compressor> create(const sstring& name, const opt_getter&);
-    static shared_ptr<compressor> create(const std::map<sstring, sstring>&);
+    static ptr_type create(const sstring& name, const opt_getter&);
+    static ptr_type create(const std::map<sstring, sstring>&);
 
-    static thread_local const shared_ptr<compressor> lz4;
-    static thread_local const shared_ptr<compressor> snappy;
-    static thread_local const shared_ptr<compressor> deflate;
+    static thread_local const ptr_type lz4;
+    static thread_local const ptr_type snappy;
+    static thread_local const ptr_type deflate;
 
     static const sstring namespace_prefix;
 };
@@ -88,8 +89,8 @@ public:
 template<typename BaseType, typename... Args>
 class class_registry;
 
-using compressor_ptr = shared_ptr<compressor>;
-using compressor_registry = class_registry<compressor_ptr, const typename compressor::opt_getter&>;
+using compressor_ptr = compressor::ptr_type;
+using compressor_registry = class_registry<compressor, const typename compressor::opt_getter&>;
 
 class compression_parameters {
 public:

@@ -199,10 +199,10 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         const std::unordered_set<gms::inet_address>& ignore_nodes) {
 
     keyspace& ks = db.find_keyspace(ksname);
-    auto& rs = ks.get_replication_strategy();
+    auto erm = ks.get_effective_replication_map();
 
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
-    auto ret = rs.get_natural_endpoints(tok);
+    auto ret = erm->get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
     if (!data_centers.empty()) {
@@ -269,7 +269,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         }
         if (ret.size() < 1) {
             auto me = utils::fb_utilities::get_broadcast_address();
-            auto others = rs.get_natural_endpoints(tok);
+            auto others = erm->get_natural_endpoints(tok);
             remove_item(others, me);
             throw std::runtime_error(sprint("Repair requires at least two "
                     "endpoints that are neighbors before it can continue, "
@@ -706,15 +706,14 @@ future<> repair_info::repair_range(const dht::token_range& range) {
 }
 
 static dht::token_range_vector get_primary_ranges_for_endpoint(
-        database& db, sstring keyspace, gms::inet_address ep, utils::can_yield can_yield = utils::can_yield::no) {
-    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
-    return rs.get_primary_ranges(ep, can_yield);
+        database& db, sstring keyspace, gms::inet_address ep) {
+    return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges(ep);
 }
 
 static dht::token_range_vector get_primary_ranges(
-        database& db, sstring keyspace, utils::can_yield can_yield = utils::can_yield::no) {
+        database& db, sstring keyspace) {
     return get_primary_ranges_for_endpoint(db, keyspace,
-            utils::fb_utilities::get_broadcast_address(), can_yield);
+            utils::fb_utilities::get_broadcast_address());
 }
 
 // get_primary_ranges_within_dc() is similar to get_primary_ranges(),
@@ -722,10 +721,8 @@ static dht::token_range_vector get_primary_ranges(
 // across the entire cluster, here each range is assigned a primary
 // owner in each of the clusters.
 static dht::token_range_vector get_primary_ranges_within_dc(
-        database& db, sstring keyspace, utils::can_yield can_yield = utils::can_yield::no) {
-    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
-    return rs.get_primary_ranges_within_dc(
-            utils::fb_utilities::get_broadcast_address(), can_yield);
+        database& db, sstring keyspace) {
+    return db.find_keyspace(keyspace).get_effective_replication_map()->get_primary_ranges_within_dc(utils::fb_utilities::get_broadcast_address());
 }
 
 static sstring get_local_dc() {
@@ -1307,7 +1304,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, utils::can_yield::yes);
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip).get0();
             seastar::thread::maybe_yield();
             nr_ranges_total += desired_ranges.size();
         }
@@ -1323,17 +1320,19 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, utils::can_yield::yes);
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip).get0();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
+            auto erm = ks.get_effective_replication_map();
+            auto replication_factor = erm->get_replication_factor();
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get0();
-            auto range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+            auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
             //Pending ranges
             metadata_clone.update_normal_tokens(tokens, myip).get();
-            auto pending_range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+            auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get0();
             metadata_clone.clear_gently().get();
 
             //Collects the source that will have its range moved to the new node
@@ -1383,7 +1382,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             return nodes;
                         };
                         auto get_rf_in_local_dc = [&] () {
-                            size_t rf_in_local_dc = strat.get_replication_factor();
+                            size_t rf_in_local_dc = replication_factor;
                             if (strat.get_type() == locator::replication_strategy_type::network_topology) {
                                 auto nts = dynamic_cast<locator::network_topology_strategy*>(&strat);
                                 if (!nts) {
@@ -1405,7 +1404,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                         auto rf_in_local_dc = get_rf_in_local_dc();
                         if (everywhere_topology) {
                             neighbors = old_endpoints_in_local_dc;
-                        } else if (old_endpoints.size() == strat.get_replication_factor()) {
+                        } else if (old_endpoints.size() == replication_factor) {
                             // For example, with RF = 3 and 3 nodes n1, n2, n3
                             // in the cluster, n4 is bootstrapped, old_replicas
                             // = {n1, n2, n3}, new_replicas = {n1, n2, n4}, n3
@@ -1414,7 +1413,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             // losing the range n3
                             mandatory_neighbors = get_node_losing_the_ranges(old_endpoints, new_endpoints);
                             neighbors = mandatory_neighbors;
-                        } else if (old_endpoints.size() < strat.get_replication_factor()) {
+                        } else if (old_endpoints.size() < replication_factor) {
                           if (!find_node_in_local_dc_only) {
                             neighbors = old_endpoints;
                           } else {
@@ -1448,7 +1447,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                           }
                         } else {
                             throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints={}, rf={}",
-                                        keyspace_name, desired_range, old_endpoints, strat.get_replication_factor()));
+                                        keyspace_name, desired_range, old_endpoints, replication_factor));
                         }
                         rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, neighbors={}, mandatory_neighbors={}",
                                 keyspace_name, desired_range, neighbors, mandatory_neighbors);
@@ -1479,8 +1478,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 continue;
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
-            auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(leaving_node, utils::can_yield::yes);
+            dht::token_range_vector ranges = ks.get_effective_replication_map()->get_ranges(leaving_node);
             nr_ranges_total += ranges.size();
         }
         if (reason == streaming::stream_reason::decommission) {
@@ -1502,8 +1500,9 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
+            auto erm = ks.get_effective_replication_map();
             // First get all ranges the leaving node is responsible for
-            dht::token_range_vector ranges = strat.get_ranges(leaving_node, utils::can_yield::yes);
+            dht::token_range_vector ranges = erm->get_ranges(leaving_node);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
             size_t nr_ranges_total = ranges.size();
             size_t nr_ranges_skipped = 0;
@@ -1511,7 +1510,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes);
+                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr).get0();
                 current_replica_endpoints.emplace(r, std::move(eps));
             }
             auto temp = tmptr->clone_after_all_left().get0();
@@ -1530,7 +1529,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
+                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp).get0();
                 const inet_address_vector_replica_set& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
                 bool skip_this_range = false;
@@ -1694,7 +1693,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
             // Okay to yield since tm is immutable
-            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr, utils::can_yield::yes);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
             nr_ranges_total += ranges.size();
 
         }
@@ -1718,7 +1717,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr, utils::can_yield::yes);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr).get0();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, ranges.size());
             for (auto it = ranges.begin(); it != ranges.end();) {
@@ -1726,7 +1725,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes) |
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr).get0() |
                     boost::adaptors::filtered([myip, &source_dc, &snitch_ptr] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;

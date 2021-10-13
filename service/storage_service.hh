@@ -207,20 +207,31 @@ public:
     future<> uninit_messaging_service();
 
 private:
+    using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
+
+    // Token metadata changes are serialized
+    // using the schema_tables merge_lock.
+    //
+    // Must be called on shard 0.
     future<token_metadata_lock> get_token_metadata_lock() noexcept;
-    future<> with_token_metadata_lock(std::function<future<> ()>) noexcept;
 
     // Acquire the token_metadata lock and get a mutable_token_metadata_ptr.
     // Pass that ptr to \c func, and when successfully done,
     // replicate it to all cores.
+    //
+    // By default the merge_lock (that is unified with the token_metadata_lock)
+    // is acquired for mutating the token_metadata.  Pass acquire_merge_lock::no
+    // when called from paths that already acquire the merge_lock, like
+    // db::schema_tables::do_merge_schema.
+    //
     // Note: must be called on shard 0.
-    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept;
+    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
     future<> update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason);
-    future<> update_pending_ranges(sstring reason);
+    future<> update_pending_ranges(sstring reason, acquire_merge_lock aml = acquire_merge_lock::yes);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
@@ -230,6 +241,10 @@ private:
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return _shared_token_metadata.get()->clone_async().then([] (token_metadata tm) {
+            // bump the token_metadata ring_version
+            // to invalidate cached token/replication mappings
+            // when the modified token_metadata is committed.
+            tm.invalidate_cached_rings();
             return make_ready_future<mutable_token_metadata_ptr>(make_token_metadata_ptr(std::move(tm)));
         });
     }
@@ -249,7 +264,6 @@ private:
         return utils::fb_utilities::get_broadcast_address();
     }
     /* This abstraction maintains the token/endpoint metadata information */
-    mutable_token_metadata_ptr _pending_token_metadata_ptr;
     shared_token_metadata& _shared_token_metadata;
 
     /* CDC generation management service.
@@ -625,13 +639,9 @@ private:
      *
      * @param keyspaceName the keyspace ranges belong to
      * @param ranges the ranges to find sources for
-     * @param tm the token metadata
      * @return multimap of addresses to ranges the address is responsible for
-     *
-     * @note The function must be called from a seastar thread.
-     *       The caller is responsible for keeping @ref tm valid across the call.
      */
-    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges, const token_metadata& tm);
+    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
 public:
     future<> confirm_replication(inet_address node);
 
@@ -656,7 +666,7 @@ private:
      */
     future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
     future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
-    future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
+    void removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
     std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);

@@ -27,30 +27,30 @@
 
 namespace locator {
 
-local_strategy::local_strategy(const shared_token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
-        abstract_replication_strategy(token_metadata, snitch, config_options, replication_strategy_type::local) {}
+local_strategy::local_strategy(snitch_ptr& snitch, const replication_strategy_config_options& config_options) :
+        abstract_replication_strategy(snitch, config_options, replication_strategy_type::local) {}
 
-inet_address_vector_replica_set local_strategy::do_get_natural_endpoints(const token& t, const token_metadata& tm, can_yield can_yield) {
-    return calculate_natural_endpoints(t, tm, can_yield);
-}
-
-inet_address_vector_replica_set local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, can_yield) const {
-    return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
+future<inet_address_vector_replica_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
+    return make_ready_future<inet_address_vector_replica_set>(inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()}));
 }
 
 void local_strategy::validate_options() const {
 }
 
-std::optional<std::set<sstring>> local_strategy::recognized_options() const {
+std::optional<std::set<sstring>> local_strategy::recognized_options(const topology&) const {
     // LocalStrategy doesn't expect any options.
     return {};
 }
 
-size_t local_strategy::get_replication_factor() const {
+size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
 
-using registry = class_registrator<abstract_replication_strategy, local_strategy, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
+inet_address_vector_replica_set local_strategy::get_natural_endpoints(const token&, const effective_replication_map&) const {
+    return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
+}
+
+using registry = class_registrator<abstract_replication_strategy, local_strategy, snitch_ptr&, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
 static registry registrator_short_name("LocalStrategy");
 

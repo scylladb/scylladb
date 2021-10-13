@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <functional>
+
 #include <seastar/util/closeable.hh>
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -82,6 +84,7 @@
 #include "thrift/controller.hh"
 #include "service/memory_limiter.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "db/schema_tables.hh"
 
 #include "redis/service.hh"
 #include "cdc/log.hh"
@@ -685,7 +688,7 @@ int main(int ac, char** av) {
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
             supervisor::notify("starting tokens manager");
-            token_metadata.start().get();
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
             // storage_proxy holds a reference on it and is not yet stopped.
             // what's worse is that the calltrace
             //   storage_proxy::do_query 

@@ -73,7 +73,7 @@ std::map<sstring, sstring> compressor::options() const {
     return {};
 }
 
-shared_ptr<compressor> compressor::create(const sstring& name, const opt_getter& opts) {
+compressor::ptr_type compressor::create(const sstring& name, const opt_getter& opts) {
     if (name.empty()) {
         return {};
     }

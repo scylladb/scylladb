@@ -20,6 +20,10 @@
  */
 
 #include <algorithm>
+
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "simple_strategy.hh"
 #include "utils/class_registrator.hh"
 #include <boost/algorithm/string.hpp>
@@ -27,8 +31,8 @@
 
 namespace locator {
 
-simple_strategy::simple_strategy(const shared_token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
-        abstract_replication_strategy(token_metadata, snitch, config_options, replication_strategy_type::simple) {
+simple_strategy::simple_strategy(snitch_ptr& snitch, const replication_strategy_config_options& config_options) :
+        abstract_replication_strategy(snitch, config_options, replication_strategy_type::simple) {
     for (auto& config_pair : config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
@@ -42,14 +46,14 @@ simple_strategy::simple_strategy(const shared_token_metadata& token_metadata, sn
     }
 }
 
-inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, can_yield can_yield) const {
+future<inet_address_vector_replica_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
-        return inet_address_vector_replica_set();
+        co_return inet_address_vector_replica_set();
     }
 
-    size_t replicas = get_replication_factor();
+    size_t replicas = _replication_factor;
     utils::sequenced_set<inet_address> endpoints;
     endpoints.reserve(replicas);
 
@@ -57,19 +61,18 @@ inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(con
         if (endpoints.size() == replicas) {
            break;
         }
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
+
         auto ep = tm.get_endpoint(token);
         assert(ep);
 
         endpoints.push_back(*ep);
+        co_await coroutine::maybe_yield();
     }
 
-    return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
+    co_return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
 }
 
-size_t simple_strategy::get_replication_factor() const {
+size_t simple_strategy::get_replication_factor(const token_metadata&) const {
     return _replication_factor;
 }
 
@@ -81,11 +84,11 @@ void simple_strategy::validate_options() const {
     validate_replication_factor(it->second);
 }
 
-std::optional<std::set<sstring>>simple_strategy::recognized_options() const {
+std::optional<std::set<sstring>>simple_strategy::recognized_options(const topology&) const {
     return {{ "replication_factor" }};
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, snitch_ptr&, const replication_strategy_config_options&>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");
 

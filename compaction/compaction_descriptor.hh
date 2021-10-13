@@ -67,10 +67,10 @@ public:
     struct regular {
     };
     struct cleanup {
-        std::reference_wrapper<database> db;
+        dht::token_range_vector owned_ranges;
     };
     struct upgrade {
-        std::reference_wrapper<database> db;
+        dht::token_range_vector owned_ranges;
     };
     struct scrub {
         enum class mode {
@@ -108,12 +108,12 @@ public:
         return compaction_type_options(regular{});
     }
 
-    static compaction_type_options make_cleanup(database& db) {
-        return compaction_type_options(cleanup{db});
+    static compaction_type_options make_cleanup(dht::token_range_vector&& owned_ranges) {
+        return compaction_type_options(cleanup{std::move(owned_ranges)});
     }
 
-    static compaction_type_options make_upgrade(database& db) {
-        return compaction_type_options(upgrade{db});
+    static compaction_type_options make_upgrade(dht::token_range_vector&& owned_ranges) {
+        return compaction_type_options(upgrade{std::move(owned_ranges)});
     }
 
     static compaction_type_options make_scrub(scrub::mode mode) {

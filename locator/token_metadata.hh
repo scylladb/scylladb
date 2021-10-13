@@ -172,17 +172,13 @@ private:
 public:
     token_metadata();
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
-    token_metadata(const token_metadata&);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
-    token_metadata& operator=(const token_metadata&);
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
     future<> update_normal_token(token token, inet_address endpoint);
     future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
     future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
-    void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
-    void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
@@ -259,12 +255,6 @@ public:
      * the function yields.
      */
     future<token_metadata> clone_async() const noexcept;
-
-    /**
-     * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
-     * bootstrap tokens and leaving endpoints are not included in the copy.
-     */
-    token_metadata clone_only_token_map_sync() const;
 
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
@@ -354,7 +344,8 @@ public:
 
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
 using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
-using token_metadata_lock = semaphore_units<semaphore_default_exception_factory>;
+using token_metadata_lock = semaphore_units<>;
+using token_metadata_lock_func = noncopyable_function<future<token_metadata_lock>() noexcept>;
 
 template <typename... Args>
 mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
@@ -363,25 +354,32 @@ mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
 
 class shared_token_metadata {
     mutable_token_metadata_ptr _shared;
-    semaphore _sem = { 1 };
+    token_metadata_lock_func _lock_func;
+
 public:
     // used to construct the shared object as a sharded<> instance
-    shared_token_metadata()
+    // lock_func returns semaphore_units<>
+    explicit shared_token_metadata(token_metadata_lock_func lock_func)
         : _shared(make_token_metadata_ptr())
+        , _lock_func(std::move(lock_func))
     { }
 
-    shared_token_metadata(const shared_token_metadata& x) = default;
+    shared_token_metadata(const shared_token_metadata& x) = delete;
     shared_token_metadata(shared_token_metadata&& x) = default;
 
     token_metadata_ptr get() const noexcept {
         return _shared;
     }
 
-    void set(mutable_token_metadata_ptr tmptr) noexcept {
-        _shared = std::move(tmptr);
-    }
+    void set(mutable_token_metadata_ptr tmptr) noexcept;
 
-    future<token_metadata_lock> get_lock() noexcept;
+    // Token metadata changes are serialized
+    // using the schema_tables merge_lock.
+    //
+    // Must be called on shard 0.
+    future<token_metadata_lock> get_lock() noexcept {
+        return _lock_func();
+    }
 
     // mutate_token_metadata acquires the shared_token_metadata lock,
     // clones the token_metadata (using clone_async)

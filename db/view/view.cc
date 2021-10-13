@@ -1208,18 +1208,19 @@ static std::optional<gms::inet_address>
 get_view_natural_endpoint(const sstring& keyspace_name,
         const dht::token& base_token, const dht::token& view_token) {
     auto &db = service::get_local_storage_proxy().local_db();
-    auto& rs = db.find_keyspace(keyspace_name).get_replication_strategy();
+    auto& ks = db.find_keyspace(keyspace_name);
+    auto erm = ks.get_effective_replication_map();
     auto my_address = utils::fb_utilities::get_broadcast_address();
     auto my_datacenter = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(my_address);
-    bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&rs);
+    bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
     std::vector<gms::inet_address> base_endpoints, view_endpoints;
-    for (auto&& base_endpoint : rs.get_natural_endpoints(base_token)) {
+    for (auto&& base_endpoint : erm->get_natural_endpoints(base_token)) {
         if (!network_topology || locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(base_endpoint) == my_datacenter) {
             base_endpoints.push_back(base_endpoint);
         }
     }
 
-    for (auto&& view_endpoint : rs.get_natural_endpoints(view_token)) {
+    for (auto&& view_endpoint : erm->get_natural_endpoints(view_token)) {
         // If this base replica is also one of the view replicas, we use
         // ourselves as the view replica.
         if (view_endpoint == my_address) {

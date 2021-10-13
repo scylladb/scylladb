@@ -70,6 +70,8 @@
 #include "repair/row_level.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "debug.hh"
+#include "db/schema_tables.hh"
+
 #include <sys/time.h>
 #include <sys/resource.h>
 
@@ -479,7 +481,7 @@ public:
             }
 
             sharded<locator::shared_token_metadata> token_metadata;
-            token_metadata.start().get();
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
             sharded<service::migration_notifier> mm_notif;

@@ -48,11 +48,10 @@ namespace locator {
 class network_topology_strategy : public abstract_replication_strategy {
 public:
     network_topology_strategy(
-        const shared_token_metadata& token_metadata,
         snitch_ptr& snitch,
-        const std::map<sstring,sstring>& config_options);
+        const replication_strategy_config_options& config_options);
 
-    virtual size_t get_replication_factor() const override {
+    virtual size_t get_replication_factor(const token_metadata&) const override {
         return _rep_factor;
     }
 
@@ -74,12 +73,12 @@ protected:
      * calculate endpoints in one pass through the tokens by tracking our
      * progress in each DC, rack etc.
      */
-    virtual inet_address_vector_replica_set calculate_natural_endpoints(
-        const token& search_token, const token_metadata& tm, can_yield) const override;
+    virtual future<inet_address_vector_replica_set> calculate_natural_endpoints(
+        const token& search_token, const token_metadata& tm) const override;
 
     virtual void validate_options() const override;
 
-    virtual std::optional<std::set<sstring>> recognized_options() const override;
+    virtual std::optional<std::set<sstring>> recognized_options(const topology&) const override;
 
 private:
     // map: data centers -> replication factor

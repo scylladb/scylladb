@@ -145,6 +145,8 @@ using decorated_key_opt = std::optional<decorated_key>;
 
 class i_partitioner {
 public:
+    using ptr_type = std::unique_ptr<i_partitioner>;
+
     i_partitioner() = default;
     virtual ~i_partitioner() {}
 

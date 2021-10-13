@@ -2006,7 +2006,8 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
         return test_env::do_with_async([&db = e.local_db()] (test_env& env) {
             cell_locker_stats cl_stats;
 
-            auto s = schema_builder("ks" /* single_node_cql_env::ks_name */, "correcness_test")
+            auto ks_name = "ks";    // single_node_cql_env::ks_name
+            auto s = schema_builder(ks_name, "correcness_test")
                     .with_column("id", utf8_type, column_kind::partition_key)
                     .with_column("value", int32_type).build();
 
@@ -2035,8 +2036,9 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             cf->mark_ready_for_writes();
             cf->start();
 
+            dht::token_range_vector local_ranges = db.get_keyspace_local_ranges(ks_name);
             auto descriptor = sstables::compaction_descriptor({std::move(sst)}, cf->get_sstable_set(), default_priority_class(), compaction_descriptor::default_level,
-                compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(db));
+                compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(std::move(local_ranges)));
             auto ret = compact_sstables(std::move(descriptor), *cf, sst_gen).get0();
 
             BOOST_REQUIRE(ret.new_sstables.size() == 1);

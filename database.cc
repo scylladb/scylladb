@@ -57,6 +57,7 @@
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
+#include "utils/stall_free.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -108,7 +109,7 @@ make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_sou
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
-                                std::map<sstring, sstring> options,
+                                locator::replication_strategy_config_options options,
                                 bool durables_writes,
                                 std::vector<schema_ptr> cf_defs)
 {
@@ -863,7 +864,7 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
         }
     }
 
-    ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
+    co_await ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
     co_await get_notifier().update_keyspace(ks.metadata());
 }
 
@@ -1041,13 +1042,20 @@ bool database::column_family_exists(const utils::UUID& uuid) const {
     return _column_families.contains(uuid);
 }
 
-void
-keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const std::map<sstring, sstring>& options) {
+future<>
+keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options) {
     using namespace locator;
 
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
-                _metadata->strategy_name(), stm, options);
+                _metadata->strategy_name(), options);
+
+    update_effective_replication_map(co_await calculate_effective_replication_map(_replication_strategy, stm.get()));
+}
+
+void
+keyspace::update_effective_replication_map(locator::mutable_effective_replication_map_ptr erm) {
+    _effective_replication_map = std::move(erm);
 }
 
 locator::abstract_replication_strategy&
@@ -1061,9 +1069,9 @@ keyspace::get_replication_strategy() const {
     return *_replication_strategy;
 }
 
-void keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
+future<> keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
     _metadata = std::move(ksm);
-   create_replication_strategy(stm, _metadata->strategy_options());
+   return create_replication_strategy(stm, _metadata->strategy_options());
 }
 
 future<> keyspace::ensure_populated() const {
@@ -1182,13 +1190,12 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    const locator::shared_token_metadata&,
     locator::snitch_ptr&,
-    const std::map<sstring, sstring>&>;
+    const locator::replication_strategy_config_options&>;
 
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
-             std::map<sstring, sstring> strategy_options,
+             locator::replication_strategy_config_options strategy_options,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs)
     : keyspace_metadata(name,
@@ -1200,7 +1207,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
 
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
-             std::map<sstring, sstring> strategy_options,
+             locator::replication_strategy_config_options strategy_options,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types)
@@ -1215,20 +1222,20 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     }
 }
 
-void keyspace_metadata::validate(const locator::shared_token_metadata& stm) const {
+void keyspace_metadata::validate(const locator::topology& topology) const {
     using namespace locator;
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), stm, strategy_options());
+    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), strategy_options(), topology);
 }
 
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
-    ksm.validate(get_shared_token_metadata());
+    ksm.validate(get_token_metadata().get_topology());
     if (!has_keyspace(ksm.name())) {
         throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm.name()));
     }
 }
 
 void database::validate_new_keyspace(keyspace_metadata& ksm) {
-    ksm.validate(get_shared_token_metadata());
+    ksm.validate(get_token_metadata().get_topology());
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }
@@ -1269,7 +1276,7 @@ std::vector<view_ptr> database::get_views() const {
             | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
-void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
+future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
     auto kscfg = make_keyspace_config(*ksm);
     if (system == system_keyspace::yes) {
         kscfg.enable_disk_reads = kscfg.enable_disk_writes = kscfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
@@ -1278,7 +1285,7 @@ void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>&
         kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
     }
     keyspace ks(ksm, std::move(kscfg));
-    ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
+    co_await ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
     _keyspaces.emplace(ksm->name(), std::move(ks));
 }
 
@@ -1293,7 +1300,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_b
         co_return;
     }
 
-    create_in_memory_keyspace(ksm, system);
+    co_await create_in_memory_keyspace(ksm, system);
     auto& ks = _keyspaces.at(ksm->name());
     auto& datadir = ks.datadir();
 
@@ -2181,7 +2188,7 @@ const sstring& database::get_snitch_name() const {
 }
 
 dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
-    return find_keyspace(ks).get_replication_strategy().get_ranges(utils::fb_utilities::get_broadcast_address());
+    return find_keyspace(ks).get_effective_replication_map()->get_ranges(utils::fb_utilities::get_broadcast_address());
 }
 
 /*!

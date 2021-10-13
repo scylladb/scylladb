@@ -177,6 +177,8 @@ protected:
     tracing& _local_tracing;
 
 public:
+    using ptr_type = std::unique_ptr<i_tracing_backend_helper>;
+
     i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start(cql3::query_processor& qp) = 0;
