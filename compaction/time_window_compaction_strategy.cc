@@ -171,7 +171,15 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 
     if (!multi_window.empty()) {
         // Everything that spans multiple windows will need reshaping
-        multi_window.resize(std::min(multi_window.size(), max_sstables));
+        if (multi_window.size() > max_sstables) {
+            // When trimming, let's keep sstables with overlapping time window, so as to reduce write amplification.
+            // For example, if there are N sstables spanning window W, where N <= 32, then we can produce all data for W
+            // in a single compaction round, removing the need to later compact W to reduce its number of files.
+            boost::partial_sort(multi_window, multi_window.begin() + max_sstables, [](const shared_sstable &a, const shared_sstable &b) {
+                return a->get_stats_metadata().max_timestamp < b->get_stats_metadata().max_timestamp;
+            });
+            multi_window.resize(max_sstables);
+        }
         compaction_descriptor desc(std::move(multi_window), std::optional<sstables::sstable_set>(), iop);
         desc.options = compaction_type_options::make_reshape();
         return desc;
