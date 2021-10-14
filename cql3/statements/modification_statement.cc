@@ -499,10 +499,8 @@ modification_statement::prepare(database& db, prepare_context& ctx, cql_stats& s
     // Since this cache is only meaningful for LWT queries, just clear the ids
     // if it's not a conditional statement so that the AST nodes don't
     // participate in the caching mechanism later.
-    if (!prepared_stmt->has_conditions()) {
-        for (auto& fn : ctx.pk_function_calls()) {
-            fn->set_id(std::nullopt);
-        }
+    if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions.has_value()) {
+        ctx.clear_pk_function_calls_cache();
     }
     return prepared_stmt;
 }

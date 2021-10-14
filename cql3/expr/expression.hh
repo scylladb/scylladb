@@ -53,6 +53,7 @@ namespace query {
 
 namespace cql3 {
 struct term;
+struct prepare_context;
 
 class column_identifier_raw;
 class query_options;
@@ -262,7 +263,21 @@ struct function_call {
     // The query should be executed on a shard that has the pk partition,
     // but it changes with each uuid() call.
     // uuid() call result is cached and sent to the proper shard.
-    std::optional<uint8_t> lwt_cache_id;
+    //
+    // Cache id is kept in shared_ptr because of how prepare_context works.
+    // During fill_prepare_context all function cache ids are collected
+    // inside prepare_context.
+    // Later when some condition occurs we might decide to clear
+    // cache ids of all function calls found in prepare_context.
+    // However by this time these function calls could have been
+    // copied multiple times. Prepare_context keeps a shared_ptr
+    // to function_call ids, and then clearing the shared id
+    // clears it in all possible copies.
+    // This logic was introduced back when everything was shared_ptr<term>,
+    // now a better solution might exist.
+    //
+    // This field can be nullptr, it means that there is no cache id set.
+    ::shared_ptr<std::optional<uint8_t>> lwt_cache_id;
 };
 
 struct cast {
@@ -707,6 +722,14 @@ std::vector<managed_bytes_opt> get_elements(const constant&);
 // Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>
 // It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
 utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
+
+// Retrieves information needed in prepare_context.
+// Collects the column specification for the bind variables in this expression.
+// Sets lwt_cache_id field in function_calls.
+void fill_prepare_context(expression&, cql3::prepare_context&);
+
+// Needed for now because some fields of expression structs are terms, will be removed soon.
+void fill_prepare_context(::shared_ptr<term>&, cql3::prepare_context&);
 
 expression to_expression(const ::shared_ptr<term>&);
 } // namespace expr

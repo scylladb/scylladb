@@ -50,6 +50,7 @@
 #include "cql3/user_types.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/function_call.hh"
+#include "cql3/prepare_context.hh"
 
 namespace cql3 {
 namespace expr {
@@ -1764,8 +1765,10 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
         arguments.emplace_back(to_bytes_opt(std::move(arg_val.value)));
     }
 
-    if (fun_call.lwt_cache_id.has_value()) {
-        computed_function_values::mapped_type* cached_value = options.find_cached_pk_function_call(*fun_call.lwt_cache_id);
+    bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
+    if (has_cache_id) {
+        computed_function_values::mapped_type* cached_value =
+            options.find_cached_pk_function_call(**fun_call.lwt_cache_id);
         if (cached_value != nullptr) {
             return constant(raw_value::make_value(*cached_value), scalar_fun->return_type());
         }
@@ -1773,8 +1776,8 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
 
     bytes_opt result = scalar_fun->execute(cql_serialization_format::internal(), arguments);
 
-    if (fun_call.lwt_cache_id.has_value()) {
-        options.cache_pk_function_call(*fun_call.lwt_cache_id, result);
+    if (has_cache_id) {
+        options.cache_pk_function_call(**fun_call.lwt_cache_id, result);
     }
 
     if (!result.has_value()) {
@@ -1909,6 +1912,71 @@ utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_element
     }
 
     return tuples_list;
+}
+
+void fill_prepare_context(expression& e, prepare_context& ctx) {
+    expr::visit(overloaded_functor {
+        [&](bind_variable& bind_var) {
+            ctx.add_variable_specification(bind_var.bind_index, bind_var.receiver);
+        },
+        [&](collection_constructor& c) {
+            for (expr::expression& element : c.elements) {
+                fill_prepare_context(element, ctx);
+            }
+        },
+        [&](tuple_constructor& t) {
+            for (expr::expression& element : t.elements) {
+                fill_prepare_context(element, ctx);
+            }
+        },
+        [&](usertype_constructor& u) {
+            for (auto& [field_name, field_val] : u.elements) {
+                fill_prepare_context(field_val, ctx);
+            }
+        },
+        [&](function_call& f) {
+            const shared_ptr<functions::function>& func = std::get<shared_ptr<functions::function>>(f.func);
+            if (ctx.is_processing_pk_restrictions() && !func->is_pure()) {
+                ctx.add_pk_function_call(f);
+            }
+
+            for (expr::expression& argument : f.args) {
+                fill_prepare_context(argument, ctx);
+            }
+        },
+        [&](binary_operator& binop) {
+            fill_prepare_context(binop.lhs, ctx);
+            fill_prepare_context(binop.rhs, ctx);
+        },
+        [&](conjunction& c) {
+            for (expression& child : c.children) {
+                fill_prepare_context(child, ctx);
+            }
+        },
+        [](token&) {},
+        [](unresolved_identifier&) {},
+        [&](column_mutation_attribute& a) {
+            fill_prepare_context(a.column, ctx);
+        },
+        [&](cast& c) {
+            fill_prepare_context(c.arg, ctx);
+        },
+        [&](field_selection& fs) {
+            fill_prepare_context(fs.structure, ctx);
+        },
+        [&](column_value& cv) {
+            fill_prepare_context(cv.sub, ctx);
+        },
+        [](untyped_constant&) {},
+        [](null&) {},
+        [](constant&) {},
+    }, e);
+}
+
+void fill_prepare_context(::shared_ptr<term>& t, prepare_context& ctx) {
+    if (t.get() != nullptr) {
+        t->fill_prepare_context(ctx);
+    }
 }
 
 expression to_expression(const ::shared_ptr<term>& term_ptr) {

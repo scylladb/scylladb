@@ -98,18 +98,41 @@ void prepare_context::set_bound_variables(const std::vector<shared_ptr<column_id
     _target_columns.resize(bn_size);
 }
 
-prepare_context::function_calls_t& prepare_context::pk_function_calls() {
-    return _pk_fn_calls;
+void prepare_context::clear_pk_function_calls_cache() {
+    for (::shared_ptr<cql3::functions::function_call>& fun_call : _pk_fn_calls) {
+        fun_call->set_id(std::nullopt);
+    }
+
+    for (::shared_ptr<std::optional<uint8_t>>& cache_id : _pk_function_calls_cache_ids) {
+        if (cache_id.get() != nullptr) {
+            *cache_id = std::nullopt;
+        }
+    }
 }
 
 void prepare_context::add_pk_function_call(::shared_ptr<cql3::functions::function_call> fn) {
     constexpr auto fn_limit = std::numeric_limits<uint8_t>::max();
-    if (_pk_fn_calls.size() == fn_limit) {
+    if (_pk_function_calls_cache_ids.size() == fn_limit) {
         throw exceptions::invalid_request_exception(
             format("Too many function calls within one statement. Max supported number is {}", fn_limit));
     }
-    fn->set_id(_pk_fn_calls.size());
+
+    fn->set_id(_pk_function_calls_cache_ids.size());
+
     _pk_fn_calls.emplace_back(std::move(fn));
+    // Workaround for now, this will be removed later along with this method
+    _pk_function_calls_cache_ids.push_back({});
+}
+
+void prepare_context::add_pk_function_call(expr::function_call& fn) {
+    constexpr auto fn_limit = std::numeric_limits<uint8_t>::max();
+    if (_pk_function_calls_cache_ids.size() == fn_limit) {
+        throw exceptions::invalid_request_exception(
+            format("Too many function calls within one statement. Max supported number is {}", fn_limit));
+    }
+
+    fn.lwt_cache_id = ::make_shared<std::optional<uint8_t>>(_pk_function_calls_cache_ids.size());
+    _pk_function_calls_cache_ids.emplace_back(fn.lwt_cache_id);
 }
 
 

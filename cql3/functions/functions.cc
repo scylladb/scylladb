@@ -512,7 +512,7 @@ expr::expression function_call::to_expression() {
     return expr::function_call {
         .func = _fun,
         .args = std::move(args),
-        .lwt_cache_id = _id,
+        .lwt_cache_id = ::make_shared<std::optional<uint8_t>>(_id),
     };
 }
 
