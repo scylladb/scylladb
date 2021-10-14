@@ -80,3 +80,10 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
 
 void compare_readers(const schema&, flat_mutation_reader authority, flat_mutation_reader tested);
 void compare_readers(const schema&, flat_mutation_reader authority, flat_mutation_reader tested, const std::vector<position_range>& fwd_ranges);
+
+// Forward `r` to each range in `fwd_ranges` and consume all fragments produced by `r` in these ranges.
+// Build a mutation out of these fragments.
+//
+// Assumes that for each subsequent `r1`, `r2` in `fwd_ranges`, `r1.end() <= r2.start()`.
+// Must be run in a seastar::thread.
+mutation forwardable_reader_to_mutation(flat_mutation_reader r, const std::vector<position_range>& fwd_ranges);
