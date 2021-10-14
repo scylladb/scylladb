@@ -117,7 +117,7 @@ mutation_source streaming_virtual_table::as_mutation_source() {
         mutation_reader::forwarding fwd_mr) {
 
         std::unique_ptr<query::partition_slice> unreversed_slice;
-        const auto reversed = query_slice.options.contains(query::partition_slice::option::reversed);
+        bool reversed = query_slice.is_reversed();
         if (reversed) {
             s = s->make_reversed();
             unreversed_slice = std::make_unique<query::partition_slice>(query::half_reverse_slice(*s, query_slice));

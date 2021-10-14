@@ -66,7 +66,7 @@ public:
     // The ranges will be returned in forward (increasing) order even if the slice is reversed.
     static clustering_key_filter_ranges get_ranges(const schema& schema, const query::partition_slice& slice, const partition_key& key) {
         const query::clustering_row_ranges& ranges = slice.row_ranges(schema, key);
-        if (slice.options.contains(query::partition_slice::option::reversed)) {
+        if (slice.is_reversed()) {
             return clustering_key_filter_ranges(clustering_key_filter_ranges::reversed{}, ranges);
         }
         return clustering_key_filter_ranges(ranges);

@@ -875,7 +875,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
             return false;
     };
 
-    auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+    auto reversed = slice.is_reversed();
     // Note that `sstable_position_reader_queue` always includes a reader which emits a `partition_start` fragment,
     // guaranteeing that the reader we return emits it as well; this helps us avoid the problem from #3552.
     return make_clustering_combined_reader(

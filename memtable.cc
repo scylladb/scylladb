@@ -481,7 +481,7 @@ public:
 
                         auto snp_schema = key_and_snp->second->schema();
                         bool digest_requested = _slice.options.contains<query::partition_slice::option::with_digest>();
-                        bool is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
+                        bool is_reversed = _slice.is_reversed();
                         auto mpsr = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, _permit, std::move(key_and_snp->first), std::move(cr), std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *mtbl());
                         mpsr.upgrade_schema(schema());
                         _delegate = std::move(mpsr);
@@ -714,7 +714,7 @@ memtable::make_flat_reader(schema_ptr s,
                       tracing::trace_state_ptr trace_state_ptr,
                       streamed_mutation::forwarding fwd,
                       mutation_reader::forwarding fwd_mr) {
-    bool is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+    bool is_reversed = slice.is_reversed();
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
         auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {

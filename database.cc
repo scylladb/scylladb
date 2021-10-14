@@ -1385,7 +1385,7 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
-    const auto reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
+    const auto reversed = cmd.slice.is_reversed();
     if (reversed) {
         s = s->make_reversed();
     }

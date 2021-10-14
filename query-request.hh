@@ -244,6 +244,11 @@ public:
         _partition_row_limit_high_bits = static_cast<uint64_t>(limit >> 32);
     }
 
+    [[nodiscard]]
+    bool is_reversed() const {
+        return options.contains<query::partition_slice::option::reversed>();
+    }
+
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };

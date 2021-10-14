@@ -156,7 +156,7 @@ position_in_partition_view get_slice_upper_bound(const schema& s, const query::p
     if (ranges.empty()) {
         return position_in_partition_view::for_static_row();
     }
-    if (slice.options.contains(query::partition_slice::option::reversed)) {
+    if (slice.is_reversed()) {
         return position_in_partition_view::for_range_end(ranges.front());
     }
     return position_in_partition_view::for_range_end(ranges.back());

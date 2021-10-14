@@ -824,7 +824,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         query::result_options opts,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    if (cmd.slice.options.contains(query::partition_slice::option::reversed)) {
+    if (cmd.slice.is_reversed()) {
         s = s->make_reversed();
     }
     return do_query_on_all_shards<data_query_result_builder>(db, s, cmd, ranges, std::move(trace_state), timeout,

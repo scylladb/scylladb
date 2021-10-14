@@ -559,7 +559,7 @@ public:
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
-            if (_slice.options.contains(query::partition_slice::option::reversed) &&
+            if (_slice.is_reversed() &&
                     // we always consume whole rows (i.e. `consume_row_end` is always called) when reading in reverse,
                     // even when `consume_row_start` requested to ignore the row. This happens because for reversed reads
                     // skipping is performed in the intermediary reversing data source (not in the reader) and the source
@@ -1530,7 +1530,7 @@ private:
         return _context->skip_to(begin);
     }
     bool reversed() const {
-        return _slice.options.contains(query::partition_slice::option::reversed);
+        return _slice.is_reversed();
     }
 public:
     void on_out_of_clustering_range() override {
@@ -1684,7 +1684,7 @@ static flat_mutation_reader_v2 make_reader(
     // but the ranges themselves are not.
     // FIXME: drop this workaround when callers are fixed to provide the slice
     // in 'native-reversed' format (if ever).
-    if (slice.get().options.contains(query::partition_slice::option::reversed)) {
+    if (slice.get().is_reversed()) {
         return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
             std::move(sstable), std::move(schema), std::move(permit), range,
             legacy_reverse_slice_to_native_reverse_slice(*schema, slice.get()), pc, std::move(trace_state), fwd, fwd_mr, monitor);

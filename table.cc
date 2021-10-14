@@ -180,7 +180,7 @@ table::make_reader(schema_ptr s,
     }
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
-    const auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+    const auto reversed = slice.is_reversed();
     if (cache_enabled() && !bypass_cache && !(reversed && _config.reversed_reads_auto_bypass_cache())) {
         // There are two supported methods of performing reversed queries now.
         // In the old 'inefficient' method the cache/sstable performs a forward query and we wrap the reader in
@@ -2083,7 +2083,7 @@ table::mutation_query(schema_ptr s,
   try {
     // Un-reverse the schema sent to the coordinator, it expects the
     // legacy format.
-    auto result_schema = cmd.slice.options.contains(query::partition_slice::option::reversed) ? s->make_reversed() : s;
+    auto result_schema = cmd.slice.is_reversed() ? s->make_reversed() : s;
     auto rrb = reconcilable_result_builder(*result_schema, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
 
