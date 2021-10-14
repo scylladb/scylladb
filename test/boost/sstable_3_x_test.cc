@@ -94,9 +94,6 @@ public:
         load();
         return sstables::test(_sst).read_indexes(_env.make_reader_permit());
     }
-    flat_mutation_reader make_reader_v1() {
-        return _sst->make_reader_v1(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
-    }
     flat_mutation_reader_v2 make_reader() {
         return _sst->make_reader(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
     }
@@ -109,24 +106,6 @@ public:
         return _sst;
     }
 
-    flat_mutation_reader make_reader_v1(
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            const io_priority_class& pc = default_priority_class(),
-            tracing::trace_state_ptr trace_state = {},
-            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
-            read_monitor& monitor = default_read_monitor()) {
-        return _sst->make_reader_v1(_sst->_schema,
-                                    _env.make_reader_permit(),
-                                    range,
-                                    slice,
-                                    pc,
-                                    std::move(trace_state),
-                                    fwd,
-                                    fwd_mr,
-                                    monitor);
-    }
     flat_mutation_reader_v2 make_reader(
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -737,14 +716,6 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
     auto make_tombstone = [] (int64_t ts, int32_t tp) {
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
-    auto make_range_tombstone = [] (clustering_key_prefix start, clustering_key_prefix end, tombstone t) {
-        return range_tombstone {
-            std::move(start),
-            bound_kind::incl_start,
-            std::move(end),
-            bound_kind::incl_end,
-            t};
-    };
 
     auto make_clustering_range = [] (clustering_key_prefix&& start, clustering_key_prefix&& end) {
         return query::clustering_range::make(
@@ -752,9 +723,9 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             query::clustering_range::bound(std::move(end), true));
     };
 
-    auto make_assertions = [] (flat_mutation_reader rd) {
+    auto make_assertions = [] (flat_mutation_reader_v2 rd) {
         rd.set_max_buffer_size(1);
-        return assert_that(std::move(rd));
+        return std::move(assert_that(std::move(rd)).ignore_deletion_time());
     };
 
     std::array<int32_t, 2> static_row_values {777, 999};
@@ -764,23 +735,21 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
     BOOST_REQUIRE(rc_cdef);
 
     auto to_expected = [rc_cdef] (int val) {
-        return std::vector<flat_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+        return std::vector<flat_reader_assertions_v2::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
     };
 
     // Sequential read
     {
-        auto r = make_assertions(sst.make_reader_v1());
+        auto r = make_assertions(sst.make_reader());
         tombstone tomb = make_tombstone(1525385507816568, 1534898526);
         for (auto pkey : boost::irange(1, 3)) {
             r.produces_partition_start(to_pkey(pkey))
             .produces_static_row({{st_cdef, int32_type->decompose(static_row_values[pkey - 1])}});
 
             for (auto idx : boost::irange(1, 1024 * 128, 3)) {
-                range_tombstone rt =
-                        make_range_tombstone( to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb);
-
                 r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(rt);
+                .produces_range_tombstone_change({{to_non_full_ck(idx + 1), bound_weight::before_all_prefixed}, tomb})
+                .produces_range_tombstone_change({{to_non_full_ck(idx + 2), bound_weight::after_all_prefixed}, {}});
             }
             r.produces_partition_end();
         }
@@ -789,7 +758,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
 
     // forwarding read
     {
-        auto r = make_assertions(sst.make_reader_v1(query::full_partition_range,
+        auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                            UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->full_slice(),
                                            default_priority_class(),
                                            tracing::trace_state_ptr(),
@@ -803,52 +772,43 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             r.fast_forward_to(to_full_ck(4471, 4471), to_full_ck(4653, 4653));
             for (const auto idx : boost::irange(4471, 4652, 3)) {
                 r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                .produces_range_tombstone_change({{to_non_full_ck(idx + 1), bound_weight::before_all_prefixed}, tomb});
+                if (idx == 4651) {
+                    r.produces_range_tombstone_change({{to_full_ck(idx + 2, idx + 2), bound_weight::before_all_prefixed}, {}});
+                } else {
+                    r.produces_range_tombstone_change({{to_non_full_ck(idx + 2), bound_weight::after_all_prefixed}, {}});
+                }
             }
             r.produces_end_of_stream();
 
             // We have a range tombstone start read, now make sure we reset it properly
             // when we fast-forward to a block that doesn't have an end open marker.
-            {
-                r.fast_forward_to(to_full_ck(13413, 13413), to_non_full_ck(13417));
-                auto slice = make_clustering_range(to_full_ck(13413, 13413), to_non_full_ck(13417));
-                r.produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13412), to_non_full_ck(13413), tomb),
-                    {slice})
-                .produces_row(to_full_ck(13414, 13414), to_expected(13414))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13415), to_non_full_ck(13416), tomb),
-                    {slice})
-                .produces_end_of_stream();
-            }
+            r.fast_forward_to(to_full_ck(13413, 13413), to_non_full_ck(13417));
+            r.produces_range_tombstone_change({{to_full_ck(13413, 13413), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13413), bound_weight::after_all_prefixed}, {}})
+            .produces_row(to_full_ck(13414, 13414), to_expected(13414))
+            .produces_range_tombstone_change({{to_non_full_ck(13415), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13416), bound_weight::after_all_prefixed}, {}})
+            .produces_end_of_stream();
 
-            {
-                r.fast_forward_to(to_non_full_ck(13417), to_non_full_ck(13420));
-                auto slice = make_clustering_range(to_non_full_ck(13417), to_non_full_ck(13420));
-                r.produces_row(to_full_ck(13417, 13417), to_expected(13417))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13418), to_non_full_ck(13419), tomb),
-                    {slice})
-                .produces_end_of_stream();
+            r.fast_forward_to(to_non_full_ck(13417), to_non_full_ck(13420));
+            r.produces_row(to_full_ck(13417, 13417), to_expected(13417))
+            .produces_range_tombstone_change({{to_non_full_ck(13418), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13419), bound_weight::after_all_prefixed}, {}})
+            .produces_end_of_stream();
 
-                r.fast_forward_to(to_non_full_ck(13420), to_full_ck(13420, 13421));
-                r.produces_row(to_full_ck(13420, 13420), to_expected(13420))
-                        .produces_end_of_stream();
+            r.fast_forward_to(to_non_full_ck(13420), to_full_ck(13420, 13421));
+            r.produces_row(to_full_ck(13420, 13420), to_expected(13420))
+                    .produces_end_of_stream();
 
-                r.fast_forward_to(to_non_full_ck(13423), to_full_ck(13423, 13424));
-                r.produces_row(to_full_ck(13423, 13423), to_expected(13423))
-                        .produces_end_of_stream();
-            }
+            r.fast_forward_to(to_non_full_ck(13423), to_full_ck(13423, 13424));
+            r.produces_row(to_full_ck(13423, 13423), to_expected(13423))
+                    .produces_end_of_stream();
 
-            {
-                r.fast_forward_to(to_non_full_ck(13425), to_non_full_ck(13426));
-                auto slice = make_clustering_range(to_non_full_ck(13425), to_non_full_ck(13426));
-                r.produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13424), to_non_full_ck(13425), tomb),
-                    {slice})
-                .produces_end_of_stream();
-            }
+            r.fast_forward_to(to_non_full_ck(13425), to_non_full_ck(13426));
+            r.produces_range_tombstone_change({{to_non_full_ck(13425), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13425), bound_weight::after_all_prefixed}, {}})
+            .produces_end_of_stream();
 
             r.fast_forward_to(to_full_ck(13429, 13428), to_full_ck(13429, 13429));
             r.produces_end_of_stream();
@@ -869,7 +829,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             .with_range(query::clustering_range::make({to_full_ck(13429, 13428), true}, {to_full_ck(13429, 13429), false}))
             .build();
 
-        auto r = make_assertions(sst.make_reader_v1(query::full_partition_range, slice));
+        auto r = make_assertions(sst.make_reader(query::full_partition_range, slice));
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
         for (auto pkey : boost::irange(1, 3)) {
             auto slices = slice.get_all_ranges();
@@ -878,34 +838,28 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             .produces_static_row({{st_cdef, int32_type->decompose(static_row_values[pkey - 1])}});
             for (const auto idx : boost::irange(4471, 4652, 3)) {
                 r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                .produces_range_tombstone_change({{to_non_full_ck(idx + 1), bound_weight::before_all_prefixed}, tomb});
+                if (idx == 4651) {
+                    r.produces_range_tombstone_change({{to_full_ck(idx + 2, idx + 2), bound_weight::before_all_prefixed}, {}});
+                } else {
+                    r.produces_range_tombstone_change({{to_non_full_ck(idx + 2), bound_weight::after_all_prefixed}, {}});
+                }
             }
 
-            {
-                r.produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13412), to_non_full_ck(13413), tomb),
-                    slices)
-                .produces_row(to_full_ck(13414, 13414), to_expected(13414))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13415), to_non_full_ck(13416), tomb),
-                    slices);
-            }
+            r.produces_range_tombstone_change({{to_full_ck(13413, 13413), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13413), bound_weight::after_all_prefixed}, {}})
+            .produces_row(to_full_ck(13414, 13414), to_expected(13414))
+            .produces_range_tombstone_change({{to_non_full_ck(13415), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13416), bound_weight::after_all_prefixed}, {}});
 
-            {
-                r.produces_row(to_full_ck(13417, 13417), to_expected(13417))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13418), to_non_full_ck(13419), tomb),
-                    slices)
-                .produces_row(to_full_ck(13420, 13420), to_expected(13420))
-                .produces_row(to_full_ck(13423, 13423), to_expected(13423));
-            }
+            r.produces_row(to_full_ck(13417, 13417), to_expected(13417))
+            .produces_range_tombstone_change({{to_non_full_ck(13418), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13419), bound_weight::after_all_prefixed}, {}})
+            .produces_row(to_full_ck(13420, 13420), to_expected(13420))
+            .produces_row(to_full_ck(13423, 13423), to_expected(13423));
 
-            {
-                r.produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13424), to_non_full_ck(13425), tomb),
-                    slices);
-            }
+            r.produces_range_tombstone_change({{to_non_full_ck(13425), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13425), bound_weight::after_all_prefixed}, {}});
 
             r.next_partition();
         }
@@ -924,7 +878,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             .with_range(query::clustering_range::make({to_full_ck(13429, 13428), true}, {to_full_ck(13429, 13429), false}))
             .build();
 
-        auto r = make_assertions(sst.make_reader_v1(query::full_partition_range,
+        auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                                       slice,
                                                       default_priority_class(),
                                                       tracing::trace_state_ptr(),
@@ -941,36 +895,30 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             r.fast_forward_to(to_non_full_ck(3000), to_non_full_ck(6000));
             for (const auto idx : boost::irange(4471, 4652, 3)) {
                 r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                .produces_range_tombstone_change({{to_non_full_ck(idx + 1), bound_weight::before_all_prefixed}, tomb});
+                if (idx == 4651) {
+                    r.produces_range_tombstone_change({{to_full_ck(idx + 2, idx + 2), bound_weight::before_all_prefixed}, {}});
+                } else {
+                    r.produces_range_tombstone_change({{to_non_full_ck(idx + 2), bound_weight::after_all_prefixed}, {}});
+                }
             }
             r.produces_end_of_stream();
 
             r.fast_forward_to(to_non_full_ck(13000), to_non_full_ck(15000));
-            {
-                r.produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13412), to_non_full_ck(13413), tomb),
-                    slices)
-                .produces_row(to_full_ck(13414, 13414), to_expected(13414))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13415), to_non_full_ck(13416), tomb),
-                    slices);
-            }
+            r.produces_range_tombstone_change({{to_full_ck(13413, 13413), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13413), bound_weight::after_all_prefixed}, {}})
+            .produces_row(to_full_ck(13414, 13414), to_expected(13414))
+            .produces_range_tombstone_change({{to_non_full_ck(13415), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13416), bound_weight::after_all_prefixed}, {}});
 
-            {
-                r.produces_row(to_full_ck(13417, 13417), to_expected(13417))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13418), to_non_full_ck(13419), tomb),
-                    slices)
-                .produces_row(to_full_ck(13420, 13420), to_expected(13420))
-                .produces_row(to_full_ck(13423, 13423), to_expected(13423));
-            }
+            r.produces_row(to_full_ck(13417, 13417), to_expected(13417))
+            .produces_range_tombstone_change({{to_non_full_ck(13418), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13419), bound_weight::after_all_prefixed}, {}})
+            .produces_row(to_full_ck(13420, 13420), to_expected(13420))
+            .produces_row(to_full_ck(13423, 13423), to_expected(13423));
 
-            {
-                r.produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(13424), to_non_full_ck(13425), tomb),
-                    slices);
-            }
+            r.produces_range_tombstone_change({{to_non_full_ck(13425), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(13425), bound_weight::after_all_prefixed}, {}});
 
             r.produces_end_of_stream();
             r.next_partition();
@@ -1067,19 +1015,6 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
     auto make_tombstone = [] (int64_t ts, int32_t tp) {
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
-    const auto make_range_tombstone_creator = [] (bound_kind start_kind) {
-        return [start_kind] (clustering_key_prefix start, clustering_key_prefix end, tombstone t) {
-            return range_tombstone {
-                std::move(start),
-                start_kind,
-                std::move(end),
-                bound_kind::incl_end,
-                t};
-        };
-    };
-
-    const auto make_rt_incl_start = make_range_tombstone_creator(bound_kind::incl_start);
-    const auto make_rt_excl_start = make_range_tombstone_creator(bound_kind::excl_start);
 
     auto make_clustering_range = [] (clustering_key_prefix&& start, clustering_key_prefix&& end) {
         return query::clustering_range::make(
@@ -1087,9 +1022,9 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
             query::clustering_range::bound(std::move(end), false));
     };
 
-    auto make_assertions = [] (flat_mutation_reader rd) {
+    auto make_assertions = [] (flat_mutation_reader_v2 rd) {
         rd.set_max_buffer_size(1);
-        return assert_that(std::move(rd));
+        return std::move(assert_that(std::move(rd)).ignore_deletion_time());
     };
 
     auto st_cdef = UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->get_column_definition(to_bytes("st"));
@@ -1098,25 +1033,20 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
     BOOST_REQUIRE(rc_cdef);
 
     auto to_expected = [rc_cdef] (int val) {
-        return std::vector<flat_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+        return std::vector<flat_reader_assertions_v2::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
     };
 
     // Sequential read
     {
-        auto r = make_assertions(sst.make_reader_v1());
+        auto r = make_assertions(sst.make_reader()).ignore_deletion_time();
         tombstone tomb = make_tombstone(1525385507816568, 1534898526);
         r.produces_partition_start(to_pkey(1))
         .produces_static_row({{st_cdef, int32_type->decompose(int32_t(555))}});
 
         for (auto idx : boost::irange(1, 1024 * 128, 5)) {
-            range_tombstone rt1 =
-                    make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
-            range_tombstone rt2 =
-                    make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
-
-            r.produces_range_tombstone(rt1)
+            r.produces_range_tombstone_change({{to_non_full_ck(idx), bound_weight::before_all_prefixed}, tomb})
             .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
-            .produces_range_tombstone(rt2);
+            .produces_range_tombstone_change({{to_non_full_ck(idx + 4), bound_weight::after_all_prefixed}, {}});
         }
         r.produces_partition_end()
         .produces_end_of_stream();
@@ -1124,11 +1054,12 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
 
     // forwarding read
     {
-        auto r = make_assertions(sst.make_reader_v1(query::full_partition_range,
+        auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                            UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->full_slice(),
                                            default_priority_class(),
                                            tracing::trace_state_ptr(),
-                                           streamed_mutation::forwarding::yes));
+                                           streamed_mutation::forwarding::yes))
+                 .ignore_deletion_time();
 
         const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
         r.produces_partition_start(to_pkey(1));
@@ -1136,19 +1067,17 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
         {
             auto clustering_range = make_clustering_range(to_full_ck(7460, 7461), to_full_ck(7500, 7501));
 
-            range_tombstone rt =
-                    make_rt_excl_start(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
-            r.produces_range_tombstone(rt, {clustering_range});
+            r.produces_range_tombstone_change({{to_full_ck(7460, 7461), bound_weight::before_all_prefixed}, tomb})
+            .produces_range_tombstone_change({{to_non_full_ck(7460), bound_weight::after_all_prefixed}, {}});
 
             for (auto idx : boost::irange(7461, 7501, 5)) {
-                range_tombstone rt1 =
-                        make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
-                range_tombstone rt2 =
-                        make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
-
-                r.produces_range_tombstone(rt1, {clustering_range})
-                .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
-                .produces_range_tombstone(rt2, {clustering_range});
+                r.produces_range_tombstone_change({{to_non_full_ck(idx), bound_weight::before_all_prefixed}, tomb})
+                .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3));
+                if (idx == 7496) {
+                    r.produces_range_tombstone_change({{to_full_ck(idx + 4, idx + 5), bound_weight::before_all_prefixed}, {}});
+                } else {
+                    r.produces_range_tombstone_change({{to_non_full_ck(idx + 4), bound_weight::after_all_prefixed}, {}});
+                }
             }
             r.produces_end_of_stream();
         }
@@ -1160,26 +1089,23 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
             .with_range(make_clustering_range(to_full_ck(7460, 7461), to_full_ck(7500, 7501)))
             .build();
 
-        auto r = make_assertions(sst.make_reader_v1(query::full_partition_range, slice));
+        auto r = make_assertions(sst.make_reader(query::full_partition_range, slice)).ignore_deletion_time();
         const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
 
         r.produces_partition_start(to_pkey(1))
         .produces_static_row({{st_cdef, int32_type->decompose(int32_t(555))}});
 
-        range_tombstone rt =
-                make_rt_excl_start(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
-
-        r.produces_range_tombstone(rt, slice.get_all_ranges());
+        r.produces_range_tombstone_change({{to_full_ck(7460, 7461), bound_weight::before_all_prefixed}, tomb})
+        .produces_range_tombstone_change({{to_non_full_ck(7460), bound_weight::after_all_prefixed}, {}});
 
         for (auto idx : boost::irange(7461, 7501, 5)) {
-            range_tombstone rt1 =
-                    make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
-            range_tombstone rt2 =
-                    make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
-
-            r.produces_range_tombstone(rt1, slice.get_all_ranges())
-            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
-            .produces_range_tombstone(rt2, slice.get_all_ranges());
+            r.produces_range_tombstone_change({{to_non_full_ck(idx), bound_weight::before_all_prefixed}, tomb})
+            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3));
+            if (idx == 7496) {
+                r.produces_range_tombstone_change({{to_full_ck(idx + 4, idx + 5), bound_weight::before_all_prefixed}, {}});
+            } else {
+                r.produces_range_tombstone_change({{to_non_full_ck(idx + 4), bound_weight::after_all_prefixed}, {}});
+            }
         }
         r.produces_partition_end()
         .produces_end_of_stream();
@@ -1191,30 +1117,29 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
             .with_range(make_clustering_range(to_full_ck(7470, 7471), to_full_ck(7500, 7501)))
             .build();
 
-        auto r = make_assertions(sst.make_reader_v1(query::full_partition_range,
+        auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                                       slice,
                                                       default_priority_class(),
                                                       tracing::trace_state_ptr(),
-                                                      streamed_mutation::forwarding::yes));
+                                                      streamed_mutation::forwarding::yes))
+                 .ignore_deletion_time();
         const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
         r.produces_partition_start(to_pkey(1));
         r.fast_forward_to(to_full_ck(7460, 7461), to_full_ck(7600, 7601));
 
         auto clustering_range = make_clustering_range(to_full_ck(7470, 7471), to_full_ck(7500, 7501));
-        range_tombstone rt =
-                make_rt_excl_start(to_full_ck(7469, 7469), to_non_full_ck(7470), tomb);
 
-        r.produces_range_tombstone(rt, {clustering_range});
+        r.produces_range_tombstone_change({{to_full_ck(7470, 7471), bound_weight::before_all_prefixed}, tomb});
+        r.produces_range_tombstone_change({{to_non_full_ck(7470), bound_weight::after_all_prefixed}, {}});
 
         for (auto idx : boost::irange(7471, 7501, 5)) {
-            range_tombstone rt1 =
-                    make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
-            range_tombstone rt2 =
-                    make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
-
-            r.produces_range_tombstone(rt1, {clustering_range})
-            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
-            .produces_range_tombstone(rt2, {clustering_range});
+            r.produces_range_tombstone_change({{to_non_full_ck(idx), bound_weight::before_all_prefixed}, tomb})
+            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3));
+            if (idx == 7496) {
+                r.produces_range_tombstone_change({{to_full_ck(idx + 4, idx + 5), bound_weight::before_all_prefixed}, {}});
+            } else {
+                r.produces_range_tombstone_change({{to_non_full_ck(idx + 4), bound_weight::after_all_prefixed}, {}});
+            }
         }
         r.produces_end_of_stream();
     }
@@ -2627,31 +2552,23 @@ SEASTAR_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
     BOOST_REQUIRE(int_cdef);
 
 
-    assert_that(sst.make_reader_v1())
+    assert_that(sst.make_reader())
     .produces_partition_start(to_key(1))
     .produces_row(to_ck(101), {{int_cdef, int32_type->decompose(1001)}})
-    .produces_range_tombstone(range_tombstone(to_ck(101),
-                                              bound_kind::excl_start,
-                                              to_ck(104),
-                                              bound_kind::excl_end,
-                                              tombstone(api::timestamp_type{1529519641211958},
-                                                        gc_clock::time_point(gc_clock::duration(1529519641)))))
-    .produces_range_tombstone(range_tombstone(to_ck(104),
-                                              bound_kind::incl_start,
-                                              to_ck(105),
-                                              bound_kind::excl_end,
-                                              tombstone(api::timestamp_type{1529519641215380},
-                                                        gc_clock::time_point(gc_clock::duration(1529519641)))))
+    .produces_range_tombstone_change({{to_ck(101), bound_weight::after_all_prefixed},
+            tombstone(api::timestamp_type{1529519641211958},
+                      gc_clock::time_point(gc_clock::duration(1529519641)))})
+    .produces_range_tombstone_change({{to_ck(104), bound_weight::before_all_prefixed},
+            tombstone(api::timestamp_type{1529519641215380},
+                      gc_clock::time_point(gc_clock::duration(1529519641)))})
+    .produces_range_tombstone_change({{to_ck(105), bound_weight::before_all_prefixed}, {}})
     .produces_row(to_ck(105), {{int_cdef, int32_type->decompose(1005)}})
     .produces_row(to_ck(106), {{int_cdef, int32_type->decompose(1006)}})
     .produces_row(to_ck(107), {{int_cdef, int32_type->decompose(1007)}})
     .produces_row(to_ck(108), {{int_cdef, int32_type->decompose(1008)}})
-    .produces_range_tombstone(range_tombstone(to_ck(108),
-                                              bound_kind::excl_start,
-                                              clustering_key_prefix::make_empty(),
-                                              bound_kind::incl_end,
-                                              tombstone(api::timestamp_type{1529519643267068},
-                                                        gc_clock::time_point(gc_clock::duration(1529519643)))))
+    .produces_range_tombstone_change({{to_ck(108), bound_weight::after_all_prefixed}, tombstone(api::timestamp_type{1529519643267068},
+                                                                                                gc_clock::time_point(gc_clock::duration(1529519643)))})
+    .produces_range_tombstone_change({{clustering_key_prefix::make_empty(), bound_weight::after_all_prefixed}, {}})
     .produces_partition_end()
     .produces_end_of_stream();
   });
@@ -2699,36 +2616,20 @@ SEASTAR_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
                                                  int32_type->decompose(ck));
     };
 
-    assert_that(sst.make_reader_v1())
+    assert_that(sst.make_reader())
     .produces_partition_start(to_key(1))
-    .produces_range_tombstone(range_tombstone(to_ck(1),
-                              bound_kind::excl_start,
-                              clustering_key::from_exploded(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, {
-                                  int32_type->decompose(2),
-                                  int32_type->decompose(13)
-                              }),
-                              bound_kind::incl_end,
-                              tombstone(api::timestamp_type{1530543711595401},
-                              gc_clock::time_point(gc_clock::duration(1530543711)))))
+    .produces_range_tombstone_change({{to_ck(1), bound_weight::after_all_prefixed},
+            tombstone(api::timestamp_type{1530543711595401},
+                      gc_clock::time_point(gc_clock::duration(1530543711)))})
     .produces_row_with_key(clustering_key::from_exploded(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, {
                                                             int32_type->decompose(2),
                                                             int32_type->decompose(13)
-                                                        }))
-    .produces_range_tombstone(range_tombstone(clustering_key::from_exploded(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, {
-                                  int32_type->decompose(2),
-                                  int32_type->decompose(13)
-                              }),
-                              bound_kind::incl_start,
-                              to_ck(3),
-                              bound_kind::excl_end,
-                              tombstone(api::timestamp_type{1530543711595401},
-                              gc_clock::time_point(gc_clock::duration(1530543711)))))
-    .produces_range_tombstone(range_tombstone(to_ck(3),
-                              bound_kind::excl_start,
-                              clustering_key_prefix::make_empty(),
-                              bound_kind::incl_end,
-                              tombstone(api::timestamp_type{1530543761322213},
-                              gc_clock::time_point(gc_clock::duration(1530543761)))))
+            }))
+    .produces_range_tombstone_change({{to_ck(3), bound_weight::before_all_prefixed}, {}})
+    .produces_range_tombstone_change({{to_ck(3), bound_weight::after_all_prefixed},
+            tombstone(api::timestamp_type{1530543761322213},
+                      gc_clock::time_point(gc_clock::duration(1530543761)))})
+    .produces_range_tombstone_change({{clustering_key_prefix::make_empty(), bound_weight::after_all_prefixed}, {}})
     .produces_partition_end()
     .produces_end_of_stream();
   });
