@@ -47,6 +47,7 @@ public:
     // Data size of the whole run, meaning it's a sum of the data size of all its fragments.
     uint64_t data_size() const;
     const sstable_list& all() const { return _all; }
+    double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
 };
 
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
