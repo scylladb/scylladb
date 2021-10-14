@@ -2604,37 +2604,10 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
 
 // Runs inside seastar::async context
 void storage_service::flush_column_families() {
-    container().invoke_on_all([] (auto& ss) {
-        auto& local_db = ss._db.local();
-        auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return !is_system_keyspace(cf->schema()->ks_name());
-        });
-        // count CFs first
-        auto total_cfs = boost::distance(non_system_cfs);
-        ss._drain_progress.total_cfs = total_cfs;
-        ss._drain_progress.remaining_cfs = total_cfs;
-        // flush
-        return parallel_for_each(non_system_cfs, [&ss] (auto&& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return cf->flush().then([&ss] {
-                ss._drain_progress.remaining_cfs--;
-            });
-        });
-    }).get();
+    _db.invoke_on_all(&database::flush_non_system_column_families).get();
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-    container().invoke_on_all([] (auto& ss) {
-        auto& local_db = ss._db.local();
-        auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return is_system_keyspace(cf->schema()->ks_name());
-        });
-        return parallel_for_each(system_cfs, [&ss] (auto&& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return cf->flush();
-        });
-    }).get();
+    _db.invoke_on_all(&database::flush_system_column_families).get();
 }
 
 future<> storage_service::drain() {

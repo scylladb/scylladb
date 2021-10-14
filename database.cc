@@ -2270,6 +2270,35 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
     });
 }
 
+future<> database::flush_non_system_column_families() {
+    auto non_system_cfs = get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+        auto cf = uuid_and_cf.second;
+        return !is_system_keyspace(cf->schema()->ks_name());
+    });
+    // count CFs first
+    auto total_cfs = boost::distance(non_system_cfs);
+    _drain_progress.total_cfs = total_cfs;
+    _drain_progress.remaining_cfs = total_cfs;
+    // flush
+    return parallel_for_each(non_system_cfs, [this] (auto&& uuid_and_cf) {
+        auto cf = uuid_and_cf.second;
+        return cf->flush().then([this] {
+            _drain_progress.remaining_cfs--;
+        });
+    });
+}
+
+future<> database::flush_system_column_families() {
+    auto system_cfs = get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+        auto cf = uuid_and_cf.second;
+        return is_system_keyspace(cf->schema()->ks_name());
+    });
+    return parallel_for_each(system_cfs, [] (auto&& uuid_and_cf) {
+        auto cf = uuid_and_cf.second;
+        return cf->flush();
+    });
+}
+
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;
     return os;

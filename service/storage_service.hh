@@ -293,20 +293,6 @@ private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
     /* Used for tracking drain progress */
-public:
-    struct drain_progress {
-        int32_t total_cfs;
-        int32_t remaining_cfs;
-
-        drain_progress& operator+=(const drain_progress& other) {
-            total_cfs += other.total_cfs;
-            remaining_cfs += other.remaining_cfs;
-            return *this;
-        }
-    };
-private:
-    drain_progress _drain_progress{};
-
 
     endpoint_lifecycle_notifier& _lifecycle_notifier;
 
@@ -782,10 +768,6 @@ public:
     future<sstring> get_operation_mode();
 
     future<bool> is_starting();
-
-    drain_progress get_drain_progress() const {
-        return _drain_progress;
-    }
 
     /**
      * Shuts node off to writes, empties memtables and the commit log.
