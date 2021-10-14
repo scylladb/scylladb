@@ -1381,10 +1381,12 @@ public:
         return _drain_progress;
     }
 
+    future<> drain();
+
+private:
     future<> flush_non_system_column_families();
     future<> flush_system_column_families();
 
-private:
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
     friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);

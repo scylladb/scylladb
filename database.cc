@@ -2299,6 +2299,20 @@ future<> database::flush_system_column_families() {
     });
 }
 
+future<> database::drain() {
+    // Interrupt on going compaction and shutdown to prevent further compaction
+    co_await _compaction_manager->drain();
+
+    // flush the system ones after all the rest are done, just in case flushing modifies any system state
+    // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
+    co_await _stop_barrier.arrive_and_wait();
+    co_await flush_non_system_column_families();
+    co_await _stop_barrier.arrive_and_wait();
+    co_await flush_system_column_families();
+    co_await _stop_barrier.arrive_and_wait();
+    co_await _commitlog->shutdown();
+}
+
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;
     return os;

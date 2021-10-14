@@ -390,8 +390,6 @@ public:
 
     future<> stop_transport();
 
-    void flush_column_families();
-
 private:
     bool should_bootstrap();
     bool is_first_node();

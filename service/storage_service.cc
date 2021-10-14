@@ -2602,14 +2602,6 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
     });
 }
 
-// Runs inside seastar::async context
-void storage_service::flush_column_families() {
-    _db.invoke_on_all(&database::flush_non_system_column_families).get();
-    // flush the system ones after all the rest are done, just in case flushing modifies any system state
-    // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-    _db.invoke_on_all(&database::flush_system_column_families).get();
-}
-
 future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
         if (ss._operation_mode == mode::DRAINED) {
@@ -2638,17 +2630,8 @@ future<> storage_service::do_drain() {
         set_mode(mode::DRAINING, "shutting down migration manager", false);
         _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
 
-        // Interrupt on going compaction and shutdown to prevent further compaction
-        _db.invoke_on_all([] (auto& db) {
-            return db.get_compaction_manager().drain();
-        }).get();
-
         set_mode(mode::DRAINING, "flushing column families", false);
-        flush_column_families();
-
-        _db.invoke_on_all([] (auto& db) {
-            return db.commitlog()->shutdown();
-        }).get();
+        _db.invoke_on_all(&database::drain).get();
     });
 }
 
