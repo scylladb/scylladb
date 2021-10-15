@@ -25,10 +25,12 @@
 
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/time_window_compaction_strategy.hh"
 #include "cell_locking.hh"
 #include "mutation_reader.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/random_utils.hh"
 #include <boost/accumulators/framework/accumulator_set.hpp>
 #include <boost/accumulators/framework/features.hpp>
 #include <boost/accumulators/statistics/mean.hpp>
@@ -49,6 +51,8 @@ public:
         unsigned sstables;
         size_t buffer_size;
         sstring dir;
+        sstables::compaction_strategy_type compaction_strategy;
+        api::timestamp_type timestamp_range;
     };
 
 private:
@@ -79,7 +83,7 @@ private:
     lw_shared_ptr<memtable> _mt;
     std::vector<shared_sstable> _sst;
 
-    schema_ptr create_schema() {
+    schema_ptr create_schema(sstables::compaction_strategy_type type) {
         std::vector<schema::column> columns;
 
         for (unsigned i = 0; i < _cfg.num_columns; ++i) {
@@ -100,12 +104,13 @@ private:
             // comment
             "Perf tests"
         ));
+        builder.set_compaction_strategy(type);
         return builder.build(schema_builder::compact_storage::no);
     }
 
 public:
     perf_sstable_test_env(conf cfg) : _cfg(std::move(cfg))
-           , s(create_schema())
+           , s(create_schema(cfg.compaction_strategy))
            , _distribution('@', '~')
            , _mt(make_lw_shared<memtable>(s))
     {}
@@ -122,7 +127,8 @@ public:
             auto key = partition_key::from_deeply_exploded(*s, { local_keys.at(iteration) });
             auto mut = mutation(this->s, key);
             for (auto& cdef: this->s->regular_columns()) {
-                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(*utf8_type, 0, utf8_type->decompose(this->random_column())));
+                const auto ts = _cfg.timestamp_range ? tests::random::get_int<api::timestamp_type>(-_cfg.timestamp_range, _cfg.timestamp_range) : 0;
+                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(*utf8_type, ts, utf8_type->decompose(this->random_column())));
             }
             this->_mt->apply(std::move(mut));
             return make_ready_future<>();
@@ -192,8 +198,12 @@ public:
                 auto end = perf_sstable_test_env::now();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
-                assert(ret.new_sstables.size() == 1);
-                auto total_keys_written = ret.new_sstables.front()->get_estimated_key_count();
+                if (_cfg.compaction_strategy != sstables::compaction_strategy_type::time_window) {
+                    assert(ret.new_sstables.size() == 1);
+                }
+                auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {
+                    return n + sst->get_estimated_key_count();
+                });
                 assert(total_keys_written >= partitions_per_sstable);
 
                 auto duration = std::chrono::duration<double>(end - start).count();
