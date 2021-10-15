@@ -94,7 +94,10 @@ int main(int argc, char** argv) {
         ("column_size", bpo::value<unsigned>()->default_value(64), "size in bytes for each column")
         ("sstables", bpo::value<unsigned>()->default_value(1), "number of sstables (valid only for compaction mode)")
         ("mode", bpo::value<sstring>()->default_value("index_write"), "one of: sequential_read, index_read, write, compaction, index_write (default)")
-        ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables");
+        ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables")
+        ("compaction-strategy", bpo::value<sstring>()->default_value("SizeTieredCompactionStrategy"), "compaction strategy to use, one of "
+             "(SizeTieredCompactionStrategy, LeveledCompactionStrategy, DateTieredCompactionStrategy, TimeWindowCompactionStrategy)")
+        ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]");
 
     return app.run_deprecated(argc, argv, [&app] {
         auto test = make_lw_shared<distributed<perf_sstable_test_env>>();
@@ -116,6 +119,8 @@ int main(int argc, char** argv) {
             cfg.num_columns = app.configuration()["num_columns"].as<unsigned>();
             cfg.column_size = app.configuration()["column_size"].as<unsigned>();
         }
+        cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
+        cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
         return test->start(std::move(cfg)).then([mode, dir, test] {
             engine().at_exit([test] { return test->stop(); });
             if ((mode == test_modes::index_read) ||
