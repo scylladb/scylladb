@@ -34,7 +34,7 @@ namespace alternator {
 // "ResourceNotFoundException", and a human readable message.
 // Eventually alternator::api_handler will convert a returned or thrown
 // api_error into a JSON object, and that is returned to the user.
-class api_error final {
+class api_error final : public std::exception {
 public:
     using status_type = httpd::reply::status_type;
     status_type _http_code;
@@ -86,6 +86,14 @@ public:
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
     }
+
+    // Provide the "std::exception" interface, to make it easier to print this
+    // exception in log messages. Note that this function is *not* used to
+    // format the error to send it back to the client - server.cc has
+    // generate_error_reply() to format an api_error as the DynamoDB protocol
+    // requires.
+    virtual const char* what() const noexcept override;
+    mutable std::string _what_string;
 };
 
 }

@@ -617,5 +617,12 @@ future<> server::json_parser::stop() {
     return std::move(_run_parse_json_thread);
 }
 
+const char* api_error::what() const noexcept {
+    if (_what_string.empty()) {
+        _what_string = format("{} {}: {}", _http_code, _type, _msg);
+    }
+    return _what_string.c_str();
+}
+
 }
 
