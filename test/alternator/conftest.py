@@ -24,6 +24,7 @@
 
 import pytest
 import boto3
+import requests
 from util import create_test_table
 
 # When tests are run with HTTPS, the server often won't have its SSL
@@ -118,6 +119,22 @@ def dynamodbstreams(request):
         return boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
             config=botocore.client.Config(retries={"max_attempts": 3}))
+
+# A function-scoped autouse=True fixture allows us to test after every test
+# that the server is still alive - and if not report the test which crashed
+# it and stop running any more tests.
+@pytest.fixture(scope="function", autouse=True)
+def dynamodb_test_connection(dynamodb, request):
+    yield
+    try:
+        # We want to run a do-nothing DynamoDB command. The health-check
+        # URL is the fastest one.
+        url = dynamodb.meta.client._endpoint.host
+        response = requests.get(url, verify=False)
+        assert response.ok
+    except:
+        pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
+
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
