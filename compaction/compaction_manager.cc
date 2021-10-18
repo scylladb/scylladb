@@ -271,7 +271,7 @@ future<> compaction_manager::perform_major_compaction(column_family* cf) {
     // it cannot be the other way around, or minor compaction for this column family would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
     task->compaction_done = with_semaphore(_major_compaction_sem, 1, [this, task, cf] {
-        return with_lock(_compaction_locks[cf].for_write(), [this, task, cf] {
+        return with_lock(_compaction_state[cf].lock.for_write(), [this, task, cf] {
             _stats.active_tasks++;
             if (!can_proceed(task)) {
                 return make_ready_future<>();
@@ -325,7 +325,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
 
     task->compaction_done = with_semaphore(_custom_job_sem, 1, [this, task, cf, &job = *job_ptr] () mutable {
         // take read lock for cf, so major compaction and resharding can't proceed in parallel.
-        return with_lock(_compaction_locks[cf].for_read(), [this, task, cf, &job] () mutable {
+        return with_lock(_compaction_state[cf].lock.for_read(), [this, task, cf, &job] () mutable {
             _stats.active_tasks++;
             if (!can_proceed(task)) {
                 return make_ready_future<>();
@@ -451,7 +451,7 @@ void compaction_manager::disable() {
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
-        for (auto& e: _compaction_locks) {
+        for (auto& e: _compaction_state) {
             submit(e.first);
         }
     };
@@ -617,7 +617,7 @@ void compaction_manager::submit(column_family* cf) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
-        return with_lock(_compaction_locks[cf].for_read(), [this, task] () mutable {
+        return with_lock(_compaction_state[cf].lock.for_read(), [this, task] () mutable {
           return with_scheduling_group(_compaction_controller.sg(), [this, task = std::move(task)] () mutable {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
@@ -685,7 +685,7 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         return with_semaphore(_custom_job_sem, 1, [this, task, cf] () mutable {
-            return with_lock(_compaction_locks[cf].for_read(), [this, task, cf] () mutable {
+            return with_lock(_compaction_state[cf].lock.for_read(), [this, task, cf] () mutable {
                 _stats.pending_tasks--;
                 if (!can_proceed(task)) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -765,7 +765,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
 
             return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
               // Take write lock for cf to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
-              return with_lock(_compaction_locks[&cf].for_write(), [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
+              return with_lock(_compaction_state[&cf].lock.for_write(), [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
                 _stats.pending_tasks--;
                 _stats.active_tasks++;
                 task->setup_new_compaction();
@@ -960,7 +960,7 @@ future<> compaction_manager::remove(column_family* cf) {
 #ifdef DEBUG
         assert(std::find_if(_tasks.begin(), _tasks.end(), [cf] (auto& task) { return task->compacting_cf == cf; }) == _tasks.end());
 #endif
-        _compaction_locks.erase(cf);
+        _compaction_state.erase(cf);
     });
 }
 

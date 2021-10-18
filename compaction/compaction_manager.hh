@@ -121,8 +121,12 @@ private:
     // Purpose is to serialize major compaction across all column families, so as to
     // reduce disk space requirement.
     semaphore _major_compaction_sem{1};
-    // Prevents column family from running major and minor compaction at same time.
-    std::unordered_map<column_family*, rwlock> _compaction_locks;
+
+    struct compaction_state {
+        // Prevents table from running major and minor compaction at the same time.
+        rwlock lock;
+    };
+    std::unordered_map<table*, compaction_state> _compaction_state;
 
     semaphore _custom_job_sem{1};
     seastar::named_semaphore _rewrite_sstables_sem = {1, named_semaphore_exception_factory{"rewrite sstables"}};
