@@ -51,6 +51,9 @@ class keyspace_metadata;
 
 namespace locator {
     class token_metadata;
+    class shared_token_metadata;
+    struct snitch_ptr;
+    class abstract_replication_strategy;
 } // namespace locator
 
 namespace cql3 {

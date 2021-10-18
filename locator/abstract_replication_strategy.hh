@@ -101,6 +101,9 @@ public:
                                               const replication_strategy_config_options& config_options,
                                               const topology& topology);
     static void validate_replication_factor(sstring rf);
+
+    static sstring to_qualified_class_name(std::string_view strategy_class_name);
+
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options(const topology&) const = 0;

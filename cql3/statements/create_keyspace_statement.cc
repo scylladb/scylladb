@@ -148,11 +148,6 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
     });
 }
 
-using strategy_class_registry = class_registry<
-    locator::abstract_replication_strategy,
-    locator::snitch_ptr&,
-    const std::map<sstring, sstring>&>;
-
 // Check for replication strategy choices which are restricted by the
 // configuration. This check can throw a configuration_exception immediately
 // if the strategy is forbidden by the configuration, or return a warning
@@ -169,7 +164,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     if (!attrs.get_replication_strategy_class()) {
         return std::nullopt;
     }
-    sstring replication_strategy = strategy_class_registry::to_qualified_class_name(
+    sstring replication_strategy = locator::abstract_replication_strategy::to_qualified_class_name(
         *attrs.get_replication_strategy_class());
     // SimpleStrategy is not recommended in any setup which already has - or
     // may have in the future - multiple racks or DCs. So depending on how
