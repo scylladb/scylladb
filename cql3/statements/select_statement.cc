@@ -66,7 +66,7 @@
 #include "test/lib/select_statement_utils.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
-bool is_system_keyspace(std::string_view name);
+bool is_internal_keyspace(std::string_view name);
 
 namespace cql3 {
 
@@ -156,7 +156,7 @@ select_statement::select_statement(schema_ptr schema,
     , _per_partition_limit(std::move(per_partition_limit))
     , _ordering_comparator(std::move(ordering_comparator))
     , _stats(stats)
-    , _ks_sel(::is_system_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
+    , _ks_sel(::is_internal_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
     , _attrs(std::move(attrs))
 {
     _opts = _selection->get_query_options();
