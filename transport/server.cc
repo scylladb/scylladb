@@ -503,7 +503,15 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             return make_error(stream, ex.code(), ex.what(), trace_state);
         } catch (std::exception& ex) {
             try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-            return make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), trace_state);
+            sstring msg = ex.what();
+            try {
+                std::rethrow_if_nested(ex);
+            } catch (...) {
+                std::ostringstream ss;
+                ss << msg << ": " << std::current_exception();
+                msg = ss.str();
+            }
+            return make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state);
         } catch (...) {
             try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
