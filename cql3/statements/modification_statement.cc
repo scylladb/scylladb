@@ -61,7 +61,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 
-bool is_system_keyspace(std::string_view name);
+bool is_internal_keyspace(std::string_view name);
 
 namespace cql3 {
 
@@ -90,7 +90,7 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     , attrs{std::move(attrs_)}
     , _column_operations{}
     , _stats(stats_)
-    , _ks_sel(::is_system_keyspace(schema_->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
+    , _ks_sel(::is_internal_keyspace(schema_->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
 { }
 
 uint32_t modification_statement::get_bound_terms() const {
