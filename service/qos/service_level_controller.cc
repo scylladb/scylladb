@@ -362,11 +362,11 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_levels() {
-    return _sl_data_accessor->get_service_levels();
+    return _sl_data_accessor ? _sl_data_accessor->get_service_levels() : make_ready_future<service_levels_info>();
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_level(sstring service_level_name) {
-    return _sl_data_accessor->get_service_level(service_level_name);
+    return _sl_data_accessor ? _sl_data_accessor->get_service_level(service_level_name) : make_ready_future<service_levels_info>();
 }
 
 future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type) {

@@ -501,12 +501,6 @@ public:
             sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
             auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
-            sl_controller.invoke_on_all([&sys_dist_ks, &sl_controller] (qos::service_level_controller& service) {
-                qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
-                        ::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
-                                make_shared<qos::unit_test_service_levels_accessor>(sl_controller,sys_dist_ks));
-                return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
-            }).get();
 
             sharded<netw::messaging_service> ms;
             // don't start listening so tests can be run in parallel
@@ -679,6 +673,13 @@ public:
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+
+            sl_controller.invoke_on_all([&sys_dist_ks, &sl_controller] (qos::service_level_controller& service) {
+                qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
+                        ::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+                                make_shared<qos::unit_test_service_levels_accessor>(sl_controller,sys_dist_ks));
+                return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
+            }).get();
 
             const bool raft_enabled = cfg->check_experimental(db::experimental_features_t::RAFT);
             if (raft_enabled) {
