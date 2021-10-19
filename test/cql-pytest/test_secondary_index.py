@@ -21,7 +21,7 @@ import time
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
-from cassandra_tests.porting import assert_rows
+from cassandra_tests.porting import assert_rows, assert_row_count
 
 from util import new_test_table, unique_name
 
@@ -311,3 +311,20 @@ def test_index_empty_string(cql, test_keyspace):
         # Note that on a single-node cql-pytest, index updates are
         # synchronous so we don't have to retry the SELECT.
         assert_rows(cql.execute(f"SELECT p FROM {table} WHERE v=''"), [2])
+
+# Test that trying to delete an entry based on an indexed column
+# does not cause the whole partition to be wiped. Refs #9495
+def test_try_deleting_based_on_index_column(cql, test_keyspace):
+    schema = 'p int, c1 int, c2 int, v int, primary key (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for i in range(10):
+            cql.execute(f"INSERT INTO {table} (p,c1,c2,v) VALUES (0,{i},{i},{i})")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DELETE FROM {table} WHERE p = 0 AND c2 = 1500")
+        assert_row_count(cql.execute(f"SELECT v FROM {table}"), 10)
+        cql.execute(f"CREATE INDEX ON {table}(c2)")
+        # Creating an index should *not* influence the fact that deletion
+        # is not allowed
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DELETE FROM {table} WHERE p = 0 AND c2 = 1500")
+        assert_row_count(cql.execute(f"SELECT v FROM {table}"), 10)
