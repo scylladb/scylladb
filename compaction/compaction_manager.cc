@@ -741,7 +741,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                     });
                 });
               });
-            }).then_wrapped([this, task, compacting] (future<> f) mutable {
+            }).then_wrapped([this, task, &cf, compacting] (future<> f) mutable {
                 task->finish_compaction();
                 _stats.active_tasks--;
                 if (!can_proceed(task)) {
@@ -755,6 +755,8 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                     });
                 }
                 _stats.completed_tasks++;
+                // Schedule regular compaction on rewrite completion, to allow it to catch up with new sstables produced.
+                postpone_compaction_for_column_family(&cf);
                 reevaluate_postponed_compactions();
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
