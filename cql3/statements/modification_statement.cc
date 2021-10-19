@@ -417,7 +417,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
         auto column_names = ::join(", ", _restrictions->get_non_pk_restriction()
                                          | boost::adaptors::map_keys
                                          | boost::adaptors::indirected
-                                         | boost::adaptors::transformed(std::mem_fn(&column_definition::name)));
+                                         | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
         throw exceptions::invalid_request_exception(format("Invalid where clause contains non PRIMARY KEY columns: {}", column_names));
     }
     auto ck_restrictions = _restrictions->get_clustering_columns_restrictions();
