@@ -453,9 +453,12 @@ statement_restrictions::statement_restrictions(database& db,
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
             && _partition_key_restrictions->is_all_eq());
     _has_multi_column = find_atom(_clustering_columns_restrictions->expression, expr::is_multi_column);
-    _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local);
-    _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local);
-    _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local);
+    _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
+            && !type.is_delete();
+    _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local)
+            && !type.is_delete();
+    _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local)
+            && !type.is_delete();
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
     process_partition_key_restrictions(for_view, allow_filtering);
