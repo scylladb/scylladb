@@ -156,8 +156,12 @@ dht::token_range_vector
 effective_replication_map::do_get_ranges(noncopyable_function<bool(inet_address_vector_replica_set)> should_add_range) const {
     dht::token_range_vector ret;
     const auto& tm = *_tmptr;
-    auto prev_tok = tm.sorted_tokens().back();
-    for (const auto& tok : tm.sorted_tokens()) {
+    const auto& sorted_tokens = tm.sorted_tokens();
+    if (sorted_tokens.empty()) {
+        on_internal_error(rslogger, "Token metadata is empty");
+    }
+    auto prev_tok = sorted_tokens.back();
+    for (const auto& tok : sorted_tokens) {
         if (should_add_range(get_natural_endpoints(tok))) {
             insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
@@ -183,8 +187,12 @@ future<dht::token_range_vector>
 abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tmptr) const {
     dht::token_range_vector ret;
     const auto& tm = *tmptr;
-    auto prev_tok = tm.sorted_tokens().back();
-    for (auto tok : tm.sorted_tokens()) {
+    const auto& sorted_tokens = tm.sorted_tokens();
+    if (sorted_tokens.empty()) {
+        on_internal_error(rslogger, "Token metadata is empty");
+    }
+    auto prev_tok = sorted_tokens.back();
+    for (auto tok : sorted_tokens) {
         for (inet_address a : co_await calculate_natural_endpoints(tok, tm)) {
             if (a == ep) {
                 insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);

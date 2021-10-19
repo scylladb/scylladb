@@ -117,6 +117,7 @@ public:
     replication_strategy_type get_type() const { return _my_type; }
 
     // Use the token_metadata provided by the caller instead of _token_metadata
+    // Note: must be called with initialized, non-empty token_metadata.
     future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;
 
 public:
@@ -175,6 +176,8 @@ public:
     // The list is sorted, and its elements are non overlapping and non wrap-around.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
+    //
+    // Note: must be called after token_metadata has been initialized.
     dht::token_range_vector get_ranges(inet_address ep) const;
 
     // get_primary_ranges() returns the list of "primary ranges" for the given
@@ -183,11 +186,15 @@ public:
     // returned calculate_natural_endpoints().
     // This function is the analogue of Origin's
     // StorageService.getPrimaryRangesForEndpoint().
+    //
+    // Note: must be called after token_metadata has been initialized.
     dht::token_range_vector get_primary_ranges(inet_address ep) const;
 
     // get_primary_ranges_within_dc() is similar to get_primary_ranges()
     // except it assigns a primary node for each range within each dc,
     // instead of one node globally.
+    //
+    // Note: must be called after token_metadata has been initialized.
     dht::token_range_vector get_primary_ranges_within_dc(inet_address ep) const;
 
     std::unordered_map<dht::token_range, inet_address_vector_replica_set>
