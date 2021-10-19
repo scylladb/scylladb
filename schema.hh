@@ -29,6 +29,7 @@
 #include "column_computation.hh"
 #include "timestamp.hh"
 #include "tombstone_gc_options.hh"
+#include "db/per_partition_rate_limit_options.hh"
 
 namespace dht {
 
@@ -621,6 +622,7 @@ private:
         double _dc_local_read_repair_chance = 0.0;
         double _read_repair_chance = 0.0;
         double _crc_check_chance = 1;
+        db::per_partition_rate_limit_options _per_partition_rate_limit_options;
         int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
         int32_t _max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
         int32_t _min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
@@ -812,6 +814,10 @@ public:
     const cdc::options& cdc_options() const;
 
     const ::tombstone_gc_options& tombstone_gc_options() const;
+
+    const db::per_partition_rate_limit_options& per_partition_rate_limit_options() const {
+        return _raw._per_partition_rate_limit_options;
+    }
 
     const ::speculative_retry& speculative_retry() const {
         return _raw._speculative_retry;

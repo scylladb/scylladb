@@ -86,6 +86,7 @@
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
+#include "db/per_partition_rate_limit_extension.hh"
 
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -459,6 +460,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
     ext->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
+    ext->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
 
     auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();

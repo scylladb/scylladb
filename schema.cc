@@ -31,6 +31,7 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "utils/rjson.hh"
 #include "tombstone_gc_options.hh"
+#include "db/per_partition_rate_limit_extension.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -1269,6 +1270,12 @@ schema_ptr schema_builder::build() {
             dynamic_pointer_cast<db::paxos_grace_seconds_extension>(it->second)->get_paxos_grace_seconds();
     }
 
+    // cache the `per_partition_rate_limit` parameters for fast access through the schema object.
+    if (auto it = new_raw._extensions.find(db::per_partition_rate_limit_extension::NAME); it != new_raw._extensions.end()) {
+        new_raw._per_partition_rate_limit_options =
+            dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second)->get_options();
+    }
+
     return make_lw_shared<schema>(schema::private_tag{}, new_raw, _view_info);
 }
 
@@ -1299,6 +1306,11 @@ schema_builder& schema_builder::with_cdc_options(const cdc::options& opts) {
 
 schema_builder& schema_builder::with_tombstone_gc_options(const tombstone_gc_options& opts) {
     add_extension(tombstone_gc_extension::NAME, ::make_shared<tombstone_gc_extension>(opts));
+    return *this;
+}
+
+schema_builder& schema_builder::with_per_partition_rate_limit_options(const db::per_partition_rate_limit_options& opts) {
+    add_extension(db::per_partition_rate_limit_extension::NAME, ::make_shared<db::per_partition_rate_limit_extension>(opts));
     return *this;
 }
 
