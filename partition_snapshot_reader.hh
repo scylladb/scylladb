@@ -114,7 +114,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         // In reversing mode, upper and lower bounds still need to be executed against
         // snapshot schema and ck_range, however we need them to search from "opposite" direction.
         template<typename T, typename... Args>
-        static rows_iter_type lower_bound(const T& t, Args... args) {
+        static rows_iter_type lower_bound(const T& t, Args&&... args) {
             if constexpr (Reversing) {
                 return make_iterator(t.upper_bound(std::forward<Args>(args)...));
             } else {
@@ -122,7 +122,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             }
         }
         template<typename T, typename... Args>
-        static rows_iter_type upper_bound(const T& t, Args... args) {
+        static rows_iter_type upper_bound(const T& t, Args&&... args) {
             if constexpr (Reversing) {
                 return make_iterator(t.lower_bound(std::forward<Args>(args)...));
             } else {
