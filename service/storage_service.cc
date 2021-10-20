@@ -1400,7 +1400,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
         // Precalculate new effective_replication_map for all keyspaces
         // and clone to all shards;
         auto& db = _db.local();
-        auto keyspaces = db.get_non_system_keyspaces();
+        auto keyspaces = db.get_all_keyspaces();
         for (auto& ks_name : keyspaces) {
             auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
             auto erm = co_await calculate_effective_replication_map(std::move(rs), tmptr);

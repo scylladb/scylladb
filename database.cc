@@ -997,6 +997,15 @@ std::vector<sstring>  database::get_non_system_keyspaces() const {
     return res;
 }
 
+std::vector<sstring> database::get_all_keyspaces() const {
+    std::vector<sstring> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        res.push_back(i.first);
+    }
+    return res;
+}
+
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
         get_column_families()

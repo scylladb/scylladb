@@ -770,3 +770,17 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
         }
     }, std::move(cfg)).get();
 }
+
+// Test `upgrade_sstables` on all keyspaces (including the system keyspace).
+// Refs: #9494 (https://github.com/scylladb/scylla/issues/9494)
+SEASTAR_TEST_CASE(upgrade_sstables) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([&e] (database& db) {
+            auto& cm = db.get_compaction_manager();
+            return do_for_each(db.get_column_families(), [&] (std::pair<utils::UUID, lw_shared_ptr<column_family>> t) {
+                constexpr bool exclude_current_version = false;
+                return cm.perform_sstable_upgrade(db, t.second.get(), exclude_current_version);
+            });
+        }).get();
+    });
+}
