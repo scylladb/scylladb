@@ -12,7 +12,7 @@ platforms.
 
 In this document, the detailed design and implementation of Redis that build on
 top of Scylla is provided. At the beginning, the main feature, which is as a
-data structures store, is design and  implmented. In the future, the reset
+data structures store, is design and  implemented. In the future, the reset
 features of Redis will be supported.
 
 ## 2. Motivation
@@ -28,7 +28,7 @@ features:
 * Auto tuning
 
 If Redis build on the top of Scylla, it has the above features automatically.
-It's achived great progress in cluster master managment, data persistence,
+It's achieved great progress in cluster master management, data persistence,
 failover and replication.
 
 The benefits to the users are easy to use and develop in their production
@@ -58,7 +58,7 @@ process the request correctly. In other words, Client can send request to
 any node of Redis cluster built on the top of Scylla. Obviously, the simple
 client can accesses the Redis cluster built on the top of Scylla, when
 provided address is not an IP but rather a single domain name, which a
-client resloves a random Scylla node IP address. The smart Redis client
+client resolves a random Scylla node IP address. The smart Redis client
 queries the mapping information between hash slots and Server nodes. We
 just fill the mapping with random Scylla node IP address.
 
@@ -85,7 +85,7 @@ HASHes, and  ZSETs. (In fact, Now Redis has support other structure types,
 but the basic structure types are used widely).
 
 In this proposal, We use the column family of Scylla to simulate the
-database within Redis. At the bootrap phase, the column familes with fixed
+database within Redis. At the bootrap phase, the column families with fixed
 name should be created (if not exists) or loaded.
 
 We known that, Redis allows us to store keys that map to any one of the
@@ -127,7 +127,7 @@ The disadvantages of this proposal is that, we can not the TYPE command of
 Redis. The different type strutures are stored in the different Scylla
 tables, and each Scylla table provide the independent keyspace. In Redis,
 keys are unique in the database. However,  the keys with column family of
-Scylla are not unique. Beacause the keys are splited into independent
+Scylla are not unique. Because the keys are splited into independent
 Scylla tables, it's different to original Redis.
 
 **IMPORTANT NOTE**: The keys with database of Redis are not unique  in this
@@ -209,7 +209,7 @@ HASHes provide constant time basic operations like HGET, HSET, HEXISTS etc.
 
 As mentioned above, Scylla provides the 3 kinds of collection data type,
 including map.
-We do not use this collection type of Scylla to strore HASHes data with the
+We do not use this collection type of Scylla to store HASHes data with the
 same reason.
 
 The better way is that the HASHes of Redis are stored as the partition of
@@ -274,7 +274,7 @@ CREATE TABLE ZSETs (
 ) WITH ... ;
 ```
 
-Like other stutures mentioned above, a ZSETs strucutre is stored as a
+Like other stutures mentioned above, a ZSETs structure is stored as a
 partition within the ZSETs table.
 
 ## 5. Implementation of Commands
@@ -296,7 +296,7 @@ anther difference with original Redis.
 
 ### 5.1 RMW Command
 
-The RMW Commond is that the sequence of operations (Read-Modify-Write)
+The RMW Command is that the sequence of operations (Read-Modify-Write)
 require by this command needs to be performed atomically.
 
 For instance, APPEND command of STRINGs, is typical RMW command. First,
@@ -327,12 +327,12 @@ currently.
 
 ### 5.4 Time to Live (TTL)
 
-In Redis, the TTL is only specified to entrie key-value pair. Scylla has
+In Redis, the TTL is only specified to entry key-value pair. Scylla has
 compaction mechanism to remove expired data.  We can set the TTL the
 partition for the given partition key. We also can rewrite the  partition
 with new TTL value.
 
-The partition ( stores the key-value pair of Redis strucutres) will be
+The partition ( stores the key-value pair of Redis structures) will be
 deleted eventually, when the associated TTL is older than current
 timestamp.
 
@@ -373,7 +373,7 @@ The Redis API in Scylla supports the following subset of the Redis commands.
 | ------- | ----------- |
 | **Connection** | |
 | `ECHO message` | Echo a `message` back to the client. The server returns `message´ as a response. |
-| `PING [message]` | Check connection liveness or measure reponse time. The server returns `PONG` as a response. |
+| `PING [message]` | Check connection liveness or measure response time. The server returns `PONG` as a response. |
 | `SELECT index` | Select logical database database for the current connection. |
 | **Keys** | |
 | `DEL key [key ...]` | Delete `key` from the database. |

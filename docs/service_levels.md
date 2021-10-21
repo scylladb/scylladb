@@ -55,7 +55,7 @@ select * from system_distributed.service_levels ;
 
 Service level timeout can be used to assign a default timeout value for all operations for a particular service level.
 
-Service level timeout takes precenence over default timeout values from scylla.yaml configuration
+Service level timeout takes precedence over default timeout values from scylla.yaml configuration
 file, but it can still be superseded by per-query timeouts (issuing a query with USING TIMEOUT directive).
 
 In order to set a timeout for a service level, create or alter it with proper parameters, e.g.:

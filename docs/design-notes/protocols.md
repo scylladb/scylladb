@@ -71,7 +71,7 @@ number of shards, messages from shard N in the source node arrive to shard
 N in the destination node.
 
 Port 7000 is the default port for Scylla's internal communication. This choice
-can be overriden by the `storage_port` configuration option. This awkward
+can be overridden by the `storage_port` configuration option. This awkward
 name, `storage_port`, was kept for backward compatibility with Cassandra's
 YAML configuration file. In very early Cassandra versions, this port was
 used _only_ for "storage" messages (read and write), and other messages such
@@ -84,7 +84,7 @@ on the respective unecrypted/encrypted inter-node communication port.
 There is also a `listen_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
 internal protocol. This address defaults to `localhost`, but in any
-setup except a one-node test, should be overriden.
+setup except a one-node test, should be overridden.
 
 TODO: there is also `listen_interface` option... Which wins? What's the default?
 TODO: mention SSL, how it is configured, and `ssl_storage_port` (default 7001).
@@ -155,7 +155,7 @@ native to Cassandra.
 There is also a `rpc_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
 CQL protocol. This address defaults to `localhost`, but in any setup except
-a one-node test, should be overriden. Note that the same option `rpc_address`
+a one-node test, should be overridden. Note that the same option `rpc_address`
 applies to both CQL and Thrift protocols.
 
 TODO: there is also `rpc_interface` option... Which wins? What's the default?
@@ -163,7 +163,7 @@ TODO: there is also `rpc_interface` option... Which wins? What's the default?
 ## Thrift client protocol
 
 The Apache Thrift protocol was early Cassandra's client protocol, until
-it was superceded in Cassandra 1.2 with the binary CQL protocol. Thrift
+it was superseded in Cassandra 1.2 with the binary CQL protocol. Thrift
 was still nominally supported by both Cassandra and Scylla for many years,
 but was recently dropped in Cassandra (version 4.0) and is likely to be
 dropped by Scylla in the future as well, so it is not recommended for new
@@ -184,7 +184,7 @@ Seastar's RPC, which has nothing to do with the "`rpc_port`" described here.
 There is also a `rpc_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
 Thrift protocol. This address defaults to `localhost`, but in any
-setup except a one-node test, should be overriden. Note that the same
+setup except a one-node test, should be overridden. Note that the same
 option `rpc_address` applies to both CQL and Thrift protocols.
 
 TODO: there is also `rpc_interface` option... Which wins? What's the default?
@@ -252,7 +252,7 @@ RESTful API (HTTP requests).
 Scylla listens for this REST API by default on port 10000, which can be
 configured with the `api_port` configuration option.
 
-The REST API has no notion of autentication of authorization, and allows
+The REST API has no notion of authentication of authorization, and allows
 anyone connecting to it to perform destructive operations. Therefore, it
 only listens for connection on the localhost (127.0.0.1) interface. This
 default can be overridden by the `api_address` option - but shouldn't.

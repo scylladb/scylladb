@@ -76,7 +76,7 @@ Use `git push` to publish the patches.
 
 ### Applying patch series from the mailing list
 
-Indentify the git url and branch/tag identifier, and issue
+Identify the git url and branch/tag identifier, and issue
 the command
 
     git pull --log --no-ff --no-rebase <url> <branch/tag>
@@ -129,7 +129,7 @@ Select "Squash and merge" and follow through.
 ### Applying patch series from github pull requests
 
 Select "Create a merge commit" and do NOT follow through -
-github will attribute itself as the commiter. Instead, click
+github will attribute itself as the committer. Instead, click
 "view command line options", select the "git pull" line,
 paste it to a terminal and add `--no-ff --log` and execute.
 
@@ -170,7 +170,7 @@ latest submodules.
 ## Backporting patches
 
 To backport a patch, check out the next branch of the relevant
-release branch (e.g. next-3.2), syncrhonize it with scylla.git,
+release branch (e.g. next-3.2), synchronize it with scylla.git,
 and use the cherry-pick command:
 
     git cherry-pick -x <commit hash>
@@ -193,7 +193,7 @@ creating a Seastar branch. This is done in a separate repository:
 
  1. Check out the next branch for your release branch (e.g.
     `next-3.2`) and synchronize using `git pull`.
- 2. Use `git submodule update` to syncrhonize the submodule
+ 2. Use `git submodule update` to synchronize the submodule
  3. Use `cd seastar` to enter the submodule
  4. Create a new branch (e.g. `git checkout -b branch-3.2`)
     corresponding to the release series you are backporting to.
@@ -211,7 +211,7 @@ creating a Seastar branch. This is done in a separate repository:
 After this is done, backporting seastar patches can proceed:
  1. Check out the next branch for your release branch (e.g.
     `next-3.2`) and synchronize using `git pull`.
- 2. Use `git submodule update` to syncrhonize the submodule
+ 2. Use `git submodule update` to synchronize the submodule
  3. Use `cd seastar` to enter the submodule
  4. Check out the relevant branch (`branch-3.2` in our example)
  5. Use `git cherry-pick -x <hash>`

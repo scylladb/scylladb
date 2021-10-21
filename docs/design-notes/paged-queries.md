@@ -126,7 +126,7 @@ In order for caching to work each page of a query has to be consistently
 read from the same replicas for the entire duration of the query.
 Otherwise the read might miss the querier cache and won't be able to
 reuse the queriers from the previous page.
-To faciliate this the list of replicas used for each page is saved in
+To facilitate this the list of replicas used for each page is saved in
 the paging state and on the next page the same replicas will be
 preferred over other replicas.
 
@@ -184,7 +184,7 @@ has to be discarded and a new one created on these replicas. To identify
 these cases on each cache lookup the position of the found querier is
 validated to match *exactly* the new page's read start position. When a
 mismatch is detected the saved querier is dropped and a new one is
-created instead. Note that altough readers can technically be
+created instead. Note that although readers can technically be
 fast-forwarded to a later position all position mismatches are treated
 the same (querier is dropped) even if the reader could theoretically be
 fast-forwarded to the page start position. The reason for this is that
@@ -310,7 +310,7 @@ Using the querier mandates using a `flat_mutation_reader`. Range scans
 used an open-coded algorithm on the replica for the read. As already
 explained in [the introduction](#range-scans) this algorithm
 uses several calls to `database::query_muations()` to the remote shards
-then merging the produced `reconcilable_result`. This algoritm did not
+then merging the produced `reconcilable_result`. This algorithm did not
 lend itself for being wrapped in a `flat_mutation_reader` so a new,
 suitable one was written from scratch. This is
 `multishard_combining_reader`. In addition to implementing a
