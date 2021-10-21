@@ -192,19 +192,25 @@ void unset_transport_controller(http_context& ctx, routes& r) {
 
 void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
     ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
-        return ctl.stop_server().then([] {
+        return smp::submit_to(0, [&] {
+            return ctl.request_stop_server();
+        }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
     ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
-        return ctl.start_server().then([] {
+        return smp::submit_to(0, [&] {
+            return ctl.start_server();
+        }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
     ss::is_rpc_server_running.set(r, [&ctl] (std::unique_ptr<request> req) {
-        return ctl.is_server_running().then([] (bool running) {
+        return smp::submit_to(0, [&] {
+            return !ctl.listen_addresses().empty();
+        }).then([] (bool running) {
             return make_ready_future<json::json_return_type>(running);
         });
     });

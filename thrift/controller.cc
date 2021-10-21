@@ -36,14 +36,31 @@ thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::se
     , _ss(ss)
 { }
 
-future<> thrift_controller::start_server() {
-    return smp::submit_to(0, [this] {
-        if (!_ops_sem.try_wait()) {
-            throw std::runtime_error(format("Thrift server is stopping, try again later"));
-        }
+sstring thrift_controller::name() const {
+    return "rpc";
+}
 
-        return do_start_server().finally([this] { _ops_sem.signal(); });
-    });
+sstring thrift_controller::protocol() const {
+    return "thrift";
+}
+
+sstring thrift_controller::protocol_version() const {
+     return ::cassandra::thrift_version;
+}
+
+std::vector<socket_address> thrift_controller::listen_addresses() const {
+    if (_addr) {
+        return {*_addr};
+    }
+    return {};
+}
+
+future<> thrift_controller::start_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("Thrift server is stopping, try again later"));
+    }
+
+    return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
 future<> thrift_controller::do_start_server() {
@@ -53,6 +70,8 @@ future<> thrift_controller::do_start_server() {
 
     _server = std::make_unique<distributed<thrift_server>>();
     auto tserver = &*_server;
+
+    _addr.reset();
 
     auto& cfg = _db.local().get_config();
     auto port = cfg.rpc_port();
@@ -64,6 +83,7 @@ future<> thrift_controller::do_start_server() {
     tsc.timeout_config = make_timeout_config(cfg);
     tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
     return gms::inet_address::lookup(addr, family, preferred).then([this, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
+        _addr.emplace(ip, port);
         return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_ss), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, addr, ip, keepalive] {
             // #293 - do not stop anything
             //engine().at_exit([tserver] {
@@ -76,7 +96,7 @@ future<> thrift_controller::do_start_server() {
     });
 }
 
-future<> thrift_controller::stop() {
+future<> thrift_controller::stop_server() {
     assert(this_shard_id() == 0);
 
     if (_stopped) {
@@ -86,18 +106,17 @@ future<> thrift_controller::stop() {
     return _ops_sem.wait().then([this] {
         _stopped = true;
         _ops_sem.broken();
+        _addr.reset();
         return do_stop_server();
     });
 }
 
-future<> thrift_controller::stop_server() {
-    return smp::submit_to(0, [this] {
-        if (!_ops_sem.try_wait()) {
-            throw std::runtime_error(format("Thrift server is starting, try again later"));
-        }
+future<> thrift_controller::request_stop_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("Thrift server is starting, try again later"));
+    }
 
-        return do_stop_server().finally([this] { _ops_sem.signal(); });
-    });
+    return do_stop_server().finally([this] { _ops_sem.signal(); });
 }
 
 future<> thrift_controller::do_stop_server() {
@@ -108,11 +127,5 @@ future<> thrift_controller::do_stop_server() {
             });
         }
         return make_ready_future<>();
-    });
-}
-
-future<bool> thrift_controller::is_server_running() {
-    return smp::submit_to(0, [this] {
-        return make_ready_future<bool>(bool(_server));
     });
 }

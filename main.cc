@@ -1353,7 +1353,7 @@ int main(int ac, char** av) {
             ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss);
 
             ss.local().register_client_shutdown_hook("rpc server", [&thrift_ctl] {
-                thrift_ctl.stop().get();
+                thrift_ctl.stop_server().get();
             });
 
             std::any stop_rpc;
@@ -1364,7 +1364,7 @@ int main(int ac, char** av) {
 
                 // FIXME -- this should be done via client hooks instead
                 stop_rpc = defer_verbose_shutdown("rpc server", [&thrift_ctl] {
-                    thrift_ctl.stop().get();
+                    thrift_ctl.stop_server().get();
                 });
             }
 
