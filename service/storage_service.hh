@@ -60,6 +60,7 @@
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
 #include "service/migration_listener.hh"
+#include "protocol_server.hh"
 #include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
@@ -174,7 +175,7 @@ private:
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
     using client_shutdown_hook = noncopyable_function<void()>;
-    std::vector<std::pair<std::string, client_shutdown_hook>> _client_shutdown_hooks;
+    std::vector<protocol_server*> _protocol_servers;
     std::vector<std::any> _listeners;
 
     std::unordered_map<utils::UUID, node_ops_meta_data> _node_ops;
@@ -336,14 +337,19 @@ public:
     // should only be called via JMX
     future<bool> is_gossip_running();
 
-    void register_client_shutdown_hook(std::string name, client_shutdown_hook hook) {
-        _client_shutdown_hooks.push_back({std::move(name), std::move(hook)});
+    void register_protocol_server(protocol_server& server) {
+        _protocol_servers.push_back(&server);
+    }
+
+    // All pointers are valid.
+    const std::vector<protocol_server*>& protocol_servers() const {
+        return _protocol_servers;
     }
 private:
     future<> do_stop_ms();
     future<> do_stop_stream_manager();
     // Runs in thread context
-    void shutdown_client_servers();
+    void shutdown_protocol_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::unordered_set<token>;

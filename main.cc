@@ -1328,9 +1328,7 @@ int main(int ac, char** av) {
 
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg);
 
-            ss.local().register_client_shutdown_hook("native transport", [&cql_server_ctl] {
-                cql_server_ctl.stop_server().get();
-            });
+            ss.local().register_protocol_server(cql_server_ctl);
 
             std::any stop_cql;
             if (cfg->start_native_transport()) {
@@ -1352,9 +1350,7 @@ int main(int ac, char** av) {
 
             ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss);
 
-            ss.local().register_client_shutdown_hook("rpc server", [&thrift_ctl] {
-                thrift_ctl.stop_server().get();
-            });
+            ss.local().register_protocol_server(thrift_ctl);
 
             std::any stop_rpc;
             if (cfg->start_rpc()) {
@@ -1379,11 +1375,8 @@ int main(int ac, char** av) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {
                     return alternator_ctl.start_server();
                 }).get();
-
-                ss.local().register_client_shutdown_hook("alternator", [&alternator_ctl] {
-                    alternator_ctl.stop_server().get();
-                });
             }
+            ss.local().register_protocol_server(alternator_ctl);
 
             redis_service redis(proxy, auth_service, mm, *cfg, gossiper);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
@@ -1391,6 +1384,7 @@ int main(int ac, char** av) {
                     return redis.start_server();
                 }).get();
             }
+            ss.local().register_protocol_server(redis);
 
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
