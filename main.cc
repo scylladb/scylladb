@@ -1329,7 +1329,7 @@ int main(int ac, char** av) {
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg);
 
             ss.local().register_client_shutdown_hook("native transport", [&cql_server_ctl] {
-                cql_server_ctl.stop().get();
+                cql_server_ctl.stop_server().get();
             });
 
             std::any stop_cql;
@@ -1341,7 +1341,7 @@ int main(int ac, char** av) {
 
                 // FIXME -- this should be done via client hooks instead
                 stop_cql = defer_verbose_shutdown("native transport", [&cql_server_ctl] {
-                    cql_server_ctl.stop().get();
+                    cql_server_ctl.stop_server().get();
                 });
             }
 

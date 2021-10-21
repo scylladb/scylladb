@@ -25,6 +25,8 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
+#include "protocol_server.hh"
+
 using namespace seastar;
 
 namespace auth { class service; }
@@ -41,7 +43,8 @@ namespace db { class config; }
 namespace cql_transport {
 
 class cql_server;
-class controller {
+class controller : public protocol_server {
+    std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
     semaphore _ops_sem; /* protects start/stop operations on _server */
     bool _stopped = false;
@@ -67,10 +70,13 @@ public:
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
             const db::config& cfg);
-    future<> start_server();
-    future<> stop_server();
-    future<> stop();
-    future<bool> is_server_running();
+    virtual sstring name() const override;
+    virtual sstring protocol() const override;
+    virtual sstring protocol_version() const override;
+    virtual std::vector<socket_address> listen_addresses() const override;
+    virtual future<> start_server() override;
+    virtual future<> stop_server() override;
+    virtual future<> request_stop_server() override;
 };
 
 } // namespace cql_transport
