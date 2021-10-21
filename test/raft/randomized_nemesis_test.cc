@@ -1163,9 +1163,13 @@ public:
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         assert(_started);
-        return with_gate(_gate, [this, input = std::move(input), timeout, &timer] {
-            return ::call(std::move(input), timeout, timer, *_server, _sm);
-        });
+        try {
+            co_return co_await with_gate(_gate, [this, input = std::move(input), timeout, &timer] {
+                return ::call(std::move(input), timeout, timer, *_server, _sm);
+            });
+        } catch (const gate_closed_exception&) {
+            co_return raft::stopped_error{};
+        }
     }
 
     future<reconfigure_result_t> reconfigure(
@@ -1173,9 +1177,13 @@ public:
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         assert(_started);
-        return with_gate(_gate, [this, &ids, timeout, &timer] {
-            return ::reconfigure(ids, timeout, timer, *_server);
-        });
+        try {
+            co_return co_await with_gate(_gate, [this, &ids, timeout, &timer] {
+                return ::reconfigure(ids, timeout, timer, *_server);
+            });
+        } catch (const gate_closed_exception&) {
+            co_return raft::stopped_error{};
+        }
     }
 
     bool is_leader() const {
