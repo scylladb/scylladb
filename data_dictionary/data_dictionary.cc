@@ -11,10 +11,13 @@
 #include "user_types_metadata.hh"
 #include "keyspace_metadata.hh"
 #include "schema.hh"
+#include "utils/overloaded_functor.hh"
 #include <fmt/core.h>
 #include <ostream>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/algorithm/string/join.hpp>
+#include <array>
 
 namespace data_dictionary {
 
@@ -196,11 +199,27 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types)
+    : keyspace_metadata(name,
+                        strategy_name,
+                        std::move(strategy_options),
+                        durable_writes,
+                        std::move(cf_defs),
+                        user_types_metadata{},
+                        storage_options{}) { }
+
+keyspace_metadata::keyspace_metadata(std::string_view name,
+             std::string_view strategy_name,
+             locator::replication_strategy_config_options strategy_options,
+             bool durable_writes,
+             std::vector<schema_ptr> cf_defs,
+             user_types_metadata user_types,
+             storage_options storage_opts)
     : _name{name}
     , _strategy_name{locator::abstract_replication_strategy::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
     , _strategy_options{std::move(strategy_options)}
     , _durable_writes{durable_writes}
     , _user_types{std::move(user_types)}
+    , _storage_options{std::move(storage_opts)}
 {
     for (auto&& s : cf_defs) {
         _cf_meta_data.emplace(s->cf_name(), s);
@@ -217,9 +236,10 @@ keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
                                 locator::replication_strategy_config_options options,
                                 bool durables_writes,
-                                std::vector<schema_ptr> cf_defs)
+                                std::vector<schema_ptr> cf_defs,
+                                storage_options storage_opts)
 {
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
+    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs, user_types_metadata{}, storage_opts);
 }
 
 void keyspace_metadata::add_user_type(const user_type ut) {
@@ -241,6 +261,64 @@ std::vector<view_ptr> keyspace_metadata::views() const {
             | boost::adaptors::map_values
             | boost::adaptors::filtered(std::mem_fn(&schema::is_view))
             | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
+}
+
+storage_options::value_type storage_options::from_map(std::string_view type, std::map<sstring, sstring> values) {
+    if (type == "LOCAL") {
+        if (!values.empty()) {
+            throw std::runtime_error("Local storage does not accept any custom options");
+        }
+        return local{};
+    }
+    if (type == "S3") {
+        s3 options;
+        const std::array<std::pair<sstring, sstring*>, 2> allowed_options {
+            std::make_pair("bucket", &options.bucket),
+            std::make_pair("endpoint", &options.endpoint),
+        };
+        for (auto& option : allowed_options) {
+            if (auto it = values.find(option.first); it != values.end()) {
+                *option.second = it->second;
+            } else {
+                throw std::runtime_error(format("Missing S3 option: {}", option.first));
+            }
+        }
+        if (values.size() > allowed_options.size()) {
+            throw std::runtime_error(format("Extraneous options for S3: {}; allowed: {}",
+                    boost::algorithm::join(values | boost::adaptors::map_keys, ","),
+                    boost::algorithm::join(allowed_options | boost::adaptors::map_keys, ",")));
+        }
+        return options;
+    }
+    throw std::runtime_error(format("Unknown storage type: {}", type));
+}
+
+std::string_view storage_options::type_string() const {
+    return std::visit(overloaded_functor {
+        [] (const storage_options::local&) {
+            return "LOCAL";
+        },
+        [] (const storage_options::s3&) {
+            return "S3";
+        }
+    }, value);
+}
+
+std::map<sstring, sstring> storage_options::to_map() const {
+    std::map<sstring, sstring> ret;
+    std::visit(overloaded_functor {
+        [] (const storage_options::local&) {
+        },
+        [&ret] (const storage_options::s3& v) {
+            ret.emplace("bucket", v.bucket);
+            ret.emplace("endpoint", v.endpoint);
+        }
+    }, value);
+    return ret;
+}
+
+bool storage_options::can_update_to(const storage_options& new_options) {
+    return value == new_options.value;
 }
 
 no_such_keyspace::no_such_keyspace(std::string_view ks_name)
