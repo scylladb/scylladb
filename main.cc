@@ -1385,10 +1385,10 @@ int main(int ac, char** av) {
                 });
             }
 
-            static redis_service redis;
+            redis_service redis(proxy, auth_service, mm, *cfg, gossiper);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg, &gossiper] {
-                    return redis.init(proxy, db, auth_service, mm, *cfg, gossiper);
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&redis] {
+                    return redis.start_server();
                 }).get();
             }
 
@@ -1422,9 +1422,9 @@ int main(int ac, char** av) {
                 }
             });
 
-            auto stop_redis_service = defer_verbose_shutdown("redis service", [&cfg] {
+            auto stop_redis_service = defer_verbose_shutdown("redis service", [&cfg, &redis] {
                 if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                    redis.stop().get();
+                    redis.stop_server().get();
                 }
             });
 
