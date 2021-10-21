@@ -29,7 +29,7 @@ means for the data to be "fully compacted", the backlogs are strategy-dependent.
 Each Table (Column Family) keeps track of the backlog that it has, and those backlogs are then added
 together to create a system-wide backlog.
 
-It is expected that the backlog measurement is consistent accross strategies. What this means is
+It is expected that the backlog measurement is consistent across strategies. What this means is
 that if a strategy, at a certain point in time, has more work to do than another strategy, it should
 return a higher backlog.
 

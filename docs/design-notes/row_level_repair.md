@@ -168,7 +168,7 @@ rx_row_nr  =  500233 + 500235 +  499559 + 499973 (4 shards, the numbers are for 
 Some of the RPC verbs used by row level repair can transmit bulk of data,
 namely REPAIR_GET_FULL_ROW_HASHES, REPAIR_GET_ROW_DIFF and REPAIR_PUT_ROW_DIFF.
 To have better repair bandwidth with high latency link, we want to increase the
-row buff size.  It is more efficent to send large amount of data with RPC
+row buff size.  It is more efficient to send large amount of data with RPC
 stream interface instead of the RPC verb interface.  We want to switch to RPC
 stream for such RPC verbs. Three functions, get_full_row_hashes(),
 get_row_diff() and put_row_diff(), are converted to use the new RPC stream
@@ -245,7 +245,7 @@ This is one of the row repair master requested. The row data is stored in
 repair_row_on_wire_with_cmd.row.
 
 - repair_stream_cmd::end_of_current_rows
-Notifes repair follower has sent all the rows repair master requested.
+Notifies repair follower has sent all the rows repair master requested.
 
 - repair_stream_cmd::error
 Notifies an error has happened on the follower.

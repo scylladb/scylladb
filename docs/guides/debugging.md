@@ -4,7 +4,7 @@
 
 GDB is a source level debugger for C, C++ and more languages. It allows
 inspecting the internal state of a program as it is running as well the
-post-mortem inspection of chrashed programs.
+post-mortem inspection of crashed programs.
 
 You can attach GDB to a running process, run a process inside GDB or
 examine a coredump.
@@ -238,7 +238,7 @@ calculate this as:
     $tls_entry = $sizeof_TLS_header + $fs_offset
 
 Do note however that `$fs_offset` is negative so this is in effect a
-substituation:
+substitution:
 
     $tls_entry = 0x017bf0 - 0x17ae4
 
@@ -590,7 +590,7 @@ and [Opening the core on another OS](#opening-the-core-on-another-os).
 Make sure you are using the normal scylla package, not the debuginfo one, see
 [Obtaining the relocatable package](#obtaining-the-relocatable-package).
 
-#### GDB crashes when priting the backtrace or some variable
+#### GDB crashes when printing the backtrace or some variable
 
 See [Avoid (some) symbol parsing related crashes](#avoid-some-symbol-parsing-related-crashes).
 
