@@ -1377,11 +1377,11 @@ int main(int ac, char** av) {
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {
-                    return alternator_ctl.start();
+                    return alternator_ctl.start_server();
                 }).get();
 
                 ss.local().register_client_shutdown_hook("alternator", [&alternator_ctl] {
-                    alternator_ctl.stop().get();
+                    alternator_ctl.stop_server().get();
                 });
             }
 
