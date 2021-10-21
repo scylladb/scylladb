@@ -1394,6 +1394,9 @@ public:
 
     bool is_leader(raft::server_id id) {
         auto& n = _routes.at(id);
+        if (!n._server) {
+            return false;
+        }
         return n._server->is_leader();
     }
 
@@ -1403,7 +1406,23 @@ public:
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         auto& n = _routes.at(id);
-        return n._server->call(std::move(input), timeout, timer);
+        if (!n._server) {
+            // A 'remote' caller doesn't know in general if the server is down or just slow to respond.
+            // Simulate this by timing out the call.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+
+        auto srv = n._server.get();
+        auto res = co_await srv->call(std::move(input), timeout, timer);
+
+        if (srv != n._server.get()) {
+            // The server stopped while the call was happening.
+            // As above, we simulate a 'remote' call by timing it out in this case.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+        co_return res;
     }
 
     future<reconfigure_result_t> reconfigure(
@@ -1412,11 +1431,30 @@ public:
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         auto& n = _routes.at(id);
-        return n._server->reconfigure(ids, timeout, timer);
+        if (!n._server) {
+            // A 'remote' caller doesn't know in general if the server is down or just slow to respond.
+            // Simulate this by timing out the call.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+
+        auto srv = n._server.get();
+        auto res = co_await srv->reconfigure(ids, timeout, timer);
+
+        if (srv != n._server.get()) {
+            // The server stopped while the call was happening.
+            // As above, we simulate a 'remote' call by timing it out in this case.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+        co_return res;
     }
 
-    raft::configuration get_configuration(raft::server_id id) {
+    std::optional<raft::configuration> get_configuration(raft::server_id id) {
         auto& n = _routes.at(id);
+        if (!n._server) {
+            return std::nullopt;
+        }
         return n._server->get_configuration();
     }
 
@@ -1429,7 +1467,9 @@ public:
         // Close the gate before iterating over _routes to prevent concurrent modification by other methods.
         co_await _gate.close();
         for (auto& [_, r] : _routes) {
-            co_await r._server->abort();
+            if (r._server) {
+                co_await r._server->abort();
+            }
         }
         _stopped = true;
     }
@@ -2469,12 +2509,14 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             }
 
             auto config = env.get_configuration(leader);
-            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config.current, config.previous);
+            assert(config);
+            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
 
             for (auto& s: all_servers) {
                 if (env.is_leader(s) && s != leader) {
                     auto conf = env.get_configuration(s);
-                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf.current, conf.previous);
+                    assert(conf);
+                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
                 }
             }
 
