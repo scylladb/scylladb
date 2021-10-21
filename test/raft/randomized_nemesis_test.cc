@@ -794,25 +794,21 @@ public:
 template <typename State>
 class persistence_proxy : public raft::persistence {
     snapshots_t<State>& _snapshots;
-    ::persistence<State> _persistence;
+    lw_shared_ptr<::persistence<State>> _persistence;
 
 public:
-    // If this is the first server of a cluster, it must be initialized with a singleton configuration
-    // containing opnly this server's ID which must be also provided here as `init_config_id`.
-    // Otherwise it must be initialized with an empty configuration (it will be added to the cluster
-    // through a configuration change) and `init_config_id` must be `nullopt`.
-    persistence_proxy(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id, State init_state)
+    persistence_proxy(snapshots_t<State>& snaps, lw_shared_ptr<::persistence<State>> persistence)
         : _snapshots(snaps)
-        , _persistence(std::move(init_config_id), std::move(init_state))
+        , _persistence(std::move(persistence))
     {}
 
     virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override {
-        _persistence.store_term_and_vote(term, vote);
+        _persistence->store_term_and_vote(term, vote);
         co_return;
     }
 
     virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
-        co_return _persistence.load_term_and_vote();
+        co_return _persistence->load_term_and_vote();
     }
 
     // Stores not only the snapshot descriptor but also the corresponding snapshot.
@@ -820,28 +816,28 @@ public:
         auto it = _snapshots.find(snap.id);
         assert(it != _snapshots.end());
 
-        _persistence.store_snapshot(snap, it->second, preserve_log_entries);
+        _persistence->store_snapshot(snap, it->second, preserve_log_entries);
         co_return;
     }
 
     // Loads not only the snapshot descriptor but also the corresponding snapshot.
     virtual future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
-        auto [snap, state] = _persistence.load_snapshot();
+        auto [snap, state] = _persistence->load_snapshot();
         _snapshots.insert_or_assign(snap.id, std::move(state));
         co_return snap;
     }
 
     virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override {
-        _persistence.store_log_entries(entries);
+        _persistence->store_log_entries(entries);
         co_return;
     }
 
     virtual future<raft::log_entries> load_log() override {
-        co_return _persistence.load_log();
+        co_return _persistence->load_log();
     }
 
     virtual future<> truncate_log(raft::index_t idx) override {
-        _persistence.truncate_log(idx);
+        _persistence->truncate_log(idx);
         co_return;
     }
 
@@ -1103,7 +1099,8 @@ public:
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
-        auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, first_server ? std::optional{id} : std::nullopt, M::init);
+        auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots,
+                make_lw_shared<persistence<state_t>>(first_server ? std::optional{id} : std::nullopt, M::init));
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
