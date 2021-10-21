@@ -1344,8 +1344,32 @@ public:
         });
     }
 
-    raft_server<M>& get_server(raft::server_id id) {
-        return *_routes.at(id)._server;
+    bool is_leader(raft::server_id id) {
+        auto& n = _routes.at(id);
+        return n._server->is_leader();
+    }
+
+    future<call_result_t<M>> call(
+            raft::server_id id,
+            typename M::input_t input,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        auto& n = _routes.at(id);
+        return n._server->call(std::move(input), timeout, timer);
+    }
+
+    future<reconfigure_result_t> reconfigure(
+            raft::server_id id,
+            const std::vector<raft::server_id>& ids,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        auto& n = _routes.at(id);
+        return n._server->reconfigure(ids, timeout, timer);
+    }
+
+    raft::configuration get_configuration(raft::server_id id) {
+        auto& n = _routes.at(id);
+        return n._server->get_configuration();
     }
 
     network<message_t>& get_network() {
@@ -1474,7 +1498,7 @@ struct wait_for_leader {
                     co_return raft::server_id{};
                 }
 
-                auto it = std::find_if(nodes.begin(), nodes.end(), [&env] (raft::server_id id) { return env->get_server(id).is_leader(); });
+                auto it = std::find_if(nodes.begin(), nodes.end(), [&env] (raft::server_id id) { return env->is_leader(id); });
                 if (it != nodes.end()) {
                     co_return *it;
                 }
@@ -1517,7 +1541,7 @@ SEASTAR_TEST_CASE(basic_test) {
         assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
 
         auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
-            return env.get_server(leader_id).call(std::move(input),  timer.now() + timeout, timer);
+            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
         };
 
         auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
@@ -1536,7 +1560,7 @@ SEASTAR_TEST_CASE(basic_test) {
         tlogger.debug("Started 2 more servers, changing configuration");
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(leader_id).reconfigure({leader_id, id2, id3}, timer.now() + 100_t, timer)));
+            co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
 
         tlogger.debug("Configuration changed");
 
@@ -1596,22 +1620,22 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
                 });
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(id1).reconfigure({id1, id2}, timer.now() + 100_t, timer)));
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
 
         // Append a bunch of entries
         for (int i = 1; i <= 10; ++i) {
             assert(std::holds_alternative<typename ExReg::ret>(
-                co_await env.get_server(id1).call(ExReg::exchange{0}, timer.now() + 100_t, timer)));
+                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
         }
 
-        assert(env.get_server(id1).is_leader());
+        assert(env.is_leader(id1));
 
         // Force a term increase by partitioning the network and waiting for the leader to step down
         tlogger.trace("add grudge");
         env.get_network().add_grudge(id2, id1);
         env.get_network().add_grudge(id1, id2);
 
-        while (env.get_server(id1).is_leader()) {
+        while (env.is_leader(id1)) {
             co_await seastar::later();
         }
 
@@ -1640,7 +1664,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
                     .snapshot_trailing = 2,
                 });
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(l).reconfigure({l, id3}, timer.now() + 1000_t, timer)));
+            co_await env.reconfigure(l, {l, id3}, timer.now() + 1000_t, timer)));
     });
 }
 
@@ -1678,22 +1702,22 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
                 });
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(id1).reconfigure({id1, id2}, timer.now() + 100_t, timer)));
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
 
         // Append a bunch of entries
         for (int i = 1; i <= 10; ++i) {
             assert(std::holds_alternative<typename ExReg::ret>(
-                co_await env.get_server(id1).call(ExReg::exchange{0}, timer.now() + 100_t, timer)));
+                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
         }
 
-        assert(env.get_server(id1).is_leader());
+        assert(env.is_leader(id1));
 
         // Partition the network, forcing the leader to step down.
         tlogger.trace("add grudge");
         env.get_network().add_grudge(id2, id1);
         env.get_network().add_grudge(id1, id2);
 
-        while (env.get_server(id1).is_leader()) {
+        while (env.is_leader(id1)) {
             co_await seastar::later();
         }
 
@@ -1808,7 +1832,7 @@ struct raft_call {
         tlogger.debug("db call start inp {} tid {} start time {} current time {} contact {}", input, ctx.thread, ctx.start, s.timer.now(), contact);
 
         auto [res, last] = co_await bouncing{[input = input, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
-            return env.get_server(id).call(input, timeout, timer);
+            return env.call(id, input, timeout, timer);
         }}(s.timer, s.known, contact, 6, 10_t, 10_t);
         tlogger.debug("db call end inp {} tid {} start time {} current time {} last contact {}", input, ctx.thread, ctx.start, s.timer.now(), last);
 
@@ -1849,7 +1873,7 @@ public:
         auto mid = nodes.begin() + (nodes.size() / 2);
         if (nodes.size() % 2) {
             // Odd number of nodes, let's ensure that the leader (if there is one) is in the minority
-            auto it = std::find_if(mid, nodes.end(), [&env = s.env] (raft::server_id id) { return env.get_server(id).is_leader(); });
+            auto it = std::find_if(mid, nodes.end(), [&env = s.env] (raft::server_id id) { return env.is_leader(id); });
             if (it != nodes.end()) {
                 std::swap(*nodes.begin(), *it);
             }
@@ -1917,7 +1941,7 @@ struct reconfiguration {
 
         assert(s.known.size() > 0);
         auto [res, last] = co_await bouncing{[&nodes, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
-            return env.get_server(id).reconfigure(nodes, timeout, timer);
+            return env.reconfigure(id, nodes, timeout, timer);
         }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
 
         std::visit(make_visitor(
@@ -2244,7 +2268,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         }
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(leader_id).reconfigure(
+            co_await env.reconfigure(leader_id,
                 std::vector<raft::server_id>{known_config.begin(), known_config.end()}, timer.now() + 100_t, timer)));
 
         auto threads = operation::make_thread_set(all_servers.size() + 2);
@@ -2389,20 +2413,19 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 assert(false);
             });
 
-            if (env.get_server(leader).is_leader()) {
+            if (env.is_leader(leader)) {
                 tlogger.debug("Leader {} found after {} ticks", leader, timer.now() - now);
             } else {
                 tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
                 continue;
             }
 
-            auto config = env.get_server(leader).get_configuration();
+            auto config = env.get_configuration(leader);
             tlogger.debug("Leader {} configuration: current {} previous {}", leader, config.current, config.previous);
 
             for (auto& s: all_servers) {
-                auto& srv = env.get_server(s);
-                if (srv.is_leader() && s != leader) {
-                    auto conf = srv.get_configuration();
+                if (env.is_leader(s) && s != leader) {
+                    auto conf = env.get_configuration(s);
                     tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf.current, conf.previous);
                 }
             }
@@ -2410,7 +2433,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             tlogger.debug("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
-                return env.get_server(id).call(AppendReg::append{-1}, timer.now() + 200_t, timer);
+                return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
