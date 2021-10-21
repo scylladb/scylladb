@@ -296,6 +296,27 @@ CREATE TABLE system.versions (
 
 Implemented by `versions_table` in `db/system_keyspace.cc`.
 
+## system.compactions\_in\_progress
+
+Information about currently-running compactions.
+Equivalent of the `nodetool compactionstats` command.
+
+Schema:
+```cql
+CREATE TABLE system.compactions_in_progress (
+    id uuid PRIMARY KEY,
+    type test,
+    keyspace_name text,
+    columnfamily_name text,
+    total_partitions bigint,
+    total_keys_written bigint,
+    shard_id int,
+    inputs set<int>
+)
+```
+
+Implemented by `compactions_in_progress_table` in `db/system_keyspace.cc`.
+
 ## system.config
 
 Holds all configuration variables in use
