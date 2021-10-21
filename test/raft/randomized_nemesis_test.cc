@@ -1130,8 +1130,6 @@ public:
     raft_server(raft_server&&) = delete;
 
     // Start the server. Can be called at most once.
-    //
-    // TODO: implement server ``crashes'' and ``restarts''.
     future<> start() {
         assert(!_started);
         _started = true;
@@ -1283,6 +1281,22 @@ class environment : public seastar::weakly_referencable<environment<M>> {
     // no more in-progress methods running on this object.
     seastar::gate _gate;
 
+    // Used to implement `crash`.
+    //
+    // We cannot destroy a server immediately in order to simulate a crash:
+    // there may be fibers running that use the server's internals.
+    // We move these 'crashed' servers into continuations attached to this fiber
+    // and abort them there before destruction.
+    future<> _crash_fiber = make_ready_future<>();
+
+    // Servers that are aborting in the background (in `_crash_fiber`).
+    // We need these pointers so we keep ticking the servers
+    // (in general, `abort()` requires the server to be ticked in order to finish).
+    // One downside of this is that ticks may cause the servers to output traces.
+    // Hopefully these crashing servers abort quickly so they don't stay too long
+    // and make the logs unreadable...
+    std::unordered_set<raft_server<M>*> _crashing_servers;
+
 public:
     environment(environment_config cfg)
             : _fd_convict_threshold(cfg.fd_convict_threshold), _network(cfg.network_delay,
@@ -1320,6 +1334,10 @@ public:
 
             assert(r._fd);
             r._fd->tick();
+        }
+
+        for (auto& srv: _crashing_servers) {
+            srv->tick();
         }
     }
 
@@ -1404,6 +1422,55 @@ public:
         return start_server(id).then([id] () { return id; });
     }
 
+    // Gracefully stop a running server.
+    // Assumes a server is currently running on the node `id`.
+    // When the future resolves, a new server may be started on this node. It will reuse the storage
+    // of the previously running server (so the Raft log etc. will be preserved).
+    future<> stop(raft::server_id id) {
+        return with_gate(_gate, [this, id] () -> future<> {
+            auto& n = _routes.at(id);
+            assert(n._persistence);
+            assert(n._server);
+            assert(n._fd);
+
+            co_await n._server->abort();
+            n._server = nullptr;
+        });
+    }
+
+    // Immediately stop a running server.
+    // Assumes a server is currently running on the node `id`.
+    // A new server may be started on this node when the function returns. It will reuse the storage
+    // of the previously running server (so the Raft log etc. will be preserved).
+    void crash(raft::server_id id) {
+        _gate.check();
+
+        auto& n = _routes.at(id);
+        assert(n._persistence);
+        assert(n._server);
+        assert(n._fd);
+
+        // Let the 'crashed' server continue working on its copy of persistence;
+        // none of that work will be seen by later servers restarted on this node
+        // since they'll use a separate copy.
+        n._persistence = make_lw_shared<persistence<state_t>>(*n._persistence);
+        // Setting `n._server` to nullptr cuts out the network access both for the server and failure detector.
+        // Even though the server will continue running for some time (in order to be gracefully aborted),
+        // none of that work will be seen by the rest of the environment. From others' point of view
+        // the server is immediately gone.
+        auto srv = std::exchange(n._server, nullptr);
+        _crashing_servers.insert(srv.get());
+
+        _crash_fiber = _crash_fiber.then([this, srv_ = std::move(srv)] () mutable -> future<> {
+            auto srv = std::move(srv_);
+            tlogger.trace("crash fiber: aborting {}", srv->id());
+            co_await srv->abort();
+            tlogger.trace("crash fiber: finished aborting {}", srv->id());
+            _crashing_servers.erase(srv.get());
+            // abort() ensures there are no in-progress calls on the server, so we can destroy it.
+        });
+    }
+
     bool is_leader(raft::server_id id) {
         auto& n = _routes.at(id);
         if (!n._server) {
@@ -1481,8 +1548,10 @@ public:
         for (auto& [_, r] : _routes) {
             if (r._server) {
                 co_await r._server->abort();
+                r._server = nullptr;
             }
         }
+        co_await std::move(_crash_fiber);
         _stopped = true;
     }
 };
