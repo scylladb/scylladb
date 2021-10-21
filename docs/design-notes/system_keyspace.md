@@ -194,6 +194,25 @@ CREATE TABLE system.size_estimates (
 
 Implemented by `size_estimates_mutation_reader` in `db/size_estimates_virtual_reader.{hh,cc}`.
 
+## system.snapshots
+
+The list of snapshots on the node.
+Equivalent to the `nodetool listsnapshots` command.
+
+Schema:
+```CQL
+CREATE TABLE system.snapshots (
+    keyspace_name text,
+    table_name text,
+    snapshot_name text,
+    live bigint,
+    total bigint,
+    PRIMARY KEY (keyspace_name, table_name, snapshot_name)
+)
+```
+
+Implemented by `snapshots_table` in `db/system_keyspace.cc`.
+
 ## system.token_ring
 
 The ring description for each keyspace.
