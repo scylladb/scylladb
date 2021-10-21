@@ -1082,25 +1082,25 @@ public:
     // by the server (the state machine, RPC instance and so on). The server will use
     // `send_rpc` to send RPC messages to other servers and `fd` for failure detection.
     //
-    // If this is the first server in the cluster, pass `first_server = true`; this will
-    // cause the server to be created with a non-empty singleton configuration containing itself.
-    // Otherwise, pass `first_server = false`; that server, in order to function, must be then added
-    // by the existing cluster through a configuration change.
+    // The server is started with `persistence` as its underlying persistent storage.
+    // This can be used to simulate a server that is restarting by giving it a `persistence`
+    // that was previously used by a different instance of `raft_server<M>` (but make sure
+    // they had the same `id` and that the previous instance is no longer using this
+    // `persistence`).
     //
     // The created server is not started yet; use `start` for that.
     static std::unique_ptr<raft_server> create(
             raft::server_id id,
+            lw_shared_ptr<persistence<typename M::state_t>> persistence,
             shared_ptr<failure_detector> fd,
             raft::server::configuration cfg,
-            bool first_server,
             typename rpc<typename M::state_t>::send_message_t send_rpc) {
         using state_t = typename M::state_t;
 
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
-        auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots,
-                make_lw_shared<persistence<state_t>>(first_server ? std::optional{id} : std::nullopt, M::init));
+        auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, std::move(persistence));
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
@@ -1319,7 +1319,9 @@ public:
                 _network.send(id, dst, std::nullopt);
             });
 
-            auto srv = raft_server<M>::create(id, fd, std::move(cfg), first,
+
+            auto persistence_ = make_lw_shared<persistence<state_t>>(first ? std::optional{id} : std::nullopt, M::init);
+            auto srv = raft_server<M>::create(id, std::move(persistence_), fd, std::move(cfg),
                     [id, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
                 _network.send(id, dst, {std::move(m)});
             });
