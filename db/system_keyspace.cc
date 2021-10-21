@@ -2058,6 +2058,66 @@ public:
     }
 };
 
+class protocol_servers_table : public memtable_filling_virtual_table {
+private:
+    service::storage_service& _ss;
+
+    struct protocol_server_info {
+        sstring name;
+        sstring protocol;
+        sstring protocol_version;
+        std::vector<sstring> listen_addresses;
+
+        explicit protocol_server_info(protocol_server& s)
+            : name(s.name())
+            , protocol(s.protocol())
+            , protocol_version(s.protocol_version()) {
+            for (const auto& addr : s.listen_addresses()) {
+                listen_addresses.push_back(format("{}:{}", addr.addr(), addr.port()));
+            }
+        }
+    };
+public:
+    explicit protocol_servers_table(service::storage_service& ss)
+        : memtable_filling_virtual_table(build_schema())
+        , _ss(ss) {
+        _shard_aware = true;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "protocol_servers");
+        return schema_builder(system_keyspace::NAME, "protocol_servers", std::make_optional(id))
+            .with_column("name", utf8_type, column_kind::partition_key)
+            .with_column("protocol", utf8_type)
+            .with_column("protocol_version", utf8_type)
+            .with_column("listen_addresses", list_type_impl::get_instance(utf8_type, false))
+            .set_comment("Lists all client protocol servers and their status.")
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        // Servers are registered on shard 0 only
+        const auto server_infos = co_await smp::submit_to(0ul, [&ss = _ss.container()] {
+            return boost::copy_range<std::vector<protocol_server_info>>(ss.local().protocol_servers()
+                    | boost::adaptors::transformed([] (protocol_server* s) { return protocol_server_info(*s); }));
+        });
+        for (auto server : server_infos) {
+            auto dk = dht::decorate_key(*_s, partition_key::from_single_value(*schema(), data_value(server.name).serialize_nonnull()));
+            if (!this_shard_owns(dk)) {
+                continue;
+            }
+            mutation m(schema(), std::move(dk));
+            row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
+            set_cell(cr, "protocol", server.protocol);
+            set_cell(cr, "protocol_version", server.protocol_version);
+            std::vector<data_value> addresses(server.listen_addresses.begin(), server.listen_addresses.end());
+            set_cell(cr, "listen_addresses", make_list_value(schema()->get_column_definition("listen_addresses")->type, std::move(addresses)));
+            mutation_sink(std::move(m));
+        }
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
@@ -2073,6 +2133,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     add_table(std::make_unique<cluster_status_table>(ss));
     add_table(std::make_unique<token_ring_table>(db, ss));
     add_table(std::make_unique<snapshots_table>(dist_db));
+    add_table(std::make_unique<protocol_servers_table>(ss));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {

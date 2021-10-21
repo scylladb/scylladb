@@ -175,6 +175,32 @@ CREATE TABLE system.cluster_status (
 
 Implemented by `cluster_status_table` in `db/system_keyspace.cc`.
 
+## system.protocol_servers
+
+The list of all the client-facing data-plane protocol servers and listen addresses (if running).
+Equivalent of the `nodetool statusbinary` plus the `Thrift active` and `Native Transport active` fields from `nodetool info`.
+
+TODO: include control-plane diagnostics-plane protocols here too.
+
+Schema:
+```CQL
+CREATE TABLE system.protocol_servers (
+    name text PRIMARY KEY,
+    is_running boolean,
+    listen_addresses frozen<list<text>>,
+    protocol text,
+    protocol_version text
+)
+```
+
+Columns:
+* `name` - the name/alias of the server, this is sometimes different than the protocol the server serves, e.g.: the CQL server is often called "native";
+* `listen_addresses` - the addresses this server listens on, empty if the server is not running;
+* `protocol` - the name of the protocol this server serves;
+* `protocol_version` - the version of the protocol this server understands;
+
+Implemented by `protocol_servers_table` in `db/system_keyspace.cc`.
+
 ## system.size_estimates
 
 Size estimates for individual token-ranges of each keyspace/table.
