@@ -554,6 +554,11 @@ client_data cql_server::connection::make_client_data() const {
     if (const auto user_ptr = _client_state.user(); user_ptr) {
         cd.username = user_ptr->name;
     }
+    if (_ready) {
+        cd.connection_stage = client_connection_stage::ready;
+    } else if (_authenticating) {
+        cd.connection_stage = client_connection_stage::authenticating;
+    }
     return cd;
 }
 
@@ -794,12 +799,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     _client_state.set_protocol_extensions(std::move(cql_proto_exts));
     std::unique_ptr<cql_server::response> res;
     if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
+        _authenticating = true;
         res = make_autheticate(stream, a.qualified_java_name(), trace_state);
         client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state)] {
             return std::apply(notify_client_change<changed_column::connection_stage>{},
                     std::tuple_cat(std::move(ck), std::make_tuple(connection_stage_literal<client_connection_stage::authenticating>)));
         });
     } else {
+        _ready = true;
         res = make_ready(stream, trace_state);
         client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state)] {
             return std::apply(notify_client_change<changed_column::connection_stage>{},
@@ -1204,6 +1211,7 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
     auto client_state_notification_f = std::apply(notify_client_change<changed_column::connection_stage>{},
             std::tuple_cat(make_client_key(_client_state), std::make_tuple(connection_stage_literal<client_connection_stage::ready>)));
 
+    _ready = true;
     return client_state_notification_f.then_wrapped([res = make_ready(stream, std::move(trace_state))] (future<> f) mutable {
         try {
             f.get();

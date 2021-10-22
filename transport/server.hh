@@ -189,6 +189,8 @@ private:
         timer<lowres_clock> _shedding_timer;
         bool _shed_incoming_requests = false;
         unsigned _request_cpu = 0;
+        bool _ready = false;
+        bool _authenticating = false;
 
         enum class tracing_request_type : uint8_t {
             not_requested,
