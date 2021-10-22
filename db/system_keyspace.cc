@@ -2333,6 +2333,36 @@ public:
     }
 };
 
+class versions_table : public memtable_filling_virtual_table {
+public:
+    explicit versions_table()
+        : memtable_filling_virtual_table(build_schema()) {
+        _shard_aware = false;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "versions");
+        return schema_builder(system_keyspace::NAME, "versions", std::make_optional(id))
+            .with_column("key", utf8_type, column_kind::partition_key)
+            .with_column("version", utf8_type)
+            .with_column("build_mode", utf8_type)
+            .with_column("build_id", utf8_type)
+            .set_comment("Version information.")
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        mutation m(schema(), partition_key::from_single_value(*schema(), data_value("local").serialize_nonnull()));
+        row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
+        set_cell(cr, "version", scylla_version());
+        set_cell(cr, "build_mode", scylla_build_mode());
+        set_cell(cr, "build_id", get_build_id());
+        mutation_sink(std::move(m));
+        return make_ready_future<>();
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
@@ -2350,6 +2380,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     add_table(std::make_unique<snapshots_table>(dist_db));
     add_table(std::make_unique<protocol_servers_table>(ss));
     add_table(std::make_unique<runtime_info_table>(dist_db, ss));
+    add_table(std::make_unique<versions_table>());
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {

@@ -277,3 +277,21 @@ CREATE TABLE system.token_ring (
 ```
 
 Implemented by `token_ring_table` in `db/system_keyspace.cc`.
+
+## system.versions
+
+All version-related information.
+Equivalent of `nodetool version` command, but contains more versions.
+
+Schema:
+```CQL
+CREATE TABLE system.versions (
+    key text PRIMARY KEY,
+    build_id text,
+    build_mode text,
+    compatible_version text,
+    version text
+)
+```
+
+Implemented by `versions_table` in `db/system_keyspace.cc`.
