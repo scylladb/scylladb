@@ -45,6 +45,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/reactor.hh>
 #include "system_keyspace.hh"
 #include "types.hh"
 #include "service/storage_proxy.hh"
@@ -86,6 +87,7 @@
 #include "service/storage_service.hh"
 #include "gms/gossiper.hh"
 #include "service/paxos/paxos_state.hh"
+#include "utils/build_id.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"
@@ -2118,6 +2120,219 @@ public:
     }
 };
 
+class runtime_info_table : public memtable_filling_virtual_table {
+private:
+    distributed<database>& _db;
+    service::storage_service& _ss;
+    std::optional<dht::decorated_key> _generic_key;
+
+private:
+    std::optional<dht::decorated_key> maybe_make_key(sstring key) {
+        auto dk = dht::decorate_key(*_s, partition_key::from_single_value(*schema(), data_value(std::move(key)).serialize_nonnull()));
+        if (this_shard_owns(dk)) {
+            return dk;
+        }
+        return std::nullopt;
+    }
+
+    void do_add_partition(std::function<void(mutation)>& mutation_sink, dht::decorated_key key, std::vector<std::pair<sstring, sstring>> rows) {
+        mutation m(schema(), std::move(key));
+        for (auto&& [ckey, cvalue] : rows) {
+            row& cr = m.partition().clustered_row(*schema(), clustering_key::from_single_value(*schema(), data_value(std::move(ckey)).serialize_nonnull())).cells();
+            set_cell(cr, "value", std::move(cvalue));
+        }
+        mutation_sink(std::move(m));
+    }
+
+    void add_partition(std::function<void(mutation)>& mutation_sink, sstring key, sstring value) {
+        if (_generic_key) {
+            do_add_partition(mutation_sink, *_generic_key, {{key, std::move(value)}});
+        }
+    }
+
+    void add_partition(std::function<void(mutation)>& mutation_sink, sstring key, std::initializer_list<std::pair<sstring, sstring>> rows) {
+        auto dk = maybe_make_key(std::move(key));
+        if (dk) {
+            do_add_partition(mutation_sink, std::move(*dk), std::move(rows));
+        }
+    }
+
+    future<> add_partition(std::function<void(mutation)>& mutation_sink, sstring key, std::function<future<sstring>()> value_producer) {
+        if (_generic_key) {
+            do_add_partition(mutation_sink, *_generic_key, {{key, co_await value_producer()}});
+        }
+    }
+
+    future<> add_partition(std::function<void(mutation)>& mutation_sink, sstring key, std::function<future<std::vector<std::pair<sstring, sstring>>>()> value_producer) {
+        auto dk = maybe_make_key(std::move(key));
+        if (dk) {
+            do_add_partition(mutation_sink, std::move(*dk), co_await value_producer());
+        }
+    }
+
+    template <typename T>
+    future<T> map_reduce_tables(std::function<T(table&)> map, std::function<T(T, T)> reduce = std::plus<T>{}) {
+        class shard_reducer {
+            T _v{};
+            std::function<T(T, T)> _reduce;
+        public:
+            shard_reducer(std::function<T(T, T)> reduce) : _reduce(std::move(reduce)) { }
+            future<> operator()(T v) {
+                v = _reduce(_v, v);
+                return make_ready_future<>();
+            }
+            T get() && { return std::move(_v); }
+        };
+        co_return co_await _db.map_reduce(shard_reducer(reduce), [map, reduce] (database& db) {
+            T val = {};
+            for (auto& [_, table] : db.get_column_families()) {
+               val = reduce(val, map(*table));
+            }
+            return val;
+        });
+    }
+    template <typename T>
+    future<T> map_reduce_shards(std::function<T()> map, std::function<T(T, T)> reduce = std::plus<T>{}, T initial = {}) {
+        co_return co_await map_reduce(
+                boost::irange(0u, smp::count),
+                [map] (shard_id shard) {
+                    return smp::submit_to(shard, [map] {
+                        return map();
+                    });
+                },
+                initial,
+                reduce);
+    }
+
+public:
+    explicit runtime_info_table(distributed<database>& db, service::storage_service& ss)
+        : memtable_filling_virtual_table(build_schema())
+        , _db(db)
+        , _ss(ss) {
+        _shard_aware = true;
+        _generic_key = maybe_make_key("generic");
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "runtime_info");
+        return schema_builder(system_keyspace::NAME, "runtime_info", std::make_optional(id))
+            .with_column("group", utf8_type, column_kind::partition_key)
+            .with_column("item", utf8_type, column_kind::clustering_key)
+            .with_column("value", utf8_type)
+            .set_comment("Runtime system information.")
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        co_await add_partition(mutation_sink, "gossip_active", [this] () -> future<sstring> {
+            return _ss.is_gossip_running().then([] (bool running){
+                return format("{}", running);
+            });
+        });
+        co_await add_partition(mutation_sink, "load", [this] () -> future<sstring> {
+            return map_reduce_tables<int64_t>([] (table& tbl) {
+                return tbl.get_stats().live_disk_space_used;
+            }).then([] (int64_t load) {
+                return format("{}", load);
+            });
+        });
+        add_partition(mutation_sink, "uptime", format("{} seconds", std::chrono::duration_cast<std::chrono::seconds>(engine().uptime()).count()));
+        add_partition(mutation_sink, "trace_probability", format("{:.2}", tracing::tracing::get_local_tracing_instance().get_trace_probability()));
+        co_await add_partition(mutation_sink, "memory", [this] () {
+            struct stats {
+                uint64_t total = 0;
+                uint64_t free = 0;
+                static stats reduce(stats a, stats b) { return stats{a.total + b.total, a.free + b.free}; }
+            };
+            return map_reduce_shards<stats>([] () {
+                const auto& s = memory::stats();
+                return stats{s.total_memory(), s.free_memory()};
+            }, stats::reduce, stats{}).then([] (stats s) {
+                return std::vector<std::pair<sstring, sstring>>{
+                        {"total", format("{}", s.total)},
+                        {"used", format("{}", s.total - s.free)},
+                        {"free", format("{}", s.free)}};
+            });
+        });
+        co_await add_partition(mutation_sink, "memtable", [this] () {
+            struct stats {
+                uint64_t total = 0;
+                uint64_t free = 0;
+                uint64_t entries = 0;
+                static stats reduce(stats a, stats b) { return stats{a.total + b.total, a.free + b.free, a.entries + b.entries}; }
+            };
+            return map_reduce_tables<stats>([] (table& t) {
+                const auto s = t.active_memtable().region().occupancy();
+                return stats{s.total_space(), s.free_space(), t.active_memtable().partition_count()};
+            }, stats::reduce).then([] (stats s) {
+                return std::vector<std::pair<sstring, sstring>>{
+                        {"memory_total", format("{}", s.total)},
+                        {"memory_used", format("{}", s.total - s.free)},
+                        {"memory_free", format("{}", s.free)},
+                        {"entries", format("{}", s.entries)}};
+            });
+        });
+        co_await add_partition(mutation_sink, "cache", [this] () {
+            struct stats {
+                uint64_t total = 0;
+                uint64_t free = 0;
+                uint64_t entries = 0;
+                uint64_t hits = 0;
+                uint64_t misses = 0;
+                utils::rate_moving_average hits_moving_average;
+                utils::rate_moving_average requests_moving_average;
+                static stats reduce(stats a, stats b) {
+                    return stats{
+                        a.total + b.total,
+                        a.free + b.free,
+                        a.entries + b.entries,
+                        a.hits + b.hits,
+                        a.misses + b.misses,
+                        a.hits_moving_average + b.hits_moving_average,
+                        a.requests_moving_average + b.requests_moving_average};
+                }
+            };
+            return _db.map_reduce0([] (database& db) {
+                stats res{};
+                auto occupancy = db.row_cache_tracker().region().occupancy();
+                res.total = occupancy.total_space();
+                res.free = occupancy.free_space();
+                res.entries = db.row_cache_tracker().partitions();
+                for (const auto& [_, t] : db.get_column_families()) {
+                    auto& cache_stats = t->get_row_cache().stats();
+                    res.hits += cache_stats.hits.count();
+                    res.misses += cache_stats.misses.count();
+                    res.hits_moving_average += cache_stats.hits.rate();
+                    res.requests_moving_average += (cache_stats.hits.rate() + cache_stats.misses.rate());
+                }
+                return res;
+            }, stats{}, stats::reduce).then([] (stats s) {
+                return std::vector<std::pair<sstring, sstring>>{
+                        {"memory_total", format("{}", s.total)},
+                        {"memory_used", format("{}", s.total - s.free)},
+                        {"memory_free", format("{}", s.free)},
+                        {"entries", format("{}", s.entries)},
+                        {"hits", format("{}", s.hits)},
+                        {"misses", format("{}", s.misses)},
+                        {"hit_rate_total", format("{:.2}", static_cast<double>(s.hits) / static_cast<double>(s.hits + s.misses))},
+                        {"hit_rate_recent", format("{:.2}", s.hits_moving_average.mean_rate)},
+                        {"requests_total", format("{}", s.hits + s.misses)},
+                        {"requests_recent", format("{}", static_cast<uint64_t>(s.requests_moving_average.mean_rate))}};
+            });
+        });
+        co_await add_partition(mutation_sink, "incremental_backup_enabled", [this] () {
+            return _db.map_reduce0([] (database& db) {
+                return boost::algorithm::any_of(db.get_keyspaces(), [] (const auto& id_and_ks) {
+                    return id_and_ks.second.incremental_backups_enabled();
+                });
+            }, false, std::logical_or{}).then([] (bool res) -> sstring {
+                return res ? "true" : "false";
+            });
+        });
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
@@ -2134,6 +2349,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     add_table(std::make_unique<token_ring_table>(db, ss));
     add_table(std::make_unique<snapshots_table>(dist_db));
     add_table(std::make_unique<protocol_servers_table>(ss));
+    add_table(std::make_unique<runtime_info_table>(dist_db, ss));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {

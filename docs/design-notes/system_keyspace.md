@@ -239,6 +239,24 @@ CREATE TABLE system.snapshots (
 
 Implemented by `snapshots_table` in `db/system_keyspace.cc`.
 
+## system.runtime_info
+
+Runtime specific information, like memory stats, memtable stats, cache stats and more.
+Data is grouped so that related items stay together and are easily queried.
+Roughly equivalent of the `nodetool info`, `nodetool gettraceprobability` and `nodetool statusgossup` commands.
+
+Schema:
+```CQL
+CREATE TABLE system.runtime_info (
+    group text,
+    item text,
+    value text,
+    PRIMARY KEY (group, item)
+)
+```
+
+Implemented by `runtime_info_table` in `db/system_keyspace.cc`.
+
 ## system.token_ring
 
 The ring description for each keyspace.
