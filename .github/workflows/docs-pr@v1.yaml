@@ -1,28 +1,25 @@
-name: "Build docs on pull requests"
+name: "Docs / Build PR"
 
 on:
   pull_request:
     branches:
-      - master
+    - master
     paths:
-      - "docs/**"
+    - "docs/**"
 
 jobs:
-  release:
+  build:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v1
-        with:
-          python-version: 3.7
-      - name: Build docs
-        run: |
-          export PATH=$PATH:~/.local/bin
-          cd docs
-          make test
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.7
+    - name: Build docs
+      run: make -C docs test
