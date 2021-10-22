@@ -50,6 +50,8 @@ enum class client_connection_stage {
     ready,
 };
 
+sstring to_string(client_connection_stage ct);
+
 template <client_connection_stage ccs> constexpr const char* connection_stage_literal = "";
 template <> inline constexpr const char* connection_stage_literal<client_connection_stage::established> = "ESTABLISHED";
 template <> inline constexpr const char* connection_stage_literal<client_connection_stage::authenticating> = "AUTHENTICATING";
@@ -74,6 +76,9 @@ struct client_data {
     std::optional<bool> ssl_enabled;
     std::optional<sstring> ssl_protocol;
     std::optional<sstring> username;
+
+    sstring stage_str() const { return to_string(connection_stage); }
+    sstring client_type_str() const { return to_string(ct); }
 };
 
 future<> notify_new_client(client_data cd);

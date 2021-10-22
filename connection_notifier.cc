@@ -22,7 +22,7 @@ sstring to_string(client_type ct) {
     throw std::runtime_error("Invalid client_type");
 }
 
-static sstring to_string(client_connection_stage ccs) {
+sstring to_string(client_connection_stage ccs) {
     switch (ccs) {
         case client_connection_stage::established: return connection_stage_literal<client_connection_stage::established>;
         case client_connection_stage::authenticating: return connection_stage_literal<client_connection_stage::authenticating>;
