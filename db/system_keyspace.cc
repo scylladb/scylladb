@@ -654,44 +654,6 @@ schema_ptr system_keyspace::large_cells() {
     return scylla_local;
 }
 
-/** Layout based on C*-4.0.0 with extra columns `shard_id' and `client_type'
-  * but without `request_count'. Also CK is different: C* has only (`port'). */
-schema_ptr system_keyspace::clients() {
-    thread_local auto clients = [] {
-        schema_builder builder(generate_legacy_id(NAME, CLIENTS), NAME, CLIENTS,
-            // partition key
-            {{"address", inet_addr_type}},
-            // clustering key
-            {{"port", int32_type}, {"client_type", utf8_type}},
-            // regular columns
-            {
-                {"shard_id", int32_type},
-                {"connection_stage", utf8_type},
-                {"driver_name", utf8_type},
-                {"driver_version", utf8_type},
-                {"hostname", utf8_type},
-                {"protocol_version", int32_type},
-                {"ssl_cipher_suite", utf8_type},
-                {"ssl_enabled", boolean_type},
-                {"ssl_protocol", utf8_type},
-                {"username", utf8_type}
-            },
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "list of connected clients"
-            );
-        builder.set_gc_grace_seconds(0);
-        builder.with_version(generate_schema_version(builder.uuid()));
-        return builder.build(schema_builder::compact_storage::no);
-    }();
-    return clients;
-}
-
-const char *const system_keyspace::CLIENTS = "clients";
-
 schema_ptr system_keyspace::v3::batches() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
@@ -2507,8 +2469,8 @@ class clients_table : public streaming_virtual_table {
     service::storage_service& _ss;
 
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "clients_v");
-        return schema_builder(system_keyspace::NAME, "clients_v", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, "clients");
+        return schema_builder(system_keyspace::NAME, "clients", std::make_optional(id))
             .with_column("address", inet_addr_type, column_kind::partition_key)
             .with_column("port", int32_type, column_kind::clustering_key)
             .with_column("client_type", utf8_type, column_kind::clustering_key)
@@ -2673,7 +2635,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
+                    sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     repair_history(),
                     v3::views_builds_in_progress(), v3::built_views(),
@@ -3256,7 +3218,5 @@ future<mutation> system_keyspace::get_group0_history(distributed<service::storag
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
-
-const char *const system_keyspace_CLIENTS = system_keyspace::CLIENTS;
 
 } // namespace db

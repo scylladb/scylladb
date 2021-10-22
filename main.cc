@@ -1335,9 +1335,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_view_builder(ctx).get();
             });
 
-            // Truncate `clients' CF - this table should not persist between server restarts.
-            clear_clientlist().get();
-
             db.invoke_on_all([] (replica::database& db) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
