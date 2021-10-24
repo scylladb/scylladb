@@ -2013,12 +2013,14 @@ public:
             auto base_schema = _step.base->schema();
             auto views = with_base_info_snapshot(_views_to_build);
             auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
+            auto close_reader = defer([&reader] { reader.close().get(); });
             reader.upgrade_schema(base_schema);
             _step.base->populate_views(
                     std::move(views),
                     _step.current_token(),
                     std::move(reader),
                     _now).get();
+            close_reader.cancel();
             _fragments.clear();
             _fragments_memory_usage = 0;
         }
