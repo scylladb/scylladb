@@ -1166,7 +1166,6 @@ pure_boost_tests = set([
     'test/boost/dynamic_bitset_test',
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
-    'test/boost/hashers_test',
     'test/boost/idl_test',
     'test/boost/json_test',
     'test/boost/keys_test',

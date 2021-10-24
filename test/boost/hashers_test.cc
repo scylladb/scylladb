@@ -20,9 +20,9 @@
  */
 
 #include "db/timeout_clock.hh"
-#define BOOST_TEST_MODULE core
 
-#include <boost/test/unit_test.hpp>
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "hashers.hh"
 #include "xx_hasher.hh"
 #include "gc_clock.hh"
@@ -72,8 +72,9 @@ BOOST_AUTO_TEST_CASE(bytes_view_hasher_sanity_check) {
     BOOST_REQUIRE_EQUAL(hash1, hash2);
 }
 
-BOOST_AUTO_TEST_CASE(mutation_fragment_sanity_check) {
+SEASTAR_THREAD_TEST_CASE(mutation_fragment_sanity_check) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__);
+    auto stop_semaphore = deferred_stop(semaphore);
     simple_schema s;
     auto permit = semaphore.make_tracking_only_permit(s.schema().get(), "test", db::no_timeout);
     gc_clock::time_point ts(gc_clock::duration(1234567890000));
