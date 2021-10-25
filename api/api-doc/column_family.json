@@ -89,7 +89,7 @@
                      "description":"true if the output of the major compaction should be split in several sstables",
                      "required":false,
                      "allowMultiple":false,
-                     "type":"bool",
+                     "type":"boolean",
                      "paramType":"query"
                   }
                ]
