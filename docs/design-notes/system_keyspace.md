@@ -295,3 +295,34 @@ CREATE TABLE system.versions (
 ```
 
 Implemented by `versions_table` in `db/system_keyspace.cc`.
+
+## system.config
+
+Holds all configuration variables in use
+
+Schema:
+~~~
+CREATE TABLE system.config (
+    name text PRIMARY KEY,
+    source text,
+    type text,
+    value text
+)
+~~~
+
+The source of the option is one of 'default', 'config', 'cli', 'cql' or 'internal'
+which means the value wasn't changed from its default, was configured via config
+file, was set by commanline option or via updating this table, or was deliberately
+configured by Scylla internals. Any way the option was updated overrides the
+previous one, so shown here is the latest one used.
+
+The type denotes the variable type like 'string', 'bool', 'integer', etc. Including
+some scylla-internal configuration types.
+
+The value is shown as it would appear in the json config file.
+
+The table can be updated with the UPDATE statement. The accepted value parameter
+must (of course) be a text, it's converted to the target configuration value as
+needed.
+
+## TODO: the rest

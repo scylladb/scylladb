@@ -93,6 +93,7 @@ public:
         None,
         SettingsFile,
         CommandLine,
+        CQL,
         Internal
     };
 

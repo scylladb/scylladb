@@ -46,6 +46,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/json/json_elements.hh>
 #include "system_keyspace.hh"
 #include "types.hh"
 #include "service/storage_proxy.hh"
@@ -88,7 +89,7 @@
 #include "gms/gossiper.hh"
 #include "service/paxos/paxos_state.hh"
 #include "utils/build_id.hh"
-
+#include "query-result-set.hh"
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
@@ -2363,6 +2364,101 @@ public:
     }
 };
 
+class db_config_table final : public streaming_virtual_table {
+    db::config& _cfg;
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "config");
+        return schema_builder(system_keyspace::NAME, "config", std::make_optional(id))
+            .with_column("name", utf8_type, column_kind::partition_key)
+            .with_column("type", utf8_type)
+            .with_column("source", utf8_type)
+            .with_column("value", utf8_type)
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        struct config_entry {
+            dht::decorated_key key;
+            sstring_view type;
+            sstring source;
+            sstring value;
+        };
+
+        std::vector<config_entry> cfg;
+        for (auto&& cfg_ref : _cfg.values()) {
+            auto&& c = cfg_ref.get();
+            dht::decorated_key dk = dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(c.name()).serialize_nonnull()));
+            if (this_shard_owns(dk)) {
+                cfg.emplace_back(config_entry{ std::move(dk), c.type_name(), c.source_name(), c.value_as_json()._res });
+            }
+        }
+
+        boost::sort(cfg, [less = dht::ring_position_less_comparator(*_s)]
+                (const config_entry& l, const config_entry& r) {
+            return less(l.key, r.key);
+        });
+
+        for (auto&& c : cfg) {
+            co_await result.emit_partition_start(c.key);
+            mutation m(schema(), c.key);
+            clustering_row cr(clustering_key::make_empty());
+            set_cell(cr.cells(), "type", c.type);
+            set_cell(cr.cells(), "source", c.source);
+            set_cell(cr.cells(), "value", c.value);
+            co_await result.emit_row(std::move(cr));
+            co_await result.emit_partition_end();
+        }
+    }
+
+    virtual future<> apply(const frozen_mutation& fm) override {
+        const mutation m = fm.unfreeze(_s);
+        query::result_set rs(m);
+        auto name = rs.row(0).get<sstring>("name");
+        auto value = rs.row(0).get<sstring>("value");
+
+        if (!name) {
+            return make_exception_future<>(virtual_table_update_exception("option name is required"));
+        }
+
+        if (!value) {
+            return make_exception_future<>(virtual_table_update_exception("option value is required"));
+        }
+
+        if (rs.row(0).cells().contains("type")) {
+            return make_exception_future<>(virtual_table_update_exception("option type is immutable"));
+        }
+
+        if (rs.row(0).cells().contains("source")) {
+            return make_exception_future<>(virtual_table_update_exception("option source is not updateable"));
+        }
+
+        return smp::submit_to(0, [&cfg = _cfg, name = std::move(*name), value = std::move(*value)] () mutable {
+            for (auto& c_ref : cfg.values()) {
+                auto& c = c_ref.get();
+                if (c.name() == name) {
+                    if (c.set_value(value, utils::config_file::config_source::CQL)) {
+                        return cfg.broadcast_to_all_shards();
+                    } else {
+                        return make_exception_future<>(virtual_table_update_exception("option is not live-updateable"));
+                    }
+                }
+            }
+
+            return make_exception_future<>(virtual_table_update_exception("no such option"));
+        });
+    }
+
+public:
+    explicit db_config_table(db::config& cfg)
+            : streaming_virtual_table(build_schema())
+            , _cfg(cfg)
+    {
+        _shard_aware = true;
+    }
+};
+
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
@@ -2381,6 +2477,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     add_table(std::make_unique<protocol_servers_table>(ss));
     add_table(std::make_unique<runtime_info_table>(dist_db, ss));
     add_table(std::make_unique<versions_table>());
+    add_table(std::make_unique<db_config_table>(cfg));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {

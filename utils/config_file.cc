@@ -428,6 +428,8 @@ sstring utils::config_file::config_src::source_name() const noexcept {
         return "cli";
     case utils::config_file::config_source::Internal:
         return "internal";
+    case utils::config_file::config_source::CQL:
+        return "cql";
     }
 
     __builtin_unreachable();
