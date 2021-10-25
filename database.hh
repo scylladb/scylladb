@@ -589,6 +589,8 @@ private:
     void rebuild_statistics();
 private:
     mutation_source_opt _virtual_reader;
+    std::optional<noncopyable_function<future<>(const frozen_mutation&)>> _virtual_writer;
+
     // Creates a mutation reader which covers given sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
@@ -709,6 +711,10 @@ public:
 
     void set_virtual_reader(mutation_source virtual_reader) {
         _virtual_reader = std::move(virtual_reader);
+    }
+
+    void set_virtual_writer(noncopyable_function<future<>(const frozen_mutation&)> writer) {
+        _virtual_writer.emplace(std::move(writer));
     }
 
     // Queries can be satisfied from multiple data sources, so they are returned

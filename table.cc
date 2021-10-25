@@ -1914,6 +1914,10 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
 template void table::do_apply(db::rp_handle&&, const mutation&);
 
 future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    if (_virtual_writer) [[unlikely]] {
+        return (*_virtual_writer)(m);
+    }
+
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         do_apply(std::move(h), m, m_schema);
     }, timeout);

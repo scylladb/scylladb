@@ -2423,6 +2423,7 @@ static void install_virtual_readers(database& db) {
     for (auto&& [id, vt] : virtual_tables) {
         auto&& cf = db.find_column_family(vt->schema());
         cf.set_virtual_reader(vt->as_mutation_source());
+        cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
     }
 }
 
