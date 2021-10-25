@@ -1775,10 +1775,12 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
 
 class cluster_status_table : public memtable_filling_virtual_table {
 private:
+    database& _db;
     service::storage_service& _ss;
 public:
-    cluster_status_table(service::storage_service& ss)
+    cluster_status_table(database& db, service::storage_service& ss)
             : memtable_filling_virtual_table(build_schema())
+            , _db(db)
             , _ss(ss) {}
 
     static schema_ptr build_schema() {
@@ -1792,6 +1794,7 @@ public:
             .with_column("tokens", int32_type)
             .with_column("owns", float_type)
             .with_column("host_id", uuid_type)
+            .with_column("snitch", utf8_type)
             .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }
@@ -1826,6 +1829,7 @@ public:
                 }
 
                 set_cell(cr, "tokens", int32_t(tm.get_tokens(endpoint).size()));
+                set_cell(cr, "snitch", _db.get_snitch_name());
 
                 mutation_sink(std::move(m));
             }
@@ -2530,7 +2534,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     auto& ss = dist_ss.local();
 
     // Add built-in virtual tables here.
-    add_table(std::make_unique<cluster_status_table>(ss));
+    add_table(std::make_unique<cluster_status_table>(db, ss));
     add_table(std::make_unique<token_ring_table>(db, ss));
     add_table(std::make_unique<snapshots_table>(dist_db));
     add_table(std::make_unique<protocol_servers_table>(ss));

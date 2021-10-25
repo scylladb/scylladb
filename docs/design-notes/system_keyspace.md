@@ -167,6 +167,7 @@ CREATE TABLE system.cluster_status (
     host_id uuid,
     load text,
     owns float,
+    snitch text,
     status text,
     tokens int,
     up boolean
