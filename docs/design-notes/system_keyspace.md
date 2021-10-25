@@ -318,6 +318,21 @@ CREATE TABLE system.compactions_in_progress (
 
 Implemented by `compactions_in_progress_table` in `db/system_keyspace.cc`.
 
+## system.log\_levels
+
+Current values of all defined logger levels.
+Equivalent of `nodetool getlogginglevels`.
+
+Schema:
+```cql
+CREATE TABLE system.log_levels {
+    logger text PRIMARY KEY,
+    level text
+}
+```
+
+Implemented by `log_levels_table` in `db/system_keyspace.cc`.
+
 ## system.config
 
 Holds all configuration variables in use

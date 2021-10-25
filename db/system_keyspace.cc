@@ -1921,6 +1921,37 @@ public:
     }
 };
 
+class log_levels_table : public memtable_filling_virtual_table {
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "log_levels");
+        return schema_builder(system_keyspace::NAME, "log_levels", std::make_optional(id))
+            .with_column("logger", utf8_type, column_kind::partition_key)
+            .with_column("level", utf8_type)
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        auto names = logging::logger_registry().get_all_logger_names();
+        for (const auto& name : names) {
+            auto pk = partition_key::from_single_value(*schema(), data_value(name).serialize_nonnull());
+            if (!this_shard_owns(dht::decorate_key(*schema(), pk))) {
+                continue;
+            }
+            mutation m(schema(), pk);
+            row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
+            set_cell(cr, "level", logging::level_name(logging::logger_registry().get_logger_level(name)));
+            mutation_sink(std::move(m));
+        }
+        return make_ready_future<>();
+    }
+public:
+    log_levels_table()
+            : memtable_filling_virtual_table(build_schema()) {
+        _shard_aware = true;
+    }
+};
+
 class token_ring_table : public streaming_virtual_table {
 private:
     database& _db;
@@ -2542,6 +2573,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     add_table(std::make_unique<versions_table>());
     add_table(std::make_unique<db_config_table>(cfg));
     add_table(std::make_unique<compactions_in_progress_table>(dist_db));
+    add_table(std::make_unique<log_levels_table>());
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
