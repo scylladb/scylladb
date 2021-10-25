@@ -137,6 +137,7 @@ public:
         bool matches(std::string_view name) const;
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
+        virtual bool set_value(sstring, config_source = config_source::Internal) = 0;
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
         json::json_return_type value_as_json() const;
@@ -242,6 +243,7 @@ public:
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&) override;
+        bool set_value(sstring, config_source = config_source::Internal) override;
     };
 
     typedef std::reference_wrapper<config_src> cfg_ref;

@@ -70,6 +70,7 @@ struct seed_provider_type {
 };
 
 std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s);
+inline std::istream& operator>>(std::istream& is, seed_provider_type&);
 
 }
 

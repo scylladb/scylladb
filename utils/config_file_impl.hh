@@ -212,3 +212,12 @@ void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
     _source = config_source::SettingsFile;
 }
 
+template<typename T>
+bool utils::config_file::named_value<T>::set_value(sstring value, config_source src) {
+    if (_liveness != liveness::LiveUpdate) {
+        return false;
+    }
+
+    (*this)(boost::lexical_cast<T>(value), src);
+    return true;
+}
