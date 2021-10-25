@@ -3926,7 +3926,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == disjoint_sstable_count);
+            BOOST_REQUIRE_EQUAL(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size(), disjoint_sstable_count);
         }
 
         {
@@ -3935,11 +3935,24 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
             for (auto i = 0; i < disjoint_sstable_count; i++) {
-                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(i + 1)), make_row(i, std::chrono::hours(i + 2))});
+                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(i))});
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == disjoint_sstable_count);
+            BOOST_REQUIRE_EQUAL(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size(), disjoint_sstable_count);
+        }
+
+        {
+            // create set of 256 disjoint ssts that belong to different windows with none over the threshold and expect that twcs reshape selects none of them
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0; i < disjoint_sstable_count; i++) {
+                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i + 1)), make_row(i, std::chrono::hours(24*i + 2))});
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE_EQUAL(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size(), 0);
         }
 
         {
@@ -3952,7 +3965,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == uint64_t(s->max_compaction_threshold()));
+            BOOST_REQUIRE_EQUAL(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size(), uint64_t(s->max_compaction_threshold()));
         }
     });
 }
