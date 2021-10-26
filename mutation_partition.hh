@@ -843,6 +843,7 @@ public:
 
     void apply(shadowable_tombstone deleted_at) {
         _deleted_at.apply(deleted_at, _marker);
+        maybe_shadow();
     }
 
     void apply(row_tombstone deleted_at) {
@@ -869,6 +870,7 @@ public:
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
+    // Call `maybe_shadow()` if the marker's timestamp is mutated.
     row_marker& marker() { return _marker; }
     const row_marker& marker() const { return _marker; }
     const row& cells() const { return _cells; }

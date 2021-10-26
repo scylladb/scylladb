@@ -2303,7 +2303,7 @@ public:
             is_continuous continuous = is_continuous(_bool_dist(_gen));
             if (_not_dummy_dist(_gen)) {
                 deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
-                row.marker() = random_row_marker();
+                row.apply(random_row_marker());
                 if (_bool_dist(_gen)) {
                     set_random_cells(row.cells(), column_kind::regular_column);
                 } else {
