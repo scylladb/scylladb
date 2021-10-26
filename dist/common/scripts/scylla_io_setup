@@ -229,6 +229,52 @@ if __name__ == "__main__":
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
                 disk_properties["write_iops"] = 57100 * nr_disks
                 disk_properties["write_bandwidth"] = 483141731 * nr_disks
+            elif idata.instance_class() in ("c6gd", "m6gd", "r6gd", "x2gd"):
+                if idata.instance_size() == "medium":
+                    disk_properties["read_iops"] = 14808
+                    disk_properties["read_bandwidth"] = 77869147
+                    disk_properties["write_iops"] = 5972
+                    disk_properties["write_bandwidth"] = 32820302
+                elif idata.instance_size() == "large":
+                    disk_properties["read_iops"] = 29690
+                    disk_properties["read_bandwidth"] = 157712240
+                    disk_properties["write_iops"] = 12148
+                    disk_properties["write_bandwidth"] = 65978069
+                elif idata.instance_size() == "xlarge":
+                    disk_properties["read_iops"] = 59688
+                    disk_properties["read_bandwidth"] = 318762880
+                    disk_properties["write_iops"] = 24449
+                    disk_properties["write_bandwidth"] = 133311808
+                elif idata.instance_size() == "2xlarge":
+                    disk_properties["read_iops"] = 119353
+                    disk_properties["read_bandwidth"] = 634795733
+                    disk_properties["write_iops"] = 49069
+                    disk_properties["write_bandwidth"] = 266841680
+                elif idata.instance_size() == "4xlarge":
+                    disk_properties["read_iops"] = 237196
+                    disk_properties["read_bandwidth"] = 1262309504
+                    disk_properties["write_iops"] = 98884
+                    disk_properties["write_bandwidth"] = 533938080
+                elif idata.instance_size() == "8xlarge":
+                    disk_properties["read_iops"] = 442945
+                    disk_properties["read_bandwidth"] = 2522688939
+                    disk_properties["write_iops"] = 166021
+                    disk_properties["write_bandwidth"] = 1063041152
+                elif idata.instance_size() == "12xlarge":
+                    disk_properties["read_iops"] = 353691 * nr_disks
+                    disk_properties["read_bandwidth"] = 1908192256 * nr_disks
+                    disk_properties["write_iops"] = 146732 * nr_disks
+                    disk_properties["write_bandwidth"] = 806399360 * nr_disks
+                elif idata.instance_size() == "16xlarge":
+                    disk_properties["read_iops"] = 426893 * nr_disks
+                    disk_properties["read_bandwidth"] = 2525781589 * nr_disks
+                    disk_properties["write_iops"] = 161740 * nr_disks
+                    disk_properties["write_bandwidth"] = 1063389952 * nr_disks
+                elif idata.instance_size() == "metal":
+                    disk_properties["read_iops"] = 416257 * nr_disks
+                    disk_properties["read_bandwidth"] = 2527296683 * nr_disks
+                    disk_properties["write_iops"] = 156326 * nr_disks
+                    disk_properties["write_bandwidth"] = 1063657088 * nr_disks
             properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
             yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
             ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
