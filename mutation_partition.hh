@@ -830,6 +830,7 @@ public:
 
     void apply(shadowable_tombstone deleted_at) {
         _deleted_at.apply(deleted_at, _marker);
+        maybe_shadow();
     }
 
     void apply(row_tombstone deleted_at) {
