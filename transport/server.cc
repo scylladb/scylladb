@@ -710,7 +710,7 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
     if (flags & cql_frame_flags::compression) {
         if (_compression == cql_compression::lz4) {
             if (length < 4) {
-                throw std::runtime_error("Truncated frame");
+                throw std::runtime_error(fmt::format("CQL frame truncated: expected to have at least 4 bytes, got {}", length));
             }
             return _buffer_reader.read_exactly(_read_buf, length).then([this] (fragmented_temporary_buffer buf) {
                 auto linearization_buffer = bytes_ostream();
