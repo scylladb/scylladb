@@ -116,6 +116,10 @@ deb-src http://security.debian.org/ $SUITE/updates main contrib non-free
 EOS
 fi
 sudo wget -P build/chroot/etc/apt/sources.list.d $REPO
+# Avoid the pacakges to be deleted after installation
+sudo tee build/chroot/etc/apt/apt.conf.d/01keep-debs << EOS
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+EOS
 sudo chroot build/chroot apt-get update --allow-unauthenticated -y
 sudo chroot build/chroot apt-get purge -y python-minimal python3-minimal python2.7-minimal libpython2.7-minimal libpython3.*-minimal libssl1.0.0 libexpat1
 sudo chroot build/chroot apt-get -y install python-minimal python3-minimal
