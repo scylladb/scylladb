@@ -89,7 +89,7 @@ template<typename Input>
 size_type read_frame_size(Input& in) {
     auto sz = deserialize(in, boost::type<size_type>());
     if (sz < sizeof(size_type)) {
-        throw std::runtime_error("Truncated frame");
+        throw std::runtime_error(fmt::format("IDL frame truncated: expected to have at least {} bytes, got {}", sizeof(size_type), sz));
     }
     return sz - sizeof(size_type);
 }
