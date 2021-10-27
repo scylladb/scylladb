@@ -72,7 +72,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         dht::partition_range_vector pranges;
 
         for (uint32_t i = 1; i <= 1000; ++i) {
-            auto pkey = partition_key::from_single_value(*s, to_bytes(sprint("key%d", i)));
+            auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key{}", i)));
             mutation m(s, pkey);
             m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
             pranges.emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
