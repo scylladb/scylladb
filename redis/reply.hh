@@ -68,12 +68,12 @@ public:
     }
     static seastar::future<redis_message> number(size_t n) {
         auto m = make_lw_shared<scattered_message<char>> ();
-        m->append(sprint(":%zu\r\n", n));
+        m->append(fmt::format(":{}\r\n", n));
         return make_ready_future<redis_message>(m);
     }
     static seastar::future<redis_message> make_list_result(std::map<bytes, bytes>& list_result) {
         auto m = make_lw_shared<scattered_message<char>> ();
-        m->append(sprint("*%u\r\n", list_result.size() * 2));
+        m->append(fmt::format("*{}\r\n", list_result.size() * 2));
         for (auto r : list_result) {
             write_bytes(m, (bytes&)r.first);
             write_bytes(m, r.second);
@@ -86,11 +86,11 @@ public:
         return make_ready_future<redis_message>(m);
     }
     static seastar::future<redis_message> unknown(const bytes& name) {
-        return from_exception(make_message("-ERR unknown command '%s'\r\n", to_sstring(name)));
+        return from_exception(make_message("-ERR unknown command '{}'\r\n", to_sstring(name)));
     }
     static seastar::future<redis_message> exception(const sstring& em) {
         auto m = make_lw_shared<scattered_message<char>> ();
-        m->append(make_message("-ERR %s\r\n", em));
+        m->append(make_message("-ERR {}\r\n", em));
         return make_ready_future<redis_message>(m);
     }
     static seastar::future<redis_message> exception(const redis_exception& e) {
@@ -106,7 +106,7 @@ private:
     template<typename... Args>
     static inline sstring make_message(const char* fmt, Args&&... args) noexcept {
         try {
-            return sprint(fmt, std::forward<Args>(args)...);
+            return fmt::format(fmt, std::forward<Args>(args)...);
         } catch (...) {
             return sstring();
         }   
@@ -115,7 +115,7 @@ private:
         return sstring(reinterpret_cast<const char*>(b.data()), b.size());
     }
     static void write_bytes(lw_shared_ptr<scattered_message<char>> m, bytes& b) {
-        m->append(sprint("$%d\r\n", b.size()));
+        m->append(fmt::format("${}\r\n", b.size()));
         m->append(std::string_view(reinterpret_cast<const char*>(b.data()), b.size()));
         m->append_static("\r\n");
     }   

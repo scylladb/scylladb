@@ -39,7 +39,7 @@ public:
 class wrong_arguments_exception : public redis_exception {
 public:
     wrong_arguments_exception(size_t expected, size_t given, const bytes& command)
-        : redis_exception(sprint("wrong number of arguments (given %ld, expected %ld) for '%s' command", given, expected, sstring(reinterpret_cast<const char*>(command.data()), command.size())))
+        : redis_exception(fmt::format("wrong number of arguments (given {}, expected {}) for '{}' command", given, expected, sstring(reinterpret_cast<const char*>(command.data()), command.size())))
     {
     }
 };
@@ -47,14 +47,14 @@ public:
 class wrong_number_of_arguments_exception : public redis_exception {
 public:
     wrong_number_of_arguments_exception(const bytes& command)
-        : redis_exception(sprint("wrong number of arguments for '%s' command", sstring(reinterpret_cast<const char*>(command.data()), command.size())))
+        : redis_exception(fmt::format("wrong number of arguments for '{}' command", sstring(reinterpret_cast<const char*>(command.data()), command.size())))
     {
     }
 };
 
 class invalid_arguments_exception : public redis_exception {
 public:
-    invalid_arguments_exception(const bytes& command) : redis_exception(sprint("invalid argument for '%s' command", sstring(reinterpret_cast<const char*>(command.data()), command.size()))) {}
+    invalid_arguments_exception(const bytes& command) : redis_exception(fmt::format("invalid argument for '{}' command", sstring(reinterpret_cast<const char*>(command.data()), command.size()))) {}
 };
 
 class invalid_db_index_exception : public redis_exception {
