@@ -774,7 +774,13 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
                 }
             }
 
-            const auto schema = tools::load_one_schema_from_file(std::filesystem::path(app_config["schema-file"].as<sstring>())).get();
+            schema_ptr schema;
+            try {
+                schema = tools::load_one_schema_from_file(std::filesystem::path(app_config["schema-file"].as<sstring>())).get();
+            } catch (...) {
+                std::cerr << "error: could not load schema file '" << app_config["schema-file"].as<sstring>() << "': " << std::current_exception() << std::endl;
+                return 1;
+            }
 
             const auto partitions = get_partitions(schema, app_config);
 

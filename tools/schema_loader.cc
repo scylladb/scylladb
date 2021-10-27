@@ -102,7 +102,14 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         return db.find_keyspace(name);
     };
 
-    for (auto& raw_statement : cql3::query_processor::parse_statements(schema_str)) {
+
+    std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
+    try {
+        raw_statements = cql3::query_processor::parse_statements(schema_str);
+    } catch (...) {
+        throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
+    }
+    for (auto& raw_statement : raw_statements) {
         auto prepared_statement = raw_statement->prepare(db, cql_stats);
         auto* statement = prepared_statement->statement.get();
 
