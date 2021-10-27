@@ -59,7 +59,7 @@ static int callback(dl_phdr_info* info, size_t size, void* data) {
     auto* desc = p;
     auto* desc_end = p + n->n_descsz;
     while (desc < desc_end) {
-        fmt::fprintf(os, "%02x", *desc++);
+        fmt::print(os, "{:02x}", *desc++);
     }
     ret = os.str();
     return 1;
