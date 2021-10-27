@@ -507,7 +507,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner("com.scylladb.dht.CDCPartitioner");
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
-    b.set_comment(sprint("CDC log for %s.%s", s.ks_name(), s.cf_name()));
+    b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
     auto ttl_seconds = s.cdc_options().ttl();
     if (ttl_seconds > 0) {
         b.set_gc_grace_seconds(0);
