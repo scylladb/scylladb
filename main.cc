@@ -1443,7 +1443,7 @@ int main(int ac, char** av) {
     });
   } catch (...) {
       // reactor may not have been initialized, so can't use logger
-      fprint(std::cerr, "FATAL: Exception during startup, aborting: %s\n", std::current_exception());
+      fmt::print(std::cerr, "FATAL: Exception during startup, aborting: {}\n", std::current_exception());
       return 7; // 1 has a special meaning for upstart
   }
 }
