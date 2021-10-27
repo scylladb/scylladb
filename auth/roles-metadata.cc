@@ -37,9 +37,9 @@ namespace meta {
 namespace roles_table {
 
 std::string_view creation_query() {
-    static const sstring instance = sprint(
-            "CREATE TABLE %s ("
-            "  %s text PRIMARY KEY,"
+    static const sstring instance = fmt::format(
+            "CREATE TABLE {} ("
+            "  {} text PRIMARY KEY,"
             "  can_login boolean,"
             "  is_superuser boolean,"
             "  member_of set<text>,"

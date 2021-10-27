@@ -135,13 +135,13 @@ future<> default_authorizer::migrate_legacy_metadata() const {
 }
 
 future<> default_authorizer::start() {
-    static const sstring create_table = sprint(
-            "CREATE TABLE %s.%s ("
-            "%s text,"
-            "%s text,"
-            "%s set<text>,"
-            "PRIMARY KEY(%s, %s)"
-            ") WITH gc_grace_seconds=%d",
+    static const sstring create_table = fmt::format(
+            "CREATE TABLE {}.{} ("
+            "{} text,"
+            "{} text,"
+            "{} set<text>,"
+            "PRIMARY KEY({}, {})"
+            ") WITH gc_grace_seconds={}",
             meta::AUTH_KS,
             PERMISSIONS_CF,
             ROLE_NAME,
