@@ -149,14 +149,14 @@ public:
     };
 
     static sstring fmt_query(const char* fmt, const char* table) {
-        return sprint(fmt, db::system_keyspace::NAME, table);
+        return fmt::format(fmt, db::system_keyspace::NAME, table);
     }
 
     typedef ::shared_ptr<cql3::untyped_result_set> result_set_type;
     typedef const cql3::untyped_result_set::row row_type;
 
     future<> read_table(keyspace& dst, sstring cf_name, time_point timestamp) {
-        auto fmt = "SELECT * FROM %s.%s WHERE keyspace_name = ? AND columnfamily_name = ?";
+        auto fmt = "SELECT * FROM {}.{} WHERE keyspace_name = ? AND columnfamily_name = ?";
         auto tq = fmt_query(fmt, db::system_keyspace::legacy::COLUMNFAMILIES);
         auto cq = fmt_query(fmt, db::system_keyspace::legacy::COLUMNS);
         auto zq = fmt_query(fmt, db::system_keyspace::legacy::TRIGGERS);
@@ -466,7 +466,7 @@ public:
     }
 
     future<> read_tables(keyspace& dst) {
-        auto query = fmt_query("SELECT columnfamily_name, writeTime(type) AS timestamp FROM %s.%s WHERE keyspace_name = ?",
+        auto query = fmt_query("SELECT columnfamily_name, writeTime(type) AS timestamp FROM {}.{} WHERE keyspace_name = ?",
                         db::system_keyspace::legacy::COLUMNFAMILIES);
         return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
             return parallel_for_each(*result, [this, &dst](row_type& row) {
@@ -484,7 +484,7 @@ public:
     }
 
     future<> read_types(keyspace& dst) {
-        auto query = fmt_query("SELECT * FROM %s.%s WHERE keyspace_name = ?", db::system_keyspace::legacy::USERTYPES);
+        auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::USERTYPES);
         return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
             return parallel_for_each(*result, [this, &dst](row_type& row) {
                 auto name = row.get_blob("type_name");
@@ -503,7 +503,7 @@ public:
     }
 
     future<> read_functions(keyspace& dst) {
-        auto query = fmt_query("SELECT * FROM %s.%s WHERE keyspace_name = ?", db::system_keyspace::legacy::FUNCTIONS);
+        auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::FUNCTIONS);
         return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
             if (!result->empty()) {
                 throw unsupported_feature("functions");
@@ -512,7 +512,7 @@ public:
     }
 
     future<> read_aggregates(keyspace& dst) {
-        auto query = fmt_query("SELECT * FROM %s.%s WHERE keyspace_name = ?", db::system_keyspace::legacy::AGGREGATES);
+        auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::AGGREGATES);
         return _qp.execute_internal(query, {dst.name}).then([this, &dst](result_set_type result) {
             if (!result->empty()) {
                 throw unsupported_feature("aggregates");
@@ -543,7 +543,7 @@ public:
             return ks_name != db::system_keyspace::NAME && ks_name != db::schema_tables::v3::NAME;
         };
 
-        auto query = fmt_query("SELECT keyspace_name, durable_writes, strategy_options, strategy_class, writeTime(durable_writes) AS timestamp FROM %s.%s",
+        auto query = fmt_query("SELECT keyspace_name, durable_writes, strategy_options, strategy_class, writeTime(durable_writes) AS timestamp FROM {}.{}",
                         db::system_keyspace::legacy::KEYSPACES);
 
         return _qp.execute_internal(query).then([this](result_set_type result) {
