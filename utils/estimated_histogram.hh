@@ -615,7 +615,7 @@ public:
             sum += bCount * bucket_offsets[i];
         }
 
-        return ((double) (sum + elements -1)/ elements);
+        return elements ? ((double(sum) + elements - 1) / elements) : 0;
     }
 
     /**
