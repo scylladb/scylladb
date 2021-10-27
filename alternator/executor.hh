@@ -85,6 +85,7 @@ class path;
 };
 
 const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema);
+std::optional<std::string> find_tag(const schema& s, const sstring& tag);
 future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map);
 schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
 

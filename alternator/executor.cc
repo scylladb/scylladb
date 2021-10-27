@@ -608,6 +608,25 @@ const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema) {
     return tags_extension->tags();
 }
 
+// find_tag() returns the value of a specific tag, or nothing if it doesn't
+// exist. Unlike get_tags_of_table() above, if the table is missing the
+// tags extension (e.g., is not an Alternator table) it's not an error -
+// we return nothing, as in the case that tags exist but not this tag.
+std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
+    auto it1 = s.extensions().find(tags_extension::NAME);
+    if (it1 == s.extensions().end()) {
+        return std::nullopt;
+    }
+    const std::map<sstring, sstring>& tags_map =
+        static_pointer_cast<alternator::tags_extension>(it1->second)->tags();
+    auto it2 = tags_map.find(tag);
+    if (it2 == tags_map.end()) {
+        return std::nullopt;
+    } else {
+        return it2->second;
+    }
+}
+
 static bool is_legal_tag_char(char c) {
     // FIXME: According to docs, unicode strings should also be accepted.
     // Alternator currently uses a simplified ASCII approach
