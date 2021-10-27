@@ -83,7 +83,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
             , _dummy_query_state(tracing_client_state(), empty_service_permit())
             , _sessions(KEYSPACE_NAME, SESSIONS,
-                        sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                        fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                   "session_id uuid,"
                                   "command text,"
                                   "client inet,"
@@ -98,7 +98,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "PRIMARY KEY ((session_id))) "
                                   "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS),
 
-                        sprint("INSERT INTO %s.%s ("
+                        fmt::format("INSERT INTO {}.{} ("
                                   "session_id,"
                                   "command,"
                                   "client,"
@@ -122,7 +122,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   ":response_size,"
                                   ":username) USING TTL :ttl", KEYSPACE_NAME, SESSIONS),
 
-                        sprint("INSERT INTO %s.%s ("
+                        fmt::format("INSERT INTO {}.{} ("
                                   "session_id,"
                                   "command,"
                                   "client,"
@@ -145,21 +145,21 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   ":response_size) USING TTL :ttl", KEYSPACE_NAME, SESSIONS))
 
             , _sessions_time_idx(KEYSPACE_NAME, SESSIONS_TIME_IDX,
-                                 sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                                 fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                            "minute timestamp,"
                                            "started_at timestamp,"
                                            "session_id uuid,"
                                            "PRIMARY KEY (minute, started_at, session_id)) "
                                            "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS_TIME_IDX),
 
-                                 sprint("INSERT INTO %s.%s ("
+                                 fmt::format("INSERT INTO {}.{} ("
                                            "minute,"
                                            "started_at,"
                                            "session_id) VALUES (?, ?, ?) "
                                            "USING TTL ?", KEYSPACE_NAME, SESSIONS_TIME_IDX))
 
             , _events(KEYSPACE_NAME, EVENTS,
-                      sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                      fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                 "session_id uuid,"
                                 "event_id timeuuid,"
                                 "activity text,"
@@ -171,7 +171,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "PRIMARY KEY ((session_id), event_id)) "
                                 "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS),
 
-                      sprint("INSERT INTO %s.%s ("
+                      fmt::format("INSERT INTO {}.{} ("
                                 "session_id, "
                                 "event_id, "
                                 "activity, "
@@ -183,7 +183,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "USING TTL ?", KEYSPACE_NAME, EVENTS))
 
             , _slow_query_log(KEYSPACE_NAME, NODE_SLOW_QUERY_LOG,
-                              sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                              fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                         "node_ip inet,"
                                         "shard int,"
                                         "session_id uuid,"
@@ -198,7 +198,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                         "PRIMARY KEY (start_time, node_ip, shard)) "
                                         "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG),
 
-                              sprint("INSERT INTO %s.%s ("
+                              fmt::format("INSERT INTO {}.{} ("
                                         "node_ip,"
                                         "shard,"
                                         "session_id,"
@@ -213,7 +213,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                         "USING TTL ?", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG))
 
             , _slow_query_log_time_idx(KEYSPACE_NAME, NODE_SLOW_QUERY_LOG_TIME_IDX,
-                                       sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                                       fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                                  "minute timestamp,"
                                                  "started_at timestamp,"
                                                  "session_id uuid,"
@@ -223,7 +223,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                                  "PRIMARY KEY (minute, started_at, session_id)) "
                                                  "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG_TIME_IDX),
 
-                                       sprint("INSERT INTO %s.%s ("
+                                       fmt::format("INSERT INTO {}.{} ("
                                                  "minute,"
                                                  "started_at,"
                                                  "session_id,"
