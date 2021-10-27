@@ -130,7 +130,7 @@ static future<> try_record(std::string_view large_table, const sstables::sstable
     const auto sstable_name = sst.get_filename();
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = db_clock::now();
-    large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes)", desc, ks_name, cf_name, pk_str, extra_path, size);
+    large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes) to {}", desc, ks_name, cf_name, pk_str, extra_path, size, sstable_name);
     return db::qctx->execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
             .discard_result()
             .handle_exception([ks_name, cf_name, large_table, sstable_name] (std::exception_ptr ep) {
@@ -146,9 +146,10 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
 void cql_table_large_data_handler::log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         uint64_t rows_count) const {
     const schema& s = *sst.get_schema();
-    large_data_logger.warn("Writing a partition with too many rows [{}/{}:{}] ({} rows)",
+    const auto sstable_name = sst.get_filename();
+    large_data_logger.warn("Writing a partition with too many rows [{}/{}:{}] ({} rows) to {}",
                            s.ks_name(), s.cf_name(), partition_key.to_partition_key(s).with_schema(s),
-                           rows_count);
+                           rows_count, sstable_name);
 }
 
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
