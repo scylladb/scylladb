@@ -10,6 +10,8 @@ SOURCEDIR     := .
 PAPEROPT_a4     := -D latex_paper_size=a4
 PAPEROPT_letter := -D latex_paper_size=letter
 ALLSPHINXOPTS   := -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
+TESTSPHINXOPTS  := $(ALLSPHINXOPTS) -W --keep-going
+
 # the i18n builder cannot share the environment and doctrees with the others
 I18NSPHINXOPTS  := $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR)
 
@@ -76,3 +78,9 @@ multiversion: setup
 .PHONY: multiversionpreview
 multiversionpreview: multiversion
 	$(POETRY) run python3 -m http.server 5500 --directory $(BUILDDIR)/dirhtml 
+
+.PHONY: test
+test: setup
+	$(SPHINXBUILD) -b dirhtml $(TESTSPHINXOPTS) $(BUILDDIR)/dirhtml
+	@echo
+	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."

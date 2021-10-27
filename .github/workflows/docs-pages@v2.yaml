@@ -1,14 +1,15 @@
-name: "CI Docs"
+name: "Docs / Publish"
 
 on:
   push:
     branches:
     - master
     paths:
-    - 'docs/**'
+    - "docs/**"
+  workflow_dispatch:
+
 jobs:
   release:
-    name: Build
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -21,11 +22,8 @@ jobs:
       with:
         python-version: 3.7
     - name: Build docs
-      run: |
-        export PATH=$PATH:~/.local/bin
-        cd docs
-        make multiversion
+      run: make -C docs multiversion
     - name: Deploy
-      run : ./docs/_utils/deploy.sh
+      run: ./docs/_utils/deploy.sh
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
