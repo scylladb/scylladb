@@ -1855,11 +1855,11 @@ public:
     }
 };
 
-class describe_ring_table : public streaming_virtual_table {
+class token_ring_table : public streaming_virtual_table {
 private:
     service::storage_service& _ss;
 public:
-    describe_ring_table(service::storage_service& ss)
+    token_ring_table(service::storage_service& ss)
             : streaming_virtual_table(build_schema())
             , _ss(ss)
     {
@@ -1867,8 +1867,8 @@ public:
     }
 
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "describe_ring");
-        return schema_builder(system_keyspace::NAME, "describe_ring", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, "token_ring");
+        return schema_builder(system_keyspace::NAME, "token_ring", std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("start_token", utf8_type, column_kind::clustering_key)
             .with_column("endpoint", inet_addr_type, column_kind::clustering_key)
@@ -1954,7 +1954,7 @@ void register_virtual_tables(service::storage_service& ss) {
 
     // Add built-in virtual tables here.
     add_table(std::make_unique<cluster_status_table>(ss));
-    add_table(std::make_unique<describe_ring_table>(ss));
+    add_table(std::make_unique<token_ring_table>(ss));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
