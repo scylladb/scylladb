@@ -209,7 +209,7 @@ void alter_table_statement::add_column(const schema& schema, const table& cf, sc
         auto i = dropped.find(column_name.text());
         if (i != dropped.end() && i->second.type->is_collection() && i->second.type->is_multi_cell()
                 && !type->is_compatible_with(*i->second.type)) {
-            throw exceptions::invalid_request_exception(sprint("Cannot add a collection with the name %s "
+            throw exceptions::invalid_request_exception(fmt::format("Cannot add a collection with the name {} "
                 "because a collection with the same name and a different type has already been used in the past", column_name));
         }
     }

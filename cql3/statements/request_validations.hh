@@ -74,7 +74,7 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
                     const char* message_template,
                     const MessageArgs&... message_args) {
         if (!expression) {
-            throw exceptions::invalid_request_exception(sprint(message_template, message_args...));
+            throw exceptions::invalid_request_exception(fmt::format(message_template, message_args...));
         }
     }
 
@@ -167,7 +167,7 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
     template <typename... MessageArgs>
     exceptions::invalid_request_exception
     invalid_request(const char* message_template, const MessageArgs&... message_args) {
-        return exceptions::invalid_request_exception(sprint(message_template, message_args...));
+        return exceptions::invalid_request_exception(fmt::format(message_template, message_args...));
     }
 }
 
