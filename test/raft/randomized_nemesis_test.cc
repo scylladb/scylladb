@@ -2403,12 +2403,6 @@ std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
     return os << format("ret{{{}, {}}}", r.x, r.prev);
 }
 
-namespace raft {
-std::ostream& operator<<(std::ostream& os, const raft::server_address& a) {
-    return os << a.id;
-}
-}
-
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
