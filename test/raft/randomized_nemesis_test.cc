@@ -2283,7 +2283,12 @@ public:
         return _end == 0;
     }
 
-    std::pair<append_seq, elem_t> pop() {
+    size_t size() const {
+        assert(_end <= _seq->size());
+        return _end;
+    }
+
+    std::pair<append_seq, elem_t> pop() const {
         assert(_seq);
         assert(_end <= _seq->size());
         assert(0 < _end);
@@ -2294,7 +2299,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const append_seq& s) {
         // TODO: don't copy the elements
         std::vector<elem_t> v{s._seq->begin(), s._seq->begin() + s._end};
-        return os << format("v {} _end {}", v, s._end);
+        return os << format("seq({} _end {})", v, s._end);
     }
 
 private:
@@ -2333,7 +2338,10 @@ namespace ser {
     };
 }
 
-// TODO: do some useful logging in case of consistency violation
+struct inconsistency {
+    std::string what;
+};
+
 struct append_reg_model {
     using elem_t = typename append_seq::elem_t;
 
@@ -2341,6 +2349,10 @@ struct append_reg_model {
         elem_t elem;
         elem_t digest;
     };
+
+    friend std::ostream& operator<<(std::ostream& os, const entry& e) {
+        return os << e.elem;
+    }
 
     std::vector<entry> seq{{0, 0}};
     std::unordered_map<elem_t, size_t> index{{0, 0}};
@@ -2358,7 +2370,12 @@ struct append_reg_model {
         assert(!returned.contains(x));
         assert(x != 0);
         assert(!prev.empty());
-        completion(x, std::move(prev));
+        try {
+            completion(x, prev);
+        } catch (inconsistency& e) {
+            e.what += format("\nwhen completing elem: {}\nprev: {}\nmodel: {}", x, prev, seq);
+            throw;
+        }
         returned.insert(x);
     }
 
@@ -2388,8 +2405,28 @@ private:
             assert(0 < idx);
             assert(idx < seq.size());
 
-            assert(prev_x == seq[idx - 1].elem);
-            assert(prev.digest() == seq[idx - 1].digest);
+            if (prev_x != seq[idx - 1].elem) {
+                throw inconsistency{format(
+                    "elem {} completed again (existing at idx {}), but prev elem does not match existing model"
+                    "\nprev elem: {}\nmodel prev elem: {}\nprev: {} model up to idx: {}",
+                    x, idx, prev_x, seq[idx - 1].elem, prev, std::vector<entry>{seq.begin(), seq.begin()+idx})};
+            }
+
+            if (prev.digest() != seq[idx - 1].digest) {
+                auto err = format(
+                    "elem {} completed again (existing at idx {}), but prev does not match existing model"
+                    "\n prev: {}\nmodel up to idx: {}",
+                    x, idx, prev, std::vector<entry>{seq.begin(), seq.begin()+idx});
+
+                auto min_len = std::min(prev.size(), idx);
+                for (size_t i = 0; i < min_len; ++i) {
+                    if (prev[i] != seq[i].elem) {
+                        err += format("\nmismatch at idx {} prev {} model {}", i, prev[i], seq[i].elem);
+                    }
+                }
+
+                throw inconsistency{std::move(err)};
+            }
 
             return;
         }
@@ -2400,8 +2437,27 @@ private:
 
         // Check that the existing tail matches our tail.
         assert(!seq.empty());
-        assert(prev_x == seq.back().elem);
-        assert(prev.digest() == seq.back().digest);
+        if (prev_x != seq.back().elem) {
+            throw inconsistency{format(
+                "new completion (elem: {}) but prev elem does not match existing model"
+                "\nprev elem: {}\nmodel prev elem: {}\nprev: {}\n model: {}",
+                x, prev_x, seq.back().elem, prev, seq)};
+        }
+        if (prev.digest() != seq.back().digest) {
+            auto err = format(
+                "new completion (elem: {}) but prev does not match existing model"
+                "\nprev: {}\n model: {}",
+                x, prev, seq);
+
+            auto min_len = std::min(prev.size(), seq.size());
+            for (size_t i = 0; i < min_len; ++i) {
+                if (prev[i] != seq[i].elem) {
+                    err += format("\nmismatch at idx {} prev {} model {}", i, prev[i], seq[i].elem);
+                }
+            }
+
+            throw inconsistency{std::move(err)};
+        }
 
         // All previous elements were completed, so the new element belongs at the end.
         index.emplace(x, seq.size());
@@ -2647,7 +2703,12 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         interpreter<op_type, decltype(gen), consistency_checker> interp{
             std::move(gen), std::move(threads), 1_t, std::move(init_state), timer,
             consistency_checker{}};
-        co_await interp.run();
+        try {
+            co_await interp.run();
+        } catch (inconsistency& e) {
+            tlogger.error("inconsistency: {}", e.what);
+            assert(false);
+        }
 
         tlogger.debug("Finished generator run, time: {}", timer.now());
 
