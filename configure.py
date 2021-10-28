@@ -1659,12 +1659,12 @@ abseil_libs = ['absl/' + lib for lib in [
     'numeric/libabsl_int128.a',
     'hash/libabsl_city.a',
     'hash/libabsl_hash.a',
-    'hash/libabsl_wyhash.a',
+    'hash/libabsl_low_level_hash.a',
     'base/libabsl_malloc_internal.a',
     'base/libabsl_spinlock_wait.a',
     'base/libabsl_base.a',
     'base/libabsl_raw_logging_internal.a',
-    'base/libabsl_exponential_biased.a',
+    'profiling/libabsl_exponential_biased.a',
     'base/libabsl_throw_delegate.a']]
 
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
