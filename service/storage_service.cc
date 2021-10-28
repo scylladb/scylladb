@@ -3142,6 +3142,29 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
             include_only_local_dc
                     ? get_range_to_address_map_in_local_dc(keyspace)
                     : get_range_to_address_map(keyspace);
+
+    // First pass, get all endpoints' metadata
+    struct endpoint_metadata {
+        endpoint_details details;
+        sstring rpc_address;
+    };
+    std::unordered_map<gms::inet_address, endpoint_metadata> endpoints_metadata;
+    for (const auto& [_, addresses] : range_to_address_map) {
+        for (auto endpoint : addresses) {
+            if (!endpoints_metadata.contains(endpoint)) {
+                endpoints_metadata[endpoint] = endpoint_metadata{
+                    .details = {
+                        ._host = endpoint,
+                        ._datacenter = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(endpoint),
+                        ._rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(endpoint),
+                    },
+                    .rpc_address = get_rpc_address(endpoint),
+                };
+            }
+        }
+    }
+
+    // Second pass, construct all ranges and their token_range_endpoints
     for (auto entry : range_to_address_map) {
         auto range = entry.first;
         auto addresses = entry.second;
@@ -3153,13 +3176,10 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
             tr._end_token = range.end()->value().to_sstring();
         }
         for (auto endpoint : addresses) {
-            endpoint_details details;
-            details._host = endpoint;
-            details._datacenter = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(endpoint);
-            details._rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(endpoint);
-            tr._rpc_endpoints.push_back(get_rpc_address(endpoint));
-            tr._endpoints.push_back(boost::lexical_cast<std::string>(details._host));
-            tr._endpoint_details.push_back(details);
+            const auto& md = endpoints_metadata[endpoint];
+            tr._rpc_endpoints.push_back(md.rpc_address);
+            tr._endpoints.push_back(boost::lexical_cast<std::string>(md.details._host));
+            tr._endpoint_details.push_back(md.details);
         }
         ranges.push_back(tr);
         co_await coroutine::maybe_yield();
