@@ -612,13 +612,14 @@ private:
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
-public:
-    sstring dir() const {
-        return _config.datadir;
-    }
 
     logalloc::region_group& dirty_memory_region_group() const {
         return _config.dirty_memory_manager->region_group();
+    }
+
+public:
+    sstring dir() const {
+        return _config.datadir;
     }
 
     seastar::gate& async_gate() { return _async_gate; }
@@ -745,8 +746,15 @@ public:
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
-    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
-    void apply(const mutation& m, db::rp_handle&& = {});
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
+        do_apply(std::move(h), m, m_schema);
+    }
+    void apply(const mutation& m, db::rp_handle&& h = {}) {
+        do_apply(std::move(h), m);
+    }
+
+    future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
+    future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
 
     // Returns at most "cmd.limit" rows
     // The saved_querier parameter is an input-output parameter which contains
