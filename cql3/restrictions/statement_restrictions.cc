@@ -452,7 +452,7 @@ statement_restrictions::statement_restrictions(database& db,
     const expr::allow_local_index allow_local(
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
             && _partition_key_restrictions->is_all_eq());
-    _has_multi_column = find_atom(_clustering_columns_restrictions->expression, expr::is_multi_column);
+    _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
             && !type.is_delete();
     _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local)
@@ -499,7 +499,7 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
-    } else if (find_atom(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
+    } else if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
@@ -689,7 +689,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
         return;
     }
 
-    if (find_atom(_clustering_columns_restrictions->expression, expr::is_on_collection)
+    if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
@@ -764,7 +764,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     std::vector<std::vector<managed_bytes>> column_values(schema.partition_key_size());
     size_t product_size = 1;
     for (const auto& e : expressions) {
-        if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
+        if (const auto arbitrary_binop = find_binop(e, [] (const binary_operator&) { return true; })) {
             if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
                 const value_set vals = possible_lhs_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
@@ -1428,7 +1428,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     if (_clustering_prefix_restrictions.empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+    if (find_binop(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
             using namespace expr;
@@ -1647,11 +1647,11 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
 
 void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema) {
     for (const auto& e : _clustering_prefix_restrictions) {
-        if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+        if (find_binop(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
-        const auto any_binop = find_atom(e, [] (auto&&) { return true; });
+        const auto any_binop = find_binop(e, [] (auto&&) { return true; });
         if (!any_binop) {
             break;
         }
@@ -1733,7 +1733,7 @@ sstring statement_restrictions::to_string() const {
 }
 
 static bool has_eq_null(const query_options& options, const expression& expr) {
-    return find_atom(expr, [&] (const binary_operator& binop) {
+    return find_binop(expr, [&] (const binary_operator& binop) {
         return binop.op == oper_t::EQ && evaluate(binop.rhs, options).is_null();
     });
 }

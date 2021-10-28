@@ -546,7 +546,7 @@ const ExprElem* find_in_expression(const expression& e, Fn predicate_fun) {
 template<class Fn>
 requires std::invocable<Fn, const binary_operator&>
       && std::same_as<std::invoke_result_t<Fn, const binary_operator&>, bool>
-const binary_operator* find_atom(const expression& e, Fn predicate_fun) {
+const binary_operator* find_binop(const expression& e, Fn predicate_fun) {
     return find_in_expression<binary_operator>(e, predicate_fun);
 }
 
@@ -599,7 +599,7 @@ size_t count_if(const expression& e, Fn f) {
 }
 
 inline const binary_operator* find(const expression& e, oper_t op) {
-    return find_atom(e, [&] (const binary_operator& o) { return o.op == op; });
+    return find_binop(e, [&] (const binary_operator& o) { return o.op == op; });
 }
 
 inline bool needs_filtering(oper_t op) {
@@ -608,7 +608,7 @@ inline bool needs_filtering(oper_t op) {
 }
 
 inline auto find_needs_filtering(const expression& e) {
-    return find_atom(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
+    return find_binop(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
 }
 
 inline bool is_slice(oper_t op) {
@@ -616,7 +616,7 @@ inline bool is_slice(oper_t op) {
 }
 
 inline bool has_slice(const expression& e) {
-    return find_atom(e, [] (const binary_operator& bo) { return is_slice(bo.op); });
+    return find_binop(e, [] (const binary_operator& bo) { return is_slice(bo.op); });
 }
 
 inline bool is_compare(oper_t op) {
@@ -638,11 +638,11 @@ inline bool is_multi_column(const binary_operator& op) {
 }
 
 inline bool has_token(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
+    return find_binop(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
+    return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
 }
 
 inline bool is_clustering_order(const binary_operator& op) {
@@ -650,7 +650,7 @@ inline bool is_clustering_order(const binary_operator& op) {
 }
 
 inline auto find_clustering_order(const expression& e) {
-    return find_atom(e, is_clustering_order);
+    return find_binop(e, is_clustering_order);
 }
 
 /// True iff binary_operator involves a collection.
