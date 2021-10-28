@@ -11,6 +11,8 @@
  */
 
 #include <boost/range/adaptors.hpp>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "db/snapshot-ctl.hh"
 #include "replica/database.hh"
 
@@ -116,80 +118,24 @@ future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace
 
 future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>
 snapshot_ctl::get_snapshot_details() {
-    using cf_snapshot_map = std::unordered_map<utils::UUID, replica::column_family::snapshot_details>;
-    using snapshot_map = std::unordered_map<sstring, cf_snapshot_map>;
+    using snapshot_map = std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>;
 
-    class snapshot_reducer {
-    private:
-        snapshot_map _result;
-    public:
-        future<> operator()(const snapshot_map& value) {
-            for (auto&& vp: value) {
-                if (auto [ignored, added] = _result.try_emplace(vp.first, std::move(vp.second)); added) {
-                    continue;
-                }
-
-                auto& rp = _result.at(vp.first);
-                for (auto&& cf: vp.second) {
-                    if (auto [ignored, added] = rp.try_emplace(cf.first, std::move(cf.second)); added) {
-                        continue;
-                    }
-                    auto& rcf = rp.at(cf.first);
-                    rcf.live = cf.second.live;
-                    rcf.total = cf.second.total;
-                }
-            }
-            return make_ready_future<>();
+    co_return co_await run_snapshot_list_operation([this] () -> future<snapshot_map> {
+        snapshot_map result;
+        for (auto& r : co_await _db.local().get_snapshot_details()) {
+            result[r.snapshot_name].emplace_back(std::move(r.details));
         }
-        snapshot_map get() && {
-            return std::move(_result);
-        }
-    };
-
-    return run_snapshot_list_operation([this] {
-        return _db.map_reduce(snapshot_reducer(), [] (replica::database& db) {
-            auto local_snapshots = make_lw_shared<snapshot_map>();
-            return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
-                return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
-                    for (auto&& snap_map: map) {
-                        auto [it, ignored] = local_snapshots->try_emplace(snap_map.first);
-                        it->second.emplace(uuid, snap_map.second);
-                    }
-                    return make_ready_future<>();
-                });
-            }).then([local_snapshots] {
-                return make_ready_future<snapshot_map>(std::move(*local_snapshots));
-            });
-        }).then([this] (snapshot_map&& map) {
-            std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>> result;
-            for (auto&& pair: map) {
-                std::vector<snapshot_ctl::snapshot_details> details;
-
-                for (auto&& snap_map: pair.second) {
-                    auto& cf = _db.local().find_column_family(snap_map.first);
-                    details.push_back({ snap_map.second.live, snap_map.second.total, cf.schema()->cf_name(), cf.schema()->ks_name() });
-                }
-                result.emplace(pair.first, std::move(details));
-            }
-
-            return make_ready_future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>(std::move(result));
-        });
+        co_return result;
     });
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
-    return run_snapshot_list_operation([this] () mutable {
-        return do_with(int64_t(0), [this] (auto& total) {
-            return parallel_for_each(_db.local().get_column_families(), [&total] (auto& cf_pair) {
-                return cf_pair.second->get_snapshot_details().then([&total] (auto map) {
-                    for (auto&& snap_map: map) {
-                        total += snap_map.second.live;
-                    }
-                });
-            }).then([&total] {
-                return total;
-            });
-        });
+    co_return co_await run_snapshot_list_operation([this] () -> future<int64_t> {
+        int64_t total = 0;
+        for (auto& r : co_await _db.local().get_snapshot_details()) {
+            total += r.details.live;
+        }
+        co_return total;
     });
 }
 
