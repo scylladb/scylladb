@@ -1892,11 +1892,11 @@ region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
         return;
     }
 
-    printf("Sanity checking FAILED, size %ld\n", bh.size());
+    fmt::print("Sanity checking FAILED, size {}\n", bh.size());
     for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
         auto r = (*b);
         auto t = r->evictable_occupancy().total_space();
-        printf(" r = %p (id=%ld), occupancy = %ld\n",r, r->id(), t);
+        fmt::print(" r = {} (id={}), occupancy = {}\n", fmt::ptr(r), r->id(), t);
     }
     assert(0);
 #endif

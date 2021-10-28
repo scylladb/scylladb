@@ -151,7 +151,7 @@ class natural_endpoints_tracker {
                 --_rf_left;
                 auto added = _endpoints.insert(ep).second;
                 if (!added) {
-                    throw std::runtime_error(sprint("Topology error: found {} in more than one rack", ep));
+                    throw std::runtime_error(fmt::format("Topology error: found {} in more than one rack", ep));
                 }
                 return done();
             }

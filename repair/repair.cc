@@ -215,8 +215,8 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
                 for (const auto& e : dc_endpoints_map) {
                     dcs.push_back(e.first);
                 }
-                throw std::runtime_error(sprint("Unknown data center '%s'. "
-                        "Known data centers: %s", dc, dcs));
+                throw std::runtime_error(fmt::format("Unknown data center '{}'. "
+                        "Known data centers: {}", dc, dcs));
             }
             for (const auto& endpoint : it->second) {
                 dc_endpoints.insert(endpoint);
@@ -271,12 +271,12 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
             auto me = utils::fb_utilities::get_broadcast_address();
             auto others = erm->get_natural_endpoints(tok);
             remove_item(others, me);
-            throw std::runtime_error(sprint("Repair requires at least two "
+            throw std::runtime_error(fmt::format("Repair requires at least two "
                     "endpoints that are neighbors before it can continue, "
-                    "the endpoint used for this repair is %s, other "
-                    "available neighbors are %s but these neighbors were not "
+                    "the endpoint used for this repair is {}, other "
+                    "available neighbors are {} but these neighbors were not "
                     "part of the supplied list of hosts to use during the "
-                    "repair (%s).", me, others, hosts));
+                    "repair ({}).", me, others, hosts));
         }
     } else if (!ignore_nodes.empty()) {
         auto it = std::remove_if(ret.begin(), ret.end(), [&ignore_nodes] (const gms::inet_address& node) {

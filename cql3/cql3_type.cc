@@ -230,7 +230,7 @@ public:
             // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
             // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
             if (!keyspace.empty() && keyspace != _name.get_keyspace()) {
-                throw exceptions::invalid_request_exception(sprint("Statement on keyspace %s cannot refer to a user type in keyspace %s; "
+                throw exceptions::invalid_request_exception(fmt::format("Statement on keyspace {} cannot refer to a user type in keyspace {}; "
                                                                    "user types can only be used in the keyspace they are defined in",
                                                                 keyspace, _name.get_keyspace()));
             }

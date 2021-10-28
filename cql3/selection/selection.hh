@@ -191,7 +191,7 @@ public:
         }
 
         if (aggregates != 0 && aggregates != selectors.size()) {
-            throw exceptions::invalid_request_exception(sprint(msg, std::forward<Args>(args)...));
+            throw exceptions::invalid_request_exception(fmt::format(msg, std::forward<Args>(args)...));
         }
     }
 

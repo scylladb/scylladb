@@ -46,12 +46,12 @@ std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& s
     auto to_ms = [] (int64_t nanos) {
         return float(nanos) / 1e6;
     };
-    return out << sprint("{count: %d, "
-                         //"min: %.6f [ms], "
-                         //"50%%: %.6f [ms], "
-                         //"90%%: %.6f [ms], "
-                         "99%%: %.6f [ms], "
-                         "max: %.6f [ms]}",
+    return out << fmt::format("{{count: {}, "
+                         //"min: {.6f} [ms], "
+                         //"50%: {.6f} [ms], "
+                         //"90%: {.6f} [ms], "
+                         "99%: {.6f} [ms], "
+                         "max: {.6f} [ms]}}",
         slm.histogram().count(),
         //to_ms(slm.min().count()),
         //to_ms(slm.histogram().percentile(0.5)),

@@ -153,12 +153,12 @@ void compression_parameters::validate() {
         auto chunk_length = _chunk_length.value();
         if (chunk_length <= 0) {
             throw exceptions::configuration_exception(
-                fmt::sprintf("Invalid negative or null for %s/%s", CHUNK_LENGTH_KB, CHUNK_LENGTH_KB_ERR));
+                fmt::format("Invalid negative or null for {}/{}", CHUNK_LENGTH_KB, CHUNK_LENGTH_KB_ERR));
         }
         // _chunk_length must be a power of two
         if (chunk_length & (chunk_length - 1)) {
             throw exceptions::configuration_exception(
-                fmt::sprintf("%s/%s must be a power of 2.", CHUNK_LENGTH_KB, CHUNK_LENGTH_KB_ERR));
+                fmt::format("{}/{} must be a power of 2.", CHUNK_LENGTH_KB, CHUNK_LENGTH_KB_ERR));
         }
     }
     if (_crc_check_chance && (_crc_check_chance.value() < 0.0 || _crc_check_chance.value() > 1.0)) {

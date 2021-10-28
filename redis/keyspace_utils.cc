@@ -154,7 +154,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_
     auto keyspace_replication_strategy_options = config.redis_keyspace_replication_strategy_options();
     if (!keyspace_replication_strategy_options.contains("class")) {
         keyspace_replication_strategy_options["class"] = "SimpleStrategy";
-        keyspace_replication_strategy_options["replication_factor"] = sprint("%d", default_replication_factor);
+        keyspace_replication_strategy_options["replication_factor"] = fmt::format("{}", default_replication_factor);
     }
     auto keyspace_gen = [&mm, &config, keyspace_replication_strategy_options = std::move(keyspace_replication_strategy_options)]  (sstring name) {
         auto& proxy = service::get_local_storage_proxy();
@@ -182,7 +182,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::migration_
     };
     // create default databases for redis.
     return parallel_for_each(boost::irange<unsigned>(0, config.redis_database_count()), [keyspace_gen = std::move(keyspace_gen), table_gen = std::move(table_gen)] (auto c) {
-        auto ks_name = sprint("REDIS_%d", c);
+        auto ks_name = fmt::format("REDIS_{}", c);
         return keyspace_gen(ks_name).then([ks_name, table_gen] {
             return when_all_succeed(
                 table_gen(ks_name, redis::STRINGs, strings_schema(ks_name)),

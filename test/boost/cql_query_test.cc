@@ -129,7 +129,7 @@ SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
 SEASTAR_TEST_CASE(test_list_elements_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = sprint("INSERT INTO tbl (a, b) VALUES(1, ['%s'])", value);
+            auto cql = fmt::format("INSERT INTO tbl (a, b) VALUES(1, ['{}'])", value);
             if (should_throw) {
                 BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
             } else {
@@ -163,7 +163,7 @@ SEASTAR_TEST_CASE(test_list_elements_validation) {
 SEASTAR_TEST_CASE(test_set_elements_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = sprint("INSERT INTO tbl (a, b) VALUES(1, {'%s'})", value);
+            auto cql = fmt::format("INSERT INTO tbl (a, b) VALUES(1, {{'{}'}})", value);
             if (should_throw) {
                 BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
             } else {
@@ -197,8 +197,8 @@ SEASTAR_TEST_CASE(test_set_elements_validation) {
 SEASTAR_TEST_CASE(test_map_elements_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql1 = sprint("INSERT INTO tbl (a, b) VALUES(1, {'10-10-2010' : '%s'})", value);
-            auto cql2 = sprint("INSERT INTO tbl (a, b) VALUES(1, {'%s' : '10-10-2010'})", value);
+            auto cql1 = fmt::format("INSERT INTO tbl (a, b) VALUES(1, {{'10-10-2010' : '{}'}})", value);
+            auto cql2 = fmt::format("INSERT INTO tbl (a, b) VALUES(1, {{'{}' : '10-10-2010'}})", value);
             if (should_throw) {
                 BOOST_REQUIRE_THROW(e.execute_cql(cql1).get(), exceptions::invalid_request_exception);
                 BOOST_REQUIRE_THROW(e.execute_cql(cql2).get(), exceptions::invalid_request_exception);
@@ -249,7 +249,7 @@ SEASTAR_TEST_CASE(test_map_elements_validation) {
 SEASTAR_TEST_CASE(test_in_clause_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = sprint("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, '%s')) ALLOW FILTERING", value);
+            auto cql = fmt::format("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, '{}')) ALLOW FILTERING", value);
             if (should_throw) {
                 BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
             } else {
@@ -334,7 +334,7 @@ SEASTAR_THREAD_TEST_CASE(test_in_clause_cartesian_product_limits) {
 SEASTAR_TEST_CASE(test_tuple_elements_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = sprint("INSERT INTO tbl (a, b) VALUES(1, (1, '%s'))", value);
+            auto cql = fmt::format("INSERT INTO tbl (a, b) VALUES(1, (1, '{}'))", value);
             if (should_throw) {
                 BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
             } else {
@@ -476,13 +476,13 @@ SEASTAR_TEST_CASE(test_select_statement) {
 SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto execute_update_for_key = [&e](sstring key) {
-            return e.execute_cql(sprint("UPDATE cf SET "
+            return e.execute_cql(fmt::format("UPDATE cf SET "
                                             "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
                                             "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
                                             "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
                                             "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
                                             "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
-                                            "WHERE \"KEY\"=%s;", key)).discard_result();
+                                            "WHERE \"KEY\"={};", key)).discard_result();
         };
 
         auto verify_row_for_key = [&e](sstring key) {
@@ -3423,7 +3423,7 @@ private:
 SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
     using slice_test_type = slice_testcase<5,4>;
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        std::string select_query_template = "SELECT f FROM foo WHERE a=0 AND %s;";
+        std::string select_query_template = "SELECT f FROM foo WHERE a=0 AND {};";
         std::vector<std::string> column_names = { "b", "c", "d", "e" };
         e.execute_cql("CREATE TABLE foo (a int, b int, c int,d int,e int,f int, PRIMARY KEY (a, b, c, d, e)) WITH CLUSTERING ORDER BY (b DESC, c ASC, d DESC,e ASC);").get();
         e.require_table_exists("ks", "foo").get();
@@ -3491,7 +3491,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
         generate_with_inclusiveness_permutations({0,1,2,3},{0,1,2,3});
 
         for (auto&& test_case  : test_cases) {
-            auto msg = e.execute_cql(sprint(select_query_template,test_case.generate_cql_slice_expresion(column_names))).get0();
+            auto msg = e.execute_cql(fmt::format(select_query_template,test_case.generate_cql_slice_expresion(column_names))).get0();
             assert_that(msg).is_rows().with_rows(test_case.genrate_results_for_validation(ordering));
         }
     });

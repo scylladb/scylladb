@@ -211,7 +211,7 @@ future<redis_message> select(service::storage_proxy&, request& req, redis::redis
     if (index < 0 || static_cast<size_t>(index) >= options.get_total_redis_db_count()) {
         throw invalid_db_index_exception();
     }
-    options.set_keyspace_name(sprint("REDIS_%zu", static_cast<size_t>(index)));
+    options.set_keyspace_name(fmt::format("REDIS_{}", static_cast<size_t>(index)));
     return redis_message::ok();
 }
 

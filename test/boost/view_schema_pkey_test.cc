@@ -53,22 +53,22 @@ SEASTAR_TEST_CASE(test_compound_partition_key) {
                     }
                 }
             };
-            maybe_failed(e.execute_cql(sprint(
-                        "create materialized view mv1_%s as select * from cf "
-                        "where %s is not null and p1 is not null %s "
-                        "primary key (%s, p1 %s)",
+            maybe_failed(e.execute_cql(fmt::format(
+                        "create materialized view mv1_{} as select * from cf "
+                        "where {} is not null and p1 is not null {} "
+                        "primary key ({}, p1 {})",
                         cdef.name_as_text(), cdef.name_as_text(), cdef == p2 ? "" : "and p2 is not null",
                         cdef.name_as_text(), cdef == p2 ? "" : ", p2")));
-            maybe_failed(e.execute_cql(sprint(
-                        "create materialized view mv2_%s as select * from cf "
-                        "where %s is not null and p1 is not null %s "
-                        "primary key (%s, p2 %s)",
+            maybe_failed(e.execute_cql(fmt::format(
+                        "create materialized view mv2_{} as select * from cf "
+                        "where {} is not null and p1 is not null {} "
+                        "primary key ({}, p2 {})",
                         cdef.name_as_text(), cdef.name_as_text(), cdef == p2 ? "" : "and p2 is not null",
                         cdef.name_as_text(), cdef == p1 ? "" : ", p1")));
-            maybe_failed(e.execute_cql(sprint(
-                        "create materialized view mv3_%s as select * from cf "
-                        "where %s is not null and p1 is not null %s "
-                        "primary key ((%s, p1), p2)",
+            maybe_failed(e.execute_cql(fmt::format(
+                        "create materialized view mv3_{} as select * from cf "
+                        "where {} is not null and p1 is not null {} "
+                        "primary key (({}, p1), p2)",
                         cdef.name_as_text(), cdef.name_as_text(), cdef == p2 ? "" : "and p2 is not null", cdef.name_as_text())));
         }
 
@@ -210,9 +210,9 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_unrestricted_part) {
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key ((a, b), c))").get();
-            e.execute_cql(sprint("create materialized view vcf as select * from cf "
+            e.execute_cql(fmt::format("create materialized view vcf as select * from cf "
                                  "where a = 1 and b is not null and c is not null "
-                                 "primary key %s", pk)).get();
+                                 "primary key {}", pk)).get();
 
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 0, 0)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (0, 1, 0, 0)").get();
@@ -334,9 +334,9 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_with_slice) {
         // And now for the actual MV tests, where the slices should be allowed:
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key ((a, b), c))").get();
-            e.execute_cql(sprint("create materialized view vcf as select * from cf "
+            e.execute_cql(fmt::format("create materialized view vcf as select * from cf "
                                  "where a > 0 and b > 5 and c is not null "
-                                 "primary key %s", pk)).get();
+                                 "primary key {}", pk)).get();
 
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 1, 1)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (0, 10, 1, 2)").get();
@@ -407,9 +407,9 @@ SEASTAR_TEST_CASE(test_partition_key_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b, c))").get();
-            e.execute_cql(sprint("create materialized view vcf as select * from cf "
+            e.execute_cql(fmt::format("create materialized view vcf as select * from cf "
                                  "where a = 1 and b is not null and c is not null "
-                                 "primary key %s", pk)).get();
+                                 "primary key {}", pk)).get();
 
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 0, 0)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (0, 1, 0, 0)").get();
@@ -489,9 +489,9 @@ SEASTAR_TEST_CASE(test_partition_key_compound_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key ((a, b), c))").get();
-            e.execute_cql(sprint("create materialized view vcf as select * from cf "
+            e.execute_cql(fmt::format("create materialized view vcf as select * from cf "
                                  "where a = 1 and b = 1 and c is not null "
-                                 "primary key %s", pk)).get();
+                                 "primary key {}", pk)).get();
 
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 0, 0)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 1, 0)").get();
@@ -618,9 +618,9 @@ SEASTAR_TEST_CASE(test_partition_key_and_clustering_key_filtering_restrictions) 
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b, c))").get();
-            e.execute_cql(sprint("create materialized view vcf as select * from cf "
+            e.execute_cql(fmt::format("create materialized view vcf as select * from cf "
                                  "where a = 1 and b is not null and c = 1 "
-                                 "primary key %s", pk)).get();
+                                 "primary key {}", pk)).get();
 
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 0, 0)").get();
             e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 1, 0)").get();
@@ -691,30 +691,30 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         auto make_view_name = [&id] { return format("vcf_{:d}", id++); };
 
         auto views_matching = {
-            "create materialized view %s as select * from cf "
+            "create materialized view {} as select * from cf "
             "where p1 is not null and p2 is not null and c is not null and v is not null "
             "primary key (p1, v, c, p2)",
 
-            "create materialized view %s as select * from cf "
+            "create materialized view {} as select * from cf "
             "where p1 is not null and p2 is not null and c is not null and v is not null "
             "primary key ((p2, v), c, p1)",
 
-            "create materialized view %s as select * from cf "
+            "create materialized view {} as select * from cf "
             "where p1 is not null and p2 is not null and c is not null and v is not null "
             "primary key ((v, p2), c, p1)",
 
-            "create materialized view %s as select * from cf "
+            "create materialized view {} as select * from cf "
             "where p1 is not null and p2 is not null and c is not null and v is not null "
             "primary key ((c, v), p1, p2)",
 
-            "create materialized view %s as select * from cf "
+            "create materialized view {} as select * from cf "
             "where p1 is not null and p2 is not null and c is not null and v is not null "
             "primary key ((v, c), p1, p2)"
         };
         for (auto&& view : views_matching) {
             auto name = make_view_name();
             auto f = e.local_view_builder().wait_until_built("ks", name);
-            e.execute_cql(sprint(view, name)).get();
+            e.execute_cql(fmt::format(view, name)).get();
             f.get();
             auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows()
@@ -728,25 +728,25 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         }
 
         auto views_not_matching = {
-                "create materialized view %s as select * from cf "
+                "create materialized view {} as select * from cf "
                 "where p1 is not null and p2 is not null and c is not null and v is not null "
                 "primary key (c, p1, p2, v)",
 
-                "create materialized view %s as select * from cf "
+                "create materialized view {} as select * from cf "
                 "where p1 is not null and p2 is not null and c is not null and v is not null "
                 "primary key (p2, p1, c, v)"
         };
         for (auto&& view : views_not_matching) {
             auto name = make_view_name();
             auto f = e.local_view_builder().wait_until_built("ks", name);
-            e.execute_cql(sprint(view, name)).get();
+            e.execute_cql(fmt::format(view, name)).get();
             f.get();
             auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows().is_empty();
         }
         auto name = make_view_name();
         auto f = e.local_view_builder().wait_until_built("ks", name);
-        e.execute_cql(sprint("create materialized view %s as select * from cf "
+        e.execute_cql(fmt::format("create materialized view {} as select * from cf "
                              "where p1 is not null and p2 is not null and c is not null and v is not null "
                              "primary key (v, p1, p2, c)", name)).get();
         f.get();

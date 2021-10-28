@@ -155,16 +155,16 @@ single_column_relation::to_receivers(const schema& schema, const column_definiti
     }
 
     if (_map_key) {
-        check_false(dynamic_cast<const list_type_impl*>(receiver->type.get()), "Indexes on list entries (%s[index] = value) are not currently supported.", receiver->name);
-        check_true(dynamic_cast<const map_type_impl*>(receiver->type.get()), "Column %s cannot be used as a map", receiver->name);
-        check_true(receiver->type->is_multi_cell(), "Map-entry equality predicates on frozen map column %s are not supported", receiver->name);
+        check_false(dynamic_cast<const list_type_impl*>(receiver->type.get()), "Indexes on list entries ({}[index] = value) are not currently supported.", receiver->name);
+        check_true(dynamic_cast<const map_type_impl*>(receiver->type.get()), "Column {} cannot be used as a map", receiver->name);
+        check_true(receiver->type->is_multi_cell(), "Map-entry equality predicates on frozen map column {} are not supported", receiver->name);
         check_true(is_EQ(), "Only EQ relations are supported on map entries");
     }
 
     if (receiver->type->is_collection()) {
         // We don't support relations against entire collections (unless they're frozen), like "numbers = {1, 2, 3}"
         check_false(receiver->type->is_multi_cell() && !is_legal_relation_for_non_frozen_collection(),
-                   "Collection column '%s' (%s) cannot be restricted by a '%s' relation",
+                   "Collection column '{}' ({}) cannot be restricted by a '{}' relation",
                    receiver->name,
                    receiver->type->as_cql3_type(),
                    get_operator());

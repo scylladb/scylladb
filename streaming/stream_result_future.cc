@@ -69,7 +69,7 @@ shared_ptr<stream_result_future> stream_result_future::init_receiving_side(UUID 
     auto& sm = get_local_stream_manager();
     auto sr = sm.get_receiving_stream(plan_id);
     if (sr) {
-        auto err = sprint("[Stream #%s] GOT PREPARE_MESSAGE from %s, description=%s,"
+        auto err = fmt::format("[Stream #{}] GOT PREPARE_MESSAGE from {}, description={},"
                           "stream_plan exists, duplicated message received?", plan_id, description, from);
         sslog.warn(err.c_str());
         throw std::runtime_error(err);

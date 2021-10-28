@@ -986,7 +986,7 @@ struct multi_column_range_accumulator {
                 auto& col = expr::as<column_value>(lhs.elements.at(i));
                 values[i] = *statements::request_validations::check_not_null(
                         opt_values[i],
-                        "Invalid null value in condition for column %s", col.col->name_as_text());
+                        "Invalid null value in condition for column {}", col.col->name_as_text());
             }
             intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {

@@ -399,7 +399,7 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& bag) {
     const constant in_list = evaluate_IN_list(rhs, bag.options);
     statements::request_validations::check_false(
-            in_list.is_null(), "Invalid null value for column %s", col.col->name_as_text());
+            in_list.is_null(), "Invalid null value for column {}", col.col->name_as_text());
 
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error("unexpected term type in is_one_of(single column)");
@@ -612,7 +612,7 @@ value_list get_IN_values(
     if (in_list.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
-    statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column %s", column_name);
+    statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column {}", column_name);
     if (!in_list.type->without_reversed().is_list()) {
         throw std::logic_error(format("get_IN_values(single-column) on invalid term {}", *t));
     }

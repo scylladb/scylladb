@@ -230,13 +230,13 @@ protected:
         std::vector<const column_definition*> names;
         for (auto&& raw : get_entities()) {
             const auto& def = to_column_definition(schema, *raw);
-            check_true(def.is_clustering_key(), "Multi-column relations can only be applied to clustering columns but was applied to: %s", def.name_as_text());
-            check_false(std::count(names.begin(), names.end(), &def), "Column \"%s\" appeared twice in a relation: %s", def.name_as_text(), to_string());
+            check_true(def.is_clustering_key(), "Multi-column relations can only be applied to clustering columns but was applied to: {}", def.name_as_text());
+            check_false(std::count(names.begin(), names.end(), &def), "Column \"{}\" appeared twice in a relation: {}", def.name_as_text(), to_string());
 
             // FIXME: the following restriction should be removed (CASSANDRA-8613)
             if (def.position() != unsigned(previous_position + 1)) {
                 check_false(previous_position == -1, "Clustering columns may not be skipped in multi-column relations. "
-                                                     "They should appear in the PRIMARY KEY order. Got %s", to_string());
+                                                     "They should appear in the PRIMARY KEY order. Got {}", to_string());
                 throw exceptions::invalid_request_exception(format("Clustering columns must appear in the PRIMARY KEY order in multi-column relations: {}", to_string()));
             }
             names.emplace_back(&def);

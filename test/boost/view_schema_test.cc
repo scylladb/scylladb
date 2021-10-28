@@ -250,8 +250,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto s = e.local_db().find_schema(sstring("ks"), sstring("cf"));
         BOOST_REQUIRE(s);
         for (auto& col : s->all_columns()) {
-            auto f = e.execute_cql(sprint("create materialized view mv_%s as select * from cf "
-                                          "where %s is not null and k is not null primary key (%s, k)",
+            auto f = e.execute_cql(fmt::format("create materialized view mv_{} as select * from cf "
+                                          "where {} is not null and k is not null primary key ({}, k)",
                                           col.name_as_text(), col.name_as_text(), col.name_as_text()));
             if (col.type->is_multi_cell() || col.is_partition_key()) {
                 assert_that_failed(f);
@@ -1537,7 +1537,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
             "frozenmapval",
             "tupleval",
             "udtval"}));
-        e.execute_cql(sprint("create table cf ("
+        e.execute_cql(fmt::format("create table cf ("
                     "asciival ascii, "
                     "bigintval bigint, "
                     "blobval blob, "
@@ -1559,9 +1559,9 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                     "frozensetval frozen<set<uuid>>, "
                     "frozenmapval frozen<map<ascii, int>>,"
                     "tupleval frozen<tuple<int, ascii, uuid>>,"
-                    "udtval frozen<myType>, primary key (%s))", column_names)).get();
+                    "udtval frozen<myType>, primary key ({}))", column_names)).get();
 
-        e.execute_cql(sprint("create materialized view vcf as select * from cf where "
+        e.execute_cql(fmt::format("create materialized view vcf as select * from cf where "
                 "asciival = 'abc' AND "
                 "bigintval = 123 AND "
                 "blobval = 0xfeed AND "
@@ -1580,13 +1580,13 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                 "varcharval = 'abc' AND "
                 "varintval = 123123123 AND "
                 "frozenlistval = [1, 2, 3] AND "
-                "frozensetval = {6BDDC89A-5644-11E4-97FC-56847AFE9799} AND "
-                "frozenmapval = {'a': 1, 'b': 2} AND "
+                "frozensetval = {{6BDDC89A-5644-11E4-97FC-56847AFE9799}} AND "
+                "frozenmapval = {{'a': 1, 'b': 2}} AND "
                 "tupleval = (1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799) AND "
-                "udtval = {a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {'foo', 'bar'}} "
-                "PRIMARY KEY (%s)", column_names)).get();
+                "udtval = {{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}} "
+                "PRIMARY KEY ({})", column_names)).get();
 
-        e.execute_cql(sprint("insert into cf (%s) values ( "
+        e.execute_cql(fmt::format("insert into cf ({}) values ( "
                 "'abc',"
                 "123,"
                 "0xfeed,"
@@ -1605,10 +1605,10 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                 "'abc',"
                 "123123123,"
                 "[1, 2, 3],"
-                "{6BDDC89A-5644-11E4-97FC-56847AFE9799},"
-                "{'a': 1, 'b': 2},"
+                "{{6BDDC89A-5644-11E4-97FC-56847AFE9799}},"
+                "{{'a': 1, 'b': 2}},"
                 "(1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799),"
-                "{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {'foo', 'bar'}})", column_names)).get();
+                "{{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}})", column_names)).get();
 
         eventually([&] {
         auto msg = e.execute_cql("select * from vcf").get0();

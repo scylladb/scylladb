@@ -153,8 +153,8 @@ const resource_set& standard_role_manager::protected_resources() const {
 }
 
 future<> standard_role_manager::create_metadata_tables_if_missing() const {
-    static const sstring create_role_members_query = sprint(
-            "CREATE TABLE %s ("
+    static const sstring create_role_members_query = fmt::format(
+            "CREATE TABLE {} ("
             "  role text,"
             "  member text,"
             "  PRIMARY KEY (role, member)"

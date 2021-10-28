@@ -667,7 +667,7 @@ void storage_service::bootstrap() {
      }
     } else {
         // Wait until we know tokens of existing node before announcing replacing status.
-        set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
+        set_mode(mode::JOINING, fmt::format("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = _db.local().get_replace_address();
         if (replace_addr) {
@@ -1488,7 +1488,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
             _gossiper.check_snitch_name_matches();
             auto addr = get_broadcast_address();
             if (!_gossiper.is_safe_for_bootstrap(addr)) {
-                throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
+                throw std::runtime_error(fmt::format("A node with address {} already exists, cancelling join. "
                     "Use replace_address if you want to replace this node.", addr));
             }
             if (_db.local().get_config().consistent_rangemovement()) {

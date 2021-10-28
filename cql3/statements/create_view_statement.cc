@@ -188,9 +188,9 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     }
 
     if (schema->gc_grace_seconds().count() == 0) {
-        throw exceptions::invalid_request_exception(sprint(
-                "Cannot create materialized view '%s' for base table "
-                "'%s' with gc_grace_seconds of 0, since this value is "
+        throw exceptions::invalid_request_exception(fmt::format(
+                "Cannot create materialized view '{}' for base table "
+                "'{}' with gc_grace_seconds of 0, since this value is "
                 "used to TTL undelivered updates. Setting gc_grace_seconds "
                 "too low might cause undelivered updates to expire "
                 "before being replayed.", column_family(), _base_name.get_column_family()));

@@ -112,7 +112,7 @@ public:
         } catch (no_such_keyspace&) {
             throw NotFoundException();
         } catch (exceptions::syntax_exception& se) {
-            throw make_exception<InvalidRequestException>("syntax error: %s", se.what());
+            throw make_exception<InvalidRequestException>("syntax error: {}", se.what());
         } catch (exceptions::authentication_exception& ae) {
             throw make_exception<AuthenticationException>(ae.what());
         } catch (exceptions::unauthorized_exception& ue) {
@@ -759,7 +759,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [&] () -> future<std::vector<TokenRange>> {
             auto& ks = _db.local().find_keyspace(keyspace);
             if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
-                throw make_exception<InvalidRequestException>("There is no ring for the keyspace: %s", keyspace);
+                throw make_exception<InvalidRequestException>("There is no ring for the keyspace: {}", keyspace);
             }
 
             auto ring = co_await _ss.local().describe_ring(keyspace, local);
@@ -876,7 +876,7 @@ public:
                 throw NotFoundException();
             }
             if (_db.local().has_schema(cf_def.keyspace, cf_def.name)) {
-                throw make_exception<InvalidRequestException>("Column family %s already exists", cf_def.name);
+                throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace);
@@ -896,7 +896,7 @@ public:
                     throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
                 }
                 if (!cf.views().empty()) {
-                    throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views %s", column_family);
+                    throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
                 }
                 return _query_processor.local().get_migration_manager().announce_column_family_drop(current_keyspace(), column_family).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
@@ -965,12 +965,12 @@ public:
             }
 
             if (schema->is_view()) {
-                throw make_exception<InvalidRequestException>("Cannot modify Materialized View table %s as it may break the schema. "
+                throw make_exception<InvalidRequestException>("Cannot modify Materialized View table {} as it may break the schema. "
                                                               "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
             }
 
             if (!cf.views().empty()) {
-                throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views %s as it may break the schema. "
+                throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views {} as it may break the schema. "
                                                               "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
             }
 
@@ -1093,12 +1093,12 @@ public:
 
                 prepared = _query_processor.local().get_prepared(cache_key);
                 if (!prepared) {
-                    throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
+                    throw make_exception<InvalidRequestException>("Prepared query with id {} not found", itemId);
                 }
             }
             auto stmt = prepared->statement;
             if (stmt->get_bound_terms() != values.size()) {
-                throw make_exception<InvalidRequestException>("Wrong number of values specified. Expected %d, got %d.", stmt->get_bound_terms(), values.size());
+                throw make_exception<InvalidRequestException>("Wrong number of values specified. Expected {}, got {}.", stmt->get_bound_terms(), values.size());
             }
             std::vector<cql3::raw_value> bytes_values;
             std::transform(values.begin(), values.end(), std::back_inserter(bytes_values), [](auto&& s) {
@@ -1388,7 +1388,7 @@ private:
         cf_defs.reserve(ks_def.cf_defs.size());
         for (const CfDef& cf_def : ks_def.cf_defs) {
             if (cf_def.keyspace != ks_def.name) {
-                throw make_exception<InvalidRequestException>("CfDef (%s) had a keyspace definition that did not match KsDef", cf_def.keyspace);
+                throw make_exception<InvalidRequestException>("CfDef ({}) had a keyspace definition that did not match KsDef", cf_def.keyspace);
             }
             cf_defs.emplace_back(schema_from_thrift(cf_def, ks_def.name));
         }
@@ -1426,7 +1426,7 @@ private:
         case ConsistencyLevel::type::SERIAL: return db::consistency_level::SERIAL;
         case ConsistencyLevel::type::LOCAL_SERIAL: return db::consistency_level::LOCAL_SERIAL;
         case ConsistencyLevel::type::LOCAL_ONE: return db::consistency_level::LOCAL_ONE;
-        default: throw make_exception<InvalidRequestException>("undefined consistency_level %s", consistency_level);
+        default: throw make_exception<InvalidRequestException>("undefined consistency_level {}", consistency_level);
         }
     }
     static ttl_opt maybe_ttl(const schema& s, const Column& col) {
@@ -1835,9 +1835,9 @@ private:
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
             if (!reversed && is_wrap_around(range)) {
-                throw make_exception<InvalidRequestException>("Column slice had start %s greater than finish %s", cslice.start, cslice.finish);
+                throw make_exception<InvalidRequestException>("Column slice had start {} greater than finish {}", cslice.start, cslice.finish);
             } else if (reversed && !is_wrap_around(range)) {
-                throw make_exception<InvalidRequestException>("Reversed column slice had start %s less than finish %s", cslice.start, cslice.finish);
+                throw make_exception<InvalidRequestException>("Reversed column slice had start {} less than finish {}", cslice.start, cslice.finish);
             } else if (reversed) {
                 range.reverse();
                 if (is_wrap_around(range)) {
@@ -1925,7 +1925,7 @@ private:
             auto def = s.get_column_definition(to_bytes(col.name));
             if (def) {
                 if (def->kind != column_kind::regular_column) {
-                    throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
+                    throw make_exception<InvalidRequestException>("Column {} is not settable", col.name);
                 }
                 add_live_cell(s, col, *def, clustering_key_prefix::make_empty(s), m_to_apply);
             } else {
@@ -1942,7 +1942,7 @@ private:
             auto def = s.get_column_definition(to_bytes(col.name));
             if (def) {
                 if (def->kind != column_kind::regular_column) {
-                    throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
+                    throw make_exception<InvalidRequestException>("Column {} is not settable", col.name);
                 }
                 add_live_cell(s, col, *def, clustering_key_prefix::make_empty(s), m_to_apply);
             } else {

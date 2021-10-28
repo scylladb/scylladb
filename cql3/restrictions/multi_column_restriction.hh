@@ -234,7 +234,7 @@ public:
         std::vector<managed_bytes> components;
         for (unsigned i = 0; i < values.size(); i++) {
             auto component = statements::request_validations::check_not_null(values[i],
-                "Invalid null value in condition for column %s",
+                "Invalid null value in condition for column {}",
                 _column_defs.at(i)->name_as_text());
             components.emplace_back(*component);
         }
@@ -408,20 +408,20 @@ public:
     virtual void do_merge_with(::shared_ptr<clustering_key_restrictions> other) override {
         using namespace statements::request_validations;
         check_true(has_slice(other->expression),
-                   "Column \"%s\" cannot be restricted by both an equality and an inequality relation",
+                   "Column \"{}\" cannot be restricted by both an equality and an inequality relation",
                    get_columns_in_commons(other));
         auto other_slice = static_pointer_cast<slice>(other);
 
         static auto mode2str = [](auto m) { return m == mode::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
         check_true(other_slice->_mode == this->_mode, 
-                    "Invalid combination of restrictions (%s / %s)",
+                    "Invalid combination of restrictions ({} / {})",
                     mode2str(this->_mode), mode2str(other_slice->_mode)
                     );
         check_false(_slice.has_bound(statements::bound::START) && other_slice->_slice.has_bound(statements::bound::START),
-                    "More than one restriction was found for the start bound on %s",
+                    "More than one restriction was found for the start bound on {}",
                     get_columns_in_commons(other));
         check_false(_slice.has_bound(statements::bound::END) && other_slice->_slice.has_bound(statements::bound::END),
-                    "More than one restriction was found for the end bound on %s",
+                    "More than one restriction was found for the end bound on {}",
                     get_columns_in_commons(other));
 
         if (_column_defs.size() < other_slice->_column_defs.size()) {

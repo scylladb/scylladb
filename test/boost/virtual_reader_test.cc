@@ -94,93 +94,93 @@ SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
         rs = e.execute_cql("select * from system.size_estimates where keyspace_name = 'ks' and table_name > 'cf1' and table_name < 'cf2';").get0();
         assert_that(rs).is_rows().with_size(0);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s';", start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}';", start_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start >= '%s';", start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start >= '{}';", start_token1)).get0();
         assert_that(rs).is_rows().with_size(253);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start > '%s';", start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start > '{}';", start_token1)).get0();
         assert_that(rs).is_rows().with_size(252);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start <= '%s';", start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start <= '{}';", start_token1)).get0();
         assert_that(rs).is_rows().with_size(4);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start < '%s';", start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start < '{}';", start_token1)).get0();
         assert_that(rs).is_rows().with_size(3);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start >= '%s' and range_start <= '%s';", start_token1, start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start >= '{}' and range_start <= '{}';", start_token1, start_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start >= '%s' and range_start <= '%s';", start_token1, start_token2)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start >= '{}' and range_start <= '{}';", start_token1, start_token2)).get0();
         assert_that(rs).is_rows().with_size(3);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start > '%s' and range_start < '%s';", start_token1, start_token2)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start > '{}' and range_start < '{}';", start_token1, start_token2)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start in ('%s', '%s');", start_token1, start_token2)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start in ('{}', '{}');", start_token1, start_token2)).get0();
         assert_that(rs).is_rows().with_size(2);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start > '%s' and range_start <= '%s';", start_token1, start_token2)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start > '{}' and range_start <= '{}';", start_token1, start_token2)).get0();
         assert_that(rs).is_rows().with_size(2);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start >= '%s' and range_start < '%s';", start_token1, start_token2)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start >= '{}' and range_start < '{}';", start_token1, start_token2)).get0();
         assert_that(rs).is_rows().with_size(2);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end = '%s';", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end = '{}';", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end >= '%s';", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end >= '{}';", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end > '%s';", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end > '{}';", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(0);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end <= '%s';", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end <= '{}';", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end < '%s';", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end < '{}';", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(0);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end >= '%s' and range_end <= '%s';", start_token1, end_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end >= '{}' and range_end <= '{}';", start_token1, end_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and table_name = 'cf1' and range_start = '%s' and range_end > '%s' and range_end < '%s';", start_token1, end_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and table_name = 'cf1' and range_start = '{}' and range_end > '{}' and range_end < '{}';", start_token1, end_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(0);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and (table_name, range_start, range_end) = ('cf1', '%s', '%s');", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and (table_name, range_start, range_end) = ('cf1', '{}', '{}');", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(1);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and (table_name, range_start, range_end) >= ('cf1', '%s', '%s') and (table_name) <= ('cf2');", start_token1, end_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and (table_name, range_start, range_end) >= ('cf1', '{}', '{}') and (table_name) <= ('cf2');", start_token1, end_token1)).get0();
         assert_that(rs).is_rows().with_size(509);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and (table_name, range_start, range_end) >= ('cf1', '%s', '%s') "
-                                      "and (table_name, range_start) <= ('cf2', '%s');", start_token1, end_token1, start_token2)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and (table_name, range_start, range_end) >= ('cf1', '{}', '{}') "
+                                      "and (table_name, range_start) <= ('cf2', '{}');", start_token1, end_token1, start_token2)).get0();
         assert_that(rs).is_rows().with_size(259);
 
-        rs = e.execute_cql(sprint("select * from system.size_estimates where keyspace_name = 'ks' "
-                                      "and (table_name, range_start) < ('cf2', '%s');", start_token1)).get0();
+        rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
+                                      "and (table_name, range_start) < ('cf2', '{}');", start_token1)).get0();
         assert_that(rs).is_rows().with_size(259);
     });
 }

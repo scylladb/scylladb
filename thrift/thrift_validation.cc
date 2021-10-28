@@ -57,7 +57,7 @@ void validate_key(const schema& s, const bytes_view& k) {
 
     auto max = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
     if (k.size() > max) {
-        throw make_exception<InvalidRequestException>("Key length of %d is longer than maximum of %d", k.size(), max);
+        throw make_exception<InvalidRequestException>("Key length of {} is longer than maximum of {}", k.size(), max);
     }
 
     // FIXME: implement
@@ -77,27 +77,27 @@ void validate_ks_def(const KsDef& ks_def) {
     validate_keyspace_not_system(ks_def.name);
     std::regex name_regex("\\w+");
     if (!std::regex_match(ks_def.name, name_regex)) {
-        throw make_exception<InvalidRequestException>("\"%s\" is not a valid keyspace name", ks_def.name);
+        throw make_exception<InvalidRequestException>("\"{}\" is not a valid keyspace name", ks_def.name);
     }
     if (ks_def.name.length() > schema::NAME_LENGTH) {
-        throw make_exception<InvalidRequestException>("Keyspace names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, ks_def.name);
+        throw make_exception<InvalidRequestException>("Keyspace names shouldn't be more than {} characters long (got \"{}\")", schema::NAME_LENGTH, ks_def.name);
     }
 }
 
 void validate_cf_def(const CfDef& cf_def) {
     std::regex name_regex("\\w+");
     if (!std::regex_match(cf_def.name, name_regex)) {
-        throw make_exception<InvalidRequestException>("\"%s\" is not a valid column family name", cf_def.name);
+        throw make_exception<InvalidRequestException>("\"{}\" is not a valid column family name", cf_def.name);
     }
     if (cf_def.name.length() > schema::NAME_LENGTH) {
-        throw make_exception<InvalidRequestException>("Keyspace names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, cf_def.name);
+        throw make_exception<InvalidRequestException>("Keyspace names shouldn't be more than {} characters long (got \"{}\")", schema::NAME_LENGTH, cf_def.name);
     }
 }
 
 void validate_column_name(const std::string& name) {
     auto max_name_length = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
     if (name.size() > max_name_length) {
-        throw make_exception<InvalidRequestException>("column name length must not be greater than %u", max_name_length);
+        throw make_exception<InvalidRequestException>("column name length must not be greater than {}", max_name_length);
     }
     if (name.empty()) {
         throw make_exception<InvalidRequestException>("column name must not be empty");
