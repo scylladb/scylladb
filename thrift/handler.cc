@@ -26,6 +26,7 @@
 // end thrift workaround
 #include "Cassandra.h"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/coroutine.hh>
 #include "database.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
@@ -755,13 +756,13 @@ public:
 
     void do_describe_ring(thrift_fn::function<void(std::vector<TokenRange>  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace, bool local) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] () -> future<std::vector<TokenRange>> {
             auto& ks = _db.local().find_keyspace(keyspace);
             if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
                 throw make_exception<InvalidRequestException>("There is no ring for the keyspace: %s", keyspace);
             }
 
-            auto ring = _ss.local().describe_ring(keyspace, local);
+            auto ring = co_await _ss.local().describe_ring(keyspace, local);
             std::vector<TokenRange> ret;
             ret.reserve(ring.size());
             std::transform(ring.begin(), ring.end(), std::back_inserter(ret), [](auto&& tr) {
@@ -781,7 +782,7 @@ public:
                 token_range.__set_rpc_endpoints(std::vector<std::string>(tr._rpc_endpoints.begin(), tr._rpc_endpoints.end()));
                 return token_range;
             });
-            return ret;
+            co_return ret;
         });
     }
 
