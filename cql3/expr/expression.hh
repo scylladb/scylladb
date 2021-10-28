@@ -458,78 +458,96 @@ extern std::ostream& operator<<(std::ostream&, const column_value&);
 
 extern std::ostream& operator<<(std::ostream&, const expression&);
 
-/// If there is a binary_operator atom b for which f(b) is true, returns it.  Otherwise returns null.
-template<typename Fn>
-requires std::regular_invocable<Fn, const binary_operator&>
-const binary_operator* find_atom(const expression& e, Fn f) {
+// Looks into the expression and finds the given expression variant
+// for which the predicate function returns true.
+// If nothing is found returns nullptr.
+// For example:
+// find_in_expression<binary_operator>(e, [](const binary_operator&) {return true;})
+// Will return the first binary operator found in the expression
+template<ExpressionElement ExprElem, class Fn>
+requires std::invocable<Fn, const ExprElem&>
+      && std::same_as<std::invoke_result_t<Fn, const ExprElem&>, bool>
+const ExprElem* find_in_expression(const expression& e, Fn predicate_fun) {
+    if (auto expr_elem = as_if<ExprElem>(&e)) {
+        if (predicate_fun(*expr_elem)) {
+            return expr_elem;
+        }
+    }
+
     return expr::visit(overloaded_functor{
-            [&] (const binary_operator& op) { return f(op) ? &op : nullptr; },
-            [] (const constant&) -> const binary_operator* { return nullptr; },
-            [&] (const conjunction& conj) -> const binary_operator* {
+            [&] (const binary_operator& op) -> const ExprElem* {
+                if (auto found = find_in_expression<ExprElem>(op.lhs, predicate_fun)) {
+                    return found;
+                }
+                return find_in_expression<ExprElem>(op.rhs, predicate_fun);
+            },
+            [&] (const conjunction& conj) -> const ExprElem* {
                 for (auto& child : conj.children) {
-                    if (auto found = find_atom(child, f)) {
+                    if (auto found = find_in_expression<ExprElem>(child, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const column_value& cv) -> const binary_operator* {
+            [&] (const column_value& cv) -> const ExprElem* {
                 if (cv.sub.has_value()) {
-                    return find_atom(*cv.sub, f);
+                    return find_in_expression<ExprElem>(*cv.sub, predicate_fun);
                 }
                 return nullptr;
             },
-            [] (const token&) -> const binary_operator* { return nullptr; },
-            [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
-            [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
-            [&] (const function_call& fc) -> const binary_operator* {
+            [&] (const column_mutation_attribute& a) -> const ExprElem* {
+                return find_in_expression<ExprElem>(a.column, predicate_fun);
+            },
+            [&] (const function_call& fc) -> const ExprElem* {
                 for (auto& arg : fc.args) {
-                    if (auto found = find_atom(arg, f)) {
+                    if (auto found = find_in_expression<ExprElem>(arg, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const cast& c) -> const binary_operator* {
-                return find_atom(c.arg, f);
+            [&] (const cast& c) -> const ExprElem* {
+                return find_in_expression<ExprElem>(c.arg, predicate_fun);
             },
-            [&] (const field_selection& fs) -> const binary_operator* {
-                return find_atom(fs.structure, f);
+            [&] (const field_selection& fs) -> const ExprElem* {
+                return find_in_expression<ExprElem>(fs.structure, predicate_fun);
             },
-            [&] (const null&) -> const binary_operator* {
-                return nullptr;
-            },
-            [&] (const bind_variable&) -> const binary_operator* {
-                return nullptr;
-            },
-            [&] (const untyped_constant&) -> const binary_operator* {
-                return nullptr;
-            },
-            [&] (const tuple_constructor& t) -> const binary_operator* {
+            [&] (const tuple_constructor& t) -> const ExprElem* {
                 for (auto& e : t.elements) {
-                    if (auto found = find_atom(e, f)) {
+                    if (auto found = find_in_expression<ExprElem>(e, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const collection_constructor& c) -> const binary_operator* {
+            [&] (const collection_constructor& c) -> const ExprElem* {
                 for (auto& e : c.elements) {
-                    if (auto found = find_atom(e, f)) {
+                    if (auto found = find_in_expression<ExprElem>(e, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const usertype_constructor& c) -> const binary_operator* {
+            [&] (const usertype_constructor& c) -> const ExprElem* {
                 for (auto& [k, v] : c.elements) {
-                    if (auto found = find_atom(v, f)) {
+                    if (auto found = find_in_expression<ExprElem>(v, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
+            [](LeafExpression auto const&) -> const ExprElem* {
+                return nullptr;
+            }
         }, e);
+}
+
+/// If there is a binary_operator atom b for which f(b) is true, returns it.  Otherwise returns null.
+template<class Fn>
+requires std::invocable<Fn, const binary_operator&>
+      && std::same_as<std::invoke_result_t<Fn, const binary_operator&>, bool>
+const binary_operator* find_atom(const expression& e, Fn predicate_fun) {
+    return find_in_expression<binary_operator>(e, predicate_fun);
 }
 
 /// Counts binary_operator atoms b for which f(b) is true.
