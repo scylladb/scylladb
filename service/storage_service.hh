@@ -472,7 +472,7 @@ public:
      */
     //std::vector<sstring> describeRingJMX(const sstring& keyspace) const {
 
-    std::vector<token_range_endpoints> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
+    future<std::vector<token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.

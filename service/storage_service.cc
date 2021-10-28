@@ -88,6 +88,7 @@
 #include "service/priority_manager.hh"
 #include "utils/generation-number.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/stall_free.hh"
 
 #include <boost/algorithm/string/split.hpp>
@@ -3135,7 +3136,7 @@ future<> storage_service::move(token new_token) {
     });
 }
 
-std::vector<storage_service::token_range_endpoints>
+future<std::vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     std::vector<token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
@@ -3164,6 +3165,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
             tr._endpoint_details.push_back(details);
         }
         ranges.push_back(tr);
+        co_await coroutine::maybe_yield();
     }
     // Convert to wrapping ranges
     auto left_inf = boost::find_if(ranges, [] (const token_range_endpoints& tr) {
@@ -3181,7 +3183,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
         left_inf->_start_token = std::move(right_inf->_start_token);
         ranges.erase(right_inf);
     }
-    return ranges;
+    co_return ranges;
 }
 
 std::unordered_map<dht::token_range, inet_address_vector_replica_set>

@@ -361,6 +361,10 @@ void unset_view_builder(http_context& ctx, routes& r) {
     ss::view_build_statuses.unset(r);
 }
 
+static future<json::json_return_type> describe_ring_as_json(sharded<service::storage_service>& ss, sstring keyspace) {
+    co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::load_local_host_id().then([](const utils::UUID& id) {
@@ -513,12 +517,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().describe_ring(""), token_range_endpoints_to_json));
+        return describe_ring_as_json(ss, "");
     });
 
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
-        auto keyspace = validate_keyspace(ctx, req->param);
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
+        return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
     });
 
     ss::get_host_id_map.set(r, [&ctx](const_req req) {

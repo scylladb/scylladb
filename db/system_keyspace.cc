@@ -1920,7 +1920,7 @@ public:
                 continue;
             }
 
-            std::vector<dht::token_range_endpoints> ranges = _ss.describe_ring(e.name);
+            std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
 
             co_await result.emit_partition_start(dk);
             boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
