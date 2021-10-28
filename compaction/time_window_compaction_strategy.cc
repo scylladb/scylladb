@@ -220,14 +220,11 @@ time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, 
     }
 
     if (!expired.empty()) {
-        auto is_expired = [&] (const shared_sstable& s) { return expired.contains(s); };
-        candidates.erase(boost::remove_if(candidates, is_expired), candidates.end());
+        clogger.debug("Going to compact {} expired sstables", expired.size());
+        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), cf.get_sstable_set(), service::get_local_compaction_priority());
     }
 
     auto compaction_candidates = get_next_non_expired_sstables(cf, std::move(candidates), gc_before);
-    if (!expired.empty()) {
-        compaction_candidates.insert(compaction_candidates.end(), expired.begin(), expired.end());
-    }
     return compaction_descriptor(std::move(compaction_candidates), cf.get_sstable_set(), service::get_local_compaction_priority());
 }
 
