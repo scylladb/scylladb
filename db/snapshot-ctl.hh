@@ -61,6 +61,8 @@ public:
         int64_t total;
         sstring cf;
         sstring ks;
+
+        bool operator==(const snapshot_details&) const = default;
     };
     explicit snapshot_ctl(sharded<database>& db) : _db(db) {}
 

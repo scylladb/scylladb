@@ -2326,6 +2326,70 @@ future<> database::drain() {
     co_await _commitlog->shutdown();
 }
 
+static sstring extract_cf_name(const sstring& directory_name) {
+    // cf directory is of the form: 'cf_name-timestamp'
+    return directory_name.substr(0, directory_name.find("-"));
+}
+
+future<std::vector<database::snapshot_details_result>>  database::get_snapshot_details() {
+    std::vector<sstring> data_dirs = _cfg.data_file_directories();
+    auto dirs_only_entries = lister::dir_entry_types{directory_entry_type::directory};
+    std::vector<database::snapshot_details_result> details;
+
+    for (auto& datadir : data_dirs) {
+        co_await lister::scan_dir(datadir, dirs_only_entries, [this, &dirs_only_entries, &details] (fs::path parent_dir, directory_entry de) -> future<> {
+            // KS directory
+            sstring ks_name = de.name;
+
+            co_return co_await lister::scan_dir(parent_dir / de.name, dirs_only_entries, [this, &dirs_only_entries, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
+                // CF directory
+                sstring cf_name = extract_cf_name(de.name);
+                fs::path cf_dir = parent_dir / de.name;
+
+                co_return co_await lister::scan_dir(parent_dir / de.name, dirs_only_entries, [this, &dirs_only_entries, &details, &ks_name, cf_name = std::move(cf_name), cf_dir = std::move(cf_dir)] (fs::path parent_dir, directory_entry de) mutable -> future<> {
+                    // "snapshots" directory
+
+                    co_return co_await lister::scan_dir(parent_dir / de.name, dirs_only_entries, [this, &details, &ks_name, &cf_name, cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                        database::snapshot_details_result snapshot_result = { 
+                            .snapshot_name = de.name,
+                            .details = {0, 0, cf_name, ks_name}
+                        };
+
+                        co_await lister::scan_dir(parent_dir / de.name,  { directory_entry_type::regular }, [this, cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
+                            auto size = co_await io_check(file_size, (snapshot_dir / de.name).native());
+
+                            // The manifest is the only file expected to be in this directory not belonging to the SSTable.
+                            // For it, we account the total size, but zero it for the true size calculation.
+                            //
+                            // All the others should just generate an exception: there is something wrong, so don't blindly
+                            // add it to the size.
+                            if (de.name != "manifest.json" && de.name != "schema.cql") {
+                                snapshot_result.details.total += size;
+                            } else {
+                                size = 0;
+                            }
+
+                            try {
+                                // File exists in the main SSTable directory. Snapshots are not contributing to size
+                                co_await io_check(file_size, (fs::path(cf_dir) / de.name).native());
+                            } catch (std::system_error& e) {
+                                if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                                    throw;
+                                }
+                                snapshot_result.details.live += size;
+                            }
+                        });
+
+                        details.emplace_back(std::move(snapshot_result));
+                    });
+                }, [] (const fs::path& parent_dir, const directory_entry& de) { return de.name == sstables::snapshots_dir; });
+            });
+        });
+    }
+    
+    co_return details;
+}
+
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;
     return os;

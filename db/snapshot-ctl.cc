@@ -38,7 +38,10 @@
  * Copyright (C) 2020-present ScyllaDB
  */
 
+#include <tuple>
 #include <boost/range/adaptors.hpp>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "db/snapshot-ctl.hh"
 #include "database.hh"
 
@@ -144,82 +147,59 @@ future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace
 
 future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>
 snapshot_ctl::get_snapshot_details() {
-    using cf_snapshot_map = std::unordered_map<utils::UUID, column_family::snapshot_details>;
-    using snapshot_map = std::unordered_map<sstring, cf_snapshot_map>;
+    static auto details_result_hash = [] (const database::snapshot_details_result& sdr) {
+        return utils::tuple_hash()(std::make_tuple(sdr.snapshot_name, sdr.details.ks, sdr.details.cf));
+    };
+
+    // only one entry per {snapshot_name, ks, cf} triplet
+    using snapshot_acc = std::unordered_set<database::snapshot_details_result, decltype(details_result_hash)>;
+    using snapshot_map = std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>;
 
     class snapshot_reducer {
     private:
-        snapshot_map _result;
+        snapshot_acc _result = snapshot_acc(1, details_result_hash);
     public:
-        future<> operator()(const snapshot_map& value) {
-            for (auto&& vp: value) {
-                if (auto [ignored, added] = _result.try_emplace(vp.first, std::move(vp.second)); added) {
-                    continue;
-                }
-
-                auto& rp = _result.at(vp.first);
-                for (auto&& cf: vp.second) {
-                    if (auto [ignored, added] = rp.try_emplace(cf.first, std::move(cf.second)); added) {
-                        continue;
-                    }
-                    auto& rcf = rp.at(cf.first);
-                    rcf.live = cf.second.live;
-                    rcf.total = cf.second.total;
-                }
+        future<> operator()(const std::vector<database::snapshot_details_result>& value) {
+            for (auto&& vp : value) {
+                _result.emplace(std::move(vp));
             }
             return make_ready_future<>();
         }
-        snapshot_map get() && {
+
+        snapshot_acc get() && {
             return std::move(_result);
         }
     };
 
-    return run_snapshot_list_operation([this] {
-        return _db.map_reduce(snapshot_reducer(), [] (database& db) {
-            auto local_snapshots = make_lw_shared<snapshot_map>();
-            return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
-                return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
-                    for (auto&& snap_map: map) {
-                        auto [it, ignored] = local_snapshots->try_emplace(snap_map.first);
-                        it->second.emplace(uuid, snap_map.second);
-                    }
-                    return make_ready_future<>();
-                });
-            }).then([local_snapshots] {
-                return make_ready_future<snapshot_map>(std::move(*local_snapshots));
-            });
-        }).then([this] (snapshot_map&& map) {
-            std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>> result;
-            for (auto&& pair: map) {
-                std::vector<snapshot_ctl::snapshot_details> details;
-
-                for (auto&& snap_map: pair.second) {
-                    auto& cf = _db.local().find_column_family(snap_map.first);
-                    details.push_back({ snap_map.second.live, snap_map.second.total, cf.schema()->cf_name(), cf.schema()->ks_name() });
-                }
-                result.emplace(pair.first, std::move(details));
-            }
-
-            return make_ready_future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>(std::move(result));
+    co_return co_await run_snapshot_list_operation([this] () -> future<snapshot_map> {
+        snapshot_acc collected = co_await _db.map_reduce(snapshot_reducer(), [] (database& db) -> future<std::vector<database::snapshot_details_result>> {
+            co_return co_await db.get_snapshot_details();
         });
+
+        snapshot_map result;
+        for (auto&& r : collected) {
+            result[r.snapshot_name].emplace_back(std::move(r.details));
+            
+            co_await coroutine::maybe_yield();
+        }
+
+        co_return result;
     });
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
-    return run_snapshot_list_operation([this] {
-        return _db.map_reduce(adder<int64_t>(), [] (database& db) {
-            return do_with(int64_t(0), [&db] (auto& local_total) {
-                return parallel_for_each(db.get_column_families(), [&local_total] (auto& cf_pair) {
-                    return cf_pair.second->get_snapshot_details().then([&local_total] (auto map) {
-                        for (auto&& snap_map: map) {
-                            local_total += snap_map.second.live;
-                        }
-                        return make_ready_future<>();
-                     });
-                }).then([&local_total] {
-                    return make_ready_future<int64_t>(local_total);
-                });
-            });
+    co_return co_await run_snapshot_list_operation([this] () -> future<int64_t> {
+        co_return co_await _db.map_reduce(adder<int64_t>(), [] (database& db) -> future<int64_t> {
+            auto results = co_await db.get_snapshot_details();
+            int64_t local_total = 0;
+
+            for (const auto& details : results) {
+                local_total += details.details.live;
+
+                co_await coroutine::maybe_yield();
+            }
+
+            co_return local_total;
         });
     });
 }

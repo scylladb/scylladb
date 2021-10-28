@@ -49,6 +49,7 @@
 #include <limits>
 #include "schema_fwd.hh"
 #include "db/view/view.hh"
+#include "db/snapshot-ctl.hh"
 #include "gms/feature.hh"
 #include "memtable.hh"
 #include "mutation_reader.hh"
@@ -1570,7 +1571,15 @@ public:
      *                  will be deleted.
      * table_name - A name of a specific table inside the keyspace, if empty all tables will be deleted.
      */
-    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name); 
+
+    struct snapshot_details_result {
+        sstring snapshot_name;
+        db::snapshot_ctl::snapshot_details details;
+        bool operator==(const snapshot_details_result&) const = default;
+    };
+
+    future<std::vector<snapshot_details_result>> get_snapshot_details();
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
