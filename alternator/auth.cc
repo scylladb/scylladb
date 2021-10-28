@@ -31,8 +31,13 @@
 #include "auth/common.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/roles-metadata.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
+#include "service/storage_proxy.hh"
+#include "alternator/executor.hh"
+#include "cql3/selection/selection.hh"
+#include "database.hh"
+#include "query-result-set.hh"
+#include "cql3/result_set.hh"
+#include <seastar/core/coroutine.hh>
 
 namespace alternator {
 
@@ -131,23 +136,36 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
     return to_hex(bytes_view(reinterpret_cast<const int8_t*>(signature.data()), signature.size()));
 }
 
-future<std::string> get_key_from_roles(cql3::query_processor& qp, std::string username) {
-    static const sstring query = format("SELECT salted_hash FROM {} WHERE {} = ?",
-            auth::meta::roles_table::qualified_name, auth::meta::roles_table::role_col_name);
-
+future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username) {
+    schema_ptr schema = proxy.get_db().local().find_schema("system_auth", "roles");
+    partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(username));
+    dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
+    std::vector<query::clustering_range> bounds{query::clustering_range::make_open_ended_both_sides()};
+    const column_definition* salted_hash_col = schema->get_column_definition(bytes("salted_hash"));
+    if (!salted_hash_col) {
+        co_return coroutine::make_exception(api_error::unrecognized_client(format("Credentials cannot be fetched for: {}", username)));
+    }
+    auto selection = cql3::selection::selection::for_columns(schema, {salted_hash_col});
+    auto partition_slice = query::partition_slice(std::move(bounds), {}, query::column_id_vector{salted_hash_col->id}, selection->get_query_options());
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
     auto cl = auth::password_authenticator::consistency_for_user(username);
-    return qp.execute_internal(query, cl, auth::internal_distributed_query_state(), {sstring(username)}, true).then_wrapped([username = std::move(username)] (future<::shared_ptr<cql3::untyped_result_set>> f) {
-        auto res = f.get0();
-        auto salted_hash = std::optional<sstring>();
-        if (res->empty()) {
-            throw api_error::unrecognized_client(fmt::format("User not found: {}", username));
-        }
-        salted_hash = res->one().get_opt<sstring>("salted_hash");
-        if (!salted_hash) {
-            throw api_error::unrecognized_client(fmt::format("No password found for user: {}", username));
-        }
-        return make_ready_future<std::string>(*salted_hash);
-    });
+
+    service::client_state client_state{service::client_state::internal_tag()};
+    service::storage_proxy::coordinator_query_result qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), empty_service_permit(), client_state));
+
+    cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
+    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
+
+    auto result_set = builder.build();
+    if (result_set->empty()) {
+        co_return coroutine::make_exception(api_error::unrecognized_client(format("User not found: {}", username)));
+    }
+    const bytes_opt& salted_hash = result_set->rows().front().front(); // We only asked for 1 row and 1 column
+    if (!salted_hash) {
+        co_return coroutine::make_exception(api_error::unrecognized_client(format("No password found for user: {}", username)));
+    }
+    co_return value_cast<sstring>(utf8_type->deserialize(*salted_hash));
 }
 
 }

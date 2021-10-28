@@ -1368,7 +1368,7 @@ int main(int ac, char** av) {
                 api::unset_rpc_controller(ctx).get();
             });
 
-            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, qp, service_memory_limiter, *cfg);
+            alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, *cfg);
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&alternator_ctl] () mutable {

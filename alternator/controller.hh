@@ -39,10 +39,6 @@ namespace cdc {
 class generation_service;
 }
 
-namespace cql3 {
-class query_processor;
-}
-
 namespace gms {
 
 class gossiper;
@@ -62,7 +58,6 @@ class controller {
     sharded<service::migration_manager>& _mm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<cdc::generation_service>& _cdc_gen_svc;
-    sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _memory_limiter;
     const db::config& _config;
 
@@ -77,7 +72,6 @@ public:
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,
-        sharded<cql3::query_processor>& qp,
         sharded<service::memory_limiter>& memory_limiter,
         const db::config& config);
 
