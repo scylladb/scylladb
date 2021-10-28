@@ -1545,11 +1545,11 @@ mutation_fragment_stream_validator::mutation_fragment_stream_validator(const ::s
     : _schema(s)
     , _prev_kind(mutation_fragment_v2::kind::partition_end)
     , _prev_pos(position_in_partition::end_of_partition_tag_t{})
-    , _prev_partition_key(dht::minimum_token(), partition_key::make_empty()) {
+    , _prev_partition_key(std::nullopt) {
 }
 
 bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk) {
-    if (_prev_partition_key.less_compare(_schema, dk)) {
+    if (!_prev_partition_key || _prev_partition_key->less_compare(_schema, dk)) {
         _prev_partition_key = dk;
         return true;
     }
@@ -1557,8 +1557,11 @@ bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk
 }
 
 bool mutation_fragment_stream_validator::operator()(dht::token t) {
-    if (_prev_partition_key.token() <= t) {
-        _prev_partition_key._token = t;
+    if (!_prev_partition_key) {
+        _prev_partition_key = {t, partition_key::make_empty()};
+        return true;
+    } else if (_prev_partition_key->token() <= t) {
+        _prev_partition_key->_token = t;
         return true;
     }
     return false;

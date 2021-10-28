@@ -27,7 +27,7 @@ class mutation_fragment_stream_validator {
     const ::schema& _schema;
     mutation_fragment_v2::kind _prev_kind;
     position_in_partition _prev_pos;
-    dht::decorated_key _prev_partition_key;
+    std::optional<dht::decorated_key> _prev_partition_key;
 public:
     explicit mutation_fragment_stream_validator(const schema& s);
 
@@ -127,13 +127,13 @@ public:
     /// Only valid if `operator()(const dht::decorated_key&)` or
     /// `operator()(dht::token)` was used.
     dht::token previous_token() const {
-        return _prev_partition_key.token();
+        return _prev_partition_key->token();
     }
     /// The previous valid partition key.
     ///
     /// Only valid if `operator()(const dht::decorated_key&)` was used.
     const dht::decorated_key& previous_partition_key() const {
-        return _prev_partition_key;
+        return *_prev_partition_key;
     }
 };
 
