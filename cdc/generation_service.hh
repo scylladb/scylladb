@@ -88,6 +88,7 @@ private:
      * - we'll catch on and this variable will be updated with that generation.
      */
     std::optional<cdc::generation_id> _gen_id;
+    future<> _cdc_streams_rewrite_complete = make_ready_future<>();
 public:
     generation_service(config cfg, gms::gossiper&,
             sharded<db::system_distributed_keyspace>&, abort_source&, const locator::shared_token_metadata&,
