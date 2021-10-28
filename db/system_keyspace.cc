@@ -2366,7 +2366,7 @@ public:
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
 
-void register_virtual_tables(distributed<database>& dist_db, distributed<service::storage_service>& dist_ss) {
+void register_virtual_tables(distributed<database>& dist_db, distributed<service::storage_service>& dist_ss, db::config& cfg) {
     auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
         virtual_tables[tbl->schema()->id()] = std::move(tbl);
     };
@@ -2432,8 +2432,8 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
             || s == system_keyspace::v3::scylla_views_builds_in_progress();
 }
 
-future<> system_keyspace_make(distributed<database>& dist_db, distributed<service::storage_service>& dist_ss) {
-    register_virtual_tables(dist_db, dist_ss);
+future<> system_keyspace_make(distributed<database>& dist_db, distributed<service::storage_service>& dist_ss, db::config& cfg) {
+    register_virtual_tables(dist_db, dist_ss, cfg);
 
     auto& db = dist_db.local();
     auto& db_config = db.get_config();
@@ -2463,8 +2463,8 @@ future<> system_keyspace_make(distributed<database>& dist_db, distributed<servic
     install_virtual_readers(db);
 }
 
-future<> system_keyspace::make(distributed<database>& db, distributed<service::storage_service>& ss) {
-    return system_keyspace_make(db, ss);
+future<> system_keyspace::make(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg) {
+    return system_keyspace_make(db, ss, cfg);
 }
 
 utils::UUID system_keyspace::get_local_host_id() {

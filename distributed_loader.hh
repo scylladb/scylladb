@@ -36,6 +36,7 @@ class database;
 class table;
 using column_family = table;
 namespace db {
+class config;
 class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
@@ -74,7 +75,7 @@ class distributed_loader {
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
 
 public:
-    static future<> init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss);
+    static future<> init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg);
     static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
     static future<> ensure_system_table_directories(distributed<database>& db);
 

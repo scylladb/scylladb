@@ -565,10 +565,10 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
     }
 }
 
-future<> distributed_loader::init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss) {
-    return seastar::async([&db, &ss] {
-        db.invoke_on_all([&db, &ss] (database&) {
-            return db::system_keyspace::make(db, ss);
+future<> distributed_loader::init_system_keyspace(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg) {
+    return seastar::async([&db, &ss, &cfg] {
+        db.invoke_on_all([&db, &ss, &cfg] (database&) {
+            return db::system_keyspace::make(db, ss, cfg);
         }).get();
 
         const auto& cfg = db.local().get_config();

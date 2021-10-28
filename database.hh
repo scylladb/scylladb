@@ -124,7 +124,7 @@ class rp_handle;
 class data_listeners;
 class large_data_handler;
 
-future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);
+future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg);
 
 }
 
@@ -1388,7 +1388,7 @@ public:
 private:
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
-    friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);
+    friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
