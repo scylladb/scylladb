@@ -27,8 +27,8 @@
 #include "gc_clock.hh"
 #include "utils/loading_cache.hh"
 
-namespace cql3 {
-class query_processor;
+namespace service {
+class storage_proxy;
 }
 
 namespace alternator {
@@ -41,6 +41,6 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
         std::string_view orig_datestamp, std::string_view signed_headers_str, const std::map<std::string_view, std::string_view>& signed_headers_map,
         const std::vector<temporary_buffer<char>>& body_content, std::string_view region, std::string_view service, std::string_view query_string);
 
-future<std::string> get_key_from_roles(cql3::query_processor& qp, std::string username);
+future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username);
 
 }

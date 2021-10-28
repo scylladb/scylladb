@@ -40,7 +40,6 @@ controller::controller(
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,
-        sharded<cql3::query_processor>& qp,
         sharded<service::memory_limiter>& memory_limiter,
         const db::config& config)
     : _gossiper(gossiper)
@@ -48,7 +47,6 @@ controller::controller(
     , _mm(mm)
     , _sys_dist_ks(sys_dist_ks)
     , _cdc_gen_svc(cdc_gen_svc)
-    , _qp(qp)
     , _memory_limiter(memory_limiter)
     , _config(config)
 {
@@ -79,7 +77,7 @@ future<> controller::start() {
         auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
 
         _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_mm), std::ref(_sys_dist_ks), sharded_parameter(get_cdc_metadata, std::ref(_cdc_gen_svc)), _ssg.value()).get();
-        _server.start(std::ref(_executor), std::ref(_qp), std::ref(_proxy), std::ref(_gossiper)).get();
+        _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper)).get();
         std::optional<uint16_t> alternator_port;
         if (_config.alternator_port()) {
             alternator_port = _config.alternator_port();

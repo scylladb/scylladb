@@ -32,7 +32,6 @@
 #include "auth.hh"
 #include <cctype>
 #include "service/storage_proxy.hh"
-#include "cql3/query_processor.hh"
 #include "locator/snitch_base.hh"
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
@@ -305,8 +304,8 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         }
     }
 
-    auto cache_getter = [&qp = _qp] (std::string username) {
-        return get_key_from_roles(qp, std::move(username));
+    auto cache_getter = [&proxy = _proxy] (std::string username) {
+        return get_key_from_roles(proxy, std::move(username));
     };
     return _key_cache.get_ptr(user, cache_getter).then([this, &req, &content,
                                                     user = std::move(user),
@@ -441,11 +440,10 @@ void server::set_routes(routes& r) {
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
-server::server(executor& exec, cql3::query_processor& qp, service::storage_proxy& proxy, gms::gossiper& gossiper)
+server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gossiper)
         : _http_server("http-alternator")
         , _https_server("https-alternator")
         , _executor(exec)
-        , _qp(qp)
         , _proxy(proxy)
         , _gossiper(gossiper)
         , _key_cache(1024, 1min, slogger)
