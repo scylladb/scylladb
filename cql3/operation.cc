@@ -292,7 +292,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
         throw exceptions::invalid_request_exception(format("Column {} is not a counter", receiver.name_as_text()));
     }
 
-    // We need to fake a column of list<tuple<...>> to prepare the value term
+    // We need to fake a column of list<tuple<...>> to prepare the value expression
     auto & os = receiver.column_specification;
     auto spec = make_lw_shared<cql3::column_specification>(os->ks_name, os->cf_name, os->name, counter_tuple_list_type);
     auto v = prepare_expression(_value, db, keyspace, spec);

@@ -77,7 +77,7 @@ public:
 
 protected:
     // Value involved in the operation. In theory this should not be here since some operation
-    // may require none of more than one term, but most need 1 so it simplify things a bit.
+    // may require none of more than one expression, but most need 1 so it simplify things a bit.
     std::optional<expr::expression> _e;
 
 public:
@@ -139,7 +139,7 @@ public:
          * Operation.
          *
          * @param receiver the "column" this operation applies to. Note that
-         * contrarly to the method of same name in Term.Raw, the receiver should always
+         * contrarly to the method of same name in raw expression, the receiver should always
          * be a true column.
          * @return the prepared update operation.
          */

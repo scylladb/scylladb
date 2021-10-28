@@ -909,22 +909,22 @@ prepare_expression(const expression& expr, database& db, const sstring& keyspace
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
         },
         [&] (const binary_operator&) -> expression {
-            on_internal_error(expr_logger, "binary_operators are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "binary_operators are not yet reachable via prepare_expression()");
         },
         [&] (const conjunction&) -> expression {
-            on_internal_error(expr_logger, "conjunctions are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "conjunctions are not yet reachable via prepare_expression()");
         },
         [&] (const column_value&) -> expression {
-            on_internal_error(expr_logger, "column_values are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "column_values are not yet reachable via prepare_expression()");
         },
         [&] (const token&) -> expression {
-            on_internal_error(expr_logger, "tokens are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "tokens are not yet reachable via prepare_expression()");
         },
         [&] (const unresolved_identifier&) -> expression {
-            on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via prepare_expression()");
         },
         [&] (const column_mutation_attribute&) -> expression {
-            on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via prepare_expression()");
         },
         [&] (const function_call& fc) -> expression {
             return prepare_function_call(fc, db, keyspace, std::move(receiver));
@@ -933,7 +933,7 @@ prepare_expression(const expression& expr, database& db, const sstring& keyspace
             return cast_prepare_expression(c, db, keyspace, receiver);
         },
         [&] (const field_selection&) -> expression {
-            on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::prepare()");
+            on_internal_error(expr_logger, "field_selections are not yet reachable via prepare_expression()");
         },
         [&] (const null&) -> expression {
             return null_prepare_expression(db, keyspace, receiver);
@@ -994,25 +994,25 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
     return expr::visit(overloaded_functor{
         [&] (const constant&) -> test_result {
             // constants shouldn't appear in parser output, only untyped_constants
-            on_internal_error(expr_logger, "constants are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "constants are not yet reachable via test_assignment()");
         },
         [&] (const binary_operator&) -> test_result {
-            on_internal_error(expr_logger, "binary_operators are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "binary_operators are not yet reachable via test_assignment()");
         },
         [&] (const conjunction&) -> test_result {
-            on_internal_error(expr_logger, "conjunctions are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "conjunctions are not yet reachable via test_assignment()");
         },
         [&] (const column_value&) -> test_result {
-            on_internal_error(expr_logger, "column_values are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "column_values are not yet reachable via test_assignment()");
         },
         [&] (const token&) -> test_result {
-            on_internal_error(expr_logger, "tokens are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "tokens are not yet reachable via test_assignment()");
         },
         [&] (const unresolved_identifier&) -> test_result {
-            on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via test_assignment()");
         },
         [&] (const column_mutation_attribute&) -> test_result {
-            on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via test_assignment()");
         },
         [&] (const function_call& fc) -> test_result {
             return test_assignment_function_call(fc, db, keyspace, receiver);
@@ -1021,7 +1021,7 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
             return cast_test_assignment(c, db, keyspace, receiver);
         },
         [&] (const field_selection&) -> test_result {
-            on_internal_error(expr_logger, "field_selections are not yet reachable via term_raw_expr::test_assignment()");
+            on_internal_error(expr_logger, "field_selections are not yet reachable via test_assignment()");
         },
         [&] (const null&) -> test_result {
             return null_test_assignment(db, keyspace, receiver);

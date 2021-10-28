@@ -67,7 +67,7 @@ private:
 public:
     /**
      * Creates a new UpdateStatement from a column family name, columns map, consistency
-     * level, and key term.
+     * level, and key expression.
      *
      * @param name column family being operated on
      * @param attrs additional attributes for statement (timestamp, timeToLive)
