@@ -1596,23 +1596,25 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
     uint32_t max_ck_index = orderings.back().first->component_index();
     auto orderings_iterator = orderings.begin();
     for (uint32_t ck_column_index = 0; ck_column_index <= max_ck_index; ck_column_index++) {
-        if (orderings_iterator->first->component_index() != ck_column_index) {
-            // We don't have ordering for this column. Fail with an error.
-            const column_definition& cur_ck_column = schema.clustering_column_at(ck_column_index);
-            throw exceptions::invalid_request_exception(format(
-                    "Unsupported order by relation - column {} doesn't have an ordering.",
-                    cur_ck_column.name_as_text()));
-        }
-
-        // We have ordering for this column, let's see if its reversing is right.
-        const column_definition* cur_ck_column = orderings_iterator->first;
-        bool is_cur_column_reversed = are_column_select_results_reversed(*cur_ck_column, orderings_iterator->second);
-        if (is_cur_column_reversed != is_reversed) {
-            throw exceptions::invalid_request_exception(
+         if (orderings_iterator->first->component_index() == ck_column_index) {
+            // We have ordering for this column, let's see if its reversing is right.
+            const column_definition* cur_ck_column = orderings_iterator->first;
+            bool is_cur_column_reversed = are_column_select_results_reversed(*cur_ck_column, orderings_iterator->second);
+            if (is_cur_column_reversed != is_reversed) {
+                throw exceptions::invalid_request_exception(
                     format("Unsupported order by relation - only reversing all columns is supported, "
                            "but column {} has opposite ordering", cur_ck_column->name_as_text()));
+            }
+            orderings_iterator++;
+        } else {
+            // We don't have ordering for this column. Check if there is an EQ restriction or fail with an error.
+            const column_definition& cur_ck_column = schema.clustering_column_at(ck_column_index);
+            if (!restrictions.has_eq_restriction_on_column(cur_ck_column)) {
+                throw exceptions::invalid_request_exception(format(
+                    "Unsupported order by relation - column {} doesn't have an ordering or EQ relation.",
+                    cur_ck_column.name_as_text()));
+            }
         }
-        orderings_iterator++;
     }
 }
 
@@ -1622,6 +1624,9 @@ select_statement::ordering_comparator_type select_statement::get_ordering_compar
     if (!restrictions.key_is_in_relation()) {
         return {};
     }
+
+    // For the comparator we only need columns that have ordering defined.
+    // Other columns are required to have an EQ restriction, so they will have no more than a single value.
 
     std::vector<std::pair<uint32_t, data_type>> sorters;
     sorters.reserve(orderings.size());
