@@ -47,7 +47,6 @@ def table1(cql, test_keyspace):
 # Note that issue #7856 can only be reproduced for a nested frozen collection,
 # where a set is the key of a map. If we had just a frozen set, this issue
 # does not reproduce (see test_wrong_set_order() below).
-@pytest.mark.xfail(reason="issue #7856")
 def test_wrong_set_order_in_nested(cql, table1):
     k = random.randint(1,1000000000)
     # When inserting or selecting with a frozen<map<set<int>, int>> key
@@ -92,7 +91,6 @@ def test_wrong_set_order_in_nested(cql, table1):
 # of a problem in cassandra_tests/validation/entities/frozen_collections_test.py
 # testNestedPartitionKeyUsage where we inserted set set as a Python frozenset()
 # which does not use any specific order.
-@pytest.mark.xfail(reason="issue #7856")
 def test_wrong_set_order_in_nested_2(cql, table1):
     k = random.randint(1,1000000000)
     insert = cql.prepare(f"INSERT INTO {table1} (k) VALUES (?)")
