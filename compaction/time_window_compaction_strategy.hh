@@ -155,7 +155,7 @@ public:
 
     std::vector<shared_sstable>
     newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets, int min_threshold, int max_threshold,
-            std::chrono::seconds sstable_window_size, timestamp_type now, size_tiered_compaction_strategy_options& stcs_options);
+            timestamp_type now, size_tiered_compaction_strategy_options& stcs_options);
 
     static std::vector<shared_sstable>
     trim_to_threshold(std::vector<shared_sstable> bucket, int max_threshold);

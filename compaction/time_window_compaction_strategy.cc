@@ -301,7 +301,7 @@ time_window_compaction_strategy::get_compaction_candidates(table_state& table_s,
     update_estimated_compaction_by_tasks(p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
     return newest_bucket(std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
-        _options.sstable_window_size, _highest_window_seen, _stcs_options);
+        _highest_window_seen, _stcs_options);
 }
 
 timestamp_type
@@ -344,8 +344,7 @@ static std::ostream& operator<<(std::ostream& os, const std::map<timestamp_type,
 
 std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets,
-        int min_threshold, int max_threshold, std::chrono::seconds sstable_window_size, timestamp_type now,
-        size_tiered_compaction_strategy_options& stcs_options) {
+        int min_threshold, int max_threshold, timestamp_type now, size_tiered_compaction_strategy_options& stcs_options) {
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
     for (auto&& key_bucket : buckets | boost::adaptors::reversed) {
