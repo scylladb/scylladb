@@ -301,7 +301,7 @@ time_window_compaction_strategy::get_compaction_candidates(table_state& table_s,
     update_estimated_compaction_by_tasks(p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
     return newest_bucket(std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
-        _highest_window_seen, _stcs_options);
+        _highest_window_seen);
 }
 
 timestamp_type
@@ -344,7 +344,7 @@ static std::ostream& operator<<(std::ostream& os, const std::map<timestamp_type,
 
 std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets,
-        int min_threshold, int max_threshold, timestamp_type now, size_tiered_compaction_strategy_options& stcs_options) {
+        int min_threshold, int max_threshold, timestamp_type now) {
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
     for (auto&& key_bucket : buckets | boost::adaptors::reversed) {
@@ -357,7 +357,7 @@ time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vec
         switch (compaction_mode(bucket, key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered: {
             // If we're in the newest bucket, we'll use STCS to prioritize sstables.
-            auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, stcs_options);
+            auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, _stcs_options);
 
             // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
             if (!stcs_interesting_bucket.empty()) {
