@@ -448,7 +448,7 @@ date_tiered_manifest::get_next_sstables(column_family& cf, std::vector<sstables:
 
 int64_t date_tiered_manifest::get_estimated_tasks(column_family& cf) const {
     int base = cf.schema()->min_compaction_threshold();
-    int64_t now = get_now(cf);
+    int64_t now = get_now(cf.get_sstables());
     std::vector<sstables::shared_sstable> sstables;
     int64_t n = 0;
 
@@ -470,7 +470,7 @@ int64_t date_tiered_manifest::get_estimated_tasks(column_family& cf) const {
 std::vector<sstables::shared_sstable>
 date_tiered_manifest::get_next_non_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before) {
     int base = cf.schema()->min_compaction_threshold();
-    int64_t now = get_now(cf);
+    int64_t now = get_now(cf.get_sstables());
     auto most_interesting = get_compaction_candidates(cf, non_expiring_sstables, now, base);
 
     return most_interesting;
@@ -505,9 +505,8 @@ date_tiered_manifest::get_compaction_candidates(column_family& cf, std::vector<s
     return newest_bucket(buckets, min_threshold, max_threshold, now, _options.base_time);
 }
 
-int64_t date_tiered_manifest::get_now(column_family& cf) {
+int64_t date_tiered_manifest::get_now(lw_shared_ptr<const sstable_list> shared_set) {
     int64_t max_timestamp = 0;
-    auto shared_set = cf.get_sstables();
     for (auto& sst : *shared_set) {
         int64_t candidate = sst->get_stats_metadata().max_timestamp;
         max_timestamp = candidate > max_timestamp ? candidate : max_timestamp;
