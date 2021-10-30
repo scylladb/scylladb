@@ -137,8 +137,7 @@ int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family
     for (auto all_sstables = cf.get_sstables(); auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
-    leveled_manifest manifest = leveled_manifest::create(cf, sstables, _max_sstable_size_in_mb, _stcs_options);
-    return manifest.get_estimated_tasks();
+    return leveled_manifest::get_estimated_tasks(leveled_manifest::get_levels(sstables), _max_sstable_size_in_mb * 1024 * 1024);
 }
 
 compaction_descriptor

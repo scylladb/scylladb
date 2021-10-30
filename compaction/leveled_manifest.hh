@@ -97,6 +97,19 @@ private:
         _generations.resize(MAX_LEVELS);
     }
 public:
+    static std::vector<std::vector<sstables::shared_sstable>> get_levels(const std::vector<sstables::shared_sstable>& sstables) {
+        std::vector<std::vector<sstables::shared_sstable>> levels;
+        levels.resize(MAX_LEVELS);
+        for (auto& sstable : sstables) {
+            uint32_t level = sstable->get_sstable_level();
+            if (level >= levels.size()) {
+                throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (levels.size() - 1)));
+            }
+            levels[level].push_back(sstable);
+        }
+        return levels;
+    }
+
     static leveled_manifest create(column_family& cf, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
             const sstables::size_tiered_compaction_strategy_options& stcs_options) {
         leveled_manifest manifest = leveled_manifest(cf, max_sstable_size_in_mb, stcs_options);
@@ -104,14 +117,7 @@ public:
         // ensure all SSTables are in the manifest
         // FIXME: there can be tens of thousands of sstables. we can avoid this potentially expensive procedure if
         // partitioned_sstable_set keeps track of a list for each level.
-        for (auto& sstable : sstables) {
-            uint32_t level = sstable->get_sstable_level();
-            if (level >= manifest._generations.size()) {
-                throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (manifest._generations.size() - 1)));
-            }
-            logger.debug("Adding {} to L{}", sstable->get_filename(), level);
-            manifest._generations[level].push_back(sstable);
-        }
+        manifest._generations = get_levels(sstables);
 
         return manifest;
     }
@@ -524,19 +530,19 @@ public:
         return _generations[level];
     }
 
-    int64_t get_estimated_tasks() const {
+    static int64_t get_estimated_tasks(const std::vector<std::vector<sstables::shared_sstable>>& levels, uint64_t max_sstable_size_in_bytes) {
         int64_t tasks = 0;
 
-        for (int i = static_cast<int>(_generations.size()) - 1; i >= 0; i--) {
-            const auto& sstables = _generations[i];
+        for (int i = static_cast<int>(levels.size()) - 1; i >= 0; i--) {
+            const auto& sstables = levels[i];
             uint64_t total_bytes_for_this_level = get_total_bytes(sstables);
-            uint64_t max_bytes_for_this_level = max_bytes_for_level(i);
+            uint64_t max_bytes_for_this_level = max_bytes_for_level(i, max_sstable_size_in_bytes);
 
             if (total_bytes_for_this_level < max_bytes_for_this_level) {
                 continue;
             }
             // If there is 1 byte over TBL - (MBL * 1.001), there is still a task left, so we need to round up.
-            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / _max_sstable_size_in_bytes);
+            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / max_sstable_size_in_bytes);
         }
         return tasks;
     }
