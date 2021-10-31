@@ -991,7 +991,8 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, table* t, boo
 }
 
 // Submit a table to be scrubbed and wait for its termination.
-future<> compaction_manager::perform_sstable_scrub(table* t, sstables::compaction_type_options::scrub::mode scrub_mode) {
+future<> compaction_manager::perform_sstable_scrub(table* t, sstables::compaction_type_options::scrub opts) {
+    auto scrub_mode = opts.operation_mode;
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(t);
     }

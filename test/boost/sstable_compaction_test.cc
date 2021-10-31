@@ -2278,7 +2278,10 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             testlog.info("Validate");
 
             // No way to really test validation besides observing the log messages.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::validate).get();
+            sstables::compaction_type_options::scrub opts = {
+                .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+            };
+            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
             BOOST_REQUIRE(sst->is_quarantined());
             BOOST_REQUIRE(table->in_strategy_sstables().empty());
@@ -2474,7 +2477,9 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             testlog.info("Scrub in abort mode");
 
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::abort).get();
+            sstables::compaction_type_options::scrub opts = {};
+            opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
+            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2482,7 +2487,8 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             testlog.info("Scrub in skip mode");
 
             // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::skip).get();
+            opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
+            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             BOOST_REQUIRE(table->in_strategy_sstables().front() != sst);
@@ -2571,7 +2577,9 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             testlog.info("Scrub in abort mode");
 
             // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::abort).get();
+            sstables::compaction_type_options::scrub opts = {};
+            opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
+            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
@@ -2579,7 +2587,8 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             testlog.info("Scrub in segregate mode");
 
             // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
-            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::segregate).get();
+            opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
+            compaction_manager.perform_sstable_scrub(table.get(), opts).get();
 
             testlog.info("Scrub resulted in {} sstables", table->in_strategy_sstables().size());
             BOOST_REQUIRE(table->in_strategy_sstables().size() > 1);

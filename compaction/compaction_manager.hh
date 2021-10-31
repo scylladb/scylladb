@@ -259,7 +259,7 @@ public:
     future<> perform_sstable_upgrade(database& db, table* t, bool exclude_current_version);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(table* t, sstables::compaction_type_options::scrub::mode scrub_mode);
+    future<> perform_sstable_scrub(table* t, sstables::compaction_type_options::scrub opts);
 
     // Submit a table for major compaction.
     future<> perform_major_compaction(table* t);

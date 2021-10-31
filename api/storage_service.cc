@@ -1340,12 +1340,15 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             });
         }
 
-        return f.then([&ctx, keyspace, column_families, scrub_mode] {
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = scrub_mode,
+        };
+        return f.then([&ctx, keyspace, column_families, opts] {
             return ctx.db.invoke_on_all([=] (database& db) {
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf, scrub_mode);
+                    return cm.perform_sstable_scrub(&cf, opts);
                 });
             });
         }).then([]{
