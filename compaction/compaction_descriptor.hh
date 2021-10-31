@@ -80,6 +80,13 @@ public:
             validate, // validate data, printing all errors found (sstables are only read, not rewritten)
         };
         mode operation_mode = mode::abort;
+
+        enum class quarantine_mode {
+            include, // scrub all sstables, including quarantined
+            exclude, // scrub only non-quarantined sstables
+            only, // scrub only quarantined sstables
+        };
+        quarantine_mode quarantine_operation_mode = quarantine_mode::include;
     };
     struct reshard {
     };
@@ -132,6 +139,9 @@ public:
 
 std::string_view to_string(compaction_type_options::scrub::mode);
 std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::mode scrub_mode);
+
+std::string_view to_string(compaction_type_options::scrub::quarantine_mode);
+std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quarantine_mode quarantine_mode);
 
 class dummy_tag {};
 using has_only_fully_expired = seastar::bool_class<dummy_tag>;

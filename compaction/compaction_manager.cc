@@ -996,11 +996,21 @@ future<> compaction_manager::perform_sstable_scrub(table* t, sstables::compactio
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(t);
     }
-    return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), [this, t] {
+    return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), [this, t, opts] {
         auto all_sstables = t->get_sstable_set().all();
         std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*all_sstables
-                | boost::adaptors::filtered([] (const sstables::shared_sstable& sst) {
-            return !sst->requires_view_building();
+                | boost::adaptors::filtered([&opts] (const sstables::shared_sstable& sst) {
+            if (sst->requires_view_building()) {
+                return false;
+            }
+            switch (opts.quarantine_operation_mode) {
+            case sstables::compaction_type_options::scrub::quarantine_mode::include:
+                return true;
+            case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
+                return !sst->is_quarantined();
+            case sstables::compaction_type_options::scrub::quarantine_mode::only:
+                return sst->is_quarantined();
+            }
         }));
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::move(sstables));
     }, can_purge_tombstones::no);

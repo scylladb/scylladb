@@ -152,6 +152,23 @@ std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::mode 
     return os << to_string(scrub_mode);
 }
 
+std::string_view to_string(compaction_type_options::scrub::quarantine_mode quarantine_mode) {
+    switch (quarantine_mode) {
+        case compaction_type_options::scrub::quarantine_mode::include:
+            return "include";
+        case compaction_type_options::scrub::quarantine_mode::exclude:
+            return "exclude";
+        case compaction_type_options::scrub::quarantine_mode::only:
+            return "only";
+    }
+    on_internal_error_noexcept(clogger, format("Invalid scrub quarantine mode {}", int(quarantine_mode)));
+    return "(invalid)";
+}
+
+std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quarantine_mode quarantine_mode) {
+    return os << to_string(quarantine_mode);
+}
+
 std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
     static constexpr const char* suffixes[] = { " bytes", "kB", "MB", "GB", "TB", "PB" };
 

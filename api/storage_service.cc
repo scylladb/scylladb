@@ -1343,6 +1343,16 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = scrub_mode,
         };
+        const sstring quarantine_mode_str = req_param<sstring>(*req, "quarantine_mode", "INCLUDE");
+        if (quarantine_mode_str == "INCLUDE") {
+            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
+        } else if (quarantine_mode_str == "EXCLUDE") {
+            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::exclude;
+        } else if (quarantine_mode_str == "ONLY") {
+            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
+        } else {
+            throw std::invalid_argument(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
+        }
         return f.then([&ctx, keyspace, column_families, opts] {
             return ctx.db.invoke_on_all([=] (database& db) {
                 return do_for_each(column_families, [=, &db](sstring cfname) {
