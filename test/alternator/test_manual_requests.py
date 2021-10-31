@@ -154,3 +154,25 @@ def test_incorrect_numbers(dynamodb, test_table):
         req = get_signed_request(dynamodb, 'PutItem', payload)
         response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
         assert "ValidationException" in response.text and "numeric" in response.text
+
+# Although the DynamoDB API responses are JSON, additional conventions apply
+# to these responses - such as how error codes are encoded in JSON. For this
+# reason, DynamoDB uses the content type 'application/x-amz-json-1.0' instead
+# of the standard 'application/json'. This test verifies that we return the
+# correct content type header.
+# While most DynamoDB libraries we tried do not care about an unexpected
+# content-type, it turns out that one (aiodynamo) does. Moreover, AWS already
+# defined x-amz-json-1.1 - see
+#    https://awslabs.github.io/smithy/1.0/spec/aws/aws-json-1_1-protocol.html
+# which differs (only) in how it encodes error replies.
+# So in the future it may become even more important that Scylla return the
+# correct content type.
+def test_content_type(dynamodb, test_table):
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
+    # Note that get_signed_request() uses x-amz-json-1.0 to encode the
+    # *request*. In the future this may or may not effect the content type
+    # in the response (today, DynamoDB doesn't allow any other content type
+    # in the request anyway).
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.headers['Content-Type'] == 'application/x-amz-json-1.0'
