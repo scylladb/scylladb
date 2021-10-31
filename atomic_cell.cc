@@ -137,7 +137,7 @@ size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) 
 std::ostream&
 operator<<(std::ostream& os, const atomic_cell_view& acv) {
     if (acv.is_live()) {
-        return fmt_print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
+        fmt::print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
             acv.is_counter_update()
                     ? "counter_update_value=" + to_sstring(acv.counter_update_value())
                     : to_hex(to_bytes(acv.value())),
@@ -145,9 +145,10 @@ operator<<(std::ostream& os, const atomic_cell_view& acv) {
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
     } else {
-        return fmt_print(os, "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
+        fmt::print(os, "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
             acv.timestamp(), acv.deletion_time().time_since_epoch().count());
     }
+    return os;
 }
 
 std::ostream&
@@ -172,15 +173,16 @@ operator<<(std::ostream& os, const atomic_cell_view::printer& acvp) {
         } else {
             cell_value_string_builder << type.to_string(to_bytes(acv.value()));
         }
-        return fmt_print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
+        fmt::print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
             cell_value_string_builder.str(),
             acv.timestamp(),
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
     } else {
-        return fmt_print(os, "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
+        fmt::print(os, "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
             acv.timestamp(), acv.deletion_time().time_since_epoch().count());
     }
+    return os;
 }
 
 std::ostream&

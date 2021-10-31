@@ -1607,7 +1607,8 @@ future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const ch
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
-    return fmt_print(out, "{{column_family: {}/{}}}", cf._schema->ks_name(), cf._schema->cf_name());
+    fmt::print(out, "{{column_family: {}/{}}}", cf._schema->ks_name(), cf._schema->cf_name());
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const database& db) {
@@ -2006,7 +2007,8 @@ std::ostream&
 operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
     // Can't pass to_hex() to transformed(), since it is overloaded, so wrap:
     auto enhex = [] (auto&& x) { return to_hex(x); };
-    return fmt_print(os, "prefix{{{}}}", ::join(":", ecp._v | boost::adaptors::transformed(enhex)));
+    fmt::print(os, "prefix{{{}}}", ::join(":", ecp._v | boost::adaptors::transformed(enhex)));
+    return os;
 }
 
 sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,

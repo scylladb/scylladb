@@ -905,7 +905,8 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
 
 std::ostream&
 operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection::printer&>& c) {
-    return fmt_print(os, "{{column: {} {}}}", c.first, c.second);
+    fmt::print(os, "{{column: {} {}}}", c.first, c.second);
+    return os;
 }
 
 // Transforms given range of printable into a range of strings where each element
@@ -931,13 +932,14 @@ operator<<(std::ostream& os, const row::printer& p) {
 std::ostream&
 operator<<(std::ostream& os, const row_marker& rm) {
     if (rm.is_missing()) {
-        return fmt_print(os, "{{row_marker: }}");
+        fmt::print(os, "{{row_marker: }}");
     } else if (rm._ttl == row_marker::dead) {
-        return fmt_print(os, "{{row_marker: dead {} {}}}", rm._timestamp, rm._expiry.time_since_epoch().count());
+        fmt::print(os, "{{row_marker: dead {} {}}}", rm._timestamp, rm._expiry.time_since_epoch().count());
     } else {
-        return fmt_print(os, "{{row_marker: {} {} {}}}", rm._timestamp, rm._ttl.count(),
+        fmt::print(os, "{{row_marker: {} {} {}}}", rm._timestamp, rm._ttl.count(),
             rm._ttl != row_marker::no_ttl ? rm._expiry.time_since_epoch().count() : 0);
     }
+    return os;
 }
 
 std::ostream&
@@ -956,9 +958,10 @@ operator<<(std::ostream& os, const deletable_row::printer& p) {
 std::ostream&
 operator<<(std::ostream& os, const rows_entry::printer& p) {
     auto& re = p._rows_entry;
-    return fmt_print(os, "{{rows_entry: cont={} dummy={} {} {}}}", re.continuous(), re.dummy(),
+    fmt::print(os, "{{rows_entry: cont={} dummy={} {} {}}}", re.continuous(), re.dummy(),
                   position_in_partition_view::printer(p._schema, re.position()),
                   deletable_row::printer(p._schema, re._row));
+    return os;
 }
 
 std::ostream&
