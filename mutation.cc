@@ -209,7 +209,7 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
     const ::schema& s = *m.schema();
     const auto& dk = m.decorated_key();
 
-    fmt_print(os, "{{table: '{}.{}', key: {{", s.ks_name(), s.cf_name());
+    fmt::print(os, "{{table: '{}.{}', key: {{", s.ks_name(), s.cf_name());
 
     auto type_iterator = dk._key.get_compound_type(s)->types().begin();
     auto column_iterator = s.partition_key_columns().begin();
@@ -220,7 +220,7 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
         ++column_iterator;
     }
 
-    fmt_print(os, "token: {}}}, ", dk._token);
+    fmt::print(os, "token: {}}}, ", dk._token);
     os << mutation_partition::printer(s, m.partition()) << "\n}";
     return os;
 }

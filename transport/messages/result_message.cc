@@ -26,28 +26,34 @@
 namespace cql_transport::messages {
 
 std::ostream& operator<<(std::ostream& os, const result_message::void_message& msg) {
-    return fmt_print(os, "{{result_message::void}}");
+    fmt::print(os, "{{result_message::void}}");
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::bounce_to_shard& msg) {
-    return fmt_print(os, "{{result_message::bounce_to_shard {}}}", msg.move_to_shard());
+    fmt::print(os, "{{result_message::bounce_to_shard {}}}", msg.move_to_shard());
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& msg) {
-    return fmt_print(os, "{{result_message::set_keyspace {}}}", msg.get_keyspace());
+    fmt::print(os, "{{result_message::set_keyspace {}}}", msg.get_keyspace());
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::prepared::thrift& msg) {
-    return fmt_print(os, "{{result_message::prepared::thrift {:d}}}", msg.get_id());
+    fmt::print(os, "{{result_message::prepared::thrift {:d}}}", msg.get_id());
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::prepared::cql& msg) {
-    return fmt_print(os, "{{result_message::prepared::cql {}}}", to_hex(msg.get_id()));
+    fmt::print(os, "{{result_message::prepared::cql {}}}", to_hex(msg.get_id()));
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::schema_change& msg) {
     // FIXME: format contents
-    return fmt_print(os, "{{result_message::prepared::schema_change {:p}}}", (void*)msg.get_change().get());
+    fmt::print(os, "{{result_message::prepared::schema_change {:p}}}", (void*)msg.get_change().get());
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::rows& msg) {
