@@ -558,6 +558,8 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
                 dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
                 return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
                     return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::staging_dir, ks_name, cfname);
+                }).then([&db, sstdir, ks_name, cfname] {
+                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::quarantine_dir, ks_name, cfname, false /* must_exist */);
                 }).then([&db, sstdir, uuid, ks_name, cfname] {
                     return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
                 }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {
