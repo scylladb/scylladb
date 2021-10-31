@@ -464,9 +464,17 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
     });
 }
 
-future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
-    return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf)] {
+future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf, bool must_exist) {
+    return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), must_exist] {
         assert(this_shard_id() == 0);
+
+        if (!file_exists(sstdir).get0()) {
+            if (must_exist) {
+                throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", ks, cf, sstdir));
+            }
+            return;
+        }
+
         // First pass, cleanup temporary sstable directories and sstables pending delete.
         cleanup_column_family_temp_sst_dirs(sstdir).get();
         auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();

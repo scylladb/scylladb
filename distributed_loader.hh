@@ -73,7 +73,7 @@ class distributed_loader {
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
             sharded<database>& db, sharded<db::view::view_update_generator>& view_update_generator,
             std::filesystem::path datadir, sstring ks, sstring cf);
-    static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
+    static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf, bool must_exist = true);
     static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
