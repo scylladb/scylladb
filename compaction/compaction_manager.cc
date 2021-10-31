@@ -996,7 +996,12 @@ future<> compaction_manager::perform_sstable_scrub(table* t, sstables::compactio
         return perform_sstable_scrub_validate_mode(t);
     }
     return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), [this, t] {
-        return make_ready_future<std::vector<sstables::shared_sstable>>(get_candidates(*t));
+        auto all_sstables = t->get_sstable_set().all();
+        std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*all_sstables
+                | boost::adaptors::filtered([] (const sstables::shared_sstable& sst) {
+            return !sst->requires_view_building();
+        }));
+        return make_ready_future<std::vector<sstables::shared_sstable>>(std::move(sstables));
     }, can_purge_tombstones::no);
 }
 

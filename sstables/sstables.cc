@@ -2100,6 +2100,22 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
     });
 }
 
+future<> sstable::move_to_quarantine(bool do_sync_dirs) {
+    auto path = fs::path(_dir);
+    sstring basename = path.filename().native();
+    if (basename == quarantine_dir) {
+        co_return;
+    } else if (basename == staging_dir) {
+        path = path.parent_path();
+    }
+    // Note: moving a sstable in a snapshot or in the uploads dir to quarantine
+    // will move it into a "quarantine" subdirectory of its current directory.
+    auto new_dir = (path / sstables::quarantine_dir).native();
+    sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
+    co_await touch_directory(new_dir);
+    co_await move_to_new_dir(std::move(new_dir), generation(), do_sync_dirs);
+}
+
 flat_mutation_reader_v2
 sstable::make_reader(
         schema_ptr schema,

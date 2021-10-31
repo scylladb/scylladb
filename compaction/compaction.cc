@@ -1680,6 +1680,12 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 
     clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
 
+    if (!valid) {
+        for (auto& sst : *sstables->all()) {
+            co_await sst->move_to_quarantine();
+        }
+    }
+
     co_return compaction_result {
         .new_sstables = {},
         .ended_at = db_clock::now(),

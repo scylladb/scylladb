@@ -2280,8 +2280,8 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             // No way to really test validation besides observing the log messages.
             compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_type_options::scrub::mode::validate).get();
 
-            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
-            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+            BOOST_REQUIRE(sst->is_quarantined());
+            BOOST_REQUIRE(table->in_strategy_sstables().empty());
             verify_fragments(sst, corrupt_fragments);
         });
     }, test_cfg);
