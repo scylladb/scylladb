@@ -79,6 +79,10 @@
 
 namespace sstables {
 
+bool is_eligible_for_compaction(const shared_sstable& sst) noexcept {
+    return !sst->requires_view_building();
+}
+
 logging::logger clogger("compaction");
 
 static const std::unordered_map<compaction_type, sstring> compaction_types = {

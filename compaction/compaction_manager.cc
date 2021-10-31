@@ -1111,7 +1111,7 @@ void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
 }
 
 bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shared_sstable& sst) {
-    return !sst->requires_view_building();
+    return sstables::is_eligible_for_compaction(sst);
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {

@@ -1159,7 +1159,7 @@ std::vector<sstables::shared_sstable> table::in_strategy_sstables() const {
     auto sstables = _main_sstables->all();
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables
             | boost::adaptors::filtered([this] (auto& sst) {
-        return !_sstables_staging.contains(sst->generation());
+        return sstables::is_eligible_for_compaction(sst);
     }));
 }
 

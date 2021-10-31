@@ -36,6 +36,8 @@ using namespace compaction;
 
 namespace sstables {
 
+bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;
+
 class pretty_printed_data_size {
     uint64_t _size;
 public:
