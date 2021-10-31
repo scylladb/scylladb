@@ -412,7 +412,7 @@ SEASTAR_TEST_CASE(snapshot_works) {
         BOOST_REQUIRE_GT(expected.size(), 1);
 
         // all files were copied and manifest was generated
-        lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
             expected.erase(de.name);
             return make_ready_future<>();
         }).get();
@@ -440,7 +440,7 @@ SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
         BOOST_REQUIRE_EQUAL(expected.size(), 1);
 
         // all files were copied and manifest was generated
-        lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
             expected.erase(de.name);
             return make_ready_future<>();
         }).get();
@@ -492,7 +492,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
         unsigned count = 0;
-        lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&count] (fs::path parent_dir, directory_entry de) {
             count++;
             return make_ready_future<>();
         }).get();
@@ -501,7 +501,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         e.local_db().clear_snapshot("test", {"ks"}, "").get();
         count = 0;
 
-        BOOST_REQUIRE_EQUAL(fs::exists(fs::path(cf.dir()) / "snapshots" / "test"), false);
+        BOOST_REQUIRE_EQUAL(fs::exists(fs::path(cf.dir()) / sstables::snapshots_dir / "test"), false);
         return make_ready_future<>();
     });
 }

@@ -127,6 +127,10 @@ private:
     friend class sstables_manager;
 };
 
+constexpr const char* staging_dir = "staging";
+constexpr const char* upload_dir = "upload";
+constexpr const char* snapshots_dir = "snapshots";
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:

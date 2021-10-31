@@ -486,7 +486,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        auto upload_path = fs::path(cf.dir()) / "upload";
+        auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
         e.db().invoke_on_all([] (database& db) {
             auto& cf = db.find_column_family("ks", "cf");
@@ -535,7 +535,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        auto upload_path = fs::path(cf.dir()) / "upload";
+        auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
         e.db().invoke_on_all([] (database& db) {
             auto& cf = db.find_column_family("ks", "cf");
@@ -584,7 +584,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        auto upload_path = fs::path(cf.dir()) / "upload";
+        auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
         e.db().invoke_on_all([] (database& db) {
             auto& cf = db.find_column_family("ks", "cf");

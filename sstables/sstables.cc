@@ -1854,7 +1854,7 @@ std::vector<sstring> sstable::component_filenames() const {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_dir, "staging");
+    return boost::algorithm::ends_with(_dir, staging_dir);
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
@@ -2195,7 +2195,8 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
+    static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{})(?:/[^/]+)?)?/?",
+            sstables::staging_dir, sstables::upload_dir, sstables::snapshots_dir).c_str());
 
     std::smatch match;
 
