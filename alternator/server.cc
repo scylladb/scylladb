@@ -129,6 +129,10 @@ public:
                  [&] (const json::json_return_type& json_return_value) {
                      slogger.trace("api_handler success case");
                      if (json_return_value._body_writer) {
+                         // Unfortunately, write_body() forces us to choose
+                         // from a fixed and irrelevant list of "mime-types"
+                         // at this point. But we'll override it with the
+                         // one (application/x-amz-json-1.0) below.
                          rep->write_body("json", std::move(json_return_value._body_writer));
                      } else {
                          rep->_content += json_return_value._res;
@@ -141,7 +145,7 @@ public:
 
              return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
          });
-    }), _type("json") { }
+    }) { }
 
     api_handler(const api_handler&) = default;
     future<std::unique_ptr<reply>> handle(const sstring& path,
@@ -149,7 +153,8 @@ public:
         handle_CORS(*req, *rep, false);
         return _f_handle(std::move(req), std::move(rep)).then(
                 [this](std::unique_ptr<reply> rep) {
-                    rep->done(_type);
+                    rep->set_mime_type("application/x-amz-json-1.0");
+                    rep->done();
                     return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 });
     }
@@ -163,7 +168,6 @@ protected:
     }
 
     future_handler_function _f_handle;
-    sstring _type;
 };
 
 class gated_handler : public handler_base {
