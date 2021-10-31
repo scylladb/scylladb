@@ -2010,7 +2010,7 @@ public:
             _full.reset();
         }
     }
-    void abort(std::exception_ptr ep) {
+    void abort(std::exception_ptr ep) noexcept {
         _ex = std::move(ep);
         if (_full) {
             _full->set_exception(_ex);
@@ -2022,8 +2022,14 @@ public:
     }
 };
 
-void queue_reader_handle::abandon() {
-    abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("Abandoned queue_reader_handle")));
+void queue_reader_handle::abandon() noexcept {
+    std::exception_ptr ex;
+    try {
+        ex = std::make_exception_ptr<std::runtime_error>(std::runtime_error("Abandoned queue_reader_handle"));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    abort(std::move(ex));
 }
 
 queue_reader_handle::queue_reader_handle(queue_reader& reader) noexcept : _reader(&reader) {

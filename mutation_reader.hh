@@ -579,7 +579,7 @@ private:
 private:
     explicit queue_reader_handle(queue_reader& reader) noexcept;
 
-    void abandon();
+    void abandon() noexcept;
 
 public:
     queue_reader_handle(queue_reader_handle&& o) noexcept;

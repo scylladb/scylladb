@@ -54,7 +54,12 @@ private:
         });
         it->writer.consume_end_of_stream();
         co_await it->writer.close();
-        *it = bucket{bucket_writer(_schema, _permit, _consumer), key};
+        try {
+            *it = bucket{bucket_writer(_schema, _permit, _consumer), key};
+        } catch (...) {
+            _buckets.erase(it);
+            throw;
+        }
         co_return &*it;
     }
 public:
@@ -123,8 +128,14 @@ public:
 future<> segregate_by_partition(flat_mutation_reader producer, unsigned max_buckets, reader_consumer consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
+  try {
     return feed_writer(std::move(producer),
             partition_based_splitting_mutation_writer(std::move(schema), std::move(permit), std::move(consumer), max_buckets));
+  } catch (...) {
+    return producer.close().then([ex = std::current_exception()] () mutable {
+        return make_exception_future<>(std::move(ex));
+     });
+  }
 }
 
 } // namespace mutation_writer
