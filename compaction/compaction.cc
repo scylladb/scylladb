@@ -80,7 +80,7 @@
 namespace sstables {
 
 bool is_eligible_for_compaction(const shared_sstable& sst) noexcept {
-    return !sst->requires_view_building();
+    return !sst->requires_view_building() && !sst->is_quarantined();
 }
 
 logging::logger clogger("compaction");

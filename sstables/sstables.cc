@@ -1857,6 +1857,10 @@ bool sstable::requires_view_building() const {
     return boost::algorithm::ends_with(_dir, staging_dir);
 }
 
+bool sstable::is_quarantined() const noexcept {
+    return boost::algorithm::ends_with(_dir, quarantine_dir);
+}
+
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
                                     format_types format, sstring component) {
     sstring v = _version_string.at(version);
@@ -2195,8 +2199,8 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{})(?:/[^/]+)?)?/?",
-            sstables::staging_dir, sstables::upload_dir, sstables::snapshots_dir).c_str());
+    static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
+            sstables::staging_dir, sstables::quarantine_dir, sstables::upload_dir, sstables::snapshots_dir).c_str());
 
     std::smatch match;
 

@@ -130,6 +130,7 @@ private:
 constexpr const char* staging_dir = "staging";
 constexpr const char* upload_dir = "upload";
 constexpr const char* snapshots_dir = "snapshots";
+constexpr const char* quarantine_dir = "quarantine";
 
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
@@ -413,6 +414,8 @@ public:
     }
 
     bool requires_view_building() const;
+
+    bool is_quarantined() const noexcept;
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
