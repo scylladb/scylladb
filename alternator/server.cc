@@ -196,24 +196,31 @@ future<> server::verify_signature(const request& req) {
         throw api_error::missing_authentication_token("Authorization header is mandatory for signature verification");
     }
     std::string host = host_it->second;
-    std::vector<std::string_view> credentials_raw = split(authorization_it->second, ' ');
+    std::string_view authorization_header = authorization_it->second;
+    auto pos = authorization_header.find_first_of(' ');
+    if (pos == std::string_view::npos || authorization_header.substr(0, pos) != "AWS4-HMAC-SHA256") {
+        throw api_error::invalid_signature(format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header));
+    }
+    authorization_header.remove_prefix(pos+1);
     std::string credential;
     std::string user_signature;
     std::string signed_headers_str;
     std::vector<std::string_view> signed_headers;
-    for (std::string_view entry : credentials_raw) {
+    do {
+        // Either one of a comma or space can mark the end of an entry
+        pos = authorization_header.find_first_of(" ,");
+        std::string_view entry = authorization_header.substr(0, pos);
+        if (pos != std::string_view::npos) {
+            authorization_header.remove_prefix(pos + 1);
+        }
+        if (entry.empty()) {
+            continue;
+        }
         std::vector<std::string_view> entry_split = split(entry, '=');
         if (entry_split.size() != 2) {
-            if (entry != "AWS4-HMAC-SHA256") {
-                throw api_error::invalid_signature(format("Only AWS4-HMAC-SHA256 algorithm is supported. Found: {}", entry));
-            }
             continue;
         }
         std::string_view auth_value = entry_split[1];
-        // Commas appear as an additional (quite redundant) delimiter
-        if (auth_value.back() == ',') {
-            auth_value.remove_suffix(1);
-        }
         if (entry_split[0] == "Credential") {
             credential = std::string(auth_value);
         } else if (entry_split[0] == "Signature") {
@@ -223,7 +230,8 @@ future<> server::verify_signature(const request& req) {
             signed_headers = split(auth_value, ';');
             std::sort(signed_headers.begin(), signed_headers.end());
         }
-    }
+    } while (pos != std::string_view::npos);
+
     std::vector<std::string_view> credential_split = split(credential, '/');
     if (credential_split.size() != 5) {
         throw api_error::validation(format("Incorrect credential information format: {}", credential));
