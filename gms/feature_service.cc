@@ -210,6 +210,10 @@ std::set<std::string_view> feature_service::known_feature_set() {
     return features;
 }
 
+const std::unordered_map<sstring, std::reference_wrapper<feature>>& feature_service::registered_features() const {
+    return _registered_features;
+}
+
 std::set<std::string_view> feature_service::supported_feature_set() {
     auto features = known_feature_set();
 

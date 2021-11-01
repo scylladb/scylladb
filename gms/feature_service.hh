@@ -102,6 +102,9 @@ private:
     gms::feature _uda;
 
 public:
+
+    const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
+
     bool cluster_supports_user_defined_functions() const {
         return bool(_udf_feature);
     }
