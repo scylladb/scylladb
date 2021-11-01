@@ -85,3 +85,20 @@ def test_signature_too_futuristic(dynamodb, test_table):
     response = requests.post(url, headers=headers, verify=False)
     assert not response.ok
     assert "InvalidSignatureException" in response.text and "Signature not yet current" in response.text
+
+# A test that commas can be uses instead of whitespace to separate components
+# of the Authorization headers - reproducing issue #9568.
+def test_authorization_no_whitespace(dynamodb, test_table):
+    # Unlike the above tests which checked error cases so didn't need to
+    # calculate a real signature, in this test we really a correct signature,
+    # so we use a function we already have in test_manual_requests.py.
+    from test_manual_requests import get_signed_request
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    # Boto3 separates the components of the Authorization header by spaces.
+    # Let's remove all of them except the first one (which separates the
+    # signature algorithm name from the rest) and check the result still works:
+    a = req.headers['Authorization'].split()
+    req.headers['Authorization'] = a[0] + ' ' + ''.join(a[1:])
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.ok
