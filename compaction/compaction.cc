@@ -1431,6 +1431,9 @@ public:
     }
 
     reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
+        if (!use_interposer_consumer()) {
+            return end_consumer;
+        }
         return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_partition(std::move(reader), 100, [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
                 ++_bucket_count;
