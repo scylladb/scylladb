@@ -967,6 +967,12 @@ int main(int ac, char** av) {
 
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp, feature_service, messaging).get();
+
+            // Re-enable previously enabled features on node startup.
+            // This should be done before commitlog starts replaying
+            // since some features affect storage.
+            db::system_keyspace::enable_features_on_startup(feature_service).get();
+
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {

@@ -2932,6 +2932,41 @@ future<> system_keyspace::delete_paxos_decision(const schema& s, const partition
         ).discard_result();
 }
 
+future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_service>& feat) {
+    auto pre_enabled_features = co_await get_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY);
+    if (!pre_enabled_features) {
+        co_return;
+    }
+    gms::feature_service& local_feat_srv = feat.local();
+    const auto known_features = local_feat_srv.known_feature_set();
+    const auto& registered_features = local_feat_srv.registered_features();
+    const auto persisted_features = gms::feature_service::to_feature_set(*pre_enabled_features);
+    for (auto&& f : persisted_features) {
+        slogger.debug("Enabling persisted feature '{}'", f);
+        const bool is_registered_feat = registered_features.contains(sstring(f));
+        if (!is_registered_feat || !known_features.contains(f)) {
+            if (is_registered_feat) {
+                throw std::runtime_error(format(
+                    "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
+                    "Set the corresponding configuration option to enable the support for the feature.", f));
+            } else {
+                throw std::runtime_error(format("Unknown feature '{}' was previously enabled in the cluster. "
+                    " That means this node is performing a prohibited downgrade procedure"
+                    " and should not be allowed to boot.", f));
+            }
+        }
+        if (is_registered_feat) {
+            // `gms::feature::enable` should be run within a seastar thread context
+            co_await seastar::async([&local_feat_srv, f] {
+                local_feat_srv.enable(sstring(f));
+            });
+        }
+        // If a feature is not in `registered_features` but still in `known_features` list
+        // that means the feature name is used for backward compatibility and should be implicitly
+        // enabled in the code by default, so just skip it.
+    }
+}
+
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }

@@ -415,6 +415,7 @@ public:
     static future<bool> cdc_is_rewritten();
     static future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
+    static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
 }; // class system_keyspace
 
 future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);
