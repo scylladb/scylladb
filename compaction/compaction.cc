@@ -1434,6 +1434,9 @@ public:
     }
 
     reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
+        if (!use_interposer_consumer()) {
+            return end_consumer;
+        }
         return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
             auto cfg = mutation_writer::segregate_config{_io_priority, memory::stats().total_memory() / 10};
             return mutation_writer::segregate_by_partition(std::move(reader), cfg,
