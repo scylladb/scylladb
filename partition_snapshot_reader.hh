@@ -152,10 +152,15 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 }
 
                 range_tombstone_list::iterator_range rt_slice = [&] () {
+                    const auto& tombstones = v.partition().row_tombstones();
                     if (last_rts) {
-                        return v.partition().row_tombstones().upper_slice(*_snapshot_schema, *last_rts, bound_view::from_range_end(ck_range_snapshot));
+                        if constexpr (Reversing) {
+                            return tombstones.lower_slice(*_snapshot_schema, bound_view::from_range_start(ck_range_snapshot), *last_rts);
+                        } else {
+                            return tombstones.upper_slice(*_snapshot_schema, *last_rts, bound_view::from_range_end(ck_range_snapshot));
+                        }
                     } else {
-                        return v.partition().row_tombstones().slice(*_snapshot_schema, ck_range_snapshot);
+                        return tombstones.slice(*_snapshot_schema, ck_range_snapshot);
                     }
                 }();
                 if (rt_slice.begin() != rt_slice.end()) {
@@ -339,6 +344,9 @@ private:
     std::optional<query::clustering_range> opt_reversed_range;
 
     std::optional<position_in_partition> _last_entry;
+    // When not Reversing, it's .position() of last emitted range tombstone.
+    // When Reversing, it's .position().reversed() of last emitted range tombstone,
+    // so that it is usable from functions expecting position in snapshot domain.
     std::optional<position_in_partition> _last_rts;
     mutation_fragment_opt _next_row;
 
@@ -355,6 +363,18 @@ private:
         if (!sr.empty()) {
             emplace_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(sr)));
         }
+    }
+
+    // If `Reversing`, when we pop_range_tombstone(), a reversed rt is returned (the correct
+    // one in query clustering order). In order to save progress of reading from range_tombstone_list,
+    // we need to save the end position of rt (as it was stored in the list). This corresponds to
+    // the start position, with reversed bound weigth.
+    static position_in_partition rt_position_in_snapshot_order(const range_tombstone& rt) {
+        position_in_partition pos(rt.position());
+        if constexpr (Reversing) {
+            pos = pos.reversed();
+        }
+        return pos;
     }
 
     mutation_fragment_opt read_next() {
@@ -374,7 +394,7 @@ private:
 
             auto mf = _reader.next_range_tombstone(ck_range_snapshot, ck_range_query, _last_entry, _last_rts,  pos_view);
             if (mf) {
-                _last_rts = mf->as_range_tombstone().position();
+                _last_rts = rt_position_in_snapshot_order(mf->as_range_tombstone());
                 return mf;
             }
             return std::exchange(_next_row, {});
@@ -382,7 +402,7 @@ private:
             _no_more_rows_in_current_range = true;
             auto mf = _reader.next_range_tombstone(ck_range_snapshot, ck_range_query, _last_entry, _last_rts, position_in_partition_view::for_range_end(ck_range_query));
             if (mf) {
-                _last_rts = mf->as_range_tombstone().position();
+                _last_rts = rt_position_in_snapshot_order(mf->as_range_tombstone());
             }
             return mf;
         }
