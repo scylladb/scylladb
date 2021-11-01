@@ -22,12 +22,15 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/coroutine.hh>
+
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 
 #include "database.hh"
 #include "lister.hh"
@@ -43,6 +46,7 @@
 #include "test/lib/tmpdir.hh"
 #include "db/data_listeners.hh"
 #include "multishard_mutation_query.hh"
+#include "transport/messages/result_message.hh"
 
 using namespace std::chrono_literals;
 
@@ -365,11 +369,13 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
-    return seastar::async([func = std::move(func)] () mutable {
-        tmpdir tmpdir_for_data;
+future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func, lw_shared_ptr<tmpdir> tmpdir_for_data = {}) {
+    return seastar::async([func = std::move(func), tmpdir_for_data = std::move(tmpdir_for_data)] () mutable {
+        if (!tmpdir_for_data) {
+            tmpdir_for_data = make_lw_shared<tmpdir>();
+        }
         auto db_cfg_ptr = make_shared<db::config>();
-        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data.path().string() }));
+        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
             e.create_table([](std::string_view ks_name) {
                 return *schema_builder(ks_name, "cf")
@@ -382,6 +388,10 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 1, 2, 3);").get();
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 2, 2, 3);").get();
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 3, 2, 3);").get();
+
+            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 4, 5, 6);").get();
+            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 5, 5, 6);").get();
+            e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 6, 5, 6);").get();
 
             return func(e);
         }, db_cfg_ptr).get();
@@ -783,4 +793,50 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
             });
         }).get();
     });
+}
+
+SEASTAR_TEST_CASE(populate_from_quarantine_works) {
+    auto tmpdir_for_data = make_lw_shared<tmpdir>();
+
+    // populate tmpdir_for_data and
+    // move a random sstable to quarantine
+    co_await do_with_some_data([] (cql_test_env& e) -> future<> {
+        auto& db = e.db();
+        co_await db.invoke_on_all([] (database& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.flush();
+        });
+        auto shard = tests::random::get_int<unsigned>(0, smp::count);
+        auto found = false;
+        for (auto i = 0; i < smp::count && !found; i++) {
+            found = co_await db.invoke_on((shard + i) % smp::count, [] (database& db) -> future<bool> {
+                auto& cf = db.find_column_family("ks", "cf");
+                auto sstables = cf.in_strategy_sstables();
+                if (sstables.empty()) {
+                    co_return false;
+                }
+                auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
+                testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
+                auto sst = sstables[idx];
+                auto quarantine_dir = sst->get_dir() + "/" + sstables::quarantine_dir;
+                co_await touch_directory(quarantine_dir);
+                co_await sst->move_to_new_dir(quarantine_dir, sst->generation());
+                co_return true;
+            });
+        }
+        BOOST_REQUIRE(found);
+    }, tmpdir_for_data);
+
+    // reload the table from tmpdir_for_data and
+    // verify that all rows are still there
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
+    size_t row_count = 0;
+    co_await do_with_cql_env([&row_count] (cql_test_env& e) -> future<> {
+        auto res = co_await e.execute_cql("select * from ks.cf;");
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+        BOOST_REQUIRE(rows);
+        row_count = rows->rs().result_set().size();
+    }, std::move(db_cfg_ptr));
+    BOOST_REQUIRE_EQUAL(row_count, 6);
 }
