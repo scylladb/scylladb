@@ -230,11 +230,16 @@ public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
 
     using iterator_range = boost::iterator_range<const_iterator>;
-    // Returns range of tombstones which overlap with given range
+    // Returns range tombstones which overlap with given range
     iterator_range slice(const schema& s, const query::clustering_range&) const;
     // Returns range tombstones which overlap with [start, end)
     iterator_range slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
-    iterator_range upper_slice(const schema& s, position_in_partition_view start, bound_view end) const;
+
+    // Returns range tombstones with ends inside [start, before).
+    iterator_range lower_slice(const schema& s, bound_view start, position_in_partition_view before) const;
+    // Returns range tombstones with starts inside (after, end].
+    iterator_range upper_slice(const schema& s, position_in_partition_view after, bound_view end) const;
+
     iterator erase(const_iterator, const_iterator);
 
     // Pops the first element and bans (in theory) further additions
