@@ -1078,26 +1078,31 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     if (!options.start_token.empty() || !options.end_token.empty()) {
         // Intersect the list of local ranges with the given token range,
         // dropping ranges with no intersection.
-        // We don't have a range::intersect() method, but we can use
-        // range::subtract() and subtract the complement range.
         std::optional<::range<dht::token>::bound> tok_start;
         std::optional<::range<dht::token>::bound> tok_end;
         if (!options.start_token.empty()) {
             tok_start = ::range<dht::token>::bound(
                 dht::token::from_sstring(options.start_token),
-                true);
+                false);
         }
         if (!options.end_token.empty()) {
             tok_end = ::range<dht::token>::bound(
                 dht::token::from_sstring(options.end_token),
-                false);
+                true);
         }
-        dht::token_range given_range_complement(tok_end, tok_start);
+        auto wrange = wrapping_range<dht::token>(tok_start, tok_end);
+        dht::token_range_vector given_ranges;
+        ::compat::unwrap_into(std::move(wrange), dht::token_comparator(), [&] (dht::token_range&& x) {
+            given_ranges.push_back(std::move(x));
+        });
         dht::token_range_vector intersections;
         for (const auto& range : ranges) {
-            auto rs = range.subtract(given_range_complement,
-                    dht::token_comparator());
-            intersections.insert(intersections.end(), rs.begin(), rs.end());
+            for (const auto& given_range : given_ranges) {
+                auto intersection_opt = range.intersection(given_range, dht::token_comparator());
+                if (intersection_opt) {
+                    intersections.push_back(*intersection_opt);
+                }
+            }
         }
         ranges = std::move(intersections);
     }
