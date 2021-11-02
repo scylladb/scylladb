@@ -470,18 +470,17 @@ public:
     }
 
     virtual future<> fill_buffer() override {
-      // FIXME: indentation
-      return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-        _reader.with_reserve([&] {
-            if (!_static_row_done) {
-                push_static_row();
-                on_new_range();
-                _static_row_done = true;
-            }
-            do_fill_buffer();
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            _reader.with_reserve([&] {
+                if (!_static_row_done) {
+                    push_static_row();
+                    on_new_range();
+                    _static_row_done = true;
+                }
+                do_fill_buffer();
+            });
+            return make_ready_future<>();
         });
-        return make_ready_future<>();
-      });
     }
     virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
