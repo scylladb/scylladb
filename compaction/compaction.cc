@@ -1396,7 +1396,7 @@ private:
 private:
     compaction_type_options::scrub _options;
     std::string _scrub_start_description;
-    std::string _scrub_finish_description;
+    mutable std::string _scrub_finish_description;
     uint64_t _bucket_count = 0;
 
 public:
@@ -1412,6 +1412,9 @@ public:
     }
 
     std::string_view report_finish_desc() const override {
+        if (_options.operation_mode == compaction_type_options::scrub::mode::segregate) {
+            _scrub_finish_description = fmt::format("Finished scrubbing in {} mode{}", _options.operation_mode, _bucket_count ? fmt::format(" (segregated input into {} bucket(s))", _bucket_count) : "");
+        }
         return _scrub_finish_description;
     }
 
@@ -1432,7 +1435,9 @@ public:
 
     reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
         return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
-            return mutation_writer::segregate_by_partition(std::move(reader), 100, [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
+            auto cfg = mutation_writer::segregate_config{_io_priority, memory::stats().total_memory() / 10};
+            return mutation_writer::segregate_by_partition(std::move(reader), cfg,
+                    [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
                 ++_bucket_count;
                 return consumer(std::move(rd));
             });

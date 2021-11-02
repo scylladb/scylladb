@@ -450,99 +450,69 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
 
     auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
 
-    auto input_mutations = tests::generate_random_mutations(random_schema).get();
-    input_mutations.emplace_back(*input_mutations.begin()); // Have a duplicate partition as well.
-    std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
+    const auto input_mutations = tests::generate_random_mutations(
+            random_schema,
+            tests::default_timestamp_generator(),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(100, 1000), // partitions
+            std::uniform_int_distribution<size_t>(1, 4), // rows
+            std::uniform_int_distribution<size_t>(0, 1)).get(); // range tombstones
 
-    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), 10000, [] (flat_mutation_reader rd) {
-        testlog.info("Checking segregated output stream");
-        return async([rd = std::move(rd)] () mutable {
-            assert_that(std::move(rd)).has_monotonic_positions();
-        });
-    }).get();
-}
+    auto shuffled_input_mutations = input_mutations;
+    shuffled_input_mutations.emplace_back(*shuffled_input_mutations.begin()); // Have a duplicate partition as well.
+    std::shuffle(shuffled_input_mutations.begin(), shuffled_input_mutations.end(), tests::random::gen());
 
-// Check that the partition_based_splitting_mutation_writer limits the number of live buckets
-SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer_bucket_limit) {
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto random_spec = tests::make_random_schema_specification(
-            get_name(),
-            std::uniform_int_distribution<size_t>(1, 2),
-            std::uniform_int_distribution<size_t>(0, 2),
-            std::uniform_int_distribution<size_t>(1, 2),
-            std::uniform_int_distribution<size_t>(0, 1));
+    testlog.info("input_mutations.size()={}", input_mutations.size());
 
-    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+    std::vector<std::vector<mutation>> output_mutations;
+    size_t next_index = 0;
 
-    const auto max_buckets = 10u;
+    auto consumer = [&] (flat_mutation_reader rd) {
+        const auto index = next_index++;
+        output_mutations.emplace_back();
+        BOOST_REQUIRE_EQUAL(output_mutations.size(), next_index);
 
-    auto input_mutations = tests::generate_random_mutations(random_schema).get();
-    std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
-    while (input_mutations.size() < max_buckets * 4) {
-        input_mutations.push_back(input_mutations.at(tests::random::get_int<uint32_t>(input_mutations.size() - 1)));
-    }
-
-    unsigned num_buckets = 0;
-
-    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), max_buckets,
-            [&num_buckets] (flat_mutation_reader rd) {
-        ++num_buckets;
-        BOOST_REQUIRE(num_buckets <= max_buckets);
-        return async([&num_buckets, rd = std::move(rd)] () mutable {
-            assert_that(std::move(rd)).has_monotonic_positions();
-            BOOST_REQUIRE(num_buckets);
-            --num_buckets;
-        });
-    }).get();
-}
-
-SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer_exception_safety) {
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto random_spec = tests::make_random_schema_specification(
-            get_name(),
-            std::uniform_int_distribution<size_t>(1, 2),
-            std::uniform_int_distribution<size_t>(0, 2),
-            std::uniform_int_distribution<size_t>(1, 2),
-            std::uniform_int_distribution<size_t>(0, 1));
-
-    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
-
-    const auto max_buckets = 10u;
-
-    auto input_mutations = tests::generate_random_mutations(random_schema).get();
-    std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
-    while (input_mutations.size() < max_buckets * 4) {
-        input_mutations.push_back(input_mutations.at(tests::random::get_int<uint32_t>(input_mutations.size() - 1)));
-    }
-
-    auto& injector = memory::local_failure_injector();
-    uint64_t i = 0;
-    do {
-        auto reader = flat_mutation_reader_from_mutations(semaphore.make_permit(), input_mutations);
-        testlog.trace("i={}", i);
-        try {
-            injector.fail_after(i++);
-
-            mutation_writer::segregate_by_partition(std::move(reader), max_buckets, [&injector] (flat_mutation_reader rd) {
-                try {
-                    injector.on_alloc_point();
-                } catch (...) {
-                    (void)rd.close();
-                    throw;
+        return async([&, index, rd = std::move(rd)] () mutable {
+            auto close_rd = deferred_close(rd);
+            mutation_fragment_stream_validating_filter validator("test", *rd.schema(), mutation_fragment_stream_validation_level::clustering_key);
+            while (auto mf_opt = rd().get()) {
+                if (mf_opt->is_partition_start()) {
+                    const auto& key = mf_opt->as_partition_start().key();
+                    validator(key);
+                    output_mutations[index].emplace_back(rd.schema(), key);
                 }
-                // We are not interested in the various ways the below can fail.
-                memory::scoped_critical_alloc_section _;
-                return async([rd = std::move(rd)] () mutable {
-                    auto close_reader = deferred_close(rd);
-                    try {
-                        while (auto mfopt = rd().get());
-                    } catch (...) {
-                    }
-                });
-            }).get();
-
-            injector.cancel();
-        } catch (const std::bad_alloc&) {
+                validator(*mf_opt);
+                output_mutations[index].back().apply(*mf_opt);
+            }
+            validator.on_end_of_stream();
+        });
+    };
+    auto check_and_reset = [&] {
+        std::vector<flat_mutation_reader> readers;
+        auto close_readers = defer([&] {
+            for (auto& rd : readers) {
+                rd.close().get();
+            }
+        });
+        for (auto muts : output_mutations) {
+            readers.emplace_back(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(muts)));
         }
-    } while (injector.failed());
+        auto rd = assert_that(make_combined_reader(random_schema.schema(), semaphore.make_permit(), std::move(readers)));
+        for (const auto& mut : input_mutations) {
+            rd.produces(mut);
+        }
+        output_mutations.clear();
+        next_index = 0;
+    };
+
+    for (const size_t max_memory : {1'000, 10'000, 1'000'000, 10'000'000, 100'000'000}) {
+        testlog.info("Segregating with in-memory method (max_memory={})", max_memory);
+        mutation_writer::segregate_by_partition(
+                flat_mutation_reader_from_mutations(semaphore.make_permit(), shuffled_input_mutations),
+                mutation_writer::segregate_config{default_priority_class(), max_memory},
+                consumer).get();
+        testlog.info("Done segregating with in-memory method (max_memory={}): input segregated into {} buckets", max_memory, output_mutations.size());
+        check_and_reset();
+    }
+
 }
