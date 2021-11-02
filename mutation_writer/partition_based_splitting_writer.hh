@@ -27,19 +27,6 @@
 
 namespace mutation_writer {
 
-// Given a producer that may contain partitions in the wrong order, or even
-// contain partitions multiple times, separate them such that each output
-// stream keeps the partition ordering guarantee. In other words, repair
-// a stream that violates the ordering requirements by splitting it into output
-// streams that honor it.
-// This is useful for scrub compaction to split sstables containing out-of-order
-// and/or duplicate partitions into sstables that honor the partition ordering.
-//
-// The parameter max_buckets limits the number of live buckets. When reaching the
-// limit, an existing (the largest) bucket will be closed before a new one is
-// created.
-future<> segregate_by_partition(flat_mutation_reader producer, unsigned max_buckets, reader_consumer consumer);
-
 struct segregate_config {
     // For flushing the memtable which does the in-memory segregation (sorting)
     // part.
