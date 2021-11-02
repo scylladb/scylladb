@@ -1432,7 +1432,9 @@ public:
 
     reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
         return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
-            return mutation_writer::segregate_by_partition(std::move(reader), 100, [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
+            auto cfg = mutation_writer::segregate_config{_io_priority, memory::stats().total_memory() / 10};
+            return mutation_writer::segregate_by_partition(std::move(reader), cfg,
+                    [consumer = std::move(end_consumer), this] (flat_mutation_reader rd) {
                 ++_bucket_count;
                 return consumer(std::move(rd));
             });

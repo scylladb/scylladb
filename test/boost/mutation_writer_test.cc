@@ -454,7 +454,8 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     input_mutations.emplace_back(*input_mutations.begin()); // Have a duplicate partition as well.
     std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
 
-    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), 10000, [] (flat_mutation_reader rd) {
+    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)),
+            mutation_writer::segregate_config{default_priority_class(), 100000}, [] (flat_mutation_reader rd) {
         testlog.info("Checking segregated output stream");
         return async([rd = std::move(rd)] () mutable {
             assert_that(std::move(rd)).has_monotonic_positions();
@@ -484,8 +485,8 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer_bucket_l
 
     unsigned num_buckets = 0;
 
-    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)), max_buckets,
-            [&num_buckets] (flat_mutation_reader rd) {
+    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(semaphore.make_permit(), std::move(input_mutations)),
+            mutation_writer::on_disk_segregate_config{max_buckets}, [&num_buckets] (flat_mutation_reader rd) {
         ++num_buckets;
         BOOST_REQUIRE(num_buckets <= max_buckets);
         return async([&num_buckets, rd = std::move(rd)] () mutable {
@@ -523,7 +524,8 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer_exceptio
         try {
             injector.fail_after(i++);
 
-            mutation_writer::segregate_by_partition(std::move(reader), max_buckets, [&injector] (flat_mutation_reader rd) {
+            mutation_writer::segregate_by_partition(std::move(reader), mutation_writer::segregate_config{default_priority_class(), 1000},
+                    [&injector] (flat_mutation_reader rd) {
                 try {
                     injector.on_alloc_point();
                 } catch (...) {
