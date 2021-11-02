@@ -548,7 +548,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 auto& [snp, is_local, old_id] = *batch.snp;
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
-                co_await _persistence->store_snapshot_descriptor(snp, _config.snapshot_trailing);
+                co_await _persistence->store_snapshot_descriptor(snp, is_local ? _config.snapshot_trailing : 0);
                 _stats.store_snapshot++;
                 // Drop previous snapshot since it is no longer used
                  _state_machine->drop_snapshot(old_id);
