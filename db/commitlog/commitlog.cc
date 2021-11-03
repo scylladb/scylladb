@@ -290,7 +290,6 @@ public:
     request_controller_type _request_controller;
     shared_promise<> _disk_deletions;
 
-    std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::unordered_map<sstring, descriptor> _files_to_delete;
     std::vector<file> _files_to_close;
 
@@ -304,7 +303,7 @@ public:
 
     template<typename T, typename R = typename T::result_type>
     requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
-    future<R> allocate_when_possible(T writer, db::timeout_clock::time_point timeout);
+    future<R> allocate_when_possible(T writer, db::timeout_clock::time_point timeout, data_class);
 
     struct stats {
         uint64_t cycle_count = 0;
@@ -362,8 +361,8 @@ public:
     }
 
     future<> init();
-    future<sseg_ptr> new_segment();
-    future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
+    future<sseg_ptr> new_segment(data_class);
+    future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout, data_class);
     future<sseg_ptr> allocate_segment();
     future<sseg_ptr> allocate_segment_ex(descriptor, sstring filename, open_flags);
 
@@ -375,6 +374,8 @@ public:
     future<> sync_all_segments();
     future<> shutdown_all_segments();
     future<> shutdown();
+
+    size_t num_segments() const;
 
     void create_counters(const sstring& metrics_category_name);
 
@@ -431,7 +432,14 @@ private:
     future<> rename_file(sstring, sstring) const;
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0;
-    std::vector<sseg_ptr> _segments;
+
+    static constexpr size_t max_data_classes = size_t(data_class::max);
+
+    template<typename T>
+    using per_data_class = std::array<T, max_data_classes>;
+
+    per_data_class<std::vector<sseg_ptr>> _segments;    
+    per_data_class<std::optional<shared_future<with_clock<db::timeout_clock>>>> _segment_allocating;
     queue<sseg_ptr> _reserve_segments;
     queue<sstring> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
@@ -638,10 +646,10 @@ public:
     /**
      * Finalize this segment and get a new one
      */
-    future<sseg_ptr> finish_and_get_new(db::timeout_clock::time_point timeout) {
+    future<sseg_ptr> finish_and_get_new(db::timeout_clock::time_point timeout, data_class dc) {
         //FIXME: discarded future.
         (void)close();
-        return _segment_manager->active_segment(timeout);
+        return _segment_manager->active_segment(timeout, dc);
     }
     void reset_sync_time() {
         _sync_time = clock_type::now();
@@ -1137,7 +1145,7 @@ public:
 
 template<typename T, typename R>
 requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
-future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::timeout_clock::time_point timeout) {
+future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::timeout_clock::time_point timeout, data_class dc) {
     auto size = writer.size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
@@ -1152,10 +1160,12 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
     auto permit = co_await std::move(fut);
     sseg_ptr s;
 
-    if (!_segments.empty() && _segments.back()->is_still_allocating()) {
-        s = _segments.back();
+    auto& segments = _segments.at(size_t(dc));
+
+    if (!segments.empty() && segments.back()->is_still_allocating()) {
+        s = segments.back();
     } else {
-        s = co_await active_segment(timeout);
+        s = co_await active_segment(timeout, dc);
     }
 
     for (;;) {
@@ -1168,7 +1178,7 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
                 s = co_await with_timeout(timeout, s->sync());
                 continue;
             case write_result::no_space:
-                s = co_await s->finish_and_get_new(timeout);
+                s = co_await s->finish_and_get_new(timeout, dc);
                 continue;
             case write_result::ok_need_batch_sync:
                 s = co_await s->batch_cycle(timeout);
@@ -1321,18 +1331,30 @@ future<> db::commitlog::segment_manager::init() {
     arm(delay);
 }
 
+size_t db::commitlog::segment_manager::num_segments() const {
+    return std::accumulate(_segments.begin(), _segments.end(), size_t(0), [](auto v, auto& segments) { return v + segments.size(); }); 
+}
+
 void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(metrics_category_name, {
-        sm::make_gauge("segments", [this] { return _segments.size(); },
+        sm::make_gauge("segments", std::bind(&segment_manager::num_segments, this),
                        sm::description("Holds the current number of segments.")),
 
-        sm::make_gauge("allocating_segments", [this] { return std::count_if(_segments.begin(), _segments.end(), [] (const sseg_ptr & s) { return s->is_still_allocating(); }); },
+        sm::make_gauge("allocating_segments", [this] {
+                return std::accumulate(_segments.begin(), _segments.end(), size_t(0), [](auto v, auto& segments) {
+                    return std::count_if(segments.begin(), segments.end(), [] (const sseg_ptr & s) { return s->is_still_allocating(); });
+                });
+            },
                        sm::description("Holds the number of not closed segments that still have some free space. "
                                        "This value should not get too high.")),
 
-        sm::make_gauge("unused_segments", [this] { return std::count_if(_segments.begin(), _segments.end(), [] (const sseg_ptr & s) { return s->is_unused(); }); },
+        sm::make_gauge("unused_segments", [this] {
+                return std::accumulate(_segments.begin(), _segments.end(), size_t(0), [](auto v, auto& segments) {
+                    return std::count_if(segments.begin(), segments.end(), [] (const sseg_ptr & s) { return s->is_unused(); });
+                });
+            },
                        sm::description("Holds the current number of unused segments. "
                                        "A non-zero value indicates that the disk write path became temporary slow.")),
 
@@ -1388,54 +1410,74 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
 }
 
 void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
-    if (_segments.empty()) {
-        return;
-    }
-    // defensive copy.
-    auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
-    auto& active = _segments.back();
-
-    // RP at "start" of segment we leave untouched.
-    replay_position high(active->_desc.id, 0);
-
-    // But if all segments are closed or we force-flush,
-    // include all.
-    if (!active->is_still_allocating()) {
-        high = replay_position(high.id + 1, 0);
-    }
-
-    auto n = size_to_remove;
-
-    if (size_to_remove != 0) {
-        for (auto& s : _segments) {
-            if (n <= s->_size_on_disk) {
-                high = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
-                break;
-            }
-            n -= s->_size_on_disk;
+    auto dc = data_class::normal;
+    for (auto& segments : _segments) {
+        if (segments.empty()) {
+            return;
         }
-    }
+        // defensive copy.
+        auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
+        auto& active = segments.back();
 
-    // Now get a set of used CF ids:
-    std::unordered_set<cf_id_type> ids;
-    auto e = std::find_if(_segments.begin(), _segments.end(), std::mem_fn(&segment::is_still_allocating));
-    std::for_each(_segments.begin(), e, [&ids](sseg_ptr& s) {
-        for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
-            ids.insert(id);
+        // RP at "start" of segment we leave untouched.
+        replay_position high(active->_desc.id, 0);
+
+        // But if all segments are closed or we force-flush,
+        // include all.
+        if (!active->is_still_allocating()) {
+            high = replay_position(high.id + 1, 0);
         }
-    });
 
-    clogger.debug("Flushing ({} MB) to {}", size_to_remove/(1024*1024), high);
+        auto n = size_to_remove;
 
-    // For each CF id: for each callback c: call c(id, high)
-    for (auto& f : callbacks) {
-        for (auto& id : ids) {
-            try {
-                f(id, high);
-            } catch (...) {
-                clogger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
+        if (size_to_remove != 0) {
+            for (auto& s : segments) {
+                auto erp = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
+
+
+
+                if (n <= s->_size_on_disk) {
+                    n = 0;
+                    high = erp;
+                    break;
+                }
+                n -= s->_size_on_disk;
             }
         }
+
+        // Now get a set of used CF ids:
+        std::unordered_set<cf_id_type> ids;
+        auto e = std::find_if(segments.begin(), segments.end(), std::mem_fn(&segment::is_still_allocating));
+        std::for_each(segments.begin(), e, [&ids, &dc](sseg_ptr& s) {
+            for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
+                ids.insert(id);
+
+                if (dc == data_class::lowfreq_lowvol) {
+                    clogger.info("Flush low low kossa {}", id);
+                }
+            }
+        });
+
+        clogger.debug("Flushing ({} MB) to {}", size_to_remove/(1024*1024), high);
+
+        // For each CF id: for each callback c: call c(id, high)
+        for (auto& f : callbacks) {
+            for (auto& id : ids) {
+                try {
+                    f(id, high);
+                } catch (...) {
+                    clogger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
+                }
+            }
+        }
+
+        dc = data_class::lowfreq_lowvol;
+
+        if (size_to_remove != 0 && n == 0) {
+            break;
+        }
+
+        size_to_remove = n;
     }
 }
 
@@ -1593,7 +1635,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     }
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment(data_class dc) {
     if (_shutdown) {
         co_return coroutine::make_exception(std::runtime_error("Commitlog has been shut down. Cannot add data"));
     }
@@ -1615,30 +1657,34 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     }
 
     auto s = co_await _reserve_segments.pop_eventually();
-    _segments.push_back(s);
-    _segments.back()->reset_sync_time();
+    auto& segments = _segments.at(size_t(dc));
+    segments.push_back(s);
+    segments.back()->reset_sync_time();
     co_return s;
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(db::timeout_clock::time_point timeout) {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(db::timeout_clock::time_point timeout, data_class dc) {
     // If there is no active segment, try to allocate one using new_segment(). If we time out,
     // make sure later invocations can still pick that segment up once it's ready.
+    auto& segments = _segments.at(size_t(dc));
+    auto& segment_allocating = _segment_allocating.at(size_t(dc));
+
     for (;;) {
-        if (!_segments.empty() && _segments.back()->is_still_allocating()) {
-            co_return _segments.back();
+        if (!segments.empty() && segments.back()->is_still_allocating()) {
+            co_return segments.back();
         }
 
-        if (_segment_allocating) {
-            co_await _segment_allocating->get_future(timeout);
+        if (segment_allocating) {
+            co_await segment_allocating->get_future(timeout);
             continue;
         }
 
         promise<> p;
-        _segment_allocating.emplace(p.get_future());
-        auto finally = defer([&] () noexcept { _segment_allocating = std::nullopt; });
+        segment_allocating.emplace(p.get_future());
+        auto finally = defer([&] () noexcept { segment_allocating = std::nullopt; });
         try {
             gate::holder g(_gate);
-            auto s = co_await with_timeout(timeout, new_segment());
+            auto s = co_await with_timeout(timeout, new_segment(dc));
             p.set_value();
         } catch (...) {
             p.set_exception(std::current_exception());
@@ -1656,10 +1702,12 @@ void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type
 
     clogger.debug("Discarding {}: {}", id, usage);
 
-    for (auto&s : _segments) {
-        auto i = usage.find(s->_desc.id);
-        if (i != usage.end()) {
-            s->mark_clean(id, i->second);
+    for (auto& segments : _segments) {
+        for (auto&s : segments) {
+            auto i = usage.find(s->_desc.id);
+            if (i != usage.end()) {
+                s->mark_clean(id, i->second);
+            }
         }
     }
     discard_unused_segments();
@@ -1667,8 +1715,10 @@ void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type
 
 void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id) {
     clogger.debug("Discard all data for {}", id);
-    for (auto&s : _segments) {
-        s->mark_clean(id);
+    for (auto& segments : _segments) {
+        for (auto&s : segments) {
+            s->mark_clean(id);
+        }
     }
     discard_unused_segments();
 }
@@ -1690,22 +1740,24 @@ std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
 }
 
 void db::commitlog::segment_manager::discard_unused_segments() {
-    clogger.trace("Checking for unused segments ({} active)", _segments.size());
+    clogger.trace("Checking for unused segments ({} active)", num_segments());
 
-    std::erase_if(_segments, [=](sseg_ptr s) {
-        if (s->can_delete()) {
-            clogger.debug("Segment {} is unused", *s);
-            return true;
-        }
-        if (s->is_still_allocating()) {
-            clogger.debug("Not safe to delete segment {}; still allocating.", s);
-        } else if (!s->is_clean()) {
-            clogger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
-        } else {
-            clogger.debug("Not safe to delete segment {}; disk ops pending", s);
-        }
-        return false;
-    });
+    for (auto& segments : _segments) {
+        std::erase_if(segments, [=](sseg_ptr s) {
+            if (s->can_delete()) {
+                clogger.debug("Segment {} is unused", *s);
+                return true;
+            }
+            if (s->is_still_allocating()) {
+                clogger.debug("Not safe to delete segment {}; still allocating.", s);
+            } else if (!s->is_clean()) {
+                clogger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+            } else {
+                clogger.debug("Not safe to delete segment {}; disk ops pending", s);
+            }
+            return false;
+        });
+    }
 
     // launch in background, but guard with gate so this deletion is
     // sure to finish in shutdown, because at least through this path,
@@ -1743,22 +1795,26 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
     clogger.debug("Issuing sync for all segments");
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
-    auto def_copy = _segments;
-    co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
-        co_await s->sync();
-        clogger.debug("Synced segment {}", *s);
-    });
+    for (auto& segments : _segments) {
+        auto def_copy = segments;
+        co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
+            co_await s->sync();
+            clogger.debug("Synced segment {}", *s);
+        });
+    }
 }
 
 future<> db::commitlog::segment_manager::shutdown_all_segments() {
     clogger.debug("Issuing shutdown for all segments");
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
-    auto def_copy = _segments;
-    co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
-        co_await s->shutdown();
-        clogger.debug("Shutdown segment {}", *s);
-    });
+    for (auto& segments : _segments) {
+        auto def_copy = segments;
+        co_await parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
+            co_await s->shutdown();
+            clogger.debug("Shutdown segment {}", *s);
+        });
+    }
 }
 
 future<> db::commitlog::segment_manager::shutdown() {
@@ -1952,7 +2008,9 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
-    _segments.clear();
+    for (auto& segments : _segments) {
+        segments.clear();
+    }
     return clear_reserve_segments();
 }
 
@@ -1965,8 +2023,10 @@ future<> db::commitlog::segment_manager::clear() {
     clogger.debug("Clearing commitlog");
     co_await shutdown();
     clogger.debug("Clearing all segments");
-    for (auto& s : _segments) {
-        s->mark_clean();
+    for (auto& segments : _segments) {
+        for (auto& s : segments) {
+            s->mark_clean();
+        }
     }
     co_await orphan_all();
 }
@@ -1978,8 +2038,10 @@ void db::commitlog::segment_manager::sync() {
     // #8952 - calls that do sync/cycle can end up altering
     // _segments (end_flush()->discard_unused())
     auto def_copy = _segments;
-    _background_sync = parallel_for_each(def_copy, [](sseg_ptr s) {
-        return s->sync().discard_result();
+    _background_sync = parallel_for_each(def_copy, [](auto& segments) {
+        return parallel_for_each(segments, [](sseg_ptr s) {
+            return s->sync().discard_result();
+        });
     }).then([f = std::move(f)]() mutable {
         return std::move(f);
     });
@@ -2012,25 +2074,35 @@ void db::commitlog::segment_manager::on_timer() {
 
 std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
     std::vector<sstring> res;
-    for (auto i: _segments) {
-        if (!i->is_unused()) {
-            // Each shared is located in its own directory
-            res.push_back(cfg.commit_log_location + "/" + i->get_segment_name());
+    for (auto& segments : _segments) {
+        for (auto i : segments) {
+            if (!i->is_unused()) {
+                // Each shared is located in its own directory
+                res.push_back(cfg.commit_log_location + "/" + i->get_segment_name());
+            }
         }
     }
     return res;
 }
 
 uint64_t db::commitlog::segment_manager::get_num_dirty_segments() const {
-    return std::count_if(_segments.begin(), _segments.end(), [](sseg_ptr s) {
-        return !s->is_still_allocating() && !s->is_clean();
-    });
+    uint64_t res = 0;
+    for (auto& segments : _segments) {
+        res += std::count_if(segments.begin(), segments.end(), [](sseg_ptr s) {
+            return !s->is_still_allocating() && !s->is_clean();
+        });
+    }
+    return res;
 }
 
 uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
-    return std::count_if(_segments.begin(), _segments.end(), [](sseg_ptr s) {
-        return s->is_still_allocating();
-    });
+    uint64_t res = 0;
+    for (auto& segments : _segments) {
+        res += std::count_if(segments.begin(), segments.end(), [](sseg_ptr s) {
+            return s->is_still_allocating();
+        });
+    }
+    return res;
 }
 
 temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s, size_t alignment) {
@@ -2082,7 +2154,7 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
             return std::move(res);
         }
     };
-    return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout);
+    return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout, dc);
 }
 
 future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout, data_class dc)
@@ -2125,7 +2197,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
             return std::move(res);
         }
     };
-    return _segment_manager->allocate_when_possible(cl_entry_writer(cew), timeout);
+    return _segment_manager->allocate_when_possible(cl_entry_writer(cew), timeout, dc);
 }
 
 future<std::vector<db::rp_handle>> 
@@ -2187,7 +2259,7 @@ db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db
     };
 
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
-    return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
+    return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout, dc);
 }
 
 db::commitlog::commitlog(config cfg)
