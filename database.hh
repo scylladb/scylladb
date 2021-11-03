@@ -119,6 +119,7 @@ class extensions;
 class rp_handle;
 class data_listeners;
 class large_data_handler;
+enum class data_class;
 
 future<> system_keyspace_make(database& db, service::storage_service& ss);
 
@@ -488,7 +489,13 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
+
+    db::data_class _data_class;
 public:
+    db::data_class get_data_class() const {
+        return _data_class;
+    }
+
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);

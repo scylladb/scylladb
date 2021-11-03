@@ -1182,6 +1182,17 @@ table::make_memtable_list() {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
 }
 
+static db::data_class class_for(schema_ptr s) {
+    // TODO: an actual good way to do this check.
+    // Cannot check paxos() pointer equivalence, since the schema
+    // we get here is versioned and replaced from that initial one.
+    if (s->ks_name() == db::system_keyspace::NAME && s->cf_name() == db::system_keyspace::PAXOS) {
+        return db::data_class::lowfreq_lowvol; 
+    }
+    // TODO: views?
+    return db::data_class::normal;
+}
+
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager,
              cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
     : _schema(std::move(schema))
@@ -1201,6 +1212,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
+    , _data_class(class_for(_schema))
     , _row_locker(_schema)
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {

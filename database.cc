@@ -1836,7 +1836,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     if (cf.commitlog() != nullptr && cf.durable_writes()) {
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
             commitlog_entry_writer cew(m.schema(), fm, db::commitlog::force_sync::no);
-            return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
+            return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout, cf.get_data_class());
         }).then([this, &m, &cf, timeout] (db::rp_handle h) {
             return apply_in_memory(m, cf, std::move(h), timeout).handle_exception(maybe_handle_reorder);
         });
@@ -1849,7 +1849,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
     auto cl = cf.commitlog();
     if (cl != nullptr && cf.durable_writes()) {
         commitlog_entry_writer cew(s, m, sync);
-        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
+        return cf.commitlog()->add_entry(uuid, cew, timeout, cf.get_data_class()).then([&m, this, s, timeout, cl](db::rp_handle h) {
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception(maybe_handle_reorder);
         });
     }
