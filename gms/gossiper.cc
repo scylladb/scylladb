@@ -478,8 +478,10 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
 }
 
 rpc::no_wait_type gossiper::background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn) {
-    (void)container().invoke_on(0, std::move(fn)).handle_exception([type = std::move(type)] (auto ep) {
-        logger.warn("Failed to handle {}: {}", type, ep);
+    (void)with_gate(_background_msg, [this, type = std::move(type), fn = std::move(fn)] () mutable {
+        return container().invoke_on(0, std::move(fn)).handle_exception([type = std::move(type)] (auto ep) {
+            logger.warn("Failed to handle {}: {}", type, ep);
+        });
     });
     return messaging_service::no_wait();
 }
@@ -2169,6 +2171,9 @@ future<> gossiper::start() {
 }
 
 future<> gossiper::shutdown() {
+    if (!_background_msg.is_closed()) {
+        co_await _background_msg.close();
+    }
     if (this_shard_id() == 0) {
         co_await do_stop_gossiping();
     }
