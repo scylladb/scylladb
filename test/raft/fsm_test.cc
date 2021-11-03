@@ -293,6 +293,20 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     // Set trailing shorter than the length of the log
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
     BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+    // check that configuration from snapshot is used and not config entries from a trailing
+    add_entry(log, cfg);
+    add_entry(log, cfg);
+    add_entry(log, log_entry::dummy{});
+    auto snp_idx = log.last_idx();
+    log.apply_snapshot(log_snapshot(log, snp_idx), 10);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), snp_idx);
+    // Check that configuration from the log is used if it has higher index then snapshot idx
+    add_entry(log, log_entry::dummy{});
+    snp_idx = log.last_idx();
+    add_entry(log, cfg);
+    add_entry(log, cfg);
+    log.apply_snapshot(log_snapshot(log, snp_idx), 10);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), log.last_idx());
 }
 
 void test_election_single_node_helper(raft::fsm_config fcfg) {
