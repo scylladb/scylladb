@@ -440,6 +440,8 @@ private:
 
     per_data_class<std::vector<sseg_ptr>> _segments;    
     per_data_class<std::optional<shared_future<with_clock<db::timeout_clock>>>> _segment_allocating;
+    per_data_class<replay_position> _flush_callback_done;
+
     queue<sseg_ptr> _reserve_segments;
     queue<sstring> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
@@ -1430,12 +1432,17 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 
         auto n = size_to_remove;
 
+        auto last_high = _flush_callback_done[size_t(dc)];
+
         if (size_to_remove != 0) {
             for (auto& s : segments) {
                 auto erp = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
 
 
 
+                if (erp <= last_high) {
+                    continue;
+                }
                 if (n <= s->_size_on_disk) {
                     n = 0;
                     high = erp;
@@ -1470,6 +1477,8 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
                 }
             }
         }
+
+        _flush_callback_done[size_t(dc)] = high;
 
         dc = data_class::lowfreq_lowvol;
 
