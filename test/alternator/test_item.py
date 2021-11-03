@@ -440,7 +440,6 @@ def test_update_item_non_existent(test_table_s):
 # used to delete elements from a set attribute. The latter is a RMW operation,
 # because it requires testing the existing value of the attribute, if it
 # is indeed a set of the desired type.
-@pytest.mark.xfail(reason="UpdateItem AttributeUpdates DELETE not implemented for sets")
 def test_update_item_delete(test_table_s):
     p = random_string()
     a = random_string()

@@ -277,7 +277,7 @@ const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value&
     auto it = v.MemberBegin();
     const std::string it_key = it->name.GetString();
     if (it_key != "SS" && it_key != "BS" && it_key != "NS") {
-        return {"", nullptr};
+        return {std::move(it_key), nullptr};
     }
     return std::make_pair(it_key, &(it->value));
 }
@@ -347,7 +347,7 @@ std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value&
     auto [set1_type, set1] = unwrap_set(v1);
     auto [set2_type, set2] = unwrap_set(v2);
     if (set1_type != set2_type) {
-        throw api_error::validation(format("Mismatched set types: {} and {}", set1_type, set2_type));
+        throw api_error::validation(format("Set DELETE type mismatch: {} and {}", set1_type, set2_type));
     }
     if (!set1 || !set2) {
         throw api_error::validation("UpdateExpression: DELETE operation can only be performed on a set");

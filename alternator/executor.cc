@@ -2336,8 +2336,11 @@ static bool check_needs_read_before_write_attribute_updates(rjson::value *attrib
             if (action_s == "ADD") {
                 return true;
             }
-            // FIXME: we also need to read before write in certain cases
-            // of the DELETE action.
+            // For DELETE operation, it only needs a read before write if the
+            // "Value" option is used. Without it, it's just a delete.
+            if (action_s == "DELETE" && it->value.HasMember("Value")) {
+                return true;
+            }
         }
     }
     return false;
@@ -2696,16 +2699,42 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             }
             std::string action = (it->value)["Action"].GetString();
             if (action == "DELETE") {
-                // FIXME: Currently we support only the simple case where the
-                // "Value" field is missing. If it were not missing, we would
-                // we need to verify the old type and/or value is same as
-                // specified before deleting... We don't do this yet.
-                // This is issue #5864.
+                // The DELETE operation can do two unrelated tasks. Without a
+                // "Value" option, it is used to delete an attribute. With a
+                // "Value" option, it is used to delete a set of elements from
+                // a set attribute of the same type.
                 if (it->value.HasMember("Value")) {
-                     throw api_error::validation(
-                            format("UpdateItem DELETE with checking old value not yet supported"));
+                    // Subtracting sets needs a read of previous_item, so
+                    // check_needs_read_before_write_attribute_updates()
+                    // returns true in this case, and previous_item is
+                    // available to us when the item exists.
+                    const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_sstring_view(column_name)) : nullptr;
+                    const rjson::value& v2 = (it->value)["Value"];
+                    validate_value(v2, "AttributeUpdates");
+                    std::string v2_type = get_item_type_string(v2);
+                    if (v2_type != "SS" && v2_type != "NS" && v2_type != "BS") {
+                        throw api_error::validation(format("AttributeUpdates DELETE operation with Value only valid for sets, got type {}", v2_type));
+                    }
+                    if (v1) {
+                        std::optional<rjson::value> result = set_diff(*v1, v2);
+                        if (result) {
+                            do_update(std::move(column_name), *result);
+                        } else {
+                            // DynamoDB does not allow empty sets - if the
+                            // result is empty, delete the attribute.
+                            do_delete(std::move(column_name));
+                        }
+                    } else {
+                        // if the attribute or item don't exist, the DELETE
+                        // operation should silently do nothing - and not
+                        // create an empty item. It's a waste to call
+                        // do_delete() on an attribute we already know is
+                        // deleted, so we can just mark any_deletes = true.
+                        any_deletes = true;
+                    }
+                } else {
+                    do_delete(std::move(column_name));
                 }
-                do_delete(std::move(column_name));
             } else if (action == "PUT") {
                 const rjson::value& value = (it->value)["Value"];
                 validate_value(value, "AttributeUpdates");
