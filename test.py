@@ -620,8 +620,8 @@ def parse_cmd_line():
     parser.add_argument('--skip', default="",
                         dest="skip_pattern", action="store",
                         help="Skip tests which match the provided pattern")
-    parser.add_argument('--parallel-cases', dest="parallel_cases", action="store_true", default=False,
-                        help="Run individual test cases in parallel")
+    parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
+                        help="Do not run individual test cases in parallel")
     args = parser.parse_args()
 
     if not output_is_a_tty:
