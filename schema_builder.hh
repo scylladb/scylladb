@@ -39,6 +39,16 @@ public:
     schema_builder(std::string_view ks_name, std::string_view cf_name,
             std::optional<utils::UUID> = { },
             data_type regular_column_name_type = utf8_type);
+    schema_builder(
+            std::optional<utils::UUID> id,
+            std::string_view ks_name,
+            std::string_view cf_name,
+            std::vector<schema::column> partition_key,
+            std::vector<schema::column> clustering_key,
+            std::vector<schema::column> regular_columns,
+            std::vector<schema::column> static_columns,
+            data_type regular_column_name_type,
+            sstring comment = "");
     schema_builder(const schema_ptr);
 
     schema_builder& set_uuid(const utils::UUID& id) {

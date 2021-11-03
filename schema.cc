@@ -972,6 +972,32 @@ schema_builder::schema_builder(const schema::raw_schema& raw)
     }
 }
 
+schema_builder::schema_builder(
+        std::optional<utils::UUID> id,
+        std::string_view ks_name,
+        std::string_view cf_name,
+        std::vector<schema::column> partition_key,
+        std::vector<schema::column> clustering_key,
+        std::vector<schema::column> regular_columns,
+        std::vector<schema::column> static_columns,
+        data_type regular_column_name_type,
+        sstring comment)
+    : schema_builder(ks_name, cf_name, std::move(id), std::move(regular_column_name_type)) {
+    for (auto&& column : partition_key) {
+        with_column(std::move(column.name), std::move(column.type), column_kind::partition_key);
+    }
+    for (auto&& column : clustering_key) {
+        with_column(std::move(column.name), std::move(column.type), column_kind::clustering_key);
+    }
+    for (auto&& column : regular_columns) {
+        with_column(std::move(column.name), std::move(column.type));
+    }
+    for (auto&& column : static_columns) {
+        with_column(std::move(column.name), std::move(column.type), column_kind::static_column);
+    }
+    set_comment(comment);
+}
+
 column_definition& schema_builder::find_column(const cql3::column_identifier& c) {
     auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [c](auto& p) {
         return p.name() == c.name();
