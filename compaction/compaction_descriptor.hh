@@ -196,6 +196,9 @@ struct compaction_descriptor {
         , io_priority(io_priority)
         , has_only_fully_expired(has_only_fully_expired)
     {}
+
+    // Return fan-in of this job, which is equal to its number of runs.
+    unsigned fan_in() const;
 };
 
 }

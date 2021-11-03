@@ -135,8 +135,11 @@ private:
 private:
     future<> task_stop(lw_shared_ptr<task> task, sstring reason);
 
-    // Return true if weight is not registered.
-    bool can_register_weight(column_family* cf, int weight) const;
+    // Return the largest fan-in of currently running compactions
+    unsigned current_compaction_fan_in_threshold() const;
+
+    // Return true if compaction can be initiated
+    bool can_register_compaction(column_family* cf, int weight, unsigned fan_in) const;
     // Register weight for a column family. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);

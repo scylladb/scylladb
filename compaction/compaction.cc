@@ -500,6 +500,7 @@ std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
 
 class compaction {
 protected:
+    compaction_data& _info;
     column_family& _cf;
     compaction_sstable_creator_fn _sstable_creator;
     schema_ptr _schema;
@@ -514,7 +515,6 @@ protected:
     sstables::compaction_type _type;
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
-    compaction_data& _info;
     uint64_t _start_size = 0;
     uint64_t _end_size = 0;
     uint64_t _estimated_partitions = 0;
@@ -532,9 +532,15 @@ protected:
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
+private:
+    compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
+        cdata.compaction_fan_in = descriptor.fan_in();
+        return cdata;
+    }
 protected:
     compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
-        : _cf(cf)
+        : _info(init_compaction_data(info, descriptor))
+        , _cf(cf)
         , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
         , _permit(_cf.compaction_concurrency_semaphore().make_tracking_only_permit(_cf.schema().get(), "compaction", db::no_timeout))
@@ -543,7 +549,6 @@ protected:
         , _type(descriptor.options.type())
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
-        , _info(info)
         , _gc_sstable_writer_data(*this)
         , _replacer(std::move(descriptor.replacer))
         , _run_identifier(descriptor.run_identifier)
@@ -1774,6 +1779,10 @@ get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared
         }
     }
     return candidates;
+}
+
+unsigned compaction_descriptor::fan_in() const {
+    return boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
 }
 
 }

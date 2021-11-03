@@ -157,7 +157,19 @@ static inline int calculate_weight(const sstables::compaction_descriptor& descri
     return calculate_weight(get_total_size(descriptor.sstables));
 }
 
-bool compaction_manager::can_register_weight(column_family* cf, int weight) const {
+unsigned compaction_manager::current_compaction_fan_in_threshold() const {
+    if (_tasks.empty()) {
+        return 0;
+    }
+    auto largest_fan_in = std::ranges::max(_tasks | boost::adaptors::transformed([] (auto& task) {
+        return task->compaction_running ? task->compaction_data->compaction_fan_in : 0;
+    }));
+    // conservatively limit fan-in threshold to 32, such that tons of small sstables won't accumulate if
+    // running major on a leveled table, which can even have more than one thousand files.
+    return std::min(unsigned(32), largest_fan_in);
+}
+
+bool compaction_manager::can_register_compaction(column_family* cf, int weight, unsigned fan_in) const {
     // Only one weight is allowed if parallel compaction is disabled.
     if (!cf->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(cf)) {
         return false;
@@ -168,6 +180,13 @@ bool compaction_manager::can_register_weight(column_family* cf, int weight) cons
     if (_weight_tracker.contains(weight)) {
         // If reached this point, it means that there is an ongoing compaction
         // with the weight of the compaction job.
+        return false;
+    }
+    // A compaction cannot proceed until its fan-in is greater than or equal to the current largest fan-in.
+    // That's done to prevent a less efficient compaction from "diluting" a more efficient one.
+    // Compactions with the same efficiency can run in parallel as long as they aren't similar sized,
+    // i.e. an efficient small-sized job can proceed in parallel to an efficient big-sized one.
+    if (fan_in < current_compaction_fan_in_threshold()) {
         return false;
     }
     return true;
@@ -592,7 +611,7 @@ void compaction_manager::submit(column_family* cf) {
                 _stats.pending_tasks--;
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            if (!can_register_weight(&cf, weight)) {
+            if (!can_register_compaction(&cf, weight, descriptor.fan_in())) {
                 _stats.pending_tasks--;
                 cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
                     descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());

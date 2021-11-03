@@ -67,6 +67,7 @@ namespace sstables {
         uint64_t total_keys_written = 0;
         sstring stop_requested;
         utils::UUID compaction_uuid;
+        unsigned compaction_fan_in = 0;
         struct replacement {
             const std::vector<shared_sstable> removed;
             const std::vector<shared_sstable> added;
