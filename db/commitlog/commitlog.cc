@@ -1590,7 +1590,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
             if (!f.available()) {
                 _new_counter = 0; // zero this so timer task does not duplicate the below flush
-                flush_segments(0); // force memtable flush already
+                flush_segments(max_size); // force memtable flush already
             }
             try {
                 co_await std::move(f);
