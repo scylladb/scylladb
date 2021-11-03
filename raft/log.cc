@@ -81,7 +81,7 @@ void log::truncate_uncommitted(index_t idx) {
 }
 
 void log::init_last_conf_idx() {
-    for (auto it = _log.rbegin(); it != _log.rend(); ++it) {
+    for (auto it = _log.rbegin(); it != _log.rend() && (**it).idx != _snapshot.idx; ++it) {
         if (std::holds_alternative<configuration>((**it).data)) {
             if (_last_conf_idx == index_t{0}) {
                 _last_conf_idx = (**it).idx;
@@ -248,9 +248,13 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t trailing) {
 
     _stable_idx = std::max(idx, _stable_idx);
 
-    if (_first_idx > _prev_conf_idx) {
+    if (idx >= _prev_conf_idx) {
+        // The log cannot be truncated beyond snapshot index, so
+        // if previous config index is smaller we can forget it.
         _prev_conf_idx = index_t{0};
-        if (_first_idx > _last_conf_idx) {
+        if (idx >= _last_conf_idx) {
+            // If last config index is included in the snapshot
+            // use the config from the snapshot as last one
             _last_conf_idx = index_t{0};
         }
     }
