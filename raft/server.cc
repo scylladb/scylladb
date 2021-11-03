@@ -202,6 +202,10 @@ private:
     template <typename T> future<> add_entry_internal(T command, wait_type type);
     template <typename Message> void send_message(server_id id, Message m);
 
+    // Abort all snapshot transfer.
+    // Called when a server id is out of the configuration
+    void abort_snapshot_transfer(server_id id);
+
     // Abort all snapshot transfers.
     // Called when no longer a leader or on shutdown
     void abort_snapshot_transfers();
@@ -604,6 +608,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
             if (batch.rpc_configuration) {
                 for (const auto& addr: rpc_diff.leaving) {
+                    abort_snapshot_transfer(addr.id);
                     remove_from_rpc_config(addr);
                     _rpc->remove_server(addr.id);
                 }
@@ -855,6 +860,17 @@ future<> server_impl::read_barrier() {
 
     logger.trace("[{}] read_barrier read index {}, append index {}", _id, read_idx, _applied_idx);
     co_return co_await wait_for_apply(read_idx);
+}
+
+void server_impl::abort_snapshot_transfer(server_id id) {
+    auto it = _snapshot_transfers.find(id);
+    if (it != _snapshot_transfers.end()) {
+        auto& [f, as, tid] = it->second;
+        logger.trace("[{}] Request abort of snapshot transfer to {}", _id, id);
+        as.request_abort();
+        _aborted_snapshot_transfers.emplace(tid, std::move(f));
+        _snapshot_transfers.erase(it);
+    }
 }
 
 void server_impl::abort_snapshot_transfers() {
