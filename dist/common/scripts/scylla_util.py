@@ -151,6 +151,11 @@ class gcp_instance:
             if af == socket.AF_INET:
                 addr, port = sa
                 if addr == "169.254.169.254":
+                    # Make sure it is not on GKE
+                    try:
+                        gcp_instance().__instance_metadata("machine-type")
+                    except urllib.error.HTTPError:
+                        return False
                     return True
         return False
 
