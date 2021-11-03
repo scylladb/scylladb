@@ -428,24 +428,6 @@ void for_condition_expression_on(const parsed::condition_expression& ce, const n
 // expression. The parsed expression is assumed to have been "resolved", with
 // the matching resolve_* function.
 
-// Take two JSON-encoded list values (remember that a list value is
-// {"L": [...the actual list]}) and return the concatenation, again as
-// a list value.
-static rjson::value list_concatenate(const rjson::value& v1, const rjson::value& v2) {
-    const rjson::value* list1 = unwrap_list(v1);
-    const rjson::value* list2 = unwrap_list(v2);
-    if (!list1 || !list2) {
-        throw api_error::validation("UpdateExpression: list_append() given a non-list");
-    }
-    rjson::value cat = rjson::copy(*list1);
-    for (const auto& a : list2->GetArray()) {
-        rjson::push_back(cat, rjson::copy(a));
-    }
-    rjson::value ret = rjson::empty_object();
-    rjson::set(ret, "L", std::move(cat));
-    return ret;
-}
-
 // calculate_size() is ConditionExpression's size() function, i.e., it takes
 // a JSON-encoded value and returns its "size" as defined differently for the
 // different types - also as a JSON-encoded number.
@@ -530,7 +512,11 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
             }
             rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
             rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-            return list_concatenate(v1, v2);
+            rjson::value ret = list_concatenate(v1, v2);
+            if (ret.IsNull()) {
+                throw api_error::validation("UpdateExpression: list_append() given a non-list");
+            }
+            return ret;
         }
     },
     {"if_not_exists", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {

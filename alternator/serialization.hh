@@ -85,5 +85,11 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2);
 // DynamoDB does not allow empty sets, so if resulting set is empty, return
 // an unset optional instead.
 std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value& v2);
+// Take two JSON-encoded list values (remember that a list value is
+// {"L": [...the actual list]}) and return the concatenation, again as
+// a list value.
+// Returns a null value if one of the arguments is not actually a list.
+rjson::value list_concatenate(const rjson::value& v1, const rjson::value& v2);
+
 
 }
