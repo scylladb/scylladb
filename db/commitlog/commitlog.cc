@@ -432,6 +432,8 @@ private:
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0;
     std::vector<sseg_ptr> _segments;
+    replay_position _flush_callback_done;
+
     queue<sseg_ptr> _reserve_segments;
     queue<sstring> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
@@ -1405,11 +1407,17 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     }
 
     auto n = size_to_remove;
+    auto last_high = _flush_callback_done;
 
     if (size_to_remove != 0) {
         for (auto& s : _segments) {
+            auto erp = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
+
+            if (erp <= last_high) {
+                continue;
+            }
             if (n <= s->_size_on_disk) {
-                high = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
+                high = erp;
                 break;
             }
             n -= s->_size_on_disk;
@@ -1419,9 +1427,12 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     // Now get a set of used CF ids:
     std::unordered_set<cf_id_type> ids;
     auto e = std::find_if(_segments.begin(), _segments.end(), std::mem_fn(&segment::is_still_allocating));
-    std::for_each(_segments.begin(), e, [&ids](sseg_ptr& s) {
-        for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
-            ids.insert(id);
+    std::for_each(_segments.begin(), e, [&ids, &high](sseg_ptr& s) {
+        auto rp = replay_position(s->_desc.id, {});
+        if (rp < high) {
+            for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
+                ids.insert(id);
+            }
         }
     });
 
@@ -1437,6 +1448,8 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
             }
         }
     }
+
+    _flush_callback_done = high;
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, sstring filename, open_flags flags) {
