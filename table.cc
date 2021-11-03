@@ -607,8 +607,9 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         auto metadata = mutation_source_metadata{};
         metadata.min_timestamp = old->get_min_timestamp();
         metadata.max_timestamp = old->get_max_timestamp();
+        auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count());
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs] (flat_mutation_reader reader) mutable {
+        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, metadata, estimated_partitions] (flat_mutation_reader reader) mutable {
             auto&& priority = service::get_local_memtable_flush_priority();
             sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
             cfg.backup = incremental_backups_enabled();
@@ -620,10 +621,8 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             auto monitor = database_sstable_write_monitor(permit, newtab, _compaction_strategy,
                 old->get_max_timestamp());
 
-            return do_with(std::move(monitor), [newtab, cfg = std::move(cfg), old, reader = std::move(reader), &priority] (auto& monitor) mutable {
-                // FIXME: certain writers may receive only a small subset of the partitions, so bloom filters will be
-                // bigger than needed, due to overestimation. That's eventually adjusted through compaction, though.
-                return write_memtable_to_sstable(std::move(reader), *old, newtab, old->partition_count(), monitor, cfg, priority);
+            return do_with(std::move(monitor), [newtab, cfg = std::move(cfg), old, reader = std::move(reader), &priority, estimated_partitions] (auto& monitor) mutable {
+                return write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg, priority);
             });
         });
 
