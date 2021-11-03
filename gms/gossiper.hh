@@ -42,6 +42,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/print.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
@@ -144,6 +145,9 @@ private:
     // Map ip address and generation number
     std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
+
+    rpc::no_wait_type background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
+
 public:
     // Get current generation number for the given nodes
     future<std::unordered_map<gms::inet_address, int32_t>>
