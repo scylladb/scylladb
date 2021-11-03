@@ -2160,7 +2160,13 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             }}
         }, 200'000);
 
-        auto leader_id = co_await env.new_server(true);
+        auto seed = tests::random::get_int<int32_t>();
+        std::mt19937 random_engine{seed};
+        raft::server::configuration srv_cfg{
+            .enable_forwarding = false, //std::bernoulli_distribution{0.5}(random_engine)
+        };
+
+        auto leader_id = co_await env.new_server(true, srv_cfg);
 
         // Wait for the server to elect itself as a leader.
         assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
@@ -2168,7 +2174,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         size_t no_all_servers = 10;
         std::vector<raft::server_id> all_servers{leader_id};
         for (size_t i = 1; i < no_all_servers; ++i) {
-            all_servers.push_back(co_await env.new_server(false));
+            all_servers.push_back(co_await env.new_server(false, srv_cfg));
         }
 
         size_t no_init_servers = 5;
@@ -2208,7 +2214,6 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
         auto reconfig_thread = some(threads_without_nemesis);
 
-        auto seed = tests::random::get_int<int32_t>();
 
         raft_call<AppendReg>::state_type db_call_state {
             .env = env,

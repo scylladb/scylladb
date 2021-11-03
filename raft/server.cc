@@ -94,6 +94,7 @@ public:
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout) override;
     future<> modify_config(std::vector<server_address> add, std::vector<server_id> del) override;
+    future<entry_id> add_entry_on_leader(command command);
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -411,6 +412,16 @@ future<> server_impl::add_entry_internal(T command, wait_type type) {
     co_return co_await wait_for_entry({.term = e.term, .idx = e.idx}, type);
 }
 
+future<entry_id> server_impl::add_entry_on_leader(command cmd) {
+    // Wait for a new slot to become available
+    co_await _fsm->wait_max_log_size();
+    logger.trace("Adding entry after log size limit check.");
+
+    const log_entry& e = _fsm->add_entry(std::move(cmd));
+
+    co_return entry_id{.term = e.term, .idx = e.idx};
+}
+
 future<add_entry_reply> server_impl::execute_add_entry(server_id from, command cmd) {
     if (from != _id && !_fsm->get_configuration().contains(from)) {
         // Do not accept entries from servers removed from the
@@ -418,13 +429,7 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
         co_return add_entry_reply{not_a_leader{server_id{}}};
     }
     try {
-        // Wait for a new slot to become available
-        co_await _fsm->wait_max_log_size();
-        logger.trace("Adding entry after log size limit check.");
-
-        const log_entry& e = _fsm->add_entry(std::move(cmd));
-
-        co_return add_entry_reply{entry_id{.term = e.term, .idx = e.idx}};
+        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd))};
     } catch (raft::not_a_leader& e) {
         co_return add_entry_reply{e};
     }
@@ -434,6 +439,13 @@ future<> server_impl::add_entry(command command, wait_type type) {
     _stats.add_command++;
     server_id leader = _fsm->current_leader();
     logger.trace("An entry is submitted");
+    if (!_config.enable_forwarding) {
+        if (leader != _id) {
+            throw not_a_leader{leader};
+        }
+        auto eid = co_await add_entry_on_leader(std::move(command));
+        co_return co_await wait_for_entry(eid, type);
+    }
     while (true) {
         if (leader == server_id{}) {
             logger.trace("The leader is unknown, waiting through uncertainty");
@@ -502,6 +514,16 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
 
 future<> server_impl::modify_config(std::vector<server_address> add, std::vector<server_id> del) {
     server_id leader = _fsm->current_leader();
+    if (!_config.enable_forwarding) {
+        if (leader != _id) {
+            throw not_a_leader{leader};
+        }
+        auto reply = co_await execute_modify_config(leader, std::move(add), std::move(del));
+        if (std::holds_alternative<raft::entry_id>(reply)) {
+            co_return co_await wait_for_entry(std::get<raft::entry_id>(reply), wait_type::committed);
+        }
+        throw raft::not_a_leader{_fsm->current_leader()};
+    }
     while (true) {
         if (leader == server_id{}) {
             co_await wait_for_leader();

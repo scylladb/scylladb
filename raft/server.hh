@@ -48,6 +48,11 @@ public:
         size_t max_log_size = 5000;
         // If set to true will enable prevoting stage during election
         bool enable_prevoting = true;
+        // If set to true, forward configuration and entries from
+        // follower to the leader autmatically. This guarantees
+        // add_entry()/modify_config() never throws not_a_leader,
+        // but makes timed_out_error more likely.
+        bool enable_forwarding = true;
     };
 
     virtual ~server() {}
