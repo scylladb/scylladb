@@ -3918,6 +3918,13 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::sstable::version_types::md, big);
         };
 
+        // The twcs is configured with 8-hours time window. If the starting time
+        // is not aligned with that then some buckets may get less than this
+        // number of sstables in and potentially hit the minimal threshold of
+        // 4 sstables. Align the starting time not to make this happen.
+        auto hours = std::chrono::duration_cast<std::chrono::hours>(gc_clock::now().time_since_epoch());
+        forward_jump_clocks(std::chrono::hours(8 - hours.count() % 8));
+
         {
             // create set of 256 disjoint ssts that belong to the same time window and expect that twcs reshape allows them all to be compacted at once
 
