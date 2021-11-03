@@ -225,7 +225,7 @@ void set_repair(http_context& ctx, routes& r, sharded<netw::messaging_service>& 
             try {
                 res = fut.get0();
             } catch (std::exception& e) {
-                return make_exception_future<json::json_return_type>(httpd::server_error_exception(e.what()));
+                return make_exception_future<json::json_return_type>(httpd::bad_param_exception(e.what()));
             }
             return make_ready_future<json::json_return_type>(json::json_return_type(res));
         });
