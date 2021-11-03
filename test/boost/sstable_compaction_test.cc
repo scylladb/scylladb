@@ -3887,11 +3887,11 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
         std::map <sstring, sstring> opts = {
                 {time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS"},
-                {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1"},
+                {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "8"},
         };
         builder.set_compaction_strategy_options(std::move(opts));
         auto s = builder.build();
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, std::move(opts));
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, s->compaction_strategy_options());
 
         auto next_timestamp = [](auto step) {
             using namespace std::chrono;
