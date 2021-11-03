@@ -2310,10 +2310,33 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     }
 }
 
+// These are the cases where update_item_operation::apply() needs to use
+// "previous_item" for certain AttributeUpdates operations (ADD or DELETE)
+static bool check_needs_read_before_write_attribute_updates(rjson::value *attribute_updates) {
+    if (!attribute_updates) {
+        return false;
+    }
+    // We already confirmed in update_item_operation::update_item_operation()
+    // that _attribute_updates, when it exists, is a map
+    for (auto it = attribute_updates->MemberBegin(); it != attribute_updates->MemberEnd(); ++it) {
+        rjson::value* action = rjson::find(it->value, "Action");
+        if (action) {
+            std::string_view action_s = rjson::to_string_view(*action);
+            if (action_s == "ADD") {
+                return true;
+            }
+            // FIXME: we also need to read before write in certain cases
+            // of the DELETE action.
+        }
+    }
+    return false;
+}
+
 bool
 update_item_operation::needs_read_before_write() const {
     return check_needs_read_before_write(_update_expression) ||
            check_needs_read_before_write(_condition_expression) ||
+           check_needs_read_before_write_attribute_updates(_attribute_updates) ||
            _request.HasMember("Expected") ||
            (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::UPDATED_NEW);
 }
@@ -2656,6 +2679,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 // "Value" field is missing. If it were not missing, we would
                 // we need to verify the old type and/or value is same as
                 // specified before deleting... We don't do this yet.
+                // This is issue #5864.
                 if (it->value.HasMember("Value")) {
                      throw api_error::validation(
                             format("UpdateItem DELETE with checking old value not yet supported"));
@@ -2665,8 +2689,44 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 const rjson::value& value = (it->value)["Value"];
                 validate_value(value, "AttributeUpdates");
                 do_update(std::move(column_name), value);
+            } else if (action == "ADD") {
+                // Note that check_needs_read_before_write_attribute_updates()
+                // made sure we retrieved previous_item (if exists) when there
+                // is an ADD action.
+                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_sstring_view(column_name)) : nullptr;
+                const rjson::value& v2 = (it->value)["Value"];
+                validate_value(v2, "AttributeUpdates");
+                // An ADD can be used to create a new attribute (when
+                // !v1) or to add to a pre-existing attribute:
+                if (!v1) {
+                    std::string v2_type = get_item_type_string(v2);
+                    if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS" || v2_type == "L") {
+                        do_update(std::move(column_name), v2);
+                    } else {
+                        throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", v2));
+                    }
+                } else {
+                    std::string v1_type = get_item_type_string(*v1);
+                    std::string v2_type = get_item_type_string(v2);
+                    if (v2_type != v1_type) {
+                        throw api_error::validation(format("Operand type mismatch in AttributeUpdates ADD. Expected {}, got {}", v1_type, v2_type));
+                    }
+                    if (v1_type == "N") {
+                        do_update(std::move(column_name), number_add(*v1, v2));
+                    } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                        do_update(std::move(column_name), set_sum(*v1, v2));
+                    } else if (v1_type == "L") {
+                        // The DynamoDB documentation doesn't say it supports
+                        // lists in ADD operations, but it turns out that it
+                        // does. Interestingly, this is only true for
+                        // AttributeUpdates (this code) - the similar ADD
+                        // in UpdateExpression doesn't support lists.
+                        do_update(std::move(column_name), list_concatenate(*v1, v2));
+                    } else {
+                        throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", *v1));
+                    }
+                }
             } else {
-                // FIXME: need to support "ADD" as well.
                 throw api_error::validation(
                         format("Unknown Action value '{}' in AttributeUpdates", action));
             }
