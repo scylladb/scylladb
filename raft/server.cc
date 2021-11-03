@@ -611,7 +611,6 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
             // Process committed entries.
             if (batch.committed.size()) {
-                notify_waiters(_awaited_commits, batch.committed);
                 _stats.queue_entries_for_apply += batch.committed.size();
                 co_await _apply_entries.push_eventually(std::move(batch.committed));
             }
@@ -715,6 +714,13 @@ future<> server_impl::applier_fiber() {
                     logger.trace("[{}] applier fiber: received empty batch", _id);
                     continue;
                 }
+
+                // Completion notification code assumes that previous snapshot is applied
+                // before new entries are committed, otherwise it asserts that some
+                // notifications were missing. To prevent a committed entry to
+                // be notified before an erlier snapshot is applied do both
+                // notification and snapshot application in the same fiber
+                notify_waiters(_awaited_commits, batch);
 
                 std::vector<command_cref> commands;
                 commands.reserve(batch.size());
