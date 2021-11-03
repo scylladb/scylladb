@@ -2054,7 +2054,7 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
  * Add mutation.
  */
 future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
-        size_t size, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, serializer_func func) {
+        size_t size, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, serializer_func func, data_class dc) {
     class serializer_func_entry_writer final : public entry_writer {
         cf_id_type _id;
         serializer_func _func;
@@ -2085,7 +2085,7 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
     return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout);
 }
 
-future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout, data_class dc)
 {
     assert(id == cew.schema()->id());
 
@@ -2129,7 +2129,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
 }
 
 future<std::vector<db::rp_handle>> 
-db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
+db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout, data_class dc) {
     class cl_entries_writer final : public entry_writer {
         std::vector<commitlog_entry_writer> _writers;
         std::unordered_set<table_schema_version> _known;

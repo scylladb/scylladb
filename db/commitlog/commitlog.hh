@@ -63,6 +63,12 @@ class rp_handle;
 class commitlog_file_extension;
 class extensions;
 
+enum class data_class {
+    normal,
+    lowfreq_lowvol,
+    max
+};
+
 /*
  * Commit Log tracks every write operation into the system. The aim of
  * the commit log is to be able to successfully recover data that was
@@ -212,7 +218,7 @@ public:
      *
      * @param mutation_func a function that writes 'size' bytes to the log, representing the mutation.
      */
-    future<rp_handle> add(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, serializer_func mutation_func);
+    future<rp_handle> add(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, serializer_func mutation_func, data_class = data_class::normal);
 
     /**
      * Template version of add.
@@ -220,10 +226,10 @@ public:
      * @param mu an invokable op that generates the serialized data. (Of size bytes)
      */
     template<typename _MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, _MutationOp&& mu) {
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, _MutationOp&& mu, data_class dc = data_class::normal) {
         return add(id, size, timeout, sync, [mu = std::forward<_MutationOp>(mu)](output& out) {
             mu(out);
-        });
+        }, dc);
     }
 
     /**
@@ -231,8 +237,8 @@ public:
      * @param mu an invokable op that generates the serialized data. (Of size bytes)
      */
     template<typename _MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, _MutationOp&& mu) {
-        return add_mutation(id, size, db::timeout_clock::time_point::max(), sync, std::forward<_MutationOp>(mu));
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, _MutationOp&& mu, data_class dc = data_class::normal) {
+        return add_mutation(id, size, db::timeout_clock::time_point::max(), sync, std::forward<_MutationOp>(mu), dc);
     }
 
     /**
@@ -240,14 +246,14 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry
      */
-    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, db::timeout_clock::time_point timeout);
+    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, db::timeout_clock::time_point timeout, data_class = data_class::normal);
 
     /**
      * Add N entries to the commit log as a single operation (in a single segment).
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writers a vector of writers responsible for writing respective entry
      */
-    future<std::vector<rp_handle>> add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+    future<std::vector<rp_handle>> add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout, data_class = data_class::normal);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
