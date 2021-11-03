@@ -3887,11 +3887,11 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
         std::map <sstring, sstring> opts = {
                 {time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS"},
-                {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1"},
+                {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "8"},
         };
         builder.set_compaction_strategy_options(std::move(opts));
         auto s = builder.build();
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, std::move(opts));
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, s->compaction_strategy_options());
 
         auto next_timestamp = [](auto step) {
             using namespace std::chrono;
@@ -3917,6 +3917,13 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::sstable::version_types::md, big);
         };
+
+        // The twcs is configured with 8-hours time window. If the starting time
+        // is not aligned with that then some buckets may get less than this
+        // number of sstables in and potentially hit the minimal threshold of
+        // 4 sstables. Align the starting time not to make this happen.
+        auto hours = std::chrono::duration_cast<std::chrono::hours>(gc_clock::now().time_since_epoch());
+        forward_jump_clocks(std::chrono::hours(8 - hours.count() % 8));
 
         {
             // create set of 256 disjoint ssts that belong to the same time window and expect that twcs reshape allows them all to be compacted at once
