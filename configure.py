@@ -2018,7 +2018,7 @@ with open(buildfile_tmp, 'w') as f:
             command = ./dist/debian/debian_files_gen.py
         build $builddir/debian/debian: debian_files_gen | always
         rule extract_node_exporter
-            command = tar -C build -xvpf {node_exporter_filename} && rm -rfv build/node_exporter && mv -v build/{node_exporter_dirname} build/node_exporter
+            command = tar -C build -xvpf {node_exporter_filename} --no-same-owner && rm -rfv build/node_exporter && mv -v build/{node_exporter_dirname} build/node_exporter
         build $builddir/node_exporter: extract_node_exporter | always
         ''').format(**globals()))
 
