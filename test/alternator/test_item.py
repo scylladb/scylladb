@@ -514,8 +514,8 @@ def test_update_item_delete(test_table_s):
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
 # Test for UpdateItem's AttributeUpdate's ADD operation, which has different
-# meanings for numbers and sets - but not for other types.
-@pytest.mark.xfail(reason="UpdateItem AttributeUpdates ADD not implemented")
+# meanings for numbers and sets (and as it turns out, also for lists) - but
+# not for other types.
 def test_update_item_add(test_table_s):
     p = random_string()
 

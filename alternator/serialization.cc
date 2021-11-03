@@ -373,4 +373,23 @@ std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value&
     return ret;
 }
 
+// Take two JSON-encoded list values (remember that a list value is
+// {"L": [...the actual list]}) and return the concatenation, again as
+// a list value.
+// Returns a null value if one of the arguments is not actually a list.
+rjson::value list_concatenate(const rjson::value& v1, const rjson::value& v2) {
+    const rjson::value* list1 = unwrap_list(v1);
+    const rjson::value* list2 = unwrap_list(v2);
+    if (!list1 || !list2) {
+        return rjson::null_value();
+    }
+    rjson::value cat = rjson::copy(*list1);
+    for (const auto& a : list2->GetArray()) {
+        rjson::push_back(cat, rjson::copy(a));
+    }
+    rjson::value ret = rjson::empty_object();
+    rjson::set(ret, "L", std::move(cat));
+    return ret;
+}
+
 }

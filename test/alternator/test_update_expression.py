@@ -771,6 +771,35 @@ def test_update_expression_add_sets_new(test_table_s):
         ExpressionAttributeValues={':val1': set(['cat'])})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == set(['cat'])
 
+# Although AttributeUpdate's ADD operation works on lists (despite being
+# documented only for sets; see test_item.py::test_update_item_add), the
+# ADD operation of UpdateExpression does *not* support lists. Let's verify
+# this here.
+# Passing this test will require the two ADD implementations to be slightly
+# different.
+def test_update_expression_add_lists(test_table_s):
+    p = random_string()
+    # When the operand given in ExpressionAttributesValues is a list,
+    # we get an error about the operand, no matter what the item contains -
+    # a list too, or a set.
+    test_table_s.put_item(Item={'p': p, 'a': [1, 2]})
+    with pytest.raises(ClientError, match='ValidationException.*operand'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='ADD a :val1',
+            ExpressionAttributeValues={':val1': [3, 4]})
+    test_table_s.put_item(Item={'p': p, 'a': set([1, 2])})
+    with pytest.raises(ClientError, match='ValidationException.*operand'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='ADD a :val1',
+            ExpressionAttributeValues={':val1': [3, 4]})
+    # If the operand is a set, the item value still cannot be a list because
+    # those different types can't be added.
+    with pytest.raises(ClientError, match='ValidationException.*operand'):
+        test_table_s.put_item(Item={'p': p, 'a': [1, 2]})
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='ADD a :val1',
+            ExpressionAttributeValues={':val1': set([3, 4])})
+
 # Test "DELETE" operation for sets
 def test_update_expression_delete_sets(test_table_s):
     p = random_string()
