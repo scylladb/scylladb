@@ -623,7 +623,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             return do_with(std::move(monitor), [newtab, cfg = std::move(cfg), old, reader = std::move(reader), &priority] (auto& monitor) mutable {
                 // FIXME: certain writers may receive only a small subset of the partitions, so bloom filters will be
                 // bigger than needed, due to overestimation. That's eventually adjusted through compaction, though.
-                return write_memtable_to_sstable(std::move(reader), *old, newtab, monitor, cfg, priority);
+                return write_memtable_to_sstable(std::move(reader), *old, newtab, old->partition_count(), monitor, cfg, priority);
             });
         });
 
@@ -1917,6 +1917,7 @@ table::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle
 future<>
 write_memtable_to_sstable(flat_mutation_reader reader,
                           memtable& mt, sstables::shared_sstable sst,
+                          size_t estimated_partitions,
                           sstables::write_monitor& monitor,
                           sstables::sstable_writer_config& cfg,
                           const io_priority_class& pc) {
@@ -1924,7 +1925,7 @@ write_memtable_to_sstable(flat_mutation_reader reader,
     cfg.monitor = &monitor;
     cfg.origin = "memtable";
     schema_ptr s = reader.schema();
-    return sst->write_components(std::move(reader), mt.partition_count(), s, cfg, mt.get_encoding_stats(), pc);
+    return sst->write_components(std::move(reader), estimated_partitions, s, cfg, mt.get_encoding_stats(), pc);
 }
 
 future<>
@@ -1932,7 +1933,7 @@ write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_s
                           sstables::write_monitor& monitor,
                           sstables::sstable_writer_config& cfg,
                           const io_priority_class& pc) {
-    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), std::move(permit), pc), mt, std::move(sst), monitor, cfg, pc);
+    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), std::move(permit), pc), mt, std::move(sst), mt.partition_count(), monitor, cfg, pc);
 }
 
 future<>
