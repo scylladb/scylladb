@@ -212,14 +212,22 @@ class UnitTestSuite(TestSuite):
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
 
+    def __init__(self, path, cfg):
+        super().__init__(path, cfg)
+        self._cases_cache = { 'name': None, 'cases': [] }
+
     def create_test(self, shortname, args, suite, mode, options):
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
-            cases = subprocess.run([ os.path.join("build", mode, "test", suite.name, shortname), '--list_content' ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=True, universal_newlines=True).stderr
-            case_list = [ case[:-1] for case in cases.splitlines() if case.endswith('*')]
+            if self._cases_cache['name'] != shortname:
+                cases = subprocess.run([ os.path.join("build", mode, "test", suite.name, shortname), '--list_content' ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=True, universal_newlines=True).stderr
+                case_list = [ case[:-1] for case in cases.splitlines() if case.endswith('*')]
+                self._cases_cache['name'] = shortname
+                self._cases_cache['cases'] = case_list
 
+            case_list = self._cases_cache['cases']
             if len(case_list) == 1:
                 test = BoostTest(self.next_id, shortname, args, suite, None, mode, options)
                 self.tests.append(test)
