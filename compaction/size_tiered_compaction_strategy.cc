@@ -146,11 +146,11 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
         return std::vector<sstables::shared_sstable>();
     }
 
-    // NOTE: Compacting smallest sstables first, located at the beginning of the sorted vector.
+    // Pick the bucket with more elements, as efficiency of same-tier compactions increases with number of files.
     auto& min = *std::min_element(pruned_buckets_and_hotness.begin(), pruned_buckets_and_hotness.end(), [] (auto& i, auto& j) {
         // FIXME: ignoring hotness by the time being.
 
-        return i.second < j.second;
+        return i.first.size() > j.first.size();
     });
     auto hottest = std::move(min.first);
 
