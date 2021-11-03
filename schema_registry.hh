@@ -142,6 +142,8 @@ public:
     // workaround to this object being magically appearing from nowhere.
     void init(const db::schema_ctxt&);
 
+    db::schema_ctxt& get_context() { return *_ctxt; }
+
     // Looks up schema by version or loads it using supplied loader.
     schema_ptr get_or_load(table_schema_version, const frozen_schema_loader&);
 
