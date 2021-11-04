@@ -956,12 +956,12 @@ future<> compaction_manager::remove(column_family* cf) {
     _postponed.erase(cf);
 
     // Wait for the termination of an ongoing compaction on cf, if any.
-    return stop_ongoing_compactions("column family removal", cf).then([this, cf] {
+    co_await stop_ongoing_compactions("column family removal", cf);
 #ifdef DEBUG
-        assert(std::find_if(_tasks.begin(), _tasks.end(), [cf] (auto& task) { return task->compacting_cf == cf; }) == _tasks.end());
+    assert(std::find_if(_tasks.begin(), _tasks.end(), [cf] (auto& task) { return task->compacting_cf == cf; }) == _tasks.end());
 #endif
-        _compaction_state.erase(cf);
-    });
+    _compaction_state.erase(cf);
+    co_return;
 }
 
 const std::vector<sstables::compaction_info> compaction_manager::get_compactions() const {
