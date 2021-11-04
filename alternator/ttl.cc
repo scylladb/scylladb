@@ -89,7 +89,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     // Prepare the response, which contains a TimeToLiveSpecification
     // basically identical to the request's
     rjson::value response = rjson::empty_object();
-    rjson::set(response, "TimeToLiveSpecification", std::move(*spec));
+    rjson::add(response, "TimeToLiveSpecification", std::move(*spec));
     co_return make_jsonable(std::move(response));
 }
 
@@ -103,13 +103,13 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
     rjson::value desc = rjson::empty_object();
     auto i = tags_map.find(TTL_TAG_KEY);
     if (i == tags_map.end()) {
-        rjson::set(desc, "TimeToLiveStatus", "DISABLED");
+        rjson::add(desc, "TimeToLiveStatus", "DISABLED");
     } else {
-        rjson::set(desc, "TimeToLiveStatus", "ENABLED");
-        rjson::set(desc, "AttributeName", rjson::from_string(i->second));
+        rjson::add(desc, "TimeToLiveStatus", "ENABLED");
+        rjson::add(desc, "AttributeName", rjson::from_string(i->second));
     }
     rjson::value response = rjson::empty_object();
-    rjson::set(response, "TimeToLiveDescription", std::move(desc));
+    rjson::add(response, "TimeToLiveDescription", std::move(desc));
     co_return make_jsonable(std::move(response));
 }
 

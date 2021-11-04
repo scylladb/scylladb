@@ -367,27 +367,19 @@ bool remove_member(rjson::value& value, std::string_view name) {
     return value.RemoveMember(rjson::value(name.data(), name.size()));
 }
 
-void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member) {
-    base.AddMember(rjson::value(name.c_str(), name.size(), the_allocator), std::move(member), the_allocator);
-}
-
-void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member) {
+void add_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member) {
     base.AddMember(rjson::value(name.data(), name.size(), the_allocator), std::move(member), the_allocator);
 }
 
-void set_with_string_name(rjson::value& base, const std::string& name, rjson::string_ref_type member) {
-    base.AddMember(rjson::value(name.c_str(), name.size(), the_allocator), rjson::value(member), the_allocator);
-}
-
-void set_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member) {
+void add_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member) {
     base.AddMember(rjson::value(name.data(), name.size(), the_allocator), rjson::value(member), the_allocator);
 }
 
-void set(rjson::value& base, rjson::string_ref_type name, rjson::value&& member) {
+void add(rjson::value& base, rjson::string_ref_type name, rjson::value&& member) {
     base.AddMember(name, std::move(member), the_allocator);
 }
 
-void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type member) {
+void add(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type member) {
     base.AddMember(name, rjson::value(member), the_allocator);
 }
 
@@ -396,7 +388,7 @@ void replace_with_string_name(rjson::value& base, const std::string_view name, r
     if (m) {
         *m = std::move(member);
     } else {
-        set_with_string_name(base, name, std::move(member));
+        add_with_string_name(base, name, std::move(member));
     }
 }
 
@@ -460,7 +452,7 @@ bool single_value_comp::operator()(const rjson::value& r1, const rjson::value& r
 rjson::value from_string_map(const std::map<sstring, sstring>& map) {
     rjson::value v = rjson::empty_object();
     for (auto& entry : map) {
-        rjson::set_with_string_name(v, std::string_view(entry.first), rjson::from_string(entry.second));
+        rjson::add_with_string_name(v, std::string_view(entry.first), rjson::from_string(entry.second));
     }
     return v;
 }

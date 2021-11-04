@@ -1628,7 +1628,7 @@ column_computation_ptr column_computation::deserialize(bytes_view raw) {
 
 bytes legacy_token_column_computation::serialize() const {
     rjson::value serialized = rjson::empty_object();
-    rjson::set(serialized, "type", rjson::from_string("token"));
+    rjson::add(serialized, "type", rjson::from_string("token"));
     return to_bytes(rjson::print(serialized));
 }
 
@@ -1638,7 +1638,7 @@ bytes_opt legacy_token_column_computation::compute_value(const schema& schema, c
 
 bytes token_column_computation::serialize() const {
     rjson::value serialized = rjson::empty_object();
-    rjson::set(serialized, "type", rjson::from_string("token_v2"));
+    rjson::add(serialized, "type", rjson::from_string("token_v2"));
     return to_bytes(rjson::print(serialized));
 }
 

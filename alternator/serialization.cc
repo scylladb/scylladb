@@ -115,18 +115,18 @@ struct to_json_visitor {
     void operator()(const decimal_type_impl& t) const {
         auto s = to_json_string(*decimal_type, bytes(bv));
         //FIXME(sarna): unnecessary copy
-        rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(s));
+        rjson::add_with_string_name(deserialized, type_ident, rjson::from_string(s));
     }
     void operator()(const string_type_impl& t) {
-        rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(reinterpret_cast<const char *>(bv.data()), bv.size()));
+        rjson::add_with_string_name(deserialized, type_ident, rjson::from_string(reinterpret_cast<const char *>(bv.data()), bv.size()));
     }
     void operator()(const bytes_type_impl& t) const {
         std::string b64 = base64_encode(bv);
-        rjson::set_with_string_name(deserialized, type_ident, rjson::from_string(b64));
+        rjson::add_with_string_name(deserialized, type_ident, rjson::from_string(b64));
     }
     // default
     void operator()(const abstract_type& t) const {
-        rjson::set_with_string_name(deserialized, type_ident, rjson::parse(to_json_string(t, bytes(bv))));
+        rjson::add_with_string_name(deserialized, type_ident, rjson::parse(to_json_string(t, bytes(bv))));
     }
 };
 
@@ -302,7 +302,7 @@ rjson::value number_add(const rjson::value& v1, const rjson::value& v2) {
     auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
     std::string str_ret = std::string((n1 + n2).to_string());
-    rjson::set(ret, "N", rjson::from_string(str_ret));
+    rjson::add(ret, "N", rjson::from_string(str_ret));
     return ret;
 }
 
@@ -311,7 +311,7 @@ rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2) {
     auto n2 = unwrap_number(v2, "UpdateExpression");
     rjson::value ret = rjson::empty_object();
     std::string str_ret = std::string((n1 - n2).to_string());
-    rjson::set(ret, "N", rjson::from_string(str_ret));
+    rjson::add(ret, "N", rjson::from_string(str_ret));
     return ret;
 }
 
@@ -337,7 +337,7 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
         }
     }
     rjson::value ret = rjson::empty_object();
-    rjson::set_with_string_name(ret, set1_type, std::move(sum));
+    rjson::add_with_string_name(ret, set1_type, std::move(sum));
     return ret;
 }
 
@@ -365,7 +365,7 @@ std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value&
         return std::nullopt;
     }
     rjson::value ret = rjson::empty_object();
-    rjson::set_with_string_name(ret, set1_type, rjson::empty_array());
+    rjson::add_with_string_name(ret, set1_type, rjson::empty_array());
     rjson::value& result_set = ret[set1_type];
     for (const auto& a : set1_raw) {
         rjson::push_back(result_set, rjson::copy(a));
@@ -388,7 +388,7 @@ rjson::value list_concatenate(const rjson::value& v1, const rjson::value& v2) {
         rjson::push_back(cat, rjson::copy(a));
     }
     rjson::value ret = rjson::empty_object();
-    rjson::set(ret, "L", std::move(cat));
+    rjson::add(ret, "L", std::move(cat));
     return ret;
 }
 

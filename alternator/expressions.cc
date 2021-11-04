@@ -464,11 +464,11 @@ static rjson::value calculate_size(const rjson::value& v) {
         ret = base64_decoded_len(rjson::to_string_view(it->value));
     } else {
         rjson::value json_ret = rjson::empty_object();
-        rjson::set(json_ret, "null", rjson::value(true));
+        rjson::add(json_ret, "null", rjson::value(true));
         return json_ret;
     }
     rjson::value json_ret = rjson::empty_object();
-    rjson::set(json_ret, "N", rjson::from_string(std::to_string(ret)));
+    rjson::add(json_ret, "N", rjson::from_string(std::to_string(ret)));
     return json_ret;
 }
 
@@ -487,7 +487,7 @@ static const rjson::value& calculate_value(const parsed::constant& c) {
 
 static rjson::value to_bool_json(bool b) {
     rjson::value json_ret = rjson::empty_object();
-    rjson::set(json_ret, "BOOL", rjson::value(b));
+    rjson::add(json_ret, "BOOL", rjson::value(b));
     return json_ret;
 }
 

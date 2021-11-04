@@ -204,19 +204,19 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
             rjson::value new_entry = rjson::empty_object();
 
             last = i->first;
-            rjson::set(new_entry, "StreamArn", *last);
-            rjson::set(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
-            rjson::set(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
+            rjson::add(new_entry, "StreamArn", *last);
+            rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
+            rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
 
             --limit;
         }
     }
 
-    rjson::set(ret, "Streams", std::move(streams));
+    rjson::add(ret, "Streams", std::move(streams));
 
     if (last) {
-        rjson::set(ret, "LastEvaluatedStreamArn", *last);
+        rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
 
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
@@ -482,18 +482,18 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     auto ttl = std::chrono::seconds(opts.ttl());
     
-    rjson::set(stream_desc, "StreamStatus", rjson::from_string(status));
+    rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
 
     stream_view_type type = cdc_options_to_steam_view_type(opts);
 
-    rjson::set(stream_desc, "StreamArn", alternator::stream_arn(schema->id()));
-    rjson::set(stream_desc, "StreamViewType", type);
-    rjson::set(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
+    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema->id()));
+    rjson::add(stream_desc, "StreamViewType", type);
+    rjson::add(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
 
     describe_key_schema(stream_desc, *bs);
 
     if (!opts.enabled()) {
-        rjson::set(ret, "StreamDescription", std::move(stream_desc));
+        rjson::add(ret, "StreamDescription", std::move(stream_desc));
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     }
 
@@ -590,19 +590,19 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                         pid = std::prev(pid);
                     }
                     if (pid != pids.end()) {
-                        rjson::set(shard, "ParentShardId", shard_id(prev->first, *pid));
+                        rjson::add(shard, "ParentShardId", shard_id(prev->first, *pid));
                     }
                 }
 
                 last.emplace(ts, id);
-                rjson::set(shard, "ShardId", *last);
+                rjson::add(shard, "ShardId", *last);
                 auto range = rjson::empty_object();
-                rjson::set(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch())));
+                rjson::add(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch())));
                 if (expired) {
-                    rjson::set(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(expired->time_since_epoch())));
+                    rjson::add(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(expired->time_since_epoch())));
                 }
 
-                rjson::set(shard, "SequenceNumberRange", std::move(range));
+                rjson::add(shard, "SequenceNumberRange", std::move(range));
                 rjson::push_back(shards, std::move(shard));
                 
                 if (--limit == 0) {
@@ -614,11 +614,11 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         }
 
         if (last) {
-            rjson::set(stream_desc, "LastEvaluatedShardId", *last);
+            rjson::add(stream_desc, "LastEvaluatedShardId", *last);
         }
 
-        rjson::set(stream_desc, "Shards", std::move(shards));
-        rjson::set(ret, "StreamDescription", std::move(stream_desc));
+        rjson::add(stream_desc, "Shards", std::move(shards));
+        rjson::add(ret, "StreamDescription", std::move(stream_desc));
             
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
@@ -771,7 +771,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     shard_iterator iter(stream_arn, *sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
-    rjson::set(ret, "ShardIterator", iter);
+    rjson::add(ret, "ShardIterator", iter);
 
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
@@ -927,13 +927,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
         auto maybe_add_record = [&] {
             if (!dynamodb.ObjectEmpty()) {
-                rjson::set(record, "dynamodb", std::move(dynamodb));
+                rjson::add(record, "dynamodb", std::move(dynamodb));
                 dynamodb = rjson::empty_object();
             }
             if (!record.ObjectEmpty()) {
                 // TODO: awsRegion?
-                rjson::set(record, "eventID", event_id(iter.shard.id, *timestamp));
-                rjson::set(record, "eventSource", "scylladb:alternator");
+                rjson::add(record, "eventID", event_id(iter.shard.id, *timestamp));
+                rjson::add(record, "eventSource", "scylladb:alternator");
                 rjson::push_back(records, std::move(record));
                 record = rjson::empty_object();
                 --limit;
@@ -948,10 +948,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
             if (!dynamodb.HasMember("Keys")) {
                 auto keys = rjson::empty_object();
                 describe_single_item(*selection, row, key_names, keys);
-                rjson::set(dynamodb, "Keys", std::move(keys));
-                rjson::set(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
-                rjson::set(dynamodb, "SequenceNumber", sequence_number(ts));
-                rjson::set(dynamodb, "StreamViewType", type);
+                rjson::add(dynamodb, "Keys", std::move(keys));
+                rjson::add(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
+                rjson::add(dynamodb, "SequenceNumber", sequence_number(ts));
+                rjson::add(dynamodb, "StreamViewType", type);
                 //TODO: SizeInBytes
             }
 
@@ -983,17 +983,17 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 auto item = rjson::empty_object();
                 describe_single_item(*selection, row, attr_names, item, true);
                 describe_single_item(*selection, row, key_names, item);
-                rjson::set(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
+                rjson::add(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
                 break;
             }
             case cdc::operation::update:
-                rjson::set(record, "eventName", "MODIFY");
+                rjson::add(record, "eventName", "MODIFY");
                 break;
             case cdc::operation::insert:
-                rjson::set(record, "eventName", "INSERT");
+                rjson::add(record, "eventName", "INSERT");
                 break;
             default:
-                rjson::set(record, "eventName", "REMOVE");
+                rjson::add(record, "eventName", "REMOVE");
                 break;
             }
             if (eor) {
@@ -1007,7 +1007,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
         auto ret = rjson::empty_object();
         auto nrecords = records.Size();
-        rjson::set(ret, "Records", std::move(records));
+        rjson::add(ret, "Records", std::move(records));
 
         if (nrecords != 0) {
             // #9642. Set next iterators threshold to > last
@@ -1016,7 +1016,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             // without checking if maybe we reached the end-of-shard. If the
             // shard did end, then the next read will have nrecords == 0 and
             // will notice end end of shard and not return NextShardIterator.
-            rjson::set(ret, "NextShardIterator", next_iter);
+            rjson::add(ret, "NextShardIterator", next_iter);
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
         }
@@ -1038,7 +1038,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 // can also start the next search from high_ts.
                 // TODO: but why? It's simpler just to leave the iterator be.
                 shard_iterator next_iter(iter.table, iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch()), true);
-                rjson::set(ret, "NextShardIterator", iter);
+                rjson::add(ret, "NextShardIterator", iter);
             }
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
@@ -1096,11 +1096,11 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
         auto& db = _proxy.get_db().local();
         auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
         stream_arn arn(cf.schema()->id());
-        rjson::set(descr, "LatestStreamArn", arn);
-        rjson::set(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
+        rjson::add(descr, "LatestStreamArn", arn);
+        rjson::add(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
 
         auto stream_desc = rjson::empty_object();
-        rjson::set(stream_desc, "StreamEnabled", true);
+        rjson::add(stream_desc, "StreamEnabled", true);
 
         auto mode = stream_view_type::KEYS_ONLY;
         if (opts.preimage() && opts.postimage()) {
@@ -1110,8 +1110,8 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
         } else if (opts.postimage()) {
             mode = stream_view_type::NEW_IMAGE;
         }
-        rjson::set(stream_desc, "StreamViewType", mode);
-        rjson::set(descr, "StreamSpecification", std::move(stream_desc));
+        rjson::add(stream_desc, "StreamViewType", mode);
+        rjson::add(descr, "StreamSpecification", std::move(stream_desc));
     }
 }
 

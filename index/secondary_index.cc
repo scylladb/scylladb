@@ -167,13 +167,13 @@ sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::st
         rjson::push_back(pk_array, std::move(pk_json));
         pk_json = std::move(pk_array);
     }
-    rjson::set_with_string_name(json_map, PK_TARGET_KEY, std::move(pk_json));
+    rjson::add_with_string_name(json_map, PK_TARGET_KEY, std::move(pk_json));
     if (targets.size() > 1) {
         rjson::value ck_json = rjson::empty_array();
         for (unsigned i = 1; i < targets.size(); ++i) {
             rjson::push_back(ck_json, std::visit(as_json_visitor(), targets.at(i)->value));
         }
-        rjson::set_with_string_name(json_map, CK_TARGET_KEY, std::move(ck_json));
+        rjson::add_with_string_name(json_map, CK_TARGET_KEY, std::move(ck_json));
     }
     return rjson::print(json_map);
 }

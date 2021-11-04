@@ -92,10 +92,10 @@ std::string json_string::to_json() const {
 }
 
 void executor::supplement_table_info(rjson::value& descr, const schema& schema) const {
-    rjson::set(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
-    rjson::set(descr, "TableStatus", "ACTIVE");
+    rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
+    rjson::add(descr, "TableStatus", "ACTIVE");
     auto schema_id_str = schema.id().to_sstring();
-    rjson::set(descr, "TableId", rjson::from_string(schema_id_str));
+    rjson::add(descr, "TableId", rjson::from_string(schema_id_str));
 
     executor::supplement_table_stream_info(descr, schema);
 }
@@ -341,8 +341,8 @@ void executor::describe_key_schema(rjson::value& parent, const schema& schema, s
     rjson::value key_schema = rjson::empty_array();
     for (const column_definition& cdef : schema.partition_key_columns()) {
         rjson::value key = rjson::empty_object();
-        rjson::set(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
-        rjson::set(key, "KeyType", "HASH");
+        rjson::add(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
+        rjson::add(key, "KeyType", "HASH");
         rjson::push_back(key_schema, std::move(key));
         if (attribute_types) {
             (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
@@ -350,8 +350,8 @@ void executor::describe_key_schema(rjson::value& parent, const schema& schema, s
     }
     for (const column_definition& cdef : schema.clustering_key_columns()) {
         rjson::value key = rjson::empty_object();
-        rjson::set(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
-        rjson::set(key, "KeyType", "RANGE");
+        rjson::add(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
+        rjson::add(key, "KeyType", "RANGE");
         rjson::push_back(key_schema, std::move(key));
         if (attribute_types) {
             (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
@@ -362,7 +362,7 @@ void executor::describe_key_schema(rjson::value& parent, const schema& schema, s
         // reproducer in test_gsi_2_describe_table_schema.
         break;
     }
-    rjson::set(parent, "KeySchema", std::move(key_schema));
+    rjson::add(parent, "KeySchema", std::move(key_schema));
 
 }
 
@@ -395,10 +395,10 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value table_description = rjson::empty_object();
-    rjson::set(table_description, "TableName", rjson::from_string(schema->cf_name()));
+    rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
     size_t creation_date_seconds = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
-    rjson::set(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
+    rjson::add(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
@@ -406,15 +406,15 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
     // The other states (CREATING, UPDATING, DELETING) are not currently
     // returned.
-    rjson::set(table_description, "TableStatus", "ACTIVE");
-    rjson::set(table_description, "TableArn", generate_arn_for_table(*schema));
-    rjson::set(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
+    rjson::add(table_description, "TableStatus", "ACTIVE");
+    rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
+    rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
     // FIXME: Instead of hardcoding, we should take into account which mode was chosen
     // when the table was created. But, Spark jobs expect something to be returned
     // and PAY_PER_REQUEST seems closer to reality than PROVISIONED.
-    rjson::set(table_description, "BillingModeSummary", rjson::empty_object());
-    rjson::set(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
-    rjson::set(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
+    rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
+    rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
+    rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
 
     std::unordered_map<std::string,std::string> key_attribute_types;
     // Add base table's KeySchema and collect types for AttributeDefinitions:
@@ -433,7 +433,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
                 continue;
             }
             sstring index_name = cf_name.substr(delim_it + 1);
-            rjson::set(view_entry, "IndexName", rjson::from_string(index_name));
+            rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
             // Add indexes's KeySchema and collect types for AttributeDefinitions:
             describe_key_schema(view_entry, *vptr, key_attribute_types);
             // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
@@ -441,10 +441,10 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
             rjson::push_back(index_array, std::move(view_entry));
         }
         if (!lsi_array.Empty()) {
-            rjson::set(table_description, "LocalSecondaryIndexes", std::move(lsi_array));
+            rjson::add(table_description, "LocalSecondaryIndexes", std::move(lsi_array));
         }
         if (!gsi_array.Empty()) {
-            rjson::set(table_description, "GlobalSecondaryIndexes", std::move(gsi_array));
+            rjson::add(table_description, "GlobalSecondaryIndexes", std::move(gsi_array));
         }
     }
     // Use map built by describe_key_schema() for base and indexes to produce
@@ -452,18 +452,18 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::value attribute_definitions = rjson::empty_array();
     for (auto& type : key_attribute_types) {
         rjson::value key = rjson::empty_object();
-        rjson::set(key, "AttributeName", rjson::from_string(type.first));
-        rjson::set(key, "AttributeType", rjson::from_string(type.second));
+        rjson::add(key, "AttributeName", rjson::from_string(type.first));
+        rjson::add(key, "AttributeType", rjson::from_string(type.second));
         rjson::push_back(attribute_definitions, std::move(key));
     }
-    rjson::set(table_description, "AttributeDefinitions", std::move(attribute_definitions));
+    rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
 
     supplement_table_stream_info(table_description, *schema);
     
     // FIXME: still missing some response fields (issue #5026)
 
     rjson::value response = rjson::empty_object();
-    rjson::set(response, "Table", std::move(table_description));
+    rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
@@ -485,10 +485,10 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     }).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
         rjson::value table_description = rjson::empty_object();
-        rjson::set(table_description, "TableName", rjson::from_string(table_name));
-        rjson::set(table_description, "TableStatus", "DELETING");
+        rjson::add(table_description, "TableName", rjson::from_string(table_name));
+        rjson::add(table_description, "TableStatus", "DELETING");
         rjson::value response = rjson::empty_object();
-        rjson::set(response, "TableDescription", std::move(table_description));
+        rjson::add(response, "TableDescription", std::move(table_description));
         elogger.trace("returning {}", response);
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
     });
@@ -762,13 +762,13 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
 
     auto tags_map = get_tags_of_table(schema);
     rjson::value ret = rjson::empty_object();
-    rjson::set(ret, "Tags", rjson::empty_array());
+    rjson::add(ret, "Tags", rjson::empty_array());
 
     rjson::value& tags = ret["Tags"];
     for (auto& tag_entry : tags_map) {
         rjson::value new_entry = rjson::empty_object();
-        rjson::set(new_entry, "Key", rjson::from_string(tag_entry.first));
-        rjson::set(new_entry, "Value", rjson::from_string(tag_entry.second));
+        rjson::add(new_entry, "Key", rjson::from_string(tag_entry.first));
+        rjson::add(new_entry, "Value", rjson::from_string(tag_entry.second));
         rjson::push_back(tags, std::move(new_entry));
     }
 
@@ -1002,7 +1002,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                 }).then([this, table_info = std::move(table_info), schema] () mutable {
                     rjson::value status = rjson::empty_object();
                     supplement_table_info(table_info, *schema);
-                    rjson::set(status, "TableDescription", std::move(table_info));
+                    rjson::add(status, "TableDescription", std::move(table_info));
                     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
                 });
             });
@@ -1060,7 +1060,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     }).then([this, table_info = std::move(request), schema] () mutable {
         rjson::value status = rjson::empty_object();
         supplement_table_info(table_info, *schema);
-        rjson::set(status, "TableDescription", std::move(table_info));
+        rjson::add(status, "TableDescription", std::move(table_info));
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
     });
 }
@@ -1380,7 +1380,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
 static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes) {
     rjson::value ret = rjson::empty_object();
     if (!attributes.IsNull()) {
-        rjson::set(ret, "Attributes", std::move(attributes));
+        rjson::add(ret, "Attributes", std::move(attributes));
     }
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
@@ -1877,7 +1877,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
         rjson::value ret = rjson::empty_object();
-        rjson::set(ret, "UnprocessedItems", rjson::empty_object());
+        rjson::add(ret, "UnprocessedItems", rjson::empty_object());
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
 }
@@ -1923,11 +1923,13 @@ static bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>
                 if (x->second) {
                     // Only a part of this attribute is to be filtered, do it.
                     if (hierarchy_filter(it->value, *x->second)) {
-                        rjson::set_with_string_name(newv, attr, std::move(it->value));
+                        // because newv started empty and attr are unique
+                        // (keys of v), we can use add() here
+                        rjson::add_with_string_name(newv, attr, std::move(it->value));
                     }
                 } else {
                     // The entire attribute is to be kept
-                    rjson::set_with_string_name(newv, attr, std::move(it->value));
+                    rjson::add_with_string_name(newv, attr, std::move(it->value));
                 }
             }
         }
@@ -2126,9 +2128,11 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
         std::string column_name = (*column_it)->name_as_text();
         if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
             if (attrs_to_get.empty() || attrs_to_get.contains(column_name)) {
-                rjson::set_with_string_name(item, column_name, rjson::empty_object());
+                // item is expected to start empty, and column_name are unique
+                // so add() makes sense
+                rjson::add_with_string_name(item, column_name, rjson::empty_object());
                 rjson::value& field = item[column_name.c_str()];
-                rjson::set_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
+                rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
             }
         } else if (cell) {
             auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
@@ -2142,10 +2146,12 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     if (it != attrs_to_get.end()) {
                         // attrs_to_get may have asked for only part of this attribute:
                         if (hierarchy_filter(v, it->second)) {
-                            rjson::set_with_string_name(item, attr_name, std::move(v));
+                            // item is expected to start empty, and attribute
+                            // names are unique so add() makes sense
+                            rjson::add_with_string_name(item, attr_name, std::move(v));
                         }
                     } else {
-                        rjson::set_with_string_name(item, attr_name, std::move(v));
+                        rjson::add_with_string_name(item, attr_name, std::move(v));
                     }
                 }
             }
@@ -2471,7 +2477,9 @@ static bool hierarchy_actions(
                 if (subh.has_value()) {
                     std::optional<rjson::value> newv = action_result(subh.get_value(), previous_item);
                     if (newv) {
-                        rjson::set_with_string_name(v, attr, std::move(*newv));
+                        // This is the !subobj case, so v doesn't have an
+                        // attr member so we can use add()
+                        rjson::add_with_string_name(v, attr, std::move(*newv));
                     } else {
                         throw api_error::validation(format("Can't remove document path {} - not present in item",
                             subh.get_value()._path));
@@ -2548,11 +2556,14 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 // If the operation was only on specific attribute paths,
                 // leave only them in _return_attributes.
                 if (hierarchy_filter(v, *h)) {
-                    rjson::set_with_string_name(_return_attributes,
+                    // In the UPDATED_NEW case, _return_attributes starts
+                    // empty and the attribute names are unique, so we can
+                    // use add().
+                    rjson::add_with_string_name(_return_attributes,
                         to_sstring_view(column_name), std::move(v));
                 }
             } else {
-                rjson::set_with_string_name(_return_attributes,
+                rjson::add_with_string_name(_return_attributes,
                     to_sstring_view(column_name), std::move(v));
             }
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
@@ -2562,10 +2573,13 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 rjson::value&& v = rjson::copy(*col);
                 if (h) {
                     if (hierarchy_filter(v, *h)) {
-                        rjson::set_with_string_name(_return_attributes, cn, std::move(v));
+                        // In the UPDATED_OLD case, _return_attributes starts
+                        // empty and the attribute names are unique, so we can
+                        // use add().
+                        rjson::add_with_string_name(_return_attributes, cn, std::move(v));
                     }
                 } else {
-                    rjson::set_with_string_name(_return_attributes, cn, std::move(v));
+                    rjson::add_with_string_name(_return_attributes, cn, std::move(v));
                 }
             }
         }
@@ -2586,7 +2600,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             std::string_view cn =  to_sstring_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
-                rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
+                // In the UPDATED_OLD case the item starts empty and column
+                // names are unique, so we can use add()
+                rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
         }
         const column_definition* cdef = _schema->get_column_definition(column_name);
@@ -2821,7 +2837,7 @@ static rjson::value describe_item(schema_ptr schema,
         return rjson::empty_object();
     }
     rjson::value item_descr = rjson::empty_object();
-    rjson::set(item_descr, "Item", std::move(*opt_item));
+    rjson::add(item_descr, "Item", std::move(*opt_item));
     return item_descr;
 }
 
@@ -2948,11 +2964,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     return when_all_succeed(response_futures.begin(), response_futures.end()).then(
             [] (std::vector<std::tuple<std::string, std::optional<rjson::value>>> responses) {
         rjson::value response = rjson::empty_object();
-        rjson::set(response, "Responses", rjson::empty_object());
-        rjson::set(response, "UnprocessedKeys", rjson::empty_object());
+        rjson::add(response, "Responses", rjson::empty_object());
+        rjson::add(response, "UnprocessedKeys", rjson::empty_object());
         for (auto& t : responses) {
             if (!response["Responses"].HasMember(std::get<0>(t).c_str())) {
-                rjson::set_with_string_name(response["Responses"], std::get<0>(t), rjson::empty_array());
+                rjson::add_with_string_name(response["Responses"], std::get<0>(t), rjson::empty_array());
             }
             if (std::get<1>(t)) {
                 rjson::push_back(response["Responses"][std::get<0>(t)], std::move(*std::get<1>(t)));
@@ -3145,10 +3161,10 @@ public:
             if (column_name != executor::ATTRS_COLUMN_NAME) {
                 if (_attrs_to_get.empty() || _attrs_to_get.contains(column_name) || _extra_filter_attrs.contains(column_name)) {
                     if (!_item.HasMember(column_name.c_str())) {
-                        rjson::set_with_string_name(_item, column_name, rjson::empty_object());
+                        rjson::add_with_string_name(_item, column_name, rjson::empty_object());
                     }
                     rjson::value& field = _item[column_name.c_str()];
-                    rjson::set_with_string_name(field, type_to_string((*_column_it)->type), json_key_column_value(bv, **_column_it));
+                    rjson::add_with_string_name(field, type_to_string((*_column_it)->type), json_key_column_value(bv, **_column_it));
                 }
             } else {
                 auto deserialized = attrs_type()->deserialize(bv, cql_serialization_format::latest());
@@ -3163,7 +3179,7 @@ public:
                         // need the other parts (it was easier for us to keep
                         // extra_filter_attrs at top-level granularity). We'll
                         // filter the unneeded parts after item filtering.
-                        rjson::set_with_string_name(_item, attr_name, deserialize_item(value));
+                        rjson::add_with_string_name(_item, attr_name, deserialize_item(value));
                     }
                 }
             }
@@ -3212,9 +3228,9 @@ static rjson::value describe_items(schema_ptr schema, const query::partition_sli
     auto scanned_count = visitor.get_scanned_count();
     rjson::value items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
-    rjson::set(items_descr, "Count", rjson::value(items.Size()));
-    rjson::set(items_descr, "ScannedCount", rjson::value(scanned_count));
-    rjson::set(items_descr, "Items", std::move(items));
+    rjson::add(items_descr, "Count", rjson::value(items.Size()));
+    rjson::add(items_descr, "ScannedCount", rjson::value(scanned_count));
+    rjson::add(items_descr, "Items", std::move(items));
     return items_descr;
 }
 
@@ -3223,9 +3239,9 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     std::vector<bytes> exploded_pk = paging_state.get_partition_key().explode();
     auto exploded_pk_it = exploded_pk.begin();
     for (const column_definition& cdef : schema.partition_key_columns()) {
-        rjson::set_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
+        rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
         rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
-        rjson::set_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
+        rjson::add_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
         ++exploded_pk_it;
     }
     auto ck = paging_state.get_clustering_key();
@@ -3233,9 +3249,9 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         auto exploded_ck = ck->explode();
         auto exploded_ck_it = exploded_ck.begin();
         for (const column_definition& cdef : schema.clustering_key_columns()) {
-            rjson::set_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
+            rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
             rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
-            rjson::set_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
+            rjson::add_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
             ++exploded_ck_it;
         }
     }
@@ -3299,7 +3315,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         bool has_filter = filter;
         auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
         if (paging_state) {
-            rjson::set(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
+            rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
         }
         if (has_filter){
             cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
@@ -3907,7 +3923,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
                     });
 
     rjson::value response = rjson::empty_object();
-    rjson::set(response, "TableNames", rjson::empty_array());
+    rjson::add(response, "TableNames", rjson::empty_array());
     rjson::value& all_tables = response["TableNames"];
 
     //TODO(sarna): Dynamo doesn't declare any ordering when listing tables,
@@ -3931,7 +3947,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
     if (table_names_it != table_names.end()) {
         auto& last_table_name = *std::prev(all_tables.End());
-        rjson::set(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
+        rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
@@ -3949,10 +3965,10 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     if (host_header.empty()) {
         return make_ready_future<request_return_type>(api_error::validation("DescribeEndpoints needs a 'Host:' header in request"));
     }
-    rjson::set(response, "Endpoints", rjson::empty_array());
+    rjson::add(response, "Endpoints", rjson::empty_array());
     rjson::push_back(response["Endpoints"], rjson::empty_object());
-    rjson::set(response["Endpoints"][0], "Address", rjson::from_string(host_header));
-    rjson::set(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
+    rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
+    rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
