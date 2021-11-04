@@ -112,9 +112,10 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
         return std::make_pair(true, term_t(0));
     }
 
-    // We got some very old AppendEntries we can safely ignore.
+    // We got an AppendEntries inside out snapshot, it has to much by
+    // log matching property
     if (idx < _snapshot.idx) {
-        return std::make_pair(false, last_term());
+        return std::make_pair(true, last_term());
     }
 
     term_t my_term;
@@ -203,6 +204,7 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
             // If an existing entry conflicts with a new one (same
             // index but different terms), delete the existing
             // entry and all that follow it (§5.3).
+            assert(e->idx > _snapshot.idx);
             truncate_uncommitted(e->idx);
         }
         // Assert log monotonicity
