@@ -35,85 +35,86 @@ class flat_mutation_reader;
 
 namespace sstables {
 
-    class pretty_printed_data_size {
-        uint64_t _size;
-    public:
-        pretty_printed_data_size(uint64_t size) : _size(size) {}
-        friend std::ostream& operator<<(std::ostream&, pretty_printed_data_size);
+class pretty_printed_data_size {
+    uint64_t _size;
+public:
+    pretty_printed_data_size(uint64_t size) : _size(size) {}
+    friend std::ostream& operator<<(std::ostream&, pretty_printed_data_size);
+};
+
+class pretty_printed_throughput {
+    uint64_t _size;
+    std::chrono::duration<float> _duration;
+public:
+    pretty_printed_throughput(uint64_t size, std::chrono::duration<float> dur) : _size(size), _duration(std::move(dur)) {}
+    friend std::ostream& operator<<(std::ostream&, pretty_printed_throughput);
+};
+
+sstring compaction_name(compaction_type type);
+compaction_type to_compaction_type(sstring type_name);
+
+struct compaction_info {
+    utils::UUID compaction_uuid;
+    compaction_type type = compaction_type::Compaction;
+    sstring ks_name;
+    sstring cf_name;
+    uint64_t total_partitions = 0;
+    uint64_t total_keys_written = 0;
+};
+
+struct compaction_data {
+    uint64_t total_partitions = 0;
+    uint64_t total_keys_written = 0;
+    sstring stop_requested;
+    utils::UUID compaction_uuid;
+    unsigned compaction_fan_in = 0;
+    struct replacement {
+        const std::vector<shared_sstable> removed;
+        const std::vector<shared_sstable> added;
     };
+    std::vector<replacement> pending_replacements;
 
-    class pretty_printed_throughput {
-        uint64_t _size;
-        std::chrono::duration<float> _duration;
-    public:
-        pretty_printed_throughput(uint64_t size, std::chrono::duration<float> dur) : _size(size), _duration(std::move(dur)) {}
-        friend std::ostream& operator<<(std::ostream&, pretty_printed_throughput);
-    };
+    bool is_stop_requested() const noexcept {
+        return !stop_requested.empty();
+    }
 
-    sstring compaction_name(compaction_type type);
-    compaction_type to_compaction_type(sstring type_name);
+    void stop(sstring reason) {
+        stop_requested = std::move(reason);
+    }
+};
 
-    struct compaction_info {
-        utils::UUID compaction_uuid;
-        compaction_type type = compaction_type::Compaction;
-        sstring ks_name;
-        sstring cf_name;
-        uint64_t total_partitions = 0;
-        uint64_t total_keys_written = 0;
-    };
+struct compaction_result {
+    std::vector<sstables::shared_sstable> new_sstables;
+    std::chrono::time_point<db_clock> ended_at;
+    uint64_t end_size = 0;
+};
 
-    struct compaction_data {
-        uint64_t total_partitions = 0;
-        uint64_t total_keys_written = 0;
-        sstring stop_requested;
-        utils::UUID compaction_uuid;
-        unsigned compaction_fan_in = 0;
-        struct replacement {
-            const std::vector<shared_sstable> removed;
-            const std::vector<shared_sstable> added;
-        };
-        std::vector<replacement> pending_replacements;
+// Compact a list of N sstables into M sstables.
+// Returns info about the finished compaction, which includes vector to new sstables.
+//
+// creator is used to get a sstable object for a new sstable that will be written.
+// replacer will replace old sstables by new ones in the column family.
+// max_sstable_size is a relaxed limit size for a sstable to be generated.
+// Example: It's okay for the size of a new sstable to go beyond max_sstable_size
+// when writing its last partition.
+// sstable_level will be level of the sstable(s) to be created by this function.
+// If descriptor.cleanup is true, mutation that doesn't belong to current node will be
+// cleaned up, log messages will inform the user that compact_sstables runs for
+// cleaning operation, and compaction history will not be updated.
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf);
 
-        bool is_stop_requested() const noexcept {
-            return !stop_requested.empty();
-        }
+// Return list of expired sstables for column family cf.
+// A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
+// max timestamp is lower than any other relevant sstable.
+// In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
+// and possibly doesn't contain any tombstone that covers cells in other sstables.
+std::unordered_set<sstables::shared_sstable>
+get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
 
-        void stop(sstring reason) {
-            stop_requested = std::move(reason);
-        }
-    };
+// For tests, can drop after we virtualize sstables.
+flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode);
 
-    struct compaction_result {
-        std::vector<sstables::shared_sstable> new_sstables;
-        std::chrono::time_point<db_clock> ended_at;
-        uint64_t end_size = 0;
-    };
+// For tests, can drop after we virtualize sstables.
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader rd, const compaction_data& info);
 
-    // Compact a list of N sstables into M sstables.
-    // Returns info about the finished compaction, which includes vector to new sstables.
-    //
-    // creator is used to get a sstable object for a new sstable that will be written.
-    // replacer will replace old sstables by new ones in the column family.
-    // max_sstable_size is a relaxed limit size for a sstable to be generated.
-    // Example: It's okay for the size of a new sstable to go beyond max_sstable_size
-    // when writing its last partition.
-    // sstable_level will be level of the sstable(s) to be created by this function.
-    // If descriptor.cleanup is true, mutation that doesn't belong to current node will be
-    // cleaned up, log messages will inform the user that compact_sstables runs for
-    // cleaning operation, and compaction history will not be updated.
-    future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf);
-
-    // Return list of expired sstables for column family cf.
-    // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
-    // max timestamp is lower than any other relevant sstable.
-    // In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
-    // and possibly doesn't contain any tombstone that covers cells in other sstables.
-    std::unordered_set<sstables::shared_sstable>
-    get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
-
-    // For tests, can drop after we virtualize sstables.
-    flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode);
-
-    // For tests, can drop after we virtualize sstables.
-    future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader rd, const compaction_data& info);
 }
