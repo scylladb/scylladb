@@ -2229,3 +2229,61 @@ BOOST_AUTO_TEST_CASE(test_read_barrier) {
     output = AA.get_output();
     BOOST_CHECK(output.max_read_id_with_quorum);
 }
+
+BOOST_AUTO_TEST_CASE(test_append_entry_inside_snapshot) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    communicate(A, B, C);
+
+    // Add new entry and commit it with B
+    A.add_entry(log_entry::dummy{});
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    auto append = std::get<raft::append_request>(output.messages.back().second);
+    B.step(A_id, std::move(append));
+    output = B.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    auto reply = std::get<raft::append_reply>(output.messages.back().second);
+    A.step(B_id, std::move(reply)); // A commits last entry here
+
+    // propagate commit index to B
+    A.tick();
+    communicate(A, B);
+
+    // generate new message for C, first one will be empty
+    // so feed it back to A and get next one
+    A.tick();
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    append = std::get<raft::append_request>(output.messages.back().second);
+    C.step(A_id, std::move(append));
+    output = C.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    reply = std::get<raft::append_reply>(output.messages.back().second);
+    A.step(C_id, std::move(reply));
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    append = std::get<raft::append_request>(output.messages.back().second);
+
+    // Now send it to C and ignore the reply
+    C.step(A_id, std::move(append));
+    (void)C.get_output();
+    // C snapshots the log
+    C.apply_snapshot(log_snapshot(C.get_log(), C.log_last_idx()), 0, true);
+
+    // Try to add one more entry
+    A.add_entry(log_entry::dummy{});
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(!C.get_log().empty());
+}
