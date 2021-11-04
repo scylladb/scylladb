@@ -565,7 +565,10 @@ schema_ptr system_keyspace::size_estimates() {
             {"partition_key", utf8_type}
         }, // CLUSTERING ORDER BY (partition_size DESC)
         // regular columns
-        {{"compaction_time", timestamp_type}},
+        {
+            {"rows", long_type},
+            {"compaction_time", timestamp_type}
+        },
         // static columns
         {},
         // regular column name type

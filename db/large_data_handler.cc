@@ -46,17 +46,20 @@ large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint6
         partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold);
 }
 
-future<bool> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) {
+future<large_data_handler::partition_above_threshold> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows) {
     assert(running());
-    if (partition_size > _partition_threshold_bytes) {
+    partition_above_threshold above_threshold{partition_size > _partition_threshold_bytes, rows > _rows_count_threshold};
+    if (above_threshold.size) [[unlikely]] {
         ++_stats.partitions_bigger_than_threshold;
-        return with_sem([&sst, &key, partition_size, this] {
-            return record_large_partitions(sst, key, partition_size);
-        }).then([] {
-            return true;
+    }
+    if (above_threshold.size || above_threshold.rows) [[unlikely]] {
+        return with_sem([&sst, &key, partition_size, rows, this] {
+            return record_large_partitions(sst, key, partition_size, rows);
+        }).then([above_threshold] {
+            return above_threshold;
         });
     }
-    return make_ready_future<bool>(false);
+    return make_ready_future<partition_above_threshold>();
 }
 
 void large_data_handler::start() {
@@ -82,24 +85,26 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
     auto schema = sst->get_schema();
     auto filename = sst->get_filename();
     auto data_size = sst->data_size();
+    using ldt = sstables::large_data_type;
+    auto above_threshold = [sst] (ldt type) -> bool {
+        auto entry = sst->get_large_data_stat(type);
+        return entry && entry->above_threshold;
+    };
 
     future<> large_partitions = make_ready_future<>();
-    auto entry = sst->get_large_data_stat(sstables::large_data_type::partition_size);
-    if (entry && entry->above_threshold) {
+    if (above_threshold(ldt::partition_size) || above_threshold(ldt::rows_in_partition)) {
         large_partitions = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
         });
     }
     future<> large_rows = make_ready_future<>();
-    entry = sst->get_large_data_stat(sstables::large_data_type::row_size);
-    if (entry && entry->above_threshold) {
+    if (above_threshold(ldt::row_size)) {
         large_rows = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_ROWS);
         });
     }
     future<> large_cells = make_ready_future<>();
-    entry = sst->get_large_data_stat(sstables::large_data_type::cell_size);
-    if (entry && entry->above_threshold) {
+    if (above_threshold(ldt::cell_size)) {
         large_cells = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_CELLS);
         });
@@ -139,17 +144,8 @@ static future<> try_record(std::string_view large_table, const sstables::sstable
             });
 }
 
-future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
-    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {});
-}
-
-void cql_table_large_data_handler::log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key,
-        uint64_t rows_count) const {
-    const schema& s = *sst.get_schema();
-    const auto sstable_name = sst.get_filename();
-    large_data_logger.warn("Writing a partition with too many rows [{}/{}:{}] ({} rows) to {}",
-                           s.ks_name(), s.cf_name(), partition_key.to_partition_key(s).with_schema(s),
-                           rows_count, sstable_name);
+future<> cql_table_large_data_handler::record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size, uint64_t rows) const {
+    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {"rows"}, data_value((int64_t)rows));
 }
 
 future<> cql_table_large_data_handler::record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,

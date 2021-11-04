@@ -689,8 +689,7 @@ private:
         std::optional<gc_clock::time_point> local_deletion_time;
     };
 
-    void maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size);
-    void maybe_record_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count);
+    void maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows);
     void maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const uint64_t row_size);
     void maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
@@ -1040,23 +1039,18 @@ void writer::consume(tombstone t) {
     }
 }
 
-void writer::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) {
-    auto& entry = _large_data_stats.map.at(large_data_type::partition_size);
-    if (entry.max_value < partition_size) {
-        entry.max_value = partition_size;
+void writer::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key,
+                                           uint64_t partition_size, uint64_t rows) {
+    auto& size_entry = _large_data_stats.map.at(large_data_type::partition_size);
+    auto& row_count_entry = _large_data_stats.map.at(large_data_type::rows_in_partition);
+    size_entry.max_value = std::max(size_entry.max_value, partition_size);
+    row_count_entry.max_value = std::max(row_count_entry.max_value, rows);
+    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get0();
+    if (ret.size) [[unlikely]] {
+        size_entry.above_threshold++;
     }
-    if (_sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size).get0()) {
-        entry.above_threshold++;
-    };
-}
-
-void writer::maybe_record_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
-    auto& entry = _large_data_stats.map.at(large_data_type::rows_in_partition);
-    if (entry.max_value < rows_count) {
-        entry.max_value = rows_count;
-    }
-    if (_sst.get_large_data_handler().maybe_log_too_many_rows(sst, partition_key, rows_count)) {
-        entry.above_threshold++;
+    if (ret.rows) [[unlikely]] {
+        row_count_entry.above_threshold++;
     }
 }
 
@@ -1462,8 +1456,7 @@ stop_iteration writer::consume_end_of_partition() {
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
-    maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size);
-    maybe_record_too_many_rows(_sst, *_partition_key, _c_stats.rows_count);
+    maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count);
 
 
     // update is about merging column_stats with the data being stored by collector.

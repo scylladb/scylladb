@@ -5151,13 +5151,6 @@ struct large_row_handler : public db::large_data_handler {
         start();
     }
 
-    virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key,
-            uint64_t rows_count) const override {
-        const schema_ptr s = sst.get_schema();
-        callback(*s, partition_key, nullptr, rows_count);
-        return;
-    }
-
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) const override {
         const schema_ptr s = sst.get_schema();
@@ -5171,7 +5164,9 @@ struct large_row_handler : public db::large_data_handler {
     }
 
     virtual future<> record_large_partitions(const sstables::sstable& sst,
-            const sstables::key& partition_key, uint64_t partition_size) const override {
+        const sstables::key& partition_key, uint64_t partition_size, uint64_t rows_count) const override {
+        const schema_ptr s = sst.get_schema();
+        callback(*s, partition_key, nullptr, rows_count);
         return make_ready_future<>();
     }
 
