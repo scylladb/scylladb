@@ -353,6 +353,37 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
     return task->compaction_done.get_future().then([task] {});
 }
 
+bool compaction_manager::compaction_state::compaction_disabled() const {
+    return with_compaction_disabled_gate.get_count() > 0;
+}
+
+future<>
+compaction_manager::run_with_compaction_disabled(table* t, std::function<future<> ()> func) {
+    auto& c_state = _compaction_state[t];
+    auto holder = c_state.with_compaction_disabled_gate.hold();
+    co_await stop_ongoing_compactions("user-triggered operation", t);
+
+    std::exception_ptr err;
+    try {
+        co_await func();
+    } catch (...) {
+        err = std::current_exception();
+    }
+
+#ifdef DEBUG
+    assert(_compaction_state.contains(t));
+#endif
+    // submit compaction request if we're the last holder of the gate which is still opened.
+    if (!c_state.with_compaction_disabled_gate.is_closed() && c_state.with_compaction_disabled_gate.get_count() == 1) {
+        holder.release();
+        submit(t);
+    }
+    if (err) {
+        std::rethrow_exception(err);
+    }
+    co_return;
+}
+
 void compaction_manager::task::setup_new_compaction() {
     compaction_data = create_compaction_data();
     compaction_running = true;
@@ -572,7 +603,8 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
-    return (_state == state::enabled) && !task->stopping;
+    return (_state == state::enabled) && !task->stopping &&
+        (task->type != sstables::compaction_type::Compaction || !_compaction_state[task->compacting_cf].compaction_disabled());
 }
 
 inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task) {
@@ -906,7 +938,7 @@ future<> compaction_manager::perform_sstable_upgrade(database& db, column_family
         // must ensure that all sstables created before we run are included
         // in the re-write, we need to barrier out any previously running
         // compaction.
-        return cf->run_with_compaction_disabled([this, cf, &tables, exclude_current_version] {
+        return run_with_compaction_disabled(cf, [this, cf, &tables, exclude_current_version] {
             auto last_version = cf->get_sstables_manager().get_highest_supported_format();
 
             for (auto& sst : get_candidates(*cf)) {
@@ -942,7 +974,7 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
     // since we might potentially have ongoing compactions, and we
     // must ensure that all sstables created before we run are scrubbed,
     // we need to barrier out any previously running compaction.
-    return cf->run_with_compaction_disabled([this, cf, scrub_mode] {
+    return run_with_compaction_disabled(cf, [this, cf, scrub_mode] {
         return rewrite_sstables(cf, sstables::compaction_type_options::make_scrub(scrub_mode), [this] (const table& cf) {
             return get_candidates(cf);
         }, can_purge_tombstones::no);
@@ -955,8 +987,11 @@ future<> compaction_manager::remove(column_family* cf) {
     // The requirement above is provided by stop_ongoing_compactions().
     _postponed.erase(cf);
 
+    // Wait for all functions running under with_compaction_disabled_gate to terminate.
+    auto close_gate = _compaction_state[cf].with_compaction_disabled_gate.close();
+
     // Wait for the termination of an ongoing compaction on cf, if any.
-    co_await stop_ongoing_compactions("column family removal", cf);
+    co_await when_all_succeed(stop_ongoing_compactions("column family removal", cf), std::move(close_gate));
 #ifdef DEBUG
     assert(std::find_if(_tasks.begin(), _tasks.end(), [cf] (auto& task) { return task->compacting_cf == cf; }) == _tasks.end());
 #endif

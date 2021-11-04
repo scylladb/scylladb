@@ -442,7 +442,6 @@ private:
     bool _durable_writes;
     compaction_manager& _compaction_manager;
     secondary_index::secondary_index_manager _index_manager;
-    int _compaction_disabled = 0;
     bool _compaction_disabled_by_user = false;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
@@ -921,8 +920,6 @@ public:
     void set_hit_rate(gms::inet_address addr, cache_temperature rate);
     cache_hit_rate get_hit_rate(gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
-
-    future<> run_with_compaction_disabled(std::function<future<> ()> func);
 
     void enable_auto_compaction();
     void disable_auto_compaction();

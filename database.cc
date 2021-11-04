@@ -2128,7 +2128,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         auto low_mark = cf.set_low_replay_position_mark();
 
 
-        return cf.run_with_compaction_disabled([this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return _compaction_manager->run_with_compaction_disabled(&cf, [this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
             future<> f = make_ready_future<>();
             bool did_flush = false;
             if (should_flush && cf.can_flush()) {
@@ -2179,7 +2179,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 future<> database::truncate_views(const column_family& base, db_clock::time_point truncated_at, bool should_flush) {
     return parallel_for_each(base.views(), [this, truncated_at, should_flush] (view_ptr v) {
         auto& vcf = find_column_family(v);
-        return vcf.run_with_compaction_disabled([&vcf, truncated_at, should_flush] {
+        return _compaction_manager->run_with_compaction_disabled(&vcf, [&vcf, truncated_at, should_flush] {
             return (should_flush ? vcf.flush() : vcf.clear()).then([&vcf, truncated_at, should_flush] {
                 return vcf.discard_sstables(truncated_at).then([&vcf, truncated_at, should_flush](db::replay_position rp) {
                     return db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);

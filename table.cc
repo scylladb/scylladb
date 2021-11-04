@@ -981,7 +981,7 @@ void table::try_trigger_compaction() noexcept {
 
 void table::do_trigger_compaction() {
     // But not if we're locked out or stopping
-    if (!_compaction_disabled && !_async_gate.is_closed()) {
+    if (!_async_gate.is_closed()) {
         _compaction_manager.submit(this);
     }
 }
@@ -1505,7 +1505,7 @@ future<> table::clear() {
 // NOTE: does not need to be futurized, but might eventually, depending on
 // if we implement notifications, whatnot.
 future<db::replay_position> table::discard_sstables(db_clock::time_point truncated_at) {
-    assert(_compaction_disabled > 0);
+    assert(_compaction_manager.compaction_disabled(this));
 
     struct pruner {
         column_family& cf;
@@ -2129,18 +2129,6 @@ std::chrono::milliseconds table::get_coordinator_read_latency_percentile(double 
         _stats.estimated_coordinator_read *= 0.9; // decay values a little to give new data points more weight
     }
     return _percentile_cache_value;
-}
-
-future<>
-table::run_with_compaction_disabled(std::function<future<> ()> func) {
-    ++_compaction_disabled;
-    return _compaction_manager.remove(this).then(std::move(func)).finally([this] {
-        if (--_compaction_disabled == 0) {
-            // we're turning if on again, use function that does not increment
-            // the counter further.
-            do_trigger_compaction();
-        }
-    });
 }
 
 void
