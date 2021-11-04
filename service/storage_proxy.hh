@@ -331,7 +331,7 @@ private:
     void remove_response_handler(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
     void got_response(response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog);
-    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err);
+    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,

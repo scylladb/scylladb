@@ -211,6 +211,11 @@ struct mutation_write_failure_exception : public request_failure_exception {
         request_failure_exception(exception_code::WRITE_FAILURE, ks, cf, consistency_, received_, failures_, block_for_)
         , type{std::move(type_)}
     { }
+
+    mutation_write_failure_exception(const sstring& msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, db::write_type type_) noexcept :
+        request_failure_exception(exception_code::WRITE_FAILURE, msg, consistency_, received_, failures_, block_for_)
+        , type{std::move(type_)}
+    { }
 };
 
 struct read_failure_exception : public request_failure_exception {

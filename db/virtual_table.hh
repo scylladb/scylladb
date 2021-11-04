@@ -134,6 +134,11 @@ public:
     { }
 
     virtual const char* what() const noexcept override { return _cause.c_str(); }
+
+    // This method is to avoid potential exceptions while copying the string
+    // and thus to be used when the exception is handled and is about to
+    // be thrown away
+    sstring grab_cause() noexcept { return std::move(_cause); }
 };
 
 }
