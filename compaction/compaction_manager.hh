@@ -134,6 +134,7 @@ private:
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 private:
     future<> task_stop(lw_shared_ptr<task> task, sstring reason);
+    future<> stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason);
 
     // Return the largest fan-in of currently running compactions
     unsigned current_compaction_fan_in_threshold() const;

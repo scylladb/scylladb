@@ -485,13 +485,8 @@ void compaction_manager::postpone_compaction_for_column_family(column_family* cf
     _postponed.insert(cf);
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
-    cmlog.info("Stopping {} ongoing compactions due to {}", get_compactions().size(), reason);
-
-    // Wait for each task handler to stop. Copy list because task remove itself
-    // from the list when done.
-    auto tasks = _tasks;
-    return do_with(std::move(tasks), [this, reason] (std::list<lw_shared_ptr<task>>& tasks) {
+future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason) {
+    return do_with(std::move(tasks), [this, reason] (std::vector<lw_shared_ptr<task>>& tasks) {
         return parallel_for_each(tasks, [this, reason] (auto& task) {
             return this->task_stop(task, reason).then_wrapped([](future <> f) {
                 try {
@@ -505,6 +500,15 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
             });
         });
     });
+}
+
+future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
+    cmlog.info("Stopping {} ongoing compactions due to {}", get_compactions().size(), reason);
+
+    // Wait for each task handler to stop. Copy list because task remove itself
+    // from the list when done.
+    auto tasks = boost::copy_range<std::vector<lw_shared_ptr<task>>>(_tasks);
+    return stop_tasks(std::move(tasks), std::move(reason));
 }
 
 future<> compaction_manager::drain() {
