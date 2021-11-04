@@ -203,24 +203,37 @@ std::optional<T> get_opt(const rjson::value& value, std::string_view name) {
     }
 }
 
-// Sets a member in given JSON object by moving the member - allocates the name.
+// The various set*() functions below *add* a new member to a JSON object.
+// They all assume that a member with the same key (name) doesn't already
+// exist in that object, so they are meant to be used just to build a new
+// object from scratch. If a member with the same name *may* exist, and
+// might need to be replaced, use the replace*() functions instead.
+// The benefit of the set*() functions is that they are faster (O(1),
+// compared to O(n) for the replace* function that need to inspect the
+// existing members).
+
+// Adds a member to a given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.
+// Assumes a member with the same name does not yet exist in base.
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member);
 
-// Sets a string member in given JSON object by assigning its reference - allocates the name.
+// Adds a string member to a given JSON object by assigning its reference - allocates the name.
 // NOTICE: member string liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
+// Assumes a member with the same name does not yet exist in base.
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member);
 
-// Sets a member in given JSON object by moving the member.
+// Adds a member to a given JSON object by moving the member.
 // NOTICE: name liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
+// Assumes a member with the same name does not yet exist in base.
 void set(rjson::value& base, rjson::string_ref_type name, rjson::value&& member);
 
-// Sets a string member in given JSON object by assigning its reference.
+// Adds a string member to a given JSON object by assigning its reference.
 // NOTICE: name liveness must be ensured to be at least as long as base's.
 // NOTICE: member liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
+// Assumes a member with the same name does not yet exist in base.
 void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type member);
 
 /**
@@ -240,6 +253,12 @@ set(rjson::value& base, rjson::string_ref_type name, T&& member) {
     v.Set(std::forward<T>(member), the_allocator);
     set(base, std::move(name), std::move(v));
 }
+
+// Set a member in a given JSON object by moving the member - allocates the name.
+// If a member with the same name already exist in base, it is replaced.
+// Throws if base is not a JSON object.
+void replace_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member);
+
 
 // Adds a value to a JSON list by moving the item to its end.
 // Throws if base_array is not a JSON array.

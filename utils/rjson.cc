@@ -282,6 +282,15 @@ void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type
     base.AddMember(name, rjson::value(member), the_allocator);
 }
 
+void replace_with_string_name(rjson::value& base, const std::string_view name, rjson::value&& member) {
+    rjson::value *m = rjson::find(base, name);
+    if (m) {
+        *m = std::move(member);
+    } else {
+        set_with_string_name(base, name, std::move(member));
+    }
+}
+
 void push_back(rjson::value& base_array, rjson::value&& item) {
     base_array.PushBack(std::move(item), the_allocator);
 
