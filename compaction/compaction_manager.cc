@@ -486,6 +486,11 @@ void compaction_manager::postpone_compaction_for_column_family(column_family* cf
 }
 
 future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, sstring reason) {
+    // To prevent compaction from being postponed while tasks are being stopped, let's set all
+    // tasks as stopping before the deferring point below.
+    for (auto& t : tasks) {
+        t->stopping = true;
+    }
     return do_with(std::move(tasks), [this, reason] (std::vector<lw_shared_ptr<task>>& tasks) {
         return parallel_for_each(tasks, [this, reason] (auto& task) {
             return this->task_stop(task, reason).then_wrapped([](future <> f) {
