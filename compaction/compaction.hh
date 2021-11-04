@@ -92,15 +92,8 @@ struct compaction_result {
 // Compact a list of N sstables into M sstables.
 // Returns info about the finished compaction, which includes vector to new sstables.
 //
-// creator is used to get a sstable object for a new sstable that will be written.
-// replacer will replace old sstables by new ones in the column family.
-// max_sstable_size is a relaxed limit size for a sstable to be generated.
-// Example: It's okay for the size of a new sstable to go beyond max_sstable_size
-// when writing its last partition.
-// sstable_level will be level of the sstable(s) to be created by this function.
-// If descriptor.cleanup is true, mutation that doesn't belong to current node will be
-// cleaned up, log messages will inform the user that compact_sstables runs for
-// cleaning operation, and compaction history will not be updated.
+// compaction_descriptor is responsible for specifying the type of compaction, and influencing
+// compaction behavior through its available member fields.
 future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf);
 
 // Return list of expired sstables for column family cf.
