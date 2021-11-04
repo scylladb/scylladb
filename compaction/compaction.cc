@@ -1081,7 +1081,7 @@ private:
 };
 
 class cleanup_compaction final : public regular_compaction {
-    dht::token_range_vector _owned_ranges;
+    const dht::token_range_vector _owned_ranges;
     incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
