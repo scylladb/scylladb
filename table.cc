@@ -959,7 +959,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>
 table::compact_all_sstables() {
-    return _compaction_manager.submit_major_compaction(this);
+    return _compaction_manager.perform_major_compaction(this);
 }
 
 void table::start_compaction() {

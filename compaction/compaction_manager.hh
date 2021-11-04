@@ -233,7 +233,7 @@ public:
     future<> perform_sstable_scrub(column_family* cf, sstables::compaction_type_options::scrub::mode scrub_mode);
 
     // Submit a column family for major compaction.
-    future<> submit_major_compaction(column_family* cf);
+    future<> perform_major_compaction(column_family* cf);
 
 
     // Run a custom job for a given column family, defined by a function

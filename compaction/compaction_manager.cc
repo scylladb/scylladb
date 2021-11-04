@@ -260,7 +260,7 @@ private:
     virtual void remove_sstable(sstables::shared_sstable sst)  override { }
 };
 
-future<> compaction_manager::submit_major_compaction(column_family* cf) {
+future<> compaction_manager::perform_major_compaction(column_family* cf) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
