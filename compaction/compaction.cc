@@ -947,7 +947,7 @@ public:
 };
 
 class regular_compaction : public compaction {
-    // sstable being currently written.
+    // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
     mutable compaction_read_monitor_generator _monitor_generator;
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata)
