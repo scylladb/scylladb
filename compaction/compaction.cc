@@ -185,28 +185,6 @@ static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, 
     return timestamp;
 }
 
-class incremental_owned_ranges_checker {
-    const dht::token_range_vector& _sorted_owned_ranges;
-    mutable dht::token_range_vector::const_iterator _it;
-public:
-    incremental_owned_ranges_checker(const dht::token_range_vector& sorted_owned_ranges)
-        : _sorted_owned_ranges(sorted_owned_ranges)
-        , _it(_sorted_owned_ranges.begin()) {
-    }
-
-    // Must be called with increasing token values.
-    bool belongs_to_current_node(const dht::token& t) const {
-        // While token T is after a range Rn, advance the iterator.
-        // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
-        // or at a range which is after T (if T doesn't belong to this node).
-        while (_it != _sorted_owned_ranges.end() && _it->after(t, dht::token_comparator())) {
-            _it++;
-        }
-
-        return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
-    }
-};
-
 static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable> sstables) {
     auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
     boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
@@ -1081,6 +1059,28 @@ private:
 };
 
 class cleanup_compaction final : public regular_compaction {
+    class incremental_owned_ranges_checker {
+        const dht::token_range_vector& _sorted_owned_ranges;
+        mutable dht::token_range_vector::const_iterator _it;
+    public:
+        incremental_owned_ranges_checker(const dht::token_range_vector& sorted_owned_ranges)
+                : _sorted_owned_ranges(sorted_owned_ranges)
+                , _it(_sorted_owned_ranges.begin()) {
+        }
+
+        // Must be called with increasing token values.
+        bool belongs_to_current_node(const dht::token& t) const {
+            // While token T is after a range Rn, advance the iterator.
+            // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
+            // or at a range which is after T (if T doesn't belong to this node).
+            while (_it != _sorted_owned_ranges.end() && _it->after(t, dht::token_comparator())) {
+                _it++;
+            }
+
+            return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
+        }
+    };
+
     const dht::token_range_vector _owned_ranges;
     incremental_owned_ranges_checker _owned_ranges_checker;
 private:
