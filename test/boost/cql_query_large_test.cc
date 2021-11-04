@@ -52,6 +52,12 @@ SEASTAR_TEST_CASE(test_large_partitions) {
     return do_with_cql_env([](cql_test_env& e) { return make_ready_future<>(); }, cfg);
 }
 
+SEASTAR_TEST_CASE(test_large_row_count) {
+    auto cfg = make_shared<db::config>();
+    cfg->compaction_rows_count_warning_threshold(0);
+    return do_with_cql_env([](cql_test_env& e) { return make_ready_future<>(); }, cfg);
+}
+
 static void flush(cql_test_env& e) {
     e.db().invoke_on_all([](database& dbi) {
         return dbi.flush_all_memtables();
