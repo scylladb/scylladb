@@ -74,7 +74,7 @@ private:
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
         utils::UUID output_run_identifier;
-        lw_shared_ptr<sstables::compaction_data> compaction_data = make_lw_shared<sstables::compaction_data>();
+        sstables::compaction_data compaction_data;
 
         explicit task(column_family* cf, sstables::compaction_type type) : compacting_cf(cf), type(type) {}
 
@@ -276,7 +276,7 @@ public:
     // Propagate replacement of sstables to all ongoing compaction of a given column family
     void propagate_replacement(column_family*cf, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
-    static lw_shared_ptr<sstables::compaction_data> create_compaction_data(column_family& cf, sstables::compaction_type type);
+    static sstables::compaction_data create_compaction_data();
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;

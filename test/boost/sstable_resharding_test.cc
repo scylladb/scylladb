@@ -99,8 +99,8 @@ void run_sstable_resharding_test() {
         return env.make_sstable(cf->schema(), tmp.path().string(), gen,
             version, sstables::sstable::format_types::big);
     };
-    auto info = compaction_manager::create_compaction_data(*cf, sstables::compaction_type::Compaction);
-    auto res = sstables::compact_sstables(std::move(descriptor), *info, *cf).get0();
+    auto cdata = compaction_manager::create_compaction_data();
+    auto res = sstables::compact_sstables(std::move(descriptor), cdata, *cf).get0();
     auto new_sstables = std::move(res.new_sstables);
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 
