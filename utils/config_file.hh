@@ -140,6 +140,7 @@ public:
         virtual bool set_value(sstring, config_source = config_source::Internal) = 0;
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
+        sstring source_name() const noexcept;
         json::json_return_type value_as_json() const;
     };
 

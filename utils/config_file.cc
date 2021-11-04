@@ -416,4 +416,19 @@ future<> utils::config_file::broadcast_to_all_shards() {
     });
 }
 
+sstring utils::config_file::config_src::source_name() const noexcept {
+    auto src = source();
 
+    switch (src) {
+    case utils::config_file::config_source::None:
+        return "default";
+    case utils::config_file::config_source::SettingsFile:
+        return "config";
+    case utils::config_file::config_source::CommandLine:
+        return "cli";
+    case utils::config_file::config_source::Internal:
+        return "internal";
+    }
+
+    __builtin_unreachable();
+}
