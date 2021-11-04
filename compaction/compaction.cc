@@ -185,28 +185,6 @@ static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, 
     return timestamp;
 }
 
-class incremental_owned_ranges_checker {
-    const dht::token_range_vector& _sorted_owned_ranges;
-    mutable dht::token_range_vector::const_iterator _it;
-public:
-    incremental_owned_ranges_checker(const dht::token_range_vector& sorted_owned_ranges)
-        : _sorted_owned_ranges(sorted_owned_ranges)
-        , _it(_sorted_owned_ranges.begin()) {
-    }
-
-    // Must be called with increasing token values.
-    bool belongs_to_current_node(const dht::token& t) const {
-        // While token T is after a range Rn, advance the iterator.
-        // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
-        // or at a range which is after T (if T doesn't belong to this node).
-        while (_it != _sorted_owned_ranges.end() && _it->after(t, dht::token_comparator())) {
-            _it++;
-        }
-
-        return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
-    }
-};
-
 static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable> sstables) {
     auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
     boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
@@ -500,7 +478,7 @@ std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
 
 class compaction {
 protected:
-    compaction_data& _info;
+    compaction_data& _cdata;
     column_family& _cf;
     compaction_sstable_creator_fn _sstable_creator;
     schema_ptr _schema;
@@ -538,8 +516,8 @@ private:
         return cdata;
     }
 protected:
-    compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
-        : _info(init_compaction_data(info, descriptor))
+    compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata)
+        : _cdata(init_compaction_data(cdata, descriptor))
         , _cf(cf)
         , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
@@ -656,7 +634,7 @@ private:
             // Compacted sstable keeps track of its ancestors.
             _ancestors.push_back(sst->generation());
             _start_size += sst->bytes_on_disk();
-            _info.total_partitions += sst->get_estimated_key_count();
+            _cdata.total_partitions += sst->get_estimated_key_count();
             formatted_msg += sst;
 
             // Do not actually compact a sstable that is fully expired and can be safely
@@ -741,7 +719,7 @@ private:
                 report_finish_desc(),
                 _total_input_sstables, new_sstables_msg, pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_end_size, duration),
-                _info.total_partitions, _info.total_keys_written);
+                _cdata.total_partitions, _cdata.total_keys_written);
 
         return ret;
     }
@@ -794,7 +772,7 @@ protected:
     void log(log_level level, std::string_view fmt, const Args&... args) const {
         if (clogger.is_enabled(level)) {
             auto msg = fmt::format(fmt, args...);
-            clogger.log(level, "[{} {}.{} {}] {}", _type, _schema->ks_name(), _schema->cf_name(), _info.compaction_uuid, msg);
+            clogger.log(level, "[{} {}.{} {}] {}", _type, _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid, msg);
         }
     }
 
@@ -843,9 +821,9 @@ public:
 };
 
 void compacting_sstable_writer::maybe_abort_compaction() {
-    if (_c._info.is_stop_requested()) [[unlikely]] {
+    if (_c._cdata.is_stop_requested()) [[unlikely]] {
         // Compaction manager will catch this exception and re-schedule the compaction.
-        throw compaction_stopped_exception(_c._schema->ks_name(), _c._schema->cf_name(), _c._info.stop_requested);
+        throw compaction_stopped_exception(_c._schema->ks_name(), _c._schema->cf_name(), _c._cdata.stop_requested);
     }
 }
 
@@ -857,7 +835,7 @@ void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& 
 
     _c.on_new_partition();
     _compaction_writer->writer.consume_new_partition(dk);
-    _c._info.total_keys_written++;
+    _c._cdata.total_keys_written++;
 }
 
 stop_iteration compacting_sstable_writer::consume_end_of_partition() {
@@ -903,8 +881,8 @@ void garbage_collected_sstable_writer::data::finish_sstable_writer() {
 
 class reshape_compaction : public compaction {
 public:
-    reshape_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
-        : compaction(cf, std::move(descriptor), info) {
+    reshape_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata)
+        : compaction(cf, std::move(descriptor), cdata) {
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
@@ -947,11 +925,11 @@ public:
 };
 
 class regular_compaction : public compaction {
-    // sstable being currently written.
+    // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
     mutable compaction_read_monitor_generator _monitor_generator;
 public:
-    regular_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info)
-        : compaction(cf, std::move(descriptor), info)
+    regular_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata)
+        : compaction(cf, std::move(descriptor), cdata)
         , _monitor_generator(_cf)
     {
     }
@@ -1057,12 +1035,12 @@ private:
     }
 
     void update_pending_ranges() {
-        if (!_sstable_set || _sstable_set->all()->empty() || _info.pending_replacements.empty()) { // set can be empty for testing scenario.
+        if (!_sstable_set || _sstable_set->all()->empty() || _cdata.pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
-        for (auto& pending_replacement : _info.pending_replacements) {
+        for (auto& pending_replacement : _cdata.pending_replacements) {
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
@@ -1076,12 +1054,34 @@ private:
             }
         }
         _selector.emplace(_sstable_set->make_incremental_selector());
-        _info.pending_replacements.clear();
+        _cdata.pending_replacements.clear();
     }
 };
 
 class cleanup_compaction final : public regular_compaction {
-    dht::token_range_vector _owned_ranges;
+    class incremental_owned_ranges_checker {
+        const dht::token_range_vector& _sorted_owned_ranges;
+        mutable dht::token_range_vector::const_iterator _it;
+    public:
+        incremental_owned_ranges_checker(const dht::token_range_vector& sorted_owned_ranges)
+                : _sorted_owned_ranges(sorted_owned_ranges)
+                , _it(_sorted_owned_ranges.begin()) {
+        }
+
+        // Must be called with increasing token values.
+        bool belongs_to_current_node(const dht::token& t) const {
+            // While token T is after a range Rn, advance the iterator.
+            // iterator will be stopped at a range which either overlaps with T (if T belongs to node),
+            // or at a range which is after T (if T doesn't belong to this node).
+            while (_it != _sorted_owned_ranges.end() && _it->after(t, dht::token_comparator())) {
+                _it++;
+            }
+
+            return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
+        }
+    };
+
+    const dht::token_range_vector _owned_ranges;
     incremental_owned_ranges_checker _owned_ranges_checker;
 private:
     // Called in a seastar thread
@@ -1119,18 +1119,18 @@ protected:
     }
 
 private:
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, dht::token_range_vector owned_ranges)
-        : regular_compaction(cf, std::move(descriptor), info)
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata, dht::token_range_vector owned_ranges)
+        : regular_compaction(cf, std::move(descriptor), cdata)
         , _owned_ranges(std::move(owned_ranges))
         , _owned_ranges_checker(_owned_ranges)
     {
     }
 
 public:
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::cleanup opts)
-        : cleanup_compaction(cf, std::move(descriptor), info, opts.owned_ranges) {}
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::upgrade opts)
-        : cleanup_compaction(cf, std::move(descriptor), info, opts.owned_ranges) {}
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::cleanup opts)
+        : cleanup_compaction(cf, std::move(descriptor), cdata, opts.owned_ranges) {}
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::upgrade opts)
+        : cleanup_compaction(cf, std::move(descriptor), cdata, opts.owned_ranges) {}
 
     flat_mutation_reader make_sstable_reader() const override {
         return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());
@@ -1405,8 +1405,8 @@ private:
     uint64_t _bucket_count = 0;
 
 public:
-    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& info, compaction_type_options::scrub options)
-        : regular_compaction(cf, std::move(descriptor), info)
+    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options)
+        : regular_compaction(cf, std::move(descriptor), cdata)
         , _options(options)
         , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
         , _scrub_finish_description(fmt::format("Finished scrubbing in {} mode", _options.operation_mode)) {
@@ -1487,8 +1487,8 @@ private:
                 _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions));
     }
 public:
-    resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_data& info)
-        : compaction(cf, std::move(descriptor), info)
+    resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_data& cdata)
+        : compaction(cf, std::move(descriptor), cdata)
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
     {
@@ -1593,36 +1593,36 @@ compaction_type compaction_type_options::type() const {
     return index_to_type[_options.index()];
 }
 
-static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_data& info) {
+static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor, compaction_data& cdata) {
     struct {
         column_family& cf;
         sstables::compaction_descriptor&& descriptor;
-        compaction_data& info;
+        compaction_data& cdata;
 
         std::unique_ptr<compaction> operator()(compaction_type_options::reshape) {
-            return std::make_unique<reshape_compaction>(cf, std::move(descriptor), info);
+            return std::make_unique<reshape_compaction>(cf, std::move(descriptor), cdata);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::reshard) {
-            return std::make_unique<resharding_compaction>(cf, std::move(descriptor), info);
+            return std::make_unique<resharding_compaction>(cf, std::move(descriptor), cdata);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::regular) {
-            return std::make_unique<regular_compaction>(cf, std::move(descriptor), info);
+            return std::make_unique<regular_compaction>(cf, std::move(descriptor), cdata);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::cleanup options) {
-            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), info, std::move(options));
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), cdata, std::move(options));
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::upgrade options) {
-            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), info, std::move(options));
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), cdata, std::move(options));
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::scrub scrub_options) {
-            return std::make_unique<scrub_compaction>(cf, std::move(descriptor), info, scrub_options);
+            return std::make_unique<scrub_compaction>(cf, std::move(descriptor), cdata, scrub_options);
         }
-    } visitor_factory{cf, std::move(descriptor), info};
+    } visitor_factory{cf, std::move(descriptor), cdata};
 
     return descriptor.options.visit(visitor_factory);
 }
 
-future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_data& info) {
+future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, const compaction_data& cdata) {
     auto schema = reader.schema();
 
     bool valid = true;
@@ -1632,9 +1632,9 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
         auto validator = mutation_fragment_stream_validator(*schema);
 
         while (auto mf_opt = co_await reader()) {
-            if (info.is_stop_requested()) [[unlikely]] {
+            if (cdata.is_stop_requested()) [[unlikely]] {
                 // Compaction manager will catch this exception and re-schedule the compaction.
-                co_return coroutine::make_exception(compaction_stopped_exception(schema->ks_name(), schema->cf_name(), info.stop_requested));
+                co_return coroutine::make_exception(compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested));
             }
 
             const auto& mf = *mf_opt;
@@ -1676,7 +1676,7 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
     co_return valid;
 }
 
-static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& info, column_family& cf) {
+static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf) {
     auto schema = cf.schema();
 
     formatted_sstables_list sstables_list_msg;
@@ -1691,7 +1691,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "scrub:validate", db::no_timeout);
     auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
 
-    const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), info);
+    const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
 
     clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
 
@@ -1702,7 +1702,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 }
 
 future<compaction_result>
-compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& info, column_family& cf) {
+compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf) {
     if (descriptor.sstables.empty()) {
         return make_exception_future<compaction_result>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
                 compaction_name(descriptor.options.type()), cf.schema()->ks_name(), cf.schema()->cf_name())));
@@ -1710,9 +1710,9 @@ compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& in
     if (descriptor.options.type() == compaction_type::Scrub
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
         // Bypass the usual compaction machinery for dry-mode scrub
-        return scrub_sstables_validate_mode(std::move(descriptor), info, cf);
+        return scrub_sstables_validate_mode(std::move(descriptor), cdata, cf);
     }
-    auto c = make_compaction(cf, std::move(descriptor), info);
+    auto c = make_compaction(cf, std::move(descriptor), cdata);
     if (c->enable_garbage_collected_sstable_writer()) {
         auto gc_writer = c->make_garbage_collected_sstable_writer();
         return compaction::run(std::move(c), std::move(gc_writer));

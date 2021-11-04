@@ -798,7 +798,7 @@ public:
     // not a real compaction policy.
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
-    future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& info);
+    future<> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata);
 
     future<bool> snapshot_exists(sstring name);
 

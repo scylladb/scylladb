@@ -348,16 +348,17 @@ class compaction_manager_test {
 public:
     explicit compaction_manager_test(compaction_manager& cm) : _cm(cm) {}
 
-    void register_compaction(lw_shared_ptr<sstables::compaction_data> c, utils::UUID output_run_id = {}, column_family* cf = nullptr) {
+    sstables::compaction_data& register_compaction(utils::UUID output_run_id = {}, column_family* cf = nullptr) {
         auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction);
         task->compaction_running = true;
-        task->compaction_data = c;
+        task->compaction_data = compaction_manager::create_compaction_data();
         task->output_run_identifier = std::move(output_run_id);
         _cm._tasks.push_back(task);
+        return task->compaction_data;
     }
 
-    void deregister_compaction(lw_shared_ptr<sstables::compaction_data> c) {
-        auto it = boost::find_if(_cm._tasks, [c] (auto& task) { return task->compaction_data == c; });
+    void deregister_compaction(const sstables::compaction_data& c) {
+        auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data.compaction_uuid == c.compaction_uuid; });
         _cm._tasks.remove(*it);
     }
 };
