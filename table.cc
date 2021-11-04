@@ -149,7 +149,7 @@ table::make_reader(schema_ptr s,
                            tracing::trace_state_ptr trace_state,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
-    if (_virtual_reader) {
+    if (_virtual_reader) [[unlikely]] {
         return (*_virtual_reader).make_reader(s, std::move(permit), range, slice, pc, trace_state, fwd, fwd_mr);
     }
 
