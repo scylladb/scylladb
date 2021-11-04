@@ -106,7 +106,7 @@ public:
 
 private:
     using cache_key_type = typename prepared_cache_key_type::cache_key_type;
-    // Keep the entry in the "new generation" partition till 2 hits because
+    // Keep the entry in the "unprivileged" cache section till 2 hits because
     // every prepared statement is accessed at least twice in the cache:
     //  1) During PREPARE
     //  2) During EXECUTE

@@ -273,12 +273,12 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
 
         loading_cache.get_ptr(0, loader).discard_result().get();
 
-        // Check new generation eviction
+        // Check unprivileged section eviction
         BOOST_REQUIRE(loading_cache.size() == 1);
         sleep(20ms).get();
         REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
 
-        // Check old generation eviction
+        // Check privileged section eviction
         loading_cache.get_ptr(0, loader).discard_result().get();
         BOOST_REQUIRE(loading_cache.find(0) != nullptr);
 
@@ -346,14 +346,14 @@ SEASTAR_TEST_CASE(test_loading_cache_move_item_to_mru_list_front_on_sync_op) {
     });
 }
 
-SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_old_gen) {
+SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_privileged_gen) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
         utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
-        // Push the entry into the old generation partition. Make sure it's being reloaded.
+        // Push the entry into the privileged section. Make sure it's being reloaded.
         loading_cache.get_ptr(0).discard_result().get();
         loading_cache.get_ptr(0).discard_result().get();
         sleep(60ms).get();
@@ -361,14 +361,14 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_old_gen) {
     });
 }
 
-SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_new_gen) {
+SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_unprivileged) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
         utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
-        // Load one entry into the new generation partition.
+        // Load one entry into the unprivileged section.
         // Make sure it's reloaded.
         loading_cache.get_ptr(0).discard_result().get();
         sleep(60ms).get();
@@ -394,7 +394,7 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction) {
     });
 }
 
-SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction_new_gen_first) {
+SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction_unprivileged_first) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
@@ -418,7 +418,7 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction_new_gen_first) {
     });
 }
 
-SEASTAR_TEST_CASE(test_loading_cache_eviction_new_gen) {
+SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
