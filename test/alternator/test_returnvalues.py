@@ -431,3 +431,14 @@ def test_update_item_returnvalues_nested(test_table_s):
     ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
         UpdateExpression='REMOVE a.c[1]')
     assert ret['Attributes'] == {'a': {'c': [70]}}
+
+# A reproducer for issue #9542 - when UpdateExpression's REMOVE operation
+# actually deletes an existing attribute, it breaks the ALL_NEW ReturnValues
+# for other attributes set in the same command.
+def test_update_item_returnvalues_all_new_remove_etc(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 's': 'dog', 'd': 'foo'})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='REMOVE d SET s = :v',
+        ExpressionAttributeValues={':v': 'cat'})
+    assert ret['Attributes']['s'] == 'cat'

@@ -2509,7 +2509,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                           const attribute_path_map_node<parsed::update_expression::action>* h = nullptr) {
         any_updates = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
-            rjson::set_with_string_name(_return_attributes,
+            rjson::replace_with_string_name(_return_attributes,
                 to_sstring_view(column_name), rjson::copy(json_value));
         } else if (_returnvalues == returnvalues::UPDATED_NEW) {
             rjson::value&& v = rjson::copy(json_value);
