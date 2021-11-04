@@ -923,8 +923,8 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
     }
 
     descriptor.creator = [this] (shard_id dummy) {
-            auto sst = make_sstable();
-            return sst;
+        auto sst = make_sstable();
+        return sst;
     };
     descriptor.replacer = [this, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {
         _compaction_strategy.notify_completion(desc.old_sstables, desc.new_sstables);
