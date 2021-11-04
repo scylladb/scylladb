@@ -2232,56 +2232,56 @@ std::deque<mutation_fragment> make_fragments_with_non_monotonic_positions(simple
 // range-tombstones and that it can make progress (doesn't assume that an additional
 // fill buffer call will bring in a fragment with a higher position).
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic_positions) {
-    const size_t max_buffer_size = 512;
-    const int pk = 0;
-    const auto tombstone_deletion_time = gc_clock::now();
-    simple_schema s;
+    do_with_cql_env_thread([] (cql_test_env& env) mutable -> future<> {
+        const size_t max_buffer_size = 512;
+        const int pk = 0;
+        const auto tombstone_deletion_time = gc_clock::now();
+        simple_schema s;
 
-    // Validate that the generated fragments are fit for the very strict
-    // requirement of this test.
-    // The test is meaningless if these requirements are not met.
-    {
-        tests::reader_concurrency_semaphore_wrapper semaphore;
+        // Validate that the generated fragments are fit for the very strict
+        // requirement of this test.
+        // The test is meaningless if these requirements are not met.
+        {
+            tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto permit = semaphore.make_permit();
-        auto fragments = make_fragments_with_non_monotonic_positions(s, permit, s.make_pkey(pk), max_buffer_size, tombstone_deletion_time);
-        auto rd = make_flat_mutation_reader_from_fragments(s.schema(), permit, std::move(fragments));
-        auto close_rd = deferred_close(rd);
-        rd.set_max_buffer_size(max_buffer_size);
+            auto permit = semaphore.make_permit();
+            auto fragments = make_fragments_with_non_monotonic_positions(s, permit, s.make_pkey(pk), max_buffer_size, tombstone_deletion_time);
+            auto rd = make_flat_mutation_reader_from_fragments(s.schema(), permit, std::move(fragments));
+            auto close_rd = deferred_close(rd);
+            rd.set_max_buffer_size(max_buffer_size);
 
-        rd.fill_buffer().get();
+            rd.fill_buffer().get();
 
-        auto mf = rd.pop_mutation_fragment();
-        BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::partition_start);
+            auto mf = rd.pop_mutation_fragment();
+            BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::partition_start);
 
-        mf = rd.pop_mutation_fragment();
-        BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
-        const auto ckey = mf.as_range_tombstone().start;
-
-        while (!rd.is_buffer_empty()) {
             mf = rd.pop_mutation_fragment();
             BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
-            BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
-        }
+            const auto ckey = mf.as_range_tombstone().start;
 
-        rd.fill_buffer().get();
+            while (!rd.is_buffer_empty()) {
+                mf = rd.pop_mutation_fragment();
+                BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
+                BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
+            }
 
-        while (!rd.is_buffer_empty()) {
+            rd.fill_buffer().get();
+
+            while (!rd.is_buffer_empty()) {
+                mf = rd.pop_mutation_fragment();
+                BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
+                BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
+            }
+
+            rd.fill_buffer().get();
+
+            BOOST_REQUIRE(!rd.is_buffer_empty());
+
             mf = rd.pop_mutation_fragment();
-            BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::range_tombstone);
-            BOOST_REQUIRE(mf.as_range_tombstone().start.equal(*s.schema(), ckey));
+            BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::clustering_row);
+            BOOST_REQUIRE(mf.as_clustering_row().key().equal(*s.schema(), ckey));
         }
 
-        rd.fill_buffer().get();
-
-        BOOST_REQUIRE(!rd.is_buffer_empty());
-
-        mf = rd.pop_mutation_fragment();
-        BOOST_REQUIRE_EQUAL(mf.mutation_fragment_kind(), mutation_fragment::kind::clustering_row);
-        BOOST_REQUIRE(mf.as_clustering_row().key().equal(*s.schema(), ckey));
-    }
-
-    do_with_cql_env_thread([=, s = std::move(s)] (cql_test_env& env) mutable -> future<> {
         auto factory = [=, gs = global_simple_schema(s)] (
                 schema_ptr,
                 reader_permit permit,
