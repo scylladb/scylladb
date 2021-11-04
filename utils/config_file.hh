@@ -136,8 +136,8 @@ public:
         bool matches(std::string_view name) const;
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
-        virtual value_status status() const = 0;
-        virtual config_source source() const = 0;
+        virtual value_status status() const noexcept = 0;
+        virtual config_source source() const noexcept = 0;
         json::json_return_type value_as_json() const;
     };
 
@@ -195,10 +195,10 @@ public:
                 std::initializer_list<T> allowed_values = {})
                 : named_value(file, name, {}, liveness::MustRestart, vs, t, desc, allowed_values) {
         }
-        value_status status() const override {
+        value_status status() const noexcept override {
             return _value_status;
         }
-        config_source source() const override {
+        config_source source() const noexcept override {
             return _source;
         }
         bool is_set() const {
