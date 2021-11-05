@@ -72,6 +72,13 @@ def flush(cql, table):
     else:
         run_nodetool(cql, "flush", ks, cf)
 
+def take_snapshot(cql, table, tag, skip_flush):
+    ks, cf = table.split('.')
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params={'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush})
+    else:
+        run_nodetool(cql, "flush", ks, cf)
+
 def refreshsizeestimates(cql):
     if has_rest_api(cql):
         # The "nodetool refreshsizeestimates" is not available, or needed, in Scylla
