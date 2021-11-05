@@ -67,7 +67,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
     return {};
 }
 
-compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
+compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
     if (candidates.empty()) {
         return compaction_descriptor();
     }
@@ -75,7 +75,7 @@ compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(colu
     auto& sst = *std::max_element(candidates.begin(), candidates.end(), [&] (sstables::shared_sstable& sst1, sstables::shared_sstable& sst2) {
         return sst1->get_sstable_level() < sst2->get_sstable_level();
     });
-    return compaction_descriptor(std::move(candidates), cf.get_sstable_set(), service::get_local_compaction_priority(),
+    return compaction_descriptor(std::move(candidates), table_s.get_sstable_set(), service::get_local_compaction_priority(),
                                  sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
 }
 

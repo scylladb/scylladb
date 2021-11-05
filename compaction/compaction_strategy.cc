@@ -64,8 +64,8 @@ logging::logger leveled_manifest::logger("LeveledManifest");
 
 namespace sstables {
 
-compaction_descriptor compaction_strategy_impl::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-    return compaction_descriptor(std::move(candidates), cf.get_sstable_set(), service::get_local_compaction_priority());
+compaction_descriptor compaction_strategy_impl::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    return compaction_descriptor(std::move(candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
 }
 
 bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
@@ -637,8 +637,8 @@ compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_sta
     return _compaction_strategy_impl->get_sstables_for_compaction(table_s, std::move(candidates));
 }
 
-compaction_descriptor compaction_strategy::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-    return _compaction_strategy_impl->get_major_compaction_job(cf, std::move(candidates));
+compaction_descriptor compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    return _compaction_strategy_impl->get_major_compaction_job(table_s, std::move(candidates));
 }
 
 void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
