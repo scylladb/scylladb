@@ -114,7 +114,7 @@ public:
     std::vector<sstables::shared_sstable>
     get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before);
 
-    int64_t get_estimated_tasks(column_family& cf) const;
+    int64_t get_estimated_tasks(table_state& table_s) const;
 private:
     std::vector<sstables::shared_sstable>
     get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before);
@@ -295,8 +295,8 @@ public:
     date_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override;
 
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
-        return _manifest.get_estimated_tasks(cf);
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
+        return _manifest.get_estimated_tasks(table_s);
     }
 
     virtual compaction_strategy_type type() const override {

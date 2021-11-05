@@ -78,7 +78,7 @@ public:
     bool can_compact_partial_runs() const;
 
     // An estimation of number of compaction for strategy to be satisfied.
-    int64_t estimated_pending_compactions(column_family& cf) const;
+    int64_t estimated_pending_compactions(table_state& table_s) const;
 
     static sstring name(compaction_strategy_type type) {
         switch (type) {

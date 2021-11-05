@@ -175,7 +175,7 @@ private:
 
     friend class time_window_backlog_tracker;
 public:
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
         return _estimated_remaining_tasks;
     }
 

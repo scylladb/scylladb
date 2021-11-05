@@ -65,7 +65,7 @@ public:
     virtual bool parallel_compaction() const {
         return true;
     }
-    virtual int64_t estimated_pending_compactions(column_family& cf) const = 0;
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const = 0;
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const;
 
     bool use_clustering_key_filter() const {

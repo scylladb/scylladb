@@ -37,7 +37,7 @@ public:
 
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> uncompacting_sstables) override;
 
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override;
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
     virtual compaction_strategy_type type() const override;
 

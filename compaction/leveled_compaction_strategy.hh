@@ -63,7 +63,7 @@ public:
     // compacted key for the previous level.
     void generate_last_compacted_keys(leveled_manifest& manifest);
 
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override;
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
     virtual bool parallel_compaction() const override {
         return false;

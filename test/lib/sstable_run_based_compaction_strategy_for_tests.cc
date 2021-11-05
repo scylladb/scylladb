@@ -60,7 +60,7 @@ compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstab
     return sstables::compaction_descriptor();
 }
 
-int64_t sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(column_family& cf) const {
+int64_t sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(table_state& table_s) const {
     throw std::runtime_error("unimplemented");
 }
 

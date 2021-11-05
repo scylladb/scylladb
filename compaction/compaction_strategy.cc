@@ -371,7 +371,7 @@ public:
         return sstables::compaction_descriptor();
     }
 
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
         return 0;
     }
 
@@ -446,22 +446,23 @@ date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstabl
     return compaction_candidates;
 }
 
-int64_t date_tiered_manifest::get_estimated_tasks(column_family& cf) const {
-    int base = cf.schema()->min_compaction_threshold();
-    int64_t now = get_now(cf.get_sstables());
+int64_t date_tiered_manifest::get_estimated_tasks(table_state& table_s) const {
+    int base = table_s.schema()->min_compaction_threshold();
+    int64_t now = get_now(table_s.get_sstable_set().all());
     std::vector<sstables::shared_sstable> sstables;
     int64_t n = 0;
 
-    sstables.reserve(cf.sstables_count());
-    for (auto all_sstables = cf.get_sstables(); auto& entry : *all_sstables) {
+    auto all_sstables = table_s.get_sstable_set().all();
+    sstables.reserve(all_sstables->size());
+    for (auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
     auto candidates = filter_old_sstables(sstables, _options.max_sstable_age, now);
     auto buckets = get_buckets(create_sst_and_min_timestamp_pairs(candidates), _options.base_time, base, now);
 
     for (auto& bucket : buckets) {
-        if (bucket.size() >= size_t(cf.schema()->min_compaction_threshold())) {
-            n += std::ceil(double(bucket.size()) / cf.schema()->max_compaction_threshold());
+        if (bucket.size() >= size_t(table_s.schema()->min_compaction_threshold())) {
+            n += std::ceil(double(bucket.size()) / table_s.schema()->max_compaction_threshold());
         }
     }
     return n;
@@ -649,8 +650,8 @@ bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
 }
 
-int64_t compaction_strategy::estimated_pending_compactions(column_family& cf) const {
-    return _compaction_strategy_impl->estimated_pending_compactions(cf);
+int64_t compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
+    return _compaction_strategy_impl->estimated_pending_compactions(table_s);
 }
 
 bool compaction_strategy::use_clustering_key_filter() const {

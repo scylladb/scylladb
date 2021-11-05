@@ -530,13 +530,13 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_pending_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](column_family& cf) {
-            return cf.get_compaction_strategy().estimated_pending_compactions(cf);
+            return cf.get_compaction_strategy().estimated_pending_compactions(cf.as_table_state());
         }, std::plus<int64_t>());
     });
 
     cf::get_all_pending_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](column_family& cf) {
-            return cf.get_compaction_strategy().estimated_pending_compactions(cf);
+            return cf.get_compaction_strategy().estimated_pending_compactions(cf.as_table_state());
         }, std::plus<int64_t>());
     });
 
