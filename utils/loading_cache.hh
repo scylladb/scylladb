@@ -288,11 +288,11 @@ public:
                 ts_value_lru_entry* new_lru_entry = Alloc().template allocate_object<ts_value_lru_entry>();
                 new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), *this);
 
-                // This will "touch" the entry and add it to the LRU list - we must do this before the shrink() call.
-                value_ptr vp(new_lru_entry->timestamped_value_ptr());
-
                 // Remove the least recently used items if map is too big.
                 shrink();
+
+                // This will "touch" the entry and add it to the LRU list - we must do this before the shrink() call.
+                value_ptr vp(new_lru_entry->timestamped_value_ptr());
 
                 return make_ready_future<value_ptr>(std::move(vp));
             }
@@ -507,14 +507,14 @@ private:
     void shrink() {
         using namespace std::chrono;
 
-        while (_current_size > _max_size && !_unprivileged_lru_list.empty()) {
+        while (_current_size >= _max_size && !_unprivileged_lru_list.empty()) {
             ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the unpriviledged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
             LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
         }
 
-        while (_current_size > _max_size) {
+        while (_current_size >= _max_size) {
             ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
