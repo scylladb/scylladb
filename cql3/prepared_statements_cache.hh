@@ -139,6 +139,12 @@ public:
         });
     }
 
+    // "Touch" the corresponding cache entry in order to bump up its reference count.
+    void touch(const key_type& key) {
+        // loading_cache::find() returns a value_ptr object which contructor does the "thouching".
+        _cache.find(key.key());
+    }
+
     value_type find(const key_type& key) {
         cache_value_ptr vp = _cache.find(key.key());
         if (vp) {
