@@ -93,7 +93,7 @@ run apt-get -y install hostname supervisor openssh-server openssh-client openjdk
 run locale-gen en_US.UTF-8
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
-run bash -ec "cat /scylla_bashrc >> /etc/bashrc"
+run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
 run mkdir -p /etc/supervisor.conf.d
 run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
