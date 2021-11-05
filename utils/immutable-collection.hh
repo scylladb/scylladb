@@ -64,6 +64,7 @@ public:
     WRAP_METHOD(lower_bound)
     WRAP_METHOD(upper_bound)
     WRAP_METHOD(slice)
+    WRAP_METHOD(lower_slice)
     WRAP_METHOD(upper_slice)
 
     WRAP_CONST_METHOD(empty)

@@ -100,6 +100,16 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
         };
         auto cleanup_readers = defer([&] { clear_readers(); });
         std::deque<dht::partition_range> ranges_storage;
+        lw_shared_ptr<bool> finished = make_lw_shared(false);
+        auto full_compaction_in_background = seastar::do_until([finished] {return *finished;}, [] {
+            // do_refresh_state is called when we detect a new partition snapshot version.
+            // If snapshot version changes in process of reading mutation fragments from a
+            // clustering range, the partition_snapshot_reader state is refreshed with saved
+            // last position of emitted row and range tombstone. full_compaction increases the
+            // change mark.
+            logalloc::shard_tracker().full_compaction();
+            return seastar::sleep(100us);
+        });
         run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
             clear_readers();
             mt = make_lw_shared<memtable>(s);
@@ -115,6 +125,8 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
 
             return mt->as_data_source();
         });
+        *finished = true;
+        full_compaction_in_background.get();
     });
 }
 
