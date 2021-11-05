@@ -1857,10 +1857,12 @@ public:
 
 class token_ring_table : public streaming_virtual_table {
 private:
+    database& _db;
     service::storage_service& _ss;
 public:
-    token_ring_table(service::storage_service& ss)
+    token_ring_table(database& db, service::storage_service& ss)
             : streaming_virtual_table(build_schema())
+            , _db(db)
             , _ss(ss)
     {
         _shard_aware = true;
@@ -1905,7 +1907,7 @@ public:
         };
 
         auto keyspace_names = boost::copy_range<std::vector<decorated_keyspace_name>>(
-                _db->get_keyspaces() | boost::adaptors::transformed([this] (auto&& e) {
+                _db.get_keyspaces() | boost::adaptors::transformed([this] (auto&& e) {
                     return decorated_keyspace_name{e.first, make_partition_key(e.first)};
         }));
 
@@ -1916,7 +1918,7 @@ public:
 
         for (const decorated_keyspace_name& e : keyspace_names) {
             auto&& dk = e.key;
-            if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk) || !_db->has_keyspace(e.name)) {
+            if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk) || !_db.has_keyspace(e.name)) {
                 continue;
             }
 
@@ -1957,7 +1959,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
 
     // Add built-in virtual tables here.
     add_table(std::make_unique<cluster_status_table>(ss));
-    add_table(std::make_unique<token_ring_table>(ss));
+    add_table(std::make_unique<token_ring_table>(db, ss));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
@@ -2000,7 +2002,6 @@ static void install_virtual_readers(database& db) {
     for (auto&& [id, vt] : virtual_tables) {
         auto&& cf = db.find_column_family(vt->schema());
         cf.set_virtual_reader(vt->as_mutation_source());
-        vt->set_database(db);
     }
 }
 

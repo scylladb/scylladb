@@ -31,7 +31,6 @@ namespace db {
 class virtual_table {
 protected:
     schema_ptr _s;
-    database* _db = nullptr; // Always valid when attached to a database.
 
 protected: // opt-ins
     // If set to true, the implementation ensures that produced data
@@ -57,8 +56,6 @@ public:
 
     // Keep this object alive as long as the returned mutation_source is alive.
     virtual mutation_source as_mutation_source() = 0;
-
-    void set_database(database& db) { _db = &db; }
 };
 
 // Produces results by filling a memtable on each read.
