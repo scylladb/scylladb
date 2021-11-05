@@ -604,7 +604,7 @@ void compaction_manager::submit(column_family* cf) {
           return with_scheduling_group(_compaction_controller.sg(), [this, task = std::move(task)] () mutable {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
-            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
+            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf.as_table_state(), get_candidates(cf));
             int weight = calculate_weight(descriptor);
 
             if (descriptor.sstables.empty() || !can_proceed(task) || cf.is_auto_compaction_disabled_by_user()) {

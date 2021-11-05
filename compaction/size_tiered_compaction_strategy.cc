@@ -158,11 +158,11 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 }
 
 compaction_descriptor
-size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
+size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
     // make local copies so they can't be changed out from under us mid-method
-    int min_threshold = cfs.min_compaction_threshold();
-    int max_threshold = cfs.schema()->max_compaction_threshold();
-    auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
+    int min_threshold = table_s.min_compaction_threshold();
+    int max_threshold = table_s.schema()->max_compaction_threshold();
+    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
 
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
@@ -170,13 +170,13 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting), cfs.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(most_interesting), table_s.get_sstable_set(), service::get_local_compaction_priority());
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
-    if (!cfs.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
+    if (!table_s.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting), cfs.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(most_interesting), table_s.get_sstable_set(), service::get_local_compaction_priority());
     }
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
@@ -196,7 +196,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        return sstables::compaction_descriptor({ *it }, cfs.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor({ *it }, table_s.get_sstable_set(), service::get_local_compaction_priority());
     }
     return sstables::compaction_descriptor();
 }

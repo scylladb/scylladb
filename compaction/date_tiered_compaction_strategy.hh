@@ -112,15 +112,15 @@ public:
         : _options(options) {}
 
     std::vector<sstables::shared_sstable>
-    get_next_sstables(column_family& cf, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before);
+    get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before);
 
     int64_t get_estimated_tasks(column_family& cf) const;
 private:
     std::vector<sstables::shared_sstable>
-    get_next_non_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before);
+    get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before);
 
     std::vector<sstables::shared_sstable>
-    get_compaction_candidates(column_family& cf, std::vector<sstables::shared_sstable> candidate_sstables, int64_t now, int base);
+    get_compaction_candidates(table_state& table_s, std::vector<sstables::shared_sstable> candidate_sstables, int64_t now, int base);
 
     /**
      * Gets the timestamp that DateTieredCompactionStrategy considers to be the "current time".
@@ -293,7 +293,7 @@ class date_tiered_compaction_strategy : public compaction_strategy_impl {
     compaction_backlog_tracker _backlog_tracker;
 public:
     date_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override;
 
     virtual int64_t estimated_pending_compactions(column_family& cf) const override {
         return _manifest.get_estimated_tasks(cf);

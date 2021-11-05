@@ -52,7 +52,7 @@
 #include "database.hh"
 
 class leveled_manifest {
-    table& _table;
+    table_state& _table_s;
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
@@ -85,9 +85,9 @@ public:
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
 private:
-    leveled_manifest(column_family& cfs, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
-        : _table(cfs)
-        , _schema(cfs.schema())
+    leveled_manifest(table_state& table_s, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
+        : _table_s(table_s)
+        , _schema(table_s.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
         , _stcs_options(stcs_options)
     {
@@ -110,9 +110,9 @@ public:
         return levels;
     }
 
-    static leveled_manifest create(column_family& cf, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
+    static leveled_manifest create(table_state& table_s, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
             const sstables::size_tiered_compaction_strategy_options& stcs_options) {
-        leveled_manifest manifest = leveled_manifest(cf, max_sstable_size_in_mb, stcs_options);
+        leveled_manifest manifest = leveled_manifest(table_s, max_sstable_size_in_mb, stcs_options);
 
         // ensure all SSTables are in the manifest
         // FIXME: there can be tens of thousands of sstables. we can avoid this potentially expensive procedure if
@@ -181,7 +181,7 @@ public:
             if (info.can_promote) {
                 info.candidates = get_overlapping_starved_sstables(next_level, std::move(info.candidates), compaction_counter);
             }
-            return sstables::compaction_descriptor(std::move(info.candidates), _table.get_sstable_set(),
+            return sstables::compaction_descriptor(std::move(info.candidates), _table_s.get_sstable_set(),
                                                    service::get_local_compaction_priority(), next_level, _max_sstable_size_in_bytes);
         } else {
             logger.debug("No compaction candidates for L{}", level);
@@ -257,10 +257,10 @@ public:
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
                 auto most_interesting = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                    _table.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                    _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
-                    return sstables::compaction_descriptor(std::move(most_interesting), _table.get_sstable_set(),
+                    return sstables::compaction_descriptor(std::move(most_interesting), _table_s.get_sstable_set(),
                                                            service::get_local_compaction_priority());
                 }
             }
@@ -275,7 +275,7 @@ public:
             auto info = get_candidates_for(0, last_compacted_keys);
             if (!info.candidates.empty()) {
                 auto next_level = get_next_level(info.candidates, info.can_promote);
-                return sstables::compaction_descriptor(std::move(info.candidates), _table.get_sstable_set(),
+                return sstables::compaction_descriptor(std::move(info.candidates), _table_s.get_sstable_set(),
                                                        service::get_local_compaction_priority(), next_level, _max_sstable_size_in_bytes);
             }
         }
@@ -444,7 +444,7 @@ private:
             // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
             // avoid quadratic behavior until L0 is worth promoting.
             candidates = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                _table.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
         }
         return { std::move(candidates), can_promote };
     }

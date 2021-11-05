@@ -27,20 +27,20 @@
 
 namespace sstables {
 
-compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
+compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
     // NOTE: leveled_manifest creation may be slightly expensive, so later on,
     // we may want to store it in the strategy itself. However, the sstable
     // lists managed by the manifest may become outdated. For example, one
     // sstable in it may be marked for deletion after compacted.
     // Currently, we create a new manifest whenever it's time for compaction.
-    leveled_manifest manifest = leveled_manifest::create(cfs, candidates, _max_sstable_size_in_mb, _stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(table_s, candidates, _max_sstable_size_in_mb, _stcs_options);
     if (!_last_compacted_keys) {
         generate_last_compacted_keys(manifest);
     }
     auto candidate = manifest.get_compaction_candidates(*_last_compacted_keys, _compaction_counter);
 
     if (!candidate.sstables.empty()) {
-        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
+        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), table_s.get_sstable_set().all()->size());
         return candidate;
     }
 
@@ -48,7 +48,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
     // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
     // theoretically contain oldest non-overlapping data.
-    auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
+    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
     for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
         auto& sstables = manifest.get_level(level);
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
@@ -62,7 +62,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
         auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
             return i->estimate_droppable_tombstone_ratio(gc_before) < j->estimate_droppable_tombstone_ratio(gc_before);
         });
-        return sstables::compaction_descriptor({ sst }, cfs.get_sstable_set(), service::get_local_compaction_priority(), sst->get_sstable_level());
+        return sstables::compaction_descriptor({ sst }, table_s.get_sstable_set(), service::get_local_compaction_priority(), sst->get_sstable_level());
     }
     return {};
 }
