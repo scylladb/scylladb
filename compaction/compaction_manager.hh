@@ -256,7 +256,7 @@ public:
     const std::vector<sstables::compaction_info> get_compactions() const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
-    bool has_table_ongoing_compaction(column_family* cf) const {
+    bool has_table_ongoing_compaction(const column_family* cf) const {
         return std::any_of(_tasks.begin(), _tasks.end(), [cf] (const lw_shared_ptr<task>& task) {
             return task->compacting_cf == cf && task->compaction_running;
         });
