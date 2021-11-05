@@ -94,7 +94,7 @@ class authorized_prepared_statements_cache {
 public:
     struct stats {
         uint64_t authorized_prepared_statements_cache_evictions = 0;
-        uint64_t authorized_prepared_statements_new_gen_on_cache_size_evictions = 0;
+        uint64_t authorized_prepared_statements_unprivileged_entries_evictions_on_size = 0;
     };
 
     static stats& shard_stats() {
@@ -110,8 +110,8 @@ public:
             ++shard_stats().authorized_prepared_statements_cache_evictions;
         }
 
-        static void inc_new_gen_on_cache_size_eviction() noexcept {
-            ++shard_stats().authorized_prepared_statements_new_gen_on_cache_size_evictions;
+        static void inc_unprivileged_on_cache_size_eviction() noexcept {
+            ++shard_stats().authorized_prepared_statements_unprivileged_entries_evictions_on_size;
         }
     };
 

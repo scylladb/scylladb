@@ -349,9 +349,9 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                             sm::description("Counts the number of prepared statements cache entries evictions.")),
 
                     sm::make_derive(
-                            "new_gen_on_cache_size_evictions",
-                            [] { return prepared_statements_cache::shard_stats().new_gen_on_cache_size_evictions; },
-                            sm::description("Counts the number of prepared statements cache entries evictions from the new generation partition due to a cache size restrictions. This is usually a sign of a cache pollution.")),
+                            "unprivileged_entries_evictions_on_size",
+                            [] { return prepared_statements_cache::shard_stats().unprivileged_entries_evictions_on_size; },
+                            sm::description("Counts a number of prepared statements evictions from the unprivileged cache section due to a cache size restrictions. This is usually a sign of a cache pollution.")),
 
                     sm::make_gauge(
                             "prepared_cache_size",
@@ -435,9 +435,9 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                             sm::description("Counts the number of authenticated prepared statements cache entries evictions.")),
 
                     sm::make_derive(
-                            "authorized_prepared_statements_new_gen_on_cache_size_evictions",
-                            [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_new_gen_on_cache_size_evictions; },
-                            sm::description("Counts the number of authenticated prepared statements cache entries evictions from the new generation partition due to a cache size restrictions. This is usually a sign of a cache pollution.")),
+                            "authorized_prepared_statements_unprivileged_entries_evictions_on_size",
+                            [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_unprivileged_entries_evictions_on_size; },
+                            sm::description("Counts a number of authorized prepared statements evictions from the unprivileged cache section due to a cache size restrictions. This is usually a sign of a cache pollution.")),
 
                     sm::make_gauge(
                             "authorized_prepared_statements_cache_size",

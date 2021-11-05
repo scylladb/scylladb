@@ -84,7 +84,7 @@ class prepared_statements_cache {
 public:
     struct stats {
         uint64_t prepared_cache_evictions = 0;
-        uint64_t new_gen_on_cache_size_evictions = 0;
+        uint64_t unprivileged_entries_evictions_on_size = 0;
     };
 
     static stats& shard_stats() {
@@ -99,8 +99,8 @@ public:
         static void inc_evictions() noexcept {
             ++shard_stats().prepared_cache_evictions;
         }
-        static void inc_new_gen_on_cache_size_eviction() noexcept {
-            ++shard_stats().new_gen_on_cache_size_evictions;
+        static void inc_unprivileged_on_cache_size_eviction() noexcept {
+            ++shard_stats().unprivileged_entries_evictions_on_size;
         }
     };
 

@@ -56,7 +56,9 @@ struct simple_entry_size {
 };
 
 struct do_nothing_loading_cache_stats {
-    static void inc_new_gen_on_cache_size_eviction() noexcept {};
+    // Accounts events when entries are evicted from the unprivileged cache section due to size restriction.
+    // These events are interesting because they are an indication of a cache pollution event.
+    static void inc_unprivileged_on_cache_size_eviction() noexcept {};
 };
 
 /// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
@@ -217,7 +219,7 @@ private:
         , _logger(logger)
         , _timer([this] { on_timer(); })
     {
-        static_assert(noexcept(LoadingCacheStats::inc_new_gen_on_cache_size_eviction()), "LoadingCacheStats::inc_new_gen_on_cache_size_eviction must be non-throwing");
+        static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
 
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
         if (caching_enabled() && (_refresh == std::chrono::milliseconds(0) || _max_size == 0)) {
@@ -509,7 +511,7 @@ private:
             ts_value_lru_entry& lru_entry = *_unprivileged_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the unpriviledged entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
-            LoadingCacheStats::inc_new_gen_on_cache_size_eviction();
+            LoadingCacheStats::inc_unprivileged_on_cache_size_eviction();
         }
 
         while (_current_size > _max_size) {
