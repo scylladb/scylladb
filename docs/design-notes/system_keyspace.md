@@ -145,4 +145,72 @@ merge the data in the legacy store with data the `truncated` table. Until the wh
 cluster agrees on the feature `TRUNCATION_TABLE` truncation will write both new and 
 legacy records. When the feature is agreed upon the legacy map is removed.
 
-## TODO: the rest
+# Virtual tables in the system keyspace
+
+Virtual tables behave just like a regular table from the user's point of view.
+The difference between them and regular tables comes down to how they are implemented.
+While regular tables have memtables/commitlog/sstables and all you would expect from CQL tables, virtual tables translate some in-memory structure to CQL result format.
+For more details see the [docs/guides/virtual-tables.md](../guides/virtual-tables.md).
+
+Below you can find a list of virtual tables. Sorted in alphabetical order (please keep it so when modifying!).
+
+## system.cluster_status
+
+Contain information about the status of each endpoint in the cluster.
+Equivalent of the `nodetool status` command.
+
+Schema:
+```CQL
+CREATE TABLE system.cluster_status (
+    peer inet PRIMARY KEY,
+    dc text,
+    host_id uuid,
+    load text,
+    owns float,
+    status text,
+    tokens int,
+    up boolean
+)
+```
+
+Implemented by `cluster_status_table` in `db/system_keyspace.cc`.
+
+## system.size_estimates
+
+Size estimates for individual token-ranges of each keyspace/table.
+
+Schema:
+```CQL
+CREATE TABLE system.size_estimates (
+    keyspace_name text,
+    table_name text,
+    range_start text,
+    range_end text,
+    mean_partition_size bigint,
+    partitions_count bigint,
+    PRIMARY KEY (keyspace_name, table_name, range_start, range_end)
+)
+```
+
+Implemented by `size_estimates_mutation_reader` in `db/size_estimates_virtual_reader.{hh,cc}`.
+
+## system.token_ring
+
+The ring description for each keyspace.
+Equivalent of the `nodetool describe_ring $KEYSPACE` command (when filtered for `WHERE keyspace=$KEYSPACE`).
+Overlaps with the output of `nodetool ring`.
+
+Schema:
+```CQL
+CREATE TABLE system.token_ring (
+    keyspace_name text,
+    start_token text,
+    endpoint inet,
+    dc text,
+    end_token text,
+    rack text,
+    PRIMARY KEY (keyspace_name, start_token, endpoint)
+)
+```
+
+Implemented by `token_ring_table` in `db/system_keyspace.cc`.
