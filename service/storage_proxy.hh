@@ -43,6 +43,7 @@
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
+#include "query_ranges_to_vnodes.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -98,26 +99,6 @@ struct view_update_backlog_timestamped {
 
 struct allow_hints_tag {};
 using allow_hints = bool_class<allow_hints_tag>;
-
-
-class query_ranges_to_vnodes_generator {
-    schema_ptr _s;
-    dht::partition_range_vector _ranges;
-    dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
-    bool _local;
-    const locator::token_metadata_ptr _tmptr;
-    void process_one_range(size_t n, dht::partition_range_vector& ranges);
-public:
-    query_ranges_to_vnodes_generator(const locator::token_metadata_ptr tmptr, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
-    query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
-    query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
-    // generate next 'n' vnodes, may return less than requested number of ranges
-    // which means either that there are no more ranges
-    // (in which case empty() == true), or too many ranges
-    // are requested
-    dht::partition_range_vector operator()(size_t n);
-    bool empty() const;
-};
 
 struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;

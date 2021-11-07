@@ -25,6 +25,7 @@
 #include "exceptions/unrecognized_entity_exception.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
+#include "query_ranges_to_vnodes.hh"
 #include "query_result_merger.hh"
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
@@ -498,14 +499,14 @@ indexed_table_select_statement::do_execute_base_query(
     auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     uint32_t queried_ranges_count = partition_ranges.size();
-    service::query_ranges_to_vnodes_generator ranges_to_vnodes(qp.proxy().get_token_metadata_ptr(), _schema, std::move(partition_ranges));
+    query_ranges_to_vnodes_generator ranges_to_vnodes(qp.proxy().get_token_metadata_ptr(), _schema, std::move(partition_ranges));
 
     struct base_query_state {
         query::result_merger merger;
-        service::query_ranges_to_vnodes_generator ranges_to_vnodes;
+        query_ranges_to_vnodes_generator ranges_to_vnodes;
         size_t concurrency = 1;
         size_t previous_result_size = 0;
-        base_query_state(uint64_t row_limit, service::query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
+        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
                 : merger(row_limit, query::max_partitions)
                 , ranges_to_vnodes(std::move(ranges_to_vnodes_))
                 {}
