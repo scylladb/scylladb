@@ -1005,6 +1005,7 @@ scylla_core = (['database.cc',
                 'utils/ascii.cc',
                 'utils/like_matcher.cc',
                 'utils/error_injection.cc',
+                'utils/build_id.cc',
                 'mutation_writer/timestamp_based_splitting_writer.cc',
                 'mutation_writer/shard_based_splitting_writer.cc',
                 'mutation_writer/partition_based_splitting_writer.cc',
@@ -1014,6 +1015,7 @@ scylla_core = (['database.cc',
                 'service/raft/schema_raft_state_machine.cc',
                 'service/raft/raft_sys_table_storage.cc',
                 'serializer.cc',
+                'release.cc',
                 'service/raft/raft_rpc.cc',
                 'service/raft/raft_gossip_failure_detector.cc',
                 'service/raft/raft_group_registry.cc',
@@ -1143,7 +1145,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
 
 deps = {
-    'scylla': idls + ['main.cc', 'release.cc', 'utils/build_id.cc'] + scylla_core + api + alternator + redis,
+    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis,
     'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
     #FIXME: we don't need all of scylla_core here, only the types module, need to modularize scylla_core.
     'tools/scylla-types': idls + ['tools/scylla-types.cc'] + scylla_core,
@@ -1250,8 +1252,8 @@ deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_t
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
-deps['test/perf/perf_fast_forward'] += ['release.cc', 'test/perf/linux-perf-event.cc']
-deps['test/perf/perf_simple_query'] += ['release.cc', 'test/perf/perf.cc', 'test/perf/linux-perf-event.cc', 'test/lib/alternator_test_env.cc'] + alternator
+deps['test/perf/perf_fast_forward'] += ['test/perf/linux-perf-event.cc']
+deps['test/perf/perf_simple_query'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc', 'test/lib/alternator_test_env.cc'] + alternator
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
 deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
 deps['test/boost/reusable_buffer_test'] = [

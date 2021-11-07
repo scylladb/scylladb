@@ -24,6 +24,8 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
 
+#include "protocol_server.hh"
+
 namespace service {
 class storage_proxy;
 class migration_manager;
@@ -47,12 +49,17 @@ class gossiper;
 
 namespace alternator {
 
+// This is the official DynamoDB API version.
+// It represents the last major reorganization of that API, and all the features
+// that were added since did NOT increment this version string.
+constexpr const char* version = "2012-08-10";
+
 using namespace seastar;
 
 class executor;
 class server;
 
-class controller {
+class controller : public protocol_server {
     sharded<gms::gossiper>& _gossiper;
     sharded<service::storage_proxy>& _proxy;
     sharded<service::migration_manager>& _mm;
@@ -61,6 +68,7 @@ class controller {
     sharded<service::memory_limiter>& _memory_limiter;
     const db::config& _config;
 
+    std::vector<socket_address> _listen_addresses;
     sharded<executor> _executor;
     sharded<server> _server;
     std::optional<smp_service_group> _ssg;
@@ -75,8 +83,13 @@ public:
         sharded<service::memory_limiter>& memory_limiter,
         const db::config& config);
 
-    future<> start();
-    future<> stop();
+    virtual sstring name() const override;
+    virtual sstring protocol() const override;
+    virtual sstring protocol_version() const override;
+    virtual std::vector<socket_address> listen_addresses() const override;
+    virtual future<> start_server() override;
+    virtual future<> stop_server() override;
+    virtual future<> request_stop_server() override;
 };
 
 }

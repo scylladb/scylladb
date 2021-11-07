@@ -262,7 +262,7 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    static future<> make(database& db, service::storage_service& ss);
+    static future<> make(distributed<database>& db, distributed<service::storage_service>& ss);
 
     /// overloads
 
@@ -417,7 +417,7 @@ public:
 
 }; // class system_keyspace
 
-future<> system_keyspace_make(database& db, service::storage_service& ss);
+future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);
 extern const char *const system_keyspace_CLIENTS;
 
 } // namespace db

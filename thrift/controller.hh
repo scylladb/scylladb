@@ -25,6 +25,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/future.hh>
 #include "service/memory_limiter.hh"
+#include "protocol_server.hh"
 
 using namespace seastar;
 
@@ -34,8 +35,9 @@ namespace auth { class service; }
 namespace cql3 { class query_processor; }
 namespace service { class storage_service; }
 
-class thrift_controller {
+class thrift_controller : public protocol_server {
     std::unique_ptr<distributed<thrift_server>> _server;
+    std::optional<socket_address> _addr;
     semaphore _ops_sem; /* protects start/stop operations on _server */
     bool _stopped = false;
 
@@ -50,8 +52,11 @@ class thrift_controller {
 
 public:
     thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss);
-    future<> start_server();
-    future<> stop_server();
-    future<> stop();
-    future<bool> is_server_running();
+    virtual sstring name() const override;
+    virtual sstring protocol() const override;
+    virtual sstring protocol_version() const override;
+    virtual std::vector<socket_address> listen_addresses() const override;
+    virtual future<> start_server() override;
+    virtual future<> stop_server() override;
+    virtual future<> request_stop_server() override;
 };

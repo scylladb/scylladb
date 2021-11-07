@@ -52,8 +52,26 @@ controller::controller(
 {
 }
 
-future<> controller::start() {
+sstring controller::name() const {
+    return "alternator";
+}
+
+sstring controller::protocol() const {
+    return "dynamodb";
+}
+
+sstring controller::protocol_version() const {
+    return version;
+}
+
+std::vector<socket_address> controller::listen_addresses() const {
+    return _listen_addresses;
+}
+
+future<> controller::start_server() {
     return seastar::async([this] {
+        _listen_addresses.clear();
+
         auto preferred = _config.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
         auto family = _config.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
 
@@ -81,11 +99,13 @@ future<> controller::start() {
         std::optional<uint16_t> alternator_port;
         if (_config.alternator_port()) {
             alternator_port = _config.alternator_port();
+            _listen_addresses.push_back({addr, *alternator_port});
         }
         std::optional<uint16_t> alternator_https_port;
         std::optional<tls::credentials_builder> creds;
         if (_config.alternator_https_port()) {
             alternator_https_port = _config.alternator_https_port();
+            _listen_addresses.push_back({addr, *alternator_https_port});
             creds.emplace();
             auto opts = _config.alternator_encryption_options();
             if (opts.empty()) {
@@ -117,12 +137,20 @@ future<> controller::start() {
     });
 }
 
-future<> controller::stop() {
+future<> controller::stop_server() {
     return seastar::async([this] {
+        if (!_ssg) {
+            return;
+        }
         _server.stop().get();
         _executor.stop().get();
+        _listen_addresses.clear();
         destroy_smp_service_group(_ssg.value()).get();
     });
+}
+
+future<> controller::request_stop_server() {
+    return stop_server();
 }
 
 }

@@ -25,6 +25,7 @@
 #include "db/config.hh"
 #include "gms/gossiper.hh"
 #include "log.hh"
+#include "cql3/query_processor.hh"
 
 using namespace seastar;
 
@@ -48,14 +49,28 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
 {
 }
 
-future<> controller::start_server() {
-    return smp::submit_to(0, [this] {
-        if (!_ops_sem.try_wait()) {
-            throw std::runtime_error(format("CQL server is stopping, try again later"));
-        }
+sstring controller::name() const {
+    return "native transport";
+}
 
-        return do_start_server().finally([this] { _ops_sem.signal(); });
-    });
+sstring controller::protocol() const {
+    return "cql";
+}
+
+sstring controller::protocol_version() const {
+    return cql3::query_processor::CQL_VERSION;
+}
+
+std::vector<socket_address> controller::listen_addresses() const {
+    return _listen_addresses;
+}
+
+future<> controller::start_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("CQL server is stopping, try again later"));
+    }
+
+    return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
 future<> controller::do_start_server() {
@@ -97,6 +112,7 @@ future<> controller::do_start_server() {
             std::shared_ptr<seastar::tls::credentials_builder> cred;
         };
 
+        _listen_addresses.clear();
         std::vector<listen_cfg> configs;
         int native_port_idx = -1, native_shard_aware_port_idx = -1;
 
@@ -104,11 +120,13 @@ future<> controller::do_start_server() {
                 (!cfg.native_transport_port_ssl.is_set() && !cfg.native_transport_port.is_set())) {
             // Non-SSL port is specified || neither SSL nor non-SSL ports are specified
             configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
+            _listen_addresses.push_back(configs.back().addr);
             native_port_idx = 0;
         }
         if (cfg.native_shard_aware_transport_port.is_set() ||
                 (!cfg.native_shard_aware_transport_port_ssl.is_set() && !cfg.native_shard_aware_transport_port.is_set())) {
             configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
+            _listen_addresses.push_back(configs.back().addr);
             native_shard_aware_port_idx = native_port_idx + 1;
         }
 
@@ -124,6 +142,7 @@ future<> controller::do_start_server() {
                     cfg.native_transport_port_ssl() != cfg.native_transport_port())) {
                 // SSL port is specified && non-SSL port is either left out or set to a different value
                 configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, false, cred});
+                _listen_addresses.push_back(configs.back().addr);
             } else if (native_port_idx >= 0) {
                 configs[native_port_idx].cred = cred;
             }
@@ -131,6 +150,7 @@ future<> controller::do_start_server() {
                     (!cfg.native_shard_aware_transport_port.is_set() ||
                     cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port())) {
                 configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, std::move(cred)});
+                _listen_addresses.push_back(configs.back().addr);
             } else if (native_shard_aware_port_idx >= 0) {
                 configs[native_shard_aware_port_idx].cred = std::move(cred);
             }
@@ -160,7 +180,7 @@ future<> controller::do_start_server() {
     });
 }
 
-future<> controller::stop() {
+future<> controller::stop_server() {
     assert(this_shard_id() == 0);
 
     if (_stopped) {
@@ -170,18 +190,17 @@ future<> controller::stop() {
     return _ops_sem.wait().then([this] {
         _stopped = true;
         _ops_sem.broken();
+        _listen_addresses.clear();
         return do_stop_server();
     });
 }
 
-future<> controller::stop_server() {
-    return smp::submit_to(0, [this] {
-        if (!_ops_sem.try_wait()) {
-            throw std::runtime_error(format("CQL server is starting, try again later"));
-        }
+future<> controller::request_stop_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("CQL server is starting, try again later"));
+    }
 
-        return do_stop_server().finally([this] { _ops_sem.signal(); });
-    });
+    return do_stop_server().finally([this] { _ops_sem.signal(); });
 }
 
 future<> controller::do_stop_server() {
@@ -213,12 +232,6 @@ future<> controller::unsubscribe_server(sharded<cql_server>& server) {
         return _mnotifier.local().unregister_listener(server.get_migration_listener()).then([this, &server]{
             return _lifecycle_notifier.local().unregister_subscriber(server.get_lifecycle_listener());
         });
-    });
-}
-
-future<bool> controller::is_server_running() {
-    return smp::submit_to(0, [this] {
-        return make_ready_future<bool>(bool(_server));
     });
 }
 
