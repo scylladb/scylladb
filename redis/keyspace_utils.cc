@@ -46,7 +46,7 @@ namespace redis {
 
 static logging::logger logger("keyspace_utils");
 schema_ptr strings_schema(sstring ks_name) {
-     schema_builder builder(make_shared_schema(generate_legacy_id(ks_name, redis::STRINGs), ks_name, redis::STRINGs,
+     schema_builder builder(generate_legacy_id(ks_name, redis::STRINGs), ks_name, redis::STRINGs,
      // partition key
      {{"pkey", utf8_type}},
      // clustering key
@@ -59,7 +59,7 @@ schema_ptr strings_schema(sstring ks_name) {
      utf8_type,
      // comment
      "save STRINGs for redis"
-    ));
+    );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
     builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
@@ -67,7 +67,7 @@ schema_ptr strings_schema(sstring ks_name) {
 }
 
 schema_ptr lists_schema(sstring ks_name) {
-     schema_builder builder(make_shared_schema(generate_legacy_id(ks_name, redis::LISTs), ks_name, redis::LISTs,
+     schema_builder builder(generate_legacy_id(ks_name, redis::LISTs), ks_name, redis::LISTs,
      // partition key
      {{"pkey", utf8_type}},
      // clustering key
@@ -80,7 +80,7 @@ schema_ptr lists_schema(sstring ks_name) {
      utf8_type,
      // comment
      "save LISTs for redis"
-    ));
+    );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
     builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
@@ -88,7 +88,7 @@ schema_ptr lists_schema(sstring ks_name) {
 }
 
 schema_ptr hashes_schema(sstring ks_name) {
-     schema_builder builder(make_shared_schema(generate_legacy_id(ks_name, redis::HASHes), ks_name, redis::HASHes,
+     schema_builder builder(generate_legacy_id(ks_name, redis::HASHes), ks_name, redis::HASHes,
      // partition key
      {{"pkey", utf8_type}},
      // clustering key
@@ -101,7 +101,7 @@ schema_ptr hashes_schema(sstring ks_name) {
      utf8_type,
      // comment
      "save HASHes for redis"
-    ));
+    );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
     builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
@@ -109,7 +109,7 @@ schema_ptr hashes_schema(sstring ks_name) {
 }
 
 schema_ptr sets_schema(sstring ks_name) {
-     schema_builder builder(make_shared_schema(generate_legacy_id(ks_name, redis::SETs), ks_name, redis::SETs,
+     schema_builder builder(generate_legacy_id(ks_name, redis::SETs), ks_name, redis::SETs,
      // partition key
      {{"pkey", utf8_type}},
      // clustering key
@@ -122,7 +122,7 @@ schema_ptr sets_schema(sstring ks_name) {
      utf8_type,
      // comment
      "save SETs for redis"
-    ));
+    );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
     builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
@@ -130,7 +130,7 @@ schema_ptr sets_schema(sstring ks_name) {
 }
 
 schema_ptr zsets_schema(sstring ks_name) {
-     schema_builder builder(make_shared_schema(generate_legacy_id(ks_name, redis::ZSETs), ks_name, redis::ZSETs,
+     schema_builder builder(generate_legacy_id(ks_name, redis::ZSETs), ks_name, redis::ZSETs,
      // partition key
      {{"pkey", utf8_type}},
      // clustering key
@@ -143,7 +143,7 @@ schema_ptr zsets_schema(sstring ks_name) {
      utf8_type,
      // comment
      "save ZSETs for redis"
-    ));
+    );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
     builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));

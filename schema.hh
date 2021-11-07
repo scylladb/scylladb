@@ -846,6 +846,7 @@ public:
     const_iterator static_end() const;
     const_iterator static_lower_bound(const bytes& name) const;
     const_iterator static_upper_bound(const bytes& name) const;
+    static data_type column_name_type(const column_definition& def, const data_type& regular_column_name_type);
     data_type column_name_type(const column_definition& def) const;
     const column_definition& clustering_column_at(column_id id) const;
     const column_definition& regular_column_at(column_id id) const;
