@@ -404,6 +404,11 @@ query_processor::query_processor(service::storage_proxy& proxy, service::forward
                             sm::description("Counts the number of SELECT query executions requiring partition range scan without BYPASS CACHE option.")),
 
                     sm::make_derive(
+                            "select_parallelized",
+                            _cql_stats.select_parallelized,
+                            sm::description("Counts the number of parallelized aggregation SELECT query executions.")),
+
+                    sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
                             sm::description("Counts the number of authenticated prepared statements cache entries evictions.")),
