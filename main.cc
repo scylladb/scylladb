@@ -82,6 +82,7 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
+#include "service/forward_service.hh"
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
@@ -498,6 +499,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<repair_service> repair;
     sharded<sstables_loader> sst_loader;
     sharded<streaming::stream_manager> stream_manager;
+    sharded<service::forward_service> forward_service;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -524,7 +526,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         tcp_syncookies_sanity();
 
-        return seastar::async([&app, cfg, ext, &db, &qp, &bm, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([&app, cfg, ext, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
@@ -933,6 +935,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
                     std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(messaging)).get();
+            supervisor::notify("starting forward service");
+            forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
+            auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
+                forward_service.stop().get();
+            });
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");

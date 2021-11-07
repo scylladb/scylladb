@@ -563,6 +563,7 @@ set(scylla_sources
     schema_registry.cc
     serializer.cc
     service/client_state.cc
+    service/forward_service.cc
     service/migration_manager.cc
     service/misc_services.cc
     service/pager/paging_state.cc
