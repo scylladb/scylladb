@@ -598,7 +598,8 @@ public:
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
-            _segment_manager->totals.wasted_size_on_disk -= (_size_on_disk - file_position());
+            // Something is wrong with our accounting for this metric - see scylladb/scylla#9331
+            //_segment_manager->totals.wasted_size_on_disk -= (_size_on_disk - file_position());
             _segment_manager->add_file_to_delete(_file_name, _desc);
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
@@ -725,7 +726,8 @@ public:
         auto s = co_await sync();
         co_await flush();
         co_await terminate();
-        _segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
+        // Something is wrong with our accounting for this metric - see scylladb/scylla#9331
+        //_segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
         co_return s;
     }
     future<sseg_ptr> do_flush(uint64_t pos) {
@@ -2002,7 +2004,9 @@ void db::commitlog::segment_manager::on_timer() {
             if (max != 0 && cur >= max) {
                 clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
                 _new_counter = 0;
-                flush_segments(cur - max);
+                // There is a suspicion that flushing only the amount needed without headroom can
+                // introduce some stress into the system see scylladb/scylla#9331 
+                flush_segments(0/*cur - max*/);
             }
         }
         return do_pending_deletes();
