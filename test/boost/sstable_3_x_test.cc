@@ -737,12 +737,12 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
     auto make_tombstone = [] (int64_t ts, int32_t tp) {
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
-    auto make_range_tombstone = [] (clustering_key_prefix start, clustering_key_prefix end, tombstone t) {
+    auto make_range_tombstone = [] (clustering_key_prefix start, clustering_key_prefix end, tombstone t, bound_kind end_bound = bound_kind::incl_end) {
         return range_tombstone {
             std::move(start),
             bound_kind::incl_start,
             std::move(end),
-            bound_kind::incl_end,
+            end_bound,
             t};
     };
 
@@ -754,7 +754,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
 
     auto make_assertions = [] (flat_mutation_reader rd) {
         rd.set_max_buffer_size(1);
-        return assert_that(std::move(rd));
+        return std::move(assert_that(std::move(rd)).ignore_deletion_time());
     };
 
     std::array<int32_t, 2> static_row_values {777, 999};
@@ -802,9 +802,14 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             // and step over it so that it doesn't get emitted
             r.fast_forward_to(to_full_ck(4471, 4471), to_full_ck(4653, 4653));
             for (const auto idx : boost::irange(4471, 4652, 3)) {
-                r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                r.produces_row(to_full_ck(idx, idx), to_expected(idx));
+                if (idx == 4651) {
+                    r.produces_range_tombstone(
+                        make_range_tombstone(to_non_full_ck(idx + 1), to_full_ck(idx + 2, idx + 2), tomb, bound_kind::excl_end));
+                } else {
+                    r.produces_range_tombstone(
+                        make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                }
             }
             r.produces_end_of_stream();
 
@@ -877,9 +882,14 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
             r.produces_partition_start(to_pkey(pkey))
             .produces_static_row({{st_cdef, int32_type->decompose(static_row_values[pkey - 1])}});
             for (const auto idx : boost::irange(4471, 4652, 3)) {
-                r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                r.produces_row(to_full_ck(idx, idx), to_expected(idx));
+                if (idx == 4651) {
+                    r.produces_range_tombstone(
+                        make_range_tombstone(to_non_full_ck(idx + 1), to_full_ck(idx + 2, idx + 2), tomb, bound_kind::excl_end));
+                } else {
+                    r.produces_range_tombstone(
+                        make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                }
             }
 
             {
@@ -940,9 +950,14 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
 
             r.fast_forward_to(to_non_full_ck(3000), to_non_full_ck(6000));
             for (const auto idx : boost::irange(4471, 4652, 3)) {
-                r.produces_row(to_full_ck(idx, idx), to_expected(idx))
-                .produces_range_tombstone(
-                    make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                r.produces_row(to_full_ck(idx, idx), to_expected(idx));
+                if (idx == 4651) {
+                    r.produces_range_tombstone(
+                        make_range_tombstone(to_non_full_ck(idx + 1), to_full_ck(idx + 2, idx + 2), tomb, bound_kind::excl_end));
+                } else {
+                    r.produces_range_tombstone(
+                        make_range_tombstone(to_non_full_ck(idx + 1), to_non_full_ck(idx + 2), tomb));
+                }
             }
             r.produces_end_of_stream();
 
@@ -1089,7 +1104,7 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
 
     auto make_assertions = [] (flat_mutation_reader rd) {
         rd.set_max_buffer_size(1);
-        return assert_that(std::move(rd));
+        return std::move(assert_that(std::move(rd)).ignore_deletion_time());
     };
 
     auto st_cdef = UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->get_column_definition(to_bytes("st"));

@@ -771,27 +771,31 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
 
     table.add_row(m, keys[2], "value");
 
-    auto rt2 = table.delete_range(m, query::clustering_range::make(
+    auto rt2_range = query::clustering_range::make(
         query::clustering_range::bound(keys[3], true),
         query::clustering_range::bound(keys[6], true)
-    ));
+    );
+    auto rt2 = table.delete_range(m, rt2_range);
 
     table.add_row(m, keys[4], "value");
 
-    auto rt3 = table.delete_range(m, query::clustering_range::make(
+    auto rt3_range = query::clustering_range::make(
         query::clustering_range::bound(keys[7], true),
         query::clustering_range::bound(keys[8], true)
-    ));
+    );
+    auto rt3 = table.delete_range(m, rt3_range);
 
-    auto rt4 = table.delete_range(m, query::clustering_range::make(
+    auto rt4_range = query::clustering_range::make(
         query::clustering_range::bound(keys[9], true),
         query::clustering_range::bound(keys[10], true)
-    ));
+    );
+    auto rt4 = table.delete_range(m, rt4_range);
 
-    auto rt5 = table.delete_range(m, query::clustering_range::make(
+    auto rt5_range = query::clustering_range::make(
         query::clustering_range::bound(keys[11], true),
         query::clustering_range::bound(keys[13], true)
-    ));
+    );
+    auto rt5 = table.delete_range(m, rt5_range);
 
     mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
     auto rd = assert_that(ms.make_reader(s,
@@ -809,22 +813,28 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
 
     rd.produces_row_with_key(keys[2]);
 
-    rd.fast_forward_to(position_range(query::clustering_range::make(
+    auto ff1 = query::clustering_range::make(
         query::clustering_range::bound(keys[4], true),
         query::clustering_range::bound(keys[8], false)
-    )));
+    );
+    rd.fast_forward_to(position_range(ff1));
 
-    rd.produces_range_tombstone(rt2);
+    // we definitely expect (at least) trimmed-to-ff1 part of rt2 --
+    // before, after, or split around the keys[4] row
+    rd.produces_range_tombstone(rt2, {ff1});
     rd.produces_row_with_key(keys[4]);
-    rd.produces_range_tombstone(rt3);
+    rd.may_produce_tombstones(position_range(rt2_range), {ff1});
 
-    rd.fast_forward_to(position_range(query::clustering_range::make(
+    rd.produces_range_tombstone(rt3, {ff1});
+
+    auto ff2 = query::clustering_range::make(
         query::clustering_range::bound(keys[10], true),
         query::clustering_range::bound(keys[12], false)
-    )));
+    );
+    rd.fast_forward_to(position_range(ff2));
 
-    rd.produces_range_tombstone(rt4);
-    rd.produces_range_tombstone(rt5);
+    rd.produces_range_tombstone(rt4, {ff2});
+    rd.produces_range_tombstone(rt5, {ff2});
     rd.produces_end_of_stream();
 
     rd.fast_forward_to(position_range(query::clustering_range::make(
