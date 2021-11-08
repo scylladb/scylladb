@@ -477,49 +477,42 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     return make_ready_future<gossip_get_endpoint_states_response>(gossip_get_endpoint_states_response{std::move(map)});
 }
 
+rpc::no_wait_type gossiper::background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn) {
+    (void)with_gate(_background_msg, [this, type = std::move(type), fn = std::move(fn)] () mutable {
+        return container().invoke_on(0, std::move(fn)).handle_exception([type = std::move(type)] (auto ep) {
+            logger.warn("Failed to handle {}: {}", type, ep);
+        });
+    });
+    return messaging_service::no_wait();
+}
+
 void gossiper::init_messaging_service_handler() {
     _messaging.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = netw::messaging_service::get_source(cinfo);
-        // In a new fiber.
-        (void)container().invoke_on(0, [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
+        return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
-        }).handle_exception([] (auto ep) {
-            logger.warn("Fail to handle GOSSIP_DIGEST_SYN: {}", ep);
         });
-        return messaging_service::no_wait();
     });
     _messaging.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
         auto from = netw::messaging_service::get_source(cinfo);
-        // In a new fiber.
-        (void)container().invoke_on(0, [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
+        return background_msg("GOSSIP_DIGEST_ACK", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack_msg(from, std::move(msg));
-        }).handle_exception([] (auto ep) {
-            logger.warn("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
         });
-        return messaging_service::no_wait();
     });
     _messaging.register_gossip_digest_ack2([this] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
         auto from = netw::messaging_service::get_source(cinfo);
-        // In a new fiber.
-        (void)container().invoke_on(0, [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
+        return background_msg("GOSSIP_DIGEST_ACK2", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack2_msg(from, std::move(msg));
-        }).handle_exception([] (auto ep) {
-            logger.warn("Fail to handle GOSSIP_DIGEST_ACK2: {}", ep);
         });
-        return messaging_service::no_wait();
     });
     _messaging.register_gossip_echo([this] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return handle_echo_msg(from, generation_number_opt);
     });
     _messaging.register_gossip_shutdown([this] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
-        // In a new fiber.
-        (void)container().invoke_on(0, [from, generation_number_opt] (gms::gossiper& gossiper) {
+        return background_msg("GOSSIP_SHUTDOWN", [from, generation_number_opt] (gms::gossiper& gossiper) {
             return gossiper.handle_shutdown_msg(from, generation_number_opt);
-        }).handle_exception([] (auto ep) {
-            logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
-        return messaging_service::no_wait();
     });
     _messaging.register_gossip_get_endpoint_states([this] (const rpc::client_info& cinfo, gossip_get_endpoint_states_request request) {
         return container().invoke_on(0, [request = std::move(request)] (gms::gossiper& gossiper) mutable {
@@ -2178,6 +2171,9 @@ future<> gossiper::start() {
 }
 
 future<> gossiper::shutdown() {
+    if (!_background_msg.is_closed()) {
+        co_await _background_msg.close();
+    }
     if (this_shard_id() == 0) {
         co_await do_stop_gossiping();
     }
