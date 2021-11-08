@@ -41,7 +41,9 @@
 #include "unimplemented.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/print.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
@@ -138,12 +140,16 @@ private:
     bool _enabled = false;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
+    seastar::gate _background_msg;
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
     bool _advertise_myself = true;
     // Map ip address and generation number
     std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
+
+    rpc::no_wait_type background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
+
 public:
     // Get current generation number for the given nodes
     future<std::unordered_map<gms::inet_address, int32_t>>
