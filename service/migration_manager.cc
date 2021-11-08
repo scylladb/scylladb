@@ -168,9 +168,9 @@ void migration_manager::init_messaging_service()
         auto& proxy = get_local_storage_proxy();
         proxy.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
-        return container().invoke_on(shard, [v, &proxy] (auto&& sp) {
+        return container().invoke_on(shard, [v, &db = proxy.get_db()] (auto&& sp) {
             mlogger.debug("Schema version request for {}", v);
-            return proxy.local_db().get_schema_registry().get_frozen(v);
+            return frozen_schema(db.local().get_schema_registry().get(v));
         });
     });
 }
