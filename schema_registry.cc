@@ -39,8 +39,8 @@ schema_version_loading_failed::schema_version_loading_failed(table_schema_versio
 { }
 
 schema_registry_entry::~schema_registry_entry() {
-    if (_schema) {
-        _schema->_registry_entry = nullptr;
+    for (auto& s : _schemas) {
+        s->_registry_entry = nullptr;
     }
 }
 
@@ -52,7 +52,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
 {
     _erase_timer.set_callback([this] {
         slogger.debug("Dropping {}", _version);
-        assert(!_schema);
+        assert(_schemas.empty());
         try {
             _registry._entries.erase(_version);
         } catch (...) {
@@ -189,7 +189,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
 }
 
 schema_ptr schema_registry_entry::get_schema() {
-    if (!_schema) {
+    if (_schemas.empty()) {
         slogger.trace("Activating {}", _version);
         auto s = _frozen_schema->unfreeze(*_registry._ctxt);
         if (s->version() != _version) {
@@ -197,16 +197,21 @@ schema_ptr schema_registry_entry::get_schema() {
         }
         _erase_timer.cancel();
         s->_registry_entry = this;
-        _schema = &*s;
+        _schemas.push_back(&*s);
         return s;
     } else {
-        return _schema->shared_from_this();
+        return _schemas.front()->shared_from_this();
     }
 }
 
-void schema_registry_entry::detach_schema() noexcept {
+void schema_registry_entry::detach_schema(const schema& s) noexcept {
+    if (auto it = std::find(_schemas.begin(), _schemas.end(), &s); it != _schemas.end()) {
+        _schemas.erase(it);
+    }
+    if (!_schemas.empty()) {
+        return;
+    }
     slogger.trace("Deactivating {}", _version);
-    _schema = nullptr;
     _erase_timer.arm(_registry.grace_period());
 }
 
