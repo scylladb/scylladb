@@ -483,6 +483,13 @@ schema::registry_entry() const noexcept {
     return _registry_entry;
 }
 
+schema_registry* schema::registry() const noexcept {
+    if (!_registry_entry) {
+        return nullptr;
+    }
+    return &_registry_entry->registry();
+}
+
 sstring schema::thrift_key_validator() const {
     if (partition_key_size() == 1) {
         return partition_key_columns().begin()->type->name();
