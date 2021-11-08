@@ -950,25 +950,39 @@ schema_builder& schema_builder::with_null_sharder() {
     return *this;
 }
 
-schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
+schema_builder::schema_builder(schema_registry* registry, std::string_view ks_name, std::string_view cf_name,
         std::optional<utils::UUID> id, data_type rct)
-        : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
+        : _registry(registry)
+        , _raw(id ? *id : utils::UUID_gen::get_time_UUID())
 {
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
 }
 
+schema_builder::schema_builder(schema_registry& registry, std::string_view ks_name, std::string_view cf_name,
+        std::optional<utils::UUID> id, data_type rct)
+        : schema_builder(&registry, ks_name, cf_name, id, std::move(rct))
+{
+}
+
+schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
+        std::optional<utils::UUID> id, data_type rct)
+    : schema_builder(nullptr, ks_name, cf_name, id, rct)
+{
+}
+
 schema_builder::schema_builder(const schema_ptr s)
-    : schema_builder(s->_raw)
+    : schema_builder(s->registry(), s->_raw)
 {
     if (s->is_view()) {
         _view_info = s->view_info()->raw();
     }
 }
 
-schema_builder::schema_builder(const schema::raw_schema& raw)
-    : _raw(raw)
+schema_builder::schema_builder(schema_registry* registry, const schema::raw_schema& raw)
+    : _registry(registry)
+    , _raw(raw)
 {
     static_assert(schema::row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
     // Schema builder may add or remove columns and their ids need to be
@@ -980,6 +994,7 @@ schema_builder::schema_builder(const schema::raw_schema& raw)
 }
 
 schema_builder::schema_builder(
+        schema_registry* registry,
         std::optional<utils::UUID> id,
         std::string_view ks_name,
         std::string_view cf_name,
@@ -989,7 +1004,7 @@ schema_builder::schema_builder(
         std::vector<schema::column> static_columns,
         data_type regular_column_name_type,
         sstring comment)
-    : schema_builder(ks_name, cf_name, std::move(id), std::move(regular_column_name_type)) {
+    : schema_builder(registry, ks_name, cf_name, std::move(id), std::move(regular_column_name_type)) {
     for (auto&& column : partition_key) {
         with_column(std::move(column.name), std::move(column.type), column_kind::partition_key);
     }
@@ -1003,6 +1018,35 @@ schema_builder::schema_builder(
         with_column(std::move(column.name), std::move(column.type), column_kind::static_column);
     }
     set_comment(comment);
+}
+
+schema_builder::schema_builder(
+        schema_registry& registry,
+        std::optional<utils::UUID> id,
+        std::string_view ks_name,
+        std::string_view cf_name,
+        std::vector<schema::column> partition_key,
+        std::vector<schema::column> clustering_key,
+        std::vector<schema::column> regular_columns,
+        std::vector<schema::column> static_columns,
+        data_type regular_column_name_type,
+        sstring comment)
+    : schema_builder(&registry, id, ks_name, cf_name, std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
+            std::move(static_columns), std::move(regular_column_name_type), std::move(comment)) {
+}
+
+schema_builder::schema_builder(
+        std::optional<utils::UUID> id,
+        std::string_view ks_name,
+        std::string_view cf_name,
+        std::vector<schema::column> partition_key,
+        std::vector<schema::column> clustering_key,
+        std::vector<schema::column> regular_columns,
+        std::vector<schema::column> static_columns,
+        data_type regular_column_name_type,
+        sstring comment)
+    : schema_builder(nullptr, id, ks_name, cf_name, std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
+            std::move(static_columns), std::move(regular_column_name_type), std::move(comment)) {
 }
 
 column_definition& schema_builder::find_column(const cql3::column_identifier& c) {
@@ -1261,6 +1305,7 @@ schema_ptr schema_builder::build() {
             dynamic_pointer_cast<db::paxos_grace_seconds_extension>(it->second)->get_paxos_grace_seconds();
     }
 
+    (void)_registry;
     return make_lw_shared<schema>(schema::private_tag{}, new_raw, _view_info);
 }
 
