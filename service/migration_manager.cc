@@ -159,7 +159,7 @@ void migration_manager::init_messaging_service()
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
         return container().invoke_on(shard, [v, &proxy] (auto&& sp) {
             mlogger.debug("Schema version request for {}", v);
-            return proxy.local_db().get_schema_registry().get_frozen(v);
+            return frozen_schema(proxy.local_db().get_schema_registry().get(v));
         });
     });
 }

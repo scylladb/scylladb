@@ -145,10 +145,6 @@ public:
     // or loading is in progress.
     schema_ptr get(table_schema_version) const;
 
-    // Looks up schema version. Throws schema_version_not_found when not found
-    // or loading is in progress.
-    frozen_schema get_frozen(table_schema_version) const;
-
     // Attempts to add given schema to the registry. If the registry already
     // knows about the schema, returns existing entry, otherwise returns back
     // the schema which was passed as argument. Users should prefer to use the

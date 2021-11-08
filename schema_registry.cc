@@ -102,10 +102,6 @@ schema_ptr schema_registry::get(table_schema_version v) const {
     return get_entry(v).get_schema();
 }
 
-frozen_schema schema_registry::get_frozen(table_schema_version v) const {
-    return get_entry(v).frozen();
-}
-
 future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
     auto i = _entries.find(v);
     if (i == _entries.end()) {
