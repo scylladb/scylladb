@@ -1043,7 +1043,13 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
-    return {UDF, ALTERNATOR_STREAMS, RAFT};
+    std::vector<enum_option<db::experimental_features_t>> ret;
+    for (const auto& f : db::experimental_features_t::map()) {
+        if (f.second != db::experimental_features_t::UNUSED) {
+            ret.push_back(f.second);
+        }
+    }
+    return ret;
 }
 
 std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restriction_t::map() {
