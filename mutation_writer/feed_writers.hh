@@ -54,7 +54,7 @@ future<> feed_writer(flat_mutation_reader&& rd_ref, Writer wr) {
     auto rd = std::move(rd_ref);
     std::exception_ptr ex;
     try {
-        while (!rd.is_end_of_stream()) {
+        while (!rd.is_end_of_stream() || !rd.is_buffer_empty()) {
             co_await rd.fill_buffer();
             while (!rd.is_buffer_empty()) {
                 co_await rd.pop_mutation_fragment().consume(wr);
