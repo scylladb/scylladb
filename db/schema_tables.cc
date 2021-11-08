@@ -1173,10 +1173,19 @@ struct schema_diff {
     }
 };
 
+// Which side of the diff this schema is on?
+// Helps ensuring that when creating schema for altered views, we match "before"
+// version of view to "before" version of base table and "after" to "after"
+// respectively.
+enum class schema_diff_side {
+    left, // old, before
+    right, // new, after
+};
+
 static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
     std::map<utils::UUID, schema_mutations>&& before,
     std::map<utils::UUID, schema_mutations>&& after,
-    noncopyable_function<schema_ptr (schema_mutations sm)> create_schema)
+    noncopyable_function<schema_ptr (schema_mutations sm, schema_diff_side)> create_schema)
 {
     schema_diff d;
     auto diff = difference(before, after);
@@ -1186,13 +1195,13 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
         d.dropped.emplace_back(schema_diff::dropped_schema{s});
     }
     for (auto&& key : diff.entries_only_on_right) {
-        auto s = create_schema(std::move(after.at(key)));
+        auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
         slogger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.created.emplace_back(s);
     }
     for (auto&& key : diff.entries_differing) {
-        auto s_before = create_schema(std::move(before.at(key)));
-        auto s = create_schema(std::move(after.at(key)));
+        auto s_before = create_schema(std::move(before.at(key)), schema_diff_side::left);
+        auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.altered.emplace_back(schema_diff::altered_schema{s_before, s});
     }
@@ -1210,10 +1219,10 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     std::map<utils::UUID, schema_mutations>&& views_before,
     std::map<utils::UUID, schema_mutations>&& views_after)
 {
-    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [&] (schema_mutations sm) {
+    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), [&] (schema_mutations sm) {
+    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -1223,9 +1232,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         //    the database object.
         view_ptr vp = create_view_from_mutations(proxy, std::move(sm));
         schema_ptr base_schema;
-        for (auto&& s : tables_diff.altered) {
-            if (s.new_schema.get()->ks_name() == vp->ks_name() && s.new_schema.get()->cf_name() == vp->view_info()->base_name() ) {
-                base_schema = s.new_schema;
+        for (auto&& altered : tables_diff.altered) {
+            // Chose the appropriate version of the base table schema: old -> old, new -> new.
+            schema_ptr s = side == schema_diff_side::left ? altered.old_schema : altered.new_schema;
+            if (s->ks_name() == vp->ks_name() && s->cf_name() == vp->view_info()->base_name() ) {
+                base_schema = s;
                 break;
             }
         }
