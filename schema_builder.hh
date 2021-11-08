@@ -26,19 +26,50 @@
 #include "cdc/log.hh"
 #include "dht/i_partitioner.hh"
 
+class schema_registry;
+
 struct schema_builder {
 public:
     enum class compact_storage { no, yes };
 private:
+    schema_registry* _registry = nullptr;
     schema::raw_schema _raw;
     std::optional<compact_storage> _compact_storage;
     std::optional<table_schema_version> _version;
     std::optional<raw_view_info> _view_info;
-    schema_builder(const schema::raw_schema&);
+    schema_builder(schema_registry*, const schema::raw_schema&);
 public:
+    schema_builder(schema_registry* registry, std::string_view ks_name, std::string_view cf_name,
+            std::optional<utils::UUID> = { },
+            data_type regular_column_name_type = utf8_type);
+    schema_builder(schema_registry& registry, std::string_view ks_name, std::string_view cf_name,
+            std::optional<utils::UUID> = { },
+            data_type regular_column_name_type = utf8_type);
     schema_builder(std::string_view ks_name, std::string_view cf_name,
             std::optional<utils::UUID> = { },
             data_type regular_column_name_type = utf8_type);
+    schema_builder(
+            schema_registry* registry,
+            std::optional<utils::UUID> id,
+            std::string_view ks_name,
+            std::string_view cf_name,
+            std::vector<schema::column> partition_key,
+            std::vector<schema::column> clustering_key,
+            std::vector<schema::column> regular_columns,
+            std::vector<schema::column> static_columns,
+            data_type regular_column_name_type,
+            sstring comment = "");
+    schema_builder(
+            schema_registry& registry,
+            std::optional<utils::UUID> id,
+            std::string_view ks_name,
+            std::string_view cf_name,
+            std::vector<schema::column> partition_key,
+            std::vector<schema::column> clustering_key,
+            std::vector<schema::column> regular_columns,
+            std::vector<schema::column> static_columns,
+            data_type regular_column_name_type,
+            sstring comment = "");
     schema_builder(
             std::optional<utils::UUID> id,
             std::string_view ks_name,
