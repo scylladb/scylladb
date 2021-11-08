@@ -75,7 +75,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
-    const ::schema* _schema = nullptr;
+    std::vector<const ::schema*> _schemas;
 
     enum class sync_state { NOT_SYNCED, SYNCING, SYNCED };
     sync_state _sync_state;
@@ -104,7 +104,7 @@ public:
     table_schema_version version() const { return _version; }
 public:
     // Called by class schema
-    void detach_schema() noexcept;
+    void detach_schema(const schema& s) noexcept;
 };
 
 //

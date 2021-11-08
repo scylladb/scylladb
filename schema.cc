@@ -474,7 +474,7 @@ lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, st
 
 schema::~schema() {
     if (_registry_entry) {
-        _registry_entry->detach_schema();
+        _registry_entry->detach_schema(*this);
     }
 }
 
