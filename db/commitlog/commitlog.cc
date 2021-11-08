@@ -512,6 +512,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
     uint64_t _size_on_disk = 0;
+    uint64_t _waste = 0;
 
     size_t _alignment;
 
@@ -598,7 +599,7 @@ public:
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
-            _segment_manager->totals.wasted_size_on_disk -= (_size_on_disk - file_position());
+            _segment_manager->totals.wasted_size_on_disk -= _waste;
             _segment_manager->add_file_to_delete(_file_name, _desc);
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
@@ -725,7 +726,8 @@ public:
         auto s = co_await sync();
         co_await flush();
         co_await terminate();
-        _segment_manager->totals.wasted_size_on_disk += (_size_on_disk - file_position());
+        _waste = _size_on_disk - file_position();
+        _segment_manager->totals.wasted_size_on_disk += _waste;
         co_return s;
     }
     future<sseg_ptr> do_flush(uint64_t pos) {
