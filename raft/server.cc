@@ -587,9 +587,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // module needs to know who should it send the messages to (actual
             // network addresses of the joining servers).
             configuration_diff rpc_diff;
-            if (batch.rpc_configuration) {
+            if (batch.configuration) {
                 const server_address_set& current_rpc_config = get_rpc_config();
-                rpc_diff = diff_address_sets(get_rpc_config(), *batch.rpc_configuration);
+                rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
                 for (const auto& addr: rpc_diff.joining) {
                     add_to_rpc_config(addr);
                     _rpc->add_server(addr.id, addr.info);
@@ -606,7 +606,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 }
             }
 
-            if (batch.rpc_configuration) {
+            if (batch.configuration) {
                 for (const auto& addr: rpc_diff.leaving) {
                     abort_snapshot_transfer(addr.id);
                     remove_from_rpc_config(addr);
