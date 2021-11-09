@@ -20,6 +20,7 @@
  */
 
 #include <seastar/core/sharded.hh>
+#include <seastar/core/reactor.hh>
 
 #include "schema_registry.hh"
 #include "log.hh"
@@ -253,7 +254,10 @@ void schema_registry_entry::detach_schema(const schema& s) noexcept {
         return;
     }
     slogger.trace("Deactivating {}", _version);
-    _erase_timer.arm(_registry.grace_period());
+    // Some tests that use schemas don't start a reactor
+    if (engine_is_ready()) [[likely]] {
+        _erase_timer.arm(_registry.grace_period());
+    }
 }
 
 void schema_registry_entry::ensure_frozen() {
