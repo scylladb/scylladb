@@ -59,6 +59,7 @@ public:
 // In addition to the above the entry is controlled by lw_shared_ptr<> to cope with races between loaders.
 //
 class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_entry> {
+    using schema_factory = std::function<schema_ptr()>;
     using erase_clock = seastar::lowres_clock;
 
     enum class state {
@@ -72,7 +73,8 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     async_schema_loader _loader; // valid when state == LOADING
     shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
-    std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
+    schema_factory _factory; // engaged when state == LOADED
+    std::optional<frozen_schema> _frozen_schema; // engaged after ensure_frozen()
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
     std::vector<const ::schema*> _schemas;
@@ -83,6 +85,8 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     timer<erase_clock> _erase_timer;
 
     friend class schema_registry;
+private:
+    schema_ptr do_load(schema_factory factory);
 public:
     schema_registry_entry(table_schema_version v, schema_registry& r);
     schema_registry_entry(schema_registry_entry&&) = delete;
@@ -98,7 +102,9 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
+    void ensure_frozen();
     // Can be called from other shards
+    // Call ensure_frozen() before first use
     frozen_schema frozen() const;
     // Can be called from other shards
     table_schema_version version() const { return _version; }

@@ -144,8 +144,8 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
     return e.get_schema();
 }
 
-schema_ptr schema_registry_entry::load(frozen_schema fs) {
-    _frozen_schema = std::move(fs);
+schema_ptr schema_registry_entry::do_load(schema_factory factory) {
+    _factory = std::move(factory);
     auto s = get_schema();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
@@ -154,6 +154,12 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
     _state = state::LOADED;
     slogger.trace("Loaded {} = {}", _version, *s);
     return s;
+}
+
+schema_ptr schema_registry_entry::load(frozen_schema fs) {
+    return do_load([this, fs = std::move(fs)] {
+        return fs.unfreeze(*_registry._ctxt);
+    });
 }
 
 future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader loader) {
@@ -187,7 +193,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
 schema_ptr schema_registry_entry::get_schema() {
     if (_schemas.empty()) {
         slogger.trace("Activating {}", _version);
-        auto s = _frozen_schema->unfreeze(*_registry._ctxt);
+        auto s = _factory();
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
@@ -211,9 +217,14 @@ void schema_registry_entry::detach_schema(const schema& s) noexcept {
     _erase_timer.arm(_registry.grace_period());
 }
 
+void schema_registry_entry::ensure_frozen() {
+    if (!_frozen_schema) {
+        _frozen_schema.emplace(get_schema());
+    }
+}
+
 frozen_schema schema_registry_entry::frozen() const {
-    assert(_state >= state::LOADED);
-    return *_frozen_schema;
+    return _frozen_schema.value();
 }
 
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
@@ -326,11 +337,14 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
     auto ensure_registry_entry = [] (const schema_ptr& s) {
         schema_registry_entry* e = s->registry_entry();
         if (e) {
+            e->ensure_frozen();
             return s;
         } else {
-            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) {
+            auto loaded_s = local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) {
                 return frozen_schema(s);
             });
+            loaded_s->registry_entry()->ensure_frozen();
+            return loaded_s;
         }
     };
 
