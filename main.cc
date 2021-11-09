@@ -607,32 +607,37 @@ int main(int ac, char** av) {
                 }).get();
             });
 
-            uint16_t api_port = cfg->api_port();
-            ctx.api_dir = cfg->api_ui_dir();
-            ctx.api_doc = cfg->api_doc_dir();
+            if (cfg->broadcast_address().empty() && cfg->listen_address().empty()) {
+                startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
+                throw bad_configuration_error();
+            }
+
+            if (cfg->broadcast_rpc_address().empty() && cfg->rpc_address() == "0.0.0.0") {
+                startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address", cfg->rpc_address());
+                throw bad_configuration_error();
+            }
+
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-            sstring listen_address = cfg->listen_address();
-            sstring rpc_address = cfg->rpc_address();
-            sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
-            sstring broadcast_address = cfg->broadcast_address();
-            sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
+
+            auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
+            utils::fb_utilities::set_broadcast_address(broadcast_addr);
+            auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
+            utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
+
+            ctx.api_dir = cfg->api_ui_dir();
+            ctx.api_doc = cfg->api_doc_dir();
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
-            auto prom_addr = [&] {
-                try {
-                    return gms::inet_address::lookup(cfg->prometheus_address(), family, preferred).get0();
-                } catch (...) {
-                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve prometheus_address {}", cfg->prometheus_address())));
-                }
-            }();
+
             supervisor::notify("starting prometheus API server");
-            uint16_t pport = cfg->prometheus_port();
             std::any stop_prometheus;
-            if (pport) {
+            if (cfg->prometheus_port()) {
                 prometheus_server.start("prometheus").get();
-                stop_prometheus = defer_verbose_shutdown("prometheus API server", [&prometheus_server, pport] {
+                stop_prometheus = defer_verbose_shutdown("prometheus API server", [&prometheus_server] {
                     prometheus_server.stop().get();
                 });
+
+                auto ip = utils::resolve(cfg->prometheus_address, family, preferred).get0();
 
                 //FIXME discarded future
                 prometheus::config pctx;
@@ -640,39 +645,11 @@ int main(int ac, char** av) {
                 pctx.prefix = cfg->prometheus_prefix();
                 (void)prometheus::start(prometheus_server, pctx);
                 with_scheduling_group(maintenance_scheduling_group, [&] {
-                  return prometheus_server.listen(socket_address{prom_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
-                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
+                  return prometheus_server.listen(socket_address{ip, cfg->prometheus_port()}).handle_exception([&ip, &cfg] (auto ep) {
+                    startlog.error("Could not start Prometheus API server on {}:{}: {}", ip, cfg->prometheus_port(), ep);
                     return make_exception_future<>(ep);
                   });
                 }).get();
-            }
-            if (!broadcast_address.empty()) {
-                try {
-                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address, family, preferred).get0());
-                } catch (...) {
-                    startlog.error("Bad configuration: invalid 'broadcast_address': {}: {}", broadcast_address, std::current_exception());
-                    throw bad_configuration_error();
-                }
-            } else if (!listen_address.empty()) {
-                try {
-                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(listen_address, family, preferred).get0());
-                } catch (...) {
-                    startlog.error("Bad configuration: invalid 'listen_address': {}: {}", listen_address, std::current_exception());
-                    throw bad_configuration_error();
-                }
-            } else {
-                startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
-                throw bad_configuration_error();
-            }
-
-            if (!broadcast_rpc_address.empty()) {
-                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(broadcast_rpc_address, family, preferred).get0());
-            } else {
-                if (rpc_address == "0.0.0.0") {
-                    startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address to a value other than {}", rpc_address, rpc_address);
-                    throw bad_configuration_error();
-                }
-                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address, family, preferred).get0());
             }
 
             using namespace locator;
@@ -725,14 +702,8 @@ int main(int ac, char** av) {
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
-            supervisor::notify("determining DNS name");
-            auto ip = [&] {
-                try {
-                    return gms::inet_address::lookup(api_address, family, preferred).get0();
-                } catch (...) {
-                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve api_address {}", api_address)));
-                }
-            }();
+
+            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
             supervisor::notify("starting API server");
             ctx.http_server.start("API").get();
             auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
@@ -740,9 +711,9 @@ int main(int ac, char** av) {
             });
             api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ctx.http_server.listen(socket_address{ip, api_port});
+                return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
-            startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
+            startlog.info("Scylla API server listening on {}:{} ...", api_addr, cfg->api_port());
 
             api::set_server_config(ctx, *cfg).get();
 
@@ -759,7 +730,7 @@ int main(int ac, char** av) {
 
             netw::messaging_service::config mscfg;
 
-            mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
+            mscfg.ip = utils::resolve(cfg->listen_address, family).get0();
             mscfg.port = cfg->storage_port();
             mscfg.ssl_port = cfg->ssl_storage_port();
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();

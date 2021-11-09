@@ -82,7 +82,6 @@ future<> controller::do_start_server() {
         auto cserver = std::make_unique<sharded<cql_server>>();
 
         auto& cfg = _config;
-        auto addr = cfg.rpc_address();
         auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
         auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto ceo = cfg.client_encryption_options();
@@ -104,7 +103,7 @@ future<> controller::do_start_server() {
         smp_service_group_config cql_server_smp_service_group_config;
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
         cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
-        const seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
+        const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
 
         struct listen_cfg {
             socket_address addr;

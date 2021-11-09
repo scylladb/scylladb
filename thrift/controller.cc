@@ -74,25 +74,23 @@ future<> thrift_controller::do_start_server() {
     _addr.reset();
 
     auto& cfg = _db.local().get_config();
-    auto port = cfg.rpc_port();
-    auto addr = cfg.rpc_address();
     auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     auto keepalive = cfg.rpc_keepalive();
     thrift_server_config tsc;
     tsc.timeout_config = make_timeout_config(cfg);
     tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
-    return gms::inet_address::lookup(addr, family, preferred).then([this, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
+    return utils::resolve(cfg.rpc_address, family, preferred).then([this, tserver, port = cfg.rpc_port(), keepalive, tsc] (gms::inet_address ip) {
         _addr.emplace(ip, port);
-        return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_ss), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, addr, ip, keepalive] {
+        return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_ss), std::ref(_auth_service), std::ref(_mem_limiter), tsc).then([tserver, port, ip, keepalive] {
             // #293 - do not stop anything
             //engine().at_exit([tserver] {
             //    return tserver->stop();
             //});
             return tserver->invoke_on_all(&thrift_server::listen, socket_address{ip, port}, keepalive);
+        }).then([ip, port] {
+            clogger.info("Thrift server listening on {}:{} ...", ip, port);
         });
-    }).then([addr, port] {
-        clogger.info("Thrift server listening on {}:{} ...", addr, port);
     });
 }
 

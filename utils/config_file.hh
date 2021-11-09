@@ -288,6 +288,14 @@ private:
         _cfgs;
 };
 
+template <typename T>
+requires requires (const config_file::named_value<T>& nv) {
+    { nv().empty() } -> std::same_as<bool>;
+}
+const config_file::named_value<T>& operator||(const config_file::named_value<T>& a, const config_file::named_value<T>& b) {
+    return !a().empty() ? a : b;
+}
+
 extern template struct config_file::named_value<seastar::log_level>;
 
 }
