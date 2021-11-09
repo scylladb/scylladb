@@ -326,7 +326,7 @@ schema::raw_schema::raw_schema(utils::UUID id)
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
-schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
+schema::schema(private_tag, schema_registry* registry, const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
     : _raw(raw)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
@@ -413,6 +413,10 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
     if (raw_view_info) {
         _view_info = std::make_unique<::view_info>(*this, *raw_view_info);
     }
+
+    if (registry) {
+        registry->pair_with_entry(*this);
+    }
 }
 
 schema::schema(const schema& o, const std::function<void(schema&)>& transform)
@@ -431,6 +435,10 @@ schema::schema(const schema& o, const std::function<void(schema&)>& transform)
         if (o.view_info()->base_info()) {
             _view_info->set_base_info(o.view_info()->base_info());
         }
+    }
+
+    if (o.registry()) {
+        o.registry()->pair_with_entry(*this);
     }
 }
 
@@ -1305,8 +1313,7 @@ schema_ptr schema_builder::build() {
             dynamic_pointer_cast<db::paxos_grace_seconds_extension>(it->second)->get_paxos_grace_seconds();
     }
 
-    (void)_registry;
-    return make_lw_shared<schema>(schema::private_tag{}, new_raw, _view_info);
+    return make_lw_shared<schema>(schema::private_tag{}, _registry, new_raw, _view_info);
 }
 
 const cdc::options& schema::cdc_options() const {
