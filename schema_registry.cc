@@ -131,7 +131,7 @@ schema_ptr schema_registry::get(table_schema_version v) const {
     return get_entry(v).get_schema();
 }
 
-future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
+future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_frozen_schema_loader& loader) {
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
@@ -157,18 +157,30 @@ schema_ptr schema_registry::get_or_null(table_schema_version v) const {
     return e.get_schema();
 }
 
-schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loader& loader) {
+schema_ptr schema_registry::get_or_load(table_schema_version v, std::function<schema_ptr(schema_registry_entry&)> load) {
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
         _entries.emplace(v, e_ptr);
-        return e_ptr->load(loader(v));
+        return load(*e_ptr);
     }
     schema_registry_entry& e = *i->second;
     if (e._state == schema_registry_entry::state::LOADING) {
-        return e.load(loader(v));
+        return load(e);
     }
     return e.get_schema();
+}
+
+schema_ptr schema_registry::get_or_load(table_schema_version v, const frozen_schema_loader& loader) {
+    return get_or_load(v, [v, &loader] (schema_registry_entry& e) {
+        return e.load(loader(v));
+    });
+}
+
+schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loader& loader) {
+    return get_or_load(v, [&loader] (schema_registry_entry& e) {
+        return e.load(loader);
+    });
 }
 
 schema_ptr schema_registry_entry::do_load(schema_factory factory) {
@@ -186,7 +198,13 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
     });
 }
 
-future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader loader) {
+schema_ptr schema_registry_entry::load(schema_loader loader) {
+    return do_load([this, loader = std::move(loader)] {
+        return loader(_version);
+    });
+}
+
+future<schema_ptr> schema_registry_entry::start_loading(async_frozen_schema_loader loader) {
     _loader = std::move(loader);
     auto f = _loader(_version);
     auto sf = _schema_promise.get_shared_future();

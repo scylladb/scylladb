@@ -34,8 +34,9 @@ class schema_ctxt;
 
 class schema_registry;
 
-using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
-using schema_loader = std::function<frozen_schema(table_schema_version)>;
+using async_frozen_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
+using frozen_schema_loader = std::function<frozen_schema(table_schema_version)>;
+using schema_loader = std::function<schema_ptr(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
 public:
@@ -70,7 +71,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     table_schema_version _version; // always valid
     schema_registry& _registry; // always valid
 
-    async_schema_loader _loader; // valid when state == LOADING
+    async_frozen_schema_loader _loader; // valid when state == LOADING
     shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
     schema_factory _factory; // engaged when state == LOADED
@@ -94,8 +95,9 @@ public:
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
     schema_ptr load(frozen_schema);
+    schema_ptr load(schema_loader);
     schema_registry& registry() const { return _registry; }
-    future<schema_ptr> start_loading(async_schema_loader);
+    future<schema_ptr> start_loading(async_frozen_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
     // Can be called from other shards
     bool is_synced() const;
@@ -133,10 +135,15 @@ class schema_registry {
     // too frequent re-requests and syncs. Default is 1 second.
     schema_registry_entry::erase_clock::duration grace_period() const;
 
+    schema_ptr get_or_load(table_schema_version, std::function<schema_ptr(schema_registry_entry&)> loader);
+
 public:
     ~schema_registry();
     // workaround to this object being magically appearing from nowhere.
     void init(const db::schema_ctxt&);
+
+    // Looks up schema by version or loads it using supplied loader.
+    schema_ptr get_or_load(table_schema_version, const frozen_schema_loader&);
 
     // Looks up schema by version or loads it using supplied loader.
     schema_ptr get_or_load(table_schema_version, const schema_loader&);
@@ -144,11 +151,11 @@ public:
     // Looks up schema by version or returns an empty pointer if not available.
     schema_ptr get_or_null(table_schema_version) const;
 
-    // Like get_or_load() which takes schema_loader but the loader may be
+    // Like get_or_load() which takes frozen_schema_loader but the loader may be
     // deferring. The loader is copied must be alive only until this method
     // returns. If the loader fails, the future resolves with
     // schema_version_loading_failed.
-    future<schema_ptr> get_or_load(table_schema_version, const async_schema_loader&);
+    future<schema_ptr> get_or_load(table_schema_version, const async_frozen_schema_loader&);
 
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.
