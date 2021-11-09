@@ -835,23 +835,3 @@ SEASTAR_TEST_CASE(test_schema_make_reversed) {
 
     return make_ready_future<>();
 }
-
-SEASTAR_TEST_CASE(test_schema_get_reversed) {
-    return do_with_cql_env([this] (cql_test_env& e) {
-        auto schema = schema_builder("tests", get_name())
-                .with_column("pk", bytes_type, column_kind::partition_key)
-                .with_column("ck", bytes_type, column_kind::clustering_key)
-                .with_column("v1", bytes_type)
-                .build();
-        schema = local_schema_registry().learn(schema);
-        auto reversed_schema = schema->get_reversed();
-
-        testlog.info("        &schema: {}", fmt::ptr(schema.get()));
-        testlog.info("&reverse_schema: {}", fmt::ptr(reversed_schema.get()));
-
-        BOOST_REQUIRE_EQUAL(reversed_schema->get_reversed().get(), schema.get());
-        BOOST_REQUIRE_EQUAL(schema->get_reversed().get(), reversed_schema.get());
-
-        return make_ready_future<>();
-    });
-}
