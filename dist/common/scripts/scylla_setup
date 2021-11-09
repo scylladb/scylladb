@@ -227,6 +227,8 @@ if __name__ == '__main__':
                         help='skip raid setup')
     parser.add_argument('--raid-level-5', action='store_true', default=False,
                         help='use RAID5 for RAID volume')
+    parser.add_argument('--online-discard', default=True,
+                        help='Configure XFS to discard unused blocks as soon as files are deleted')
     parser.add_argument('--nic',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
@@ -319,6 +321,7 @@ if __name__ == '__main__':
     ntp_setup = not args.no_ntp_setup
     raid_setup = not args.no_raid_setup
     raid_level_5 = args.raid_level_5
+    online_discard = args.online_discard
     coredump_setup = not args.no_coredump_setup
     sysconfig_setup = not args.no_sysconfig_setup
     io_setup = args.io_setup
@@ -430,6 +433,7 @@ if __name__ == '__main__':
             raid_setup = False
         if res and raid_setup:
             raid_level_5 = interactive_ask_service('Do you want to change RAID level to RAID5?', 'If you choose Yes, change RAID level to RAID5. Otherwise we will use RAID0.', raid_level_5)
+            online_discard = interactive_ask_service('Enable XFS online discard?', 'The default (Yes) asks the disk to recycle SSD cells as soon as files are deleted. 4.18+ kernel recommended for this option.', online_discard)
         if res and raid_setup and os.path.exists('/etc/systemd/system/var-lib-scylla.mount'):
             colorprint('{red}/etc/systemd/system/var-lib-scylla.mount already exists, skipping RAID setup.{nocolor}')
             raid_setup = False
@@ -478,7 +482,7 @@ if __name__ == '__main__':
         args.no_raid_setup = not raid_setup
         if raid_setup:
             level = '5' if raid_level_5 else '0'
-            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot --raid-level={level}')
+            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot --raid-level={level} --online-discard={int(online_discard)}')
 
         coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', coredump_setup)
         args.no_coredump_setup = not coredump_setup
@@ -531,6 +535,8 @@ if __name__ == '__main__':
         if cpuscaling_setup:
             run_setup_script('CPU scaling', 'scylla_cpuscaling_setup')
 
+        # no need for fstrim if online discard is enabled
+        fstrim_setup = fstrim_setup and not online_discard
         fstrim_setup = interactive_ask_service('Do you want to enable fstrim service?', 'Yes - runs fstrim on your SSD. No - skip this step.', fstrim_setup)
         args.no_fstrim_setup = not fstrim_setup
         if fstrim_setup:
