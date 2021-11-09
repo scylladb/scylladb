@@ -1304,7 +1304,7 @@ future<> storage_service::stop_transport() {
 future<> storage_service::drain_on_shutdown() {
     assert(this_shard_id() == 0);
     return (_operation_mode == mode::DRAINING || _operation_mode == mode::DRAINED) ?
-        _drain_finished.get_future() : do_drain(true);
+        _drain_finished.get_future() : do_drain();
 }
 
 future<> storage_service::init_messaging_service_part() {
@@ -2645,25 +2645,23 @@ future<> storage_service::drain() {
         }
 
         ss.set_mode(mode::DRAINING, "starting drain process", true);
-        return ss.do_drain(false).then([&ss] {
+        return ss.do_drain().then([&ss] {
             ss._drain_finished.set_value();
             ss.set_mode(mode::DRAINED, true);
         });
     });
 }
 
-future<> storage_service::do_drain(bool on_shutdown) {
-    return seastar::async([this, on_shutdown] {
+future<> storage_service::do_drain() {
+    return seastar::async([this] {
         stop_transport().get();
 
         tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
 
-        if (!on_shutdown) {
-            // Interrupt on going compaction and shutdown to prevent further compaction
-            _db.invoke_on_all([] (auto& db) {
-                return db.get_compaction_manager().drain();
-            }).get();
-        }
+        // Interrupt on going compaction and shutdown to prevent further compaction
+        _db.invoke_on_all([] (auto& db) {
+            return db.get_compaction_manager().drain();
+        }).get();
 
         set_mode(mode::DRAINING, "flushing column families", false);
         flush_column_families();
