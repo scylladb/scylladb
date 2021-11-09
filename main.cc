@@ -1387,12 +1387,6 @@ int main(int ac, char** av) {
                 }
             });
 
-            auto stop_redis_service = defer_verbose_shutdown("redis service", [&cfg, &redis] {
-                if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                    redis.stop_server().get();
-                }
-            });
-
             startlog.info("Scylla version {} initialization completed.", scylla_version());
             stop_signal.wait().get();
             startlog.info("Signal received; shutting down");
