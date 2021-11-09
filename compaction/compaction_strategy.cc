@@ -42,7 +42,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/sstables.hh"
 #include "compaction.hh"
-#include "database.hh"
 #include "compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
 #include "schema.hh"
@@ -64,8 +63,8 @@ logging::logger leveled_manifest::logger("LeveledManifest");
 
 namespace sstables {
 
-compaction_descriptor compaction_strategy_impl::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-    return compaction_descriptor(std::move(candidates), cf.get_sstable_set(), service::get_local_compaction_priority());
+compaction_descriptor compaction_strategy_impl::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    return compaction_descriptor(std::move(candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
 }
 
 bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
@@ -367,11 +366,11 @@ compaction_backlog_tracker& get_null_backlog_tracker() {
 //
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override {
         return sstables::compaction_descriptor();
     }
 
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
         return 0;
     }
 
@@ -426,52 +425,53 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
 } // namespace sstables
 
 std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_next_sstables(column_family& cf, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before) {
-    if (cf.get_sstables()->empty()) {
+date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before) {
+    if (table_s.get_sstable_set().all()->empty()) {
         return {};
     }
 
     // Find fully expired SSTables. Those will be included no matter what.
-    auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before);
+    auto expired = table_s.fully_expired_sstables(uncompacting);
 
     if (!expired.empty()) {
         auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.contains(s); };
         uncompacting.erase(boost::remove_if(uncompacting, is_expired), uncompacting.end());
     }
 
-    auto compaction_candidates = get_next_non_expired_sstables(cf, uncompacting, gc_before);
+    auto compaction_candidates = get_next_non_expired_sstables(table_s, uncompacting, gc_before);
     if (!expired.empty()) {
         compaction_candidates.insert(compaction_candidates.end(), expired.begin(), expired.end());
     }
     return compaction_candidates;
 }
 
-int64_t date_tiered_manifest::get_estimated_tasks(column_family& cf) const {
-    int base = cf.schema()->min_compaction_threshold();
-    int64_t now = get_now(cf);
+int64_t date_tiered_manifest::get_estimated_tasks(table_state& table_s) const {
+    int base = table_s.schema()->min_compaction_threshold();
+    int64_t now = get_now(table_s.get_sstable_set().all());
     std::vector<sstables::shared_sstable> sstables;
     int64_t n = 0;
 
-    sstables.reserve(cf.sstables_count());
-    for (auto all_sstables = cf.get_sstables(); auto& entry : *all_sstables) {
+    auto all_sstables = table_s.get_sstable_set().all();
+    sstables.reserve(all_sstables->size());
+    for (auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
     auto candidates = filter_old_sstables(sstables, _options.max_sstable_age, now);
     auto buckets = get_buckets(create_sst_and_min_timestamp_pairs(candidates), _options.base_time, base, now);
 
     for (auto& bucket : buckets) {
-        if (bucket.size() >= size_t(cf.schema()->min_compaction_threshold())) {
-            n += std::ceil(double(bucket.size()) / cf.schema()->max_compaction_threshold());
+        if (bucket.size() >= size_t(table_s.schema()->min_compaction_threshold())) {
+            n += std::ceil(double(bucket.size()) / table_s.schema()->max_compaction_threshold());
         }
     }
     return n;
 }
 
 std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_next_non_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before) {
-    int base = cf.schema()->min_compaction_threshold();
-    int64_t now = get_now(cf);
-    auto most_interesting = get_compaction_candidates(cf, non_expiring_sstables, now, base);
+date_tiered_manifest::get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point gc_before) {
+    int base = table_s.schema()->min_compaction_threshold();
+    int64_t now = get_now(table_s.get_sstable_set().all());
+    auto most_interesting = get_compaction_candidates(table_s, non_expiring_sstables, now, base);
 
     return most_interesting;
 
@@ -495,9 +495,9 @@ date_tiered_manifest::get_next_non_expired_sstables(column_family& cf, std::vect
 }
 
 std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_compaction_candidates(column_family& cf, std::vector<sstables::shared_sstable> candidate_sstables, int64_t now, int base) {
-    int min_threshold = cf.schema()->min_compaction_threshold();
-    int max_threshold = cf.schema()->max_compaction_threshold();
+date_tiered_manifest::get_compaction_candidates(table_state& table_s, std::vector<sstables::shared_sstable> candidate_sstables, int64_t now, int base) {
+    int min_threshold = table_s.schema()->min_compaction_threshold();
+    int max_threshold = table_s.schema()->max_compaction_threshold();
     auto candidates = filter_old_sstables(candidate_sstables, _options.max_sstable_age, now);
 
     auto buckets = get_buckets(create_sst_and_min_timestamp_pairs(candidates), _options.base_time, base, now);
@@ -505,9 +505,8 @@ date_tiered_manifest::get_compaction_candidates(column_family& cf, std::vector<s
     return newest_bucket(buckets, min_threshold, max_threshold, now, _options.base_time);
 }
 
-int64_t date_tiered_manifest::get_now(column_family& cf) {
+int64_t date_tiered_manifest::get_now(lw_shared_ptr<const sstables::sstable_list> shared_set) {
     int64_t max_timestamp = 0;
-    auto shared_set = cf.get_sstables();
     for (auto& sst : *shared_set) {
         int64_t candidate = sst->get_stats_metadata().max_timestamp;
         max_timestamp = candidate > max_timestamp ? candidate : max_timestamp;
@@ -586,13 +585,13 @@ date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<
     _use_clustering_key_filter = true;
 }
 
-compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
-    auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
-    auto sstables = _manifest.get_next_sstables(cfs, candidates, gc_before);
+compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
+    auto sstables = _manifest.get_next_sstables(table_s, candidates, gc_before);
 
     if (!sstables.empty()) {
         date_tiered_manifest::logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
-        return sstables::compaction_descriptor(std::move(sstables), cfs.get_sstable_set(), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(sstables), table_s.get_sstable_set(), service::get_local_compaction_priority());
     }
 
     // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
@@ -608,7 +607,7 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     auto it = std::min_element(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
         return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
     });
-    return sstables::compaction_descriptor({ *it }, cfs.get_sstable_set(), service::get_local_compaction_priority());
+    return sstables::compaction_descriptor({ *it }, table_s.get_sstable_set(), service::get_local_compaction_priority());
 }
 
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
@@ -634,12 +633,12 @@ compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
 
-compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
-    return _compaction_strategy_impl->get_sstables_for_compaction(cfs, std::move(candidates));
+compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    return _compaction_strategy_impl->get_sstables_for_compaction(table_s, std::move(candidates));
 }
 
-compaction_descriptor compaction_strategy::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-    return _compaction_strategy_impl->get_major_compaction_job(cf, std::move(candidates));
+compaction_descriptor compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    return _compaction_strategy_impl->get_major_compaction_job(table_s, std::move(candidates));
 }
 
 void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
@@ -650,8 +649,8 @@ bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
 }
 
-int64_t compaction_strategy::estimated_pending_compactions(column_family& cf) const {
-    return _compaction_strategy_impl->estimated_pending_compactions(cf);
+int64_t compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
+    return _compaction_strategy_impl->estimated_pending_compactions(table_s);
 }
 
 bool compaction_strategy::use_clustering_key_filter() const {

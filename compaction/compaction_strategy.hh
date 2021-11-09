@@ -30,12 +30,12 @@
 #include "exceptions/exceptions.hh"
 #include "compaction_strategy_type.hh"
 #include "flat_mutation_reader.hh"
-
-class table;
-using column_family = table;
+#include "table_state.hh"
 
 struct mutation_source_metadata;
 class compaction_backlog_tracker;
+
+using namespace compaction;
 
 namespace sstables {
 
@@ -57,9 +57,9 @@ public:
     compaction_strategy& operator=(compaction_strategy&&);
 
     // Return a list of sstables to be compacted after applying the strategy.
-    compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<shared_sstable> candidates);
+    compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<shared_sstable> candidates);
 
-    compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<shared_sstable> candidates);
+    compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<shared_sstable> candidates);
 
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
@@ -75,7 +75,7 @@ public:
     bool can_compact_partial_runs() const;
 
     // An estimation of number of compaction for strategy to be satisfied.
-    int64_t estimated_pending_compactions(column_family& cf) const;
+    int64_t estimated_pending_compactions(table_state& table_s) const;
 
     static sstring name(compaction_strategy_type type) {
         switch (type) {

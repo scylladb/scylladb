@@ -36,6 +36,7 @@
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/table_state.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
 #include "db/query_context.hh"
@@ -1200,6 +1201,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
+    , _table_state(std::make_unique<table_state>(*this))
     , _row_locker(_schema)
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
@@ -2331,4 +2333,31 @@ table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts)
                                    mutation_reader::forwarding fwd_mr) {
         return this->make_reader_excluding_sstables(std::move(s), std::move(permit), ssts, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
+}
+
+class table::table_state : public compaction::table_state {
+    table& _t;
+public:
+    explicit table_state(table& t) : _t(t) {}
+
+    const schema_ptr& schema() const noexcept override {
+        return _t.schema();
+    }
+    unsigned min_compaction_threshold() const noexcept override {
+        return _t.min_compaction_threshold();
+    }
+    bool compaction_enforce_min_threshold() const noexcept override {
+        // FIXME: move compaction_enforce_min_threshold() impl to here once compaction strategy switches to table_state.
+        return _t.compaction_enforce_min_threshold();
+    }
+    const sstables::sstable_set& get_sstable_set() const override {
+        return _t.get_sstable_set();
+    }
+    std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables) const override {
+        return sstables::get_fully_expired_sstables(_t, sstables, gc_clock::now() - schema()->gc_grace_seconds());
+    }
+};
+
+compaction::table_state& table::as_table_state() const noexcept {
+    return *_table_state;
 }

@@ -135,11 +135,11 @@ public:
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
 
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override;
 
     static int64_t estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
         int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options);
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override;
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::size_tiered;

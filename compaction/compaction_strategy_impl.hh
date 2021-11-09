@@ -24,8 +24,11 @@
 #include "cql3/statements/property_definitions.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction_strategy.hh"
-#include "database_fwd.hh"
 #include "db_clock.hh"
+
+namespace compaction {
+class table_state;
+}
 
 namespace sstables {
 
@@ -54,14 +57,14 @@ protected:
     explicit compaction_strategy_impl(const std::map<sstring, sstring>& options);
 public:
     virtual ~compaction_strategy_impl() {}
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
-    virtual compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates);
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> candidates) = 0;
+    virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates);
     virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
     virtual compaction_strategy_type type() const = 0;
     virtual bool parallel_compaction() const {
         return true;
     }
-    virtual int64_t estimated_pending_compactions(column_family& cf) const = 0;
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const = 0;
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const;
 
     bool use_clustering_key_filter() const {

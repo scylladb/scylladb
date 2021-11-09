@@ -115,7 +115,7 @@ public:
     enum class bucket_compaction_mode { none, size_tiered, major };
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cf, std::vector<shared_sstable> candidates) override;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<shared_sstable> candidates) override;
 private:
     static timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
@@ -139,9 +139,9 @@ private:
     compaction_mode(const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
-    get_next_non_expired_sstables(column_family& cf, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before);
+    get_next_non_expired_sstables(table_state& table_s, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before);
 
-    std::vector<shared_sstable> get_compaction_candidates(column_family& cf, std::vector<shared_sstable> candidate_sstables);
+    std::vector<shared_sstable> get_compaction_candidates(table_state& table_s, std::vector<shared_sstable> candidate_sstables);
 public:
     // Find the lowest timestamp for window of given size
     static timestamp_type
@@ -175,7 +175,7 @@ private:
 
     friend class time_window_backlog_tracker;
 public:
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
         return _estimated_remaining_tasks;
     }
 

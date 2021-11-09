@@ -280,7 +280,7 @@ future<> compaction_manager::perform_major_compaction(column_family* cf) {
             // candidates are sstables that aren't being operated on by other compaction types.
             // those are eligible for major compaction.
             sstables::compaction_strategy cs = cf->get_compaction_strategy();
-            sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(*cf, get_candidates(*cf));
+            sstables::compaction_descriptor descriptor = cs.get_major_compaction_job(cf->as_table_state(), get_candidates(*cf));
             auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
             descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
@@ -653,7 +653,7 @@ void compaction_manager::submit(column_family* cf) {
           return with_scheduling_group(_compaction_controller.sg(), [this, task = std::move(task)] () mutable {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
-            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
+            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf.as_table_state(), get_candidates(cf));
             int weight = calculate_weight(descriptor);
 
             if (descriptor.sstables.empty() || !can_proceed(task) || cf.is_auto_compaction_disabled_by_user()) {

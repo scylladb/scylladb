@@ -79,7 +79,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
             return do_with(std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), [&ctx, &db](std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& tasks) {
                 return do_for_each(db.get_column_families(), [&tasks](const std::pair<utils::UUID, seastar::lw_shared_ptr<table>>& i) {
                     table& cf = *i.second.get();
-                    tasks[std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name())] = cf.get_compaction_strategy().estimated_pending_compactions(cf);
+                    tasks[std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name())] = cf.get_compaction_strategy().estimated_pending_compactions(cf.as_table_state());
                     return make_ready_future<>();
                 }).then([&tasks] {
                     return std::move(tasks);
@@ -119,7 +119,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
     cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](column_family& cf) {
-            return cf.get_compaction_strategy().estimated_pending_compactions(cf);
+            return cf.get_compaction_strategy().estimated_pending_compactions(cf.as_table_state());
         }, std::plus<int64_t>());
     });
 

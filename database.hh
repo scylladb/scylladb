@@ -107,6 +107,10 @@ class compaction_data;
 
 class compaction_manager;
 
+namespace compaction {
+class table_state;
+}
+
 namespace ser {
 template<typename T>
 class serializer;
@@ -487,6 +491,9 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
+
+    class table_state;
+    std::unique_ptr<table_state> _table_state;
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
@@ -1060,6 +1067,8 @@ private:
 public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
+
+    compaction::table_state& as_table_state() const noexcept;
 };
 
 class user_types_metadata;

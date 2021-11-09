@@ -35,9 +35,9 @@ class sstable_run_based_compaction_strategy_for_tests : public compaction_strate
 public:
     sstable_run_based_compaction_strategy_for_tests();
 
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cf, std::vector<sstables::shared_sstable> uncompacting_sstables) override;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, std::vector<sstables::shared_sstable> uncompacting_sstables) override;
 
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override;
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
     virtual compaction_strategy_type type() const override;
 

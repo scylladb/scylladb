@@ -52,7 +52,7 @@
 #include "database.hh"
 
 class leveled_manifest {
-    table& _table;
+    table_state& _table_s;
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
@@ -85,9 +85,9 @@ public:
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
 private:
-    leveled_manifest(column_family& cfs, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
-        : _table(cfs)
-        , _schema(cfs.schema())
+    leveled_manifest(table_state& table_s, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
+        : _table_s(table_s)
+        , _schema(table_s.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
         , _stcs_options(stcs_options)
     {
@@ -97,21 +97,27 @@ private:
         _generations.resize(MAX_LEVELS);
     }
 public:
-    static leveled_manifest create(column_family& cf, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
+    static std::vector<std::vector<sstables::shared_sstable>> get_levels(const std::vector<sstables::shared_sstable>& sstables) {
+        std::vector<std::vector<sstables::shared_sstable>> levels;
+        levels.resize(MAX_LEVELS);
+        for (auto& sstable : sstables) {
+            uint32_t level = sstable->get_sstable_level();
+            if (level >= levels.size()) {
+                throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (levels.size() - 1)));
+            }
+            levels[level].push_back(sstable);
+        }
+        return levels;
+    }
+
+    static leveled_manifest create(table_state& table_s, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
             const sstables::size_tiered_compaction_strategy_options& stcs_options) {
-        leveled_manifest manifest = leveled_manifest(cf, max_sstable_size_in_mb, stcs_options);
+        leveled_manifest manifest = leveled_manifest(table_s, max_sstable_size_in_mb, stcs_options);
 
         // ensure all SSTables are in the manifest
         // FIXME: there can be tens of thousands of sstables. we can avoid this potentially expensive procedure if
         // partitioned_sstable_set keeps track of a list for each level.
-        for (auto& sstable : sstables) {
-            uint32_t level = sstable->get_sstable_level();
-            if (level >= manifest._generations.size()) {
-                throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (manifest._generations.size() - 1)));
-            }
-            logger.debug("Adding {} to L{}", sstable->get_filename(), level);
-            manifest._generations[level].push_back(sstable);
-        }
+        manifest._generations = get_levels(sstables);
 
         return manifest;
     }
@@ -175,7 +181,7 @@ public:
             if (info.can_promote) {
                 info.candidates = get_overlapping_starved_sstables(next_level, std::move(info.candidates), compaction_counter);
             }
-            return sstables::compaction_descriptor(std::move(info.candidates), _table.get_sstable_set(),
+            return sstables::compaction_descriptor(std::move(info.candidates), _table_s.get_sstable_set(),
                                                    service::get_local_compaction_priority(), next_level, _max_sstable_size_in_bytes);
         } else {
             logger.debug("No compaction candidates for L{}", level);
@@ -251,10 +257,10 @@ public:
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
                 auto most_interesting = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                    _table.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                    _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
-                    return sstables::compaction_descriptor(std::move(most_interesting), _table.get_sstable_set(),
+                    return sstables::compaction_descriptor(std::move(most_interesting), _table_s.get_sstable_set(),
                                                            service::get_local_compaction_priority());
                 }
             }
@@ -269,7 +275,7 @@ public:
             auto info = get_candidates_for(0, last_compacted_keys);
             if (!info.candidates.empty()) {
                 auto next_level = get_next_level(info.candidates, info.can_promote);
-                return sstables::compaction_descriptor(std::move(info.candidates), _table.get_sstable_set(),
+                return sstables::compaction_descriptor(std::move(info.candidates), _table_s.get_sstable_set(),
                                                        service::get_local_compaction_priority(), next_level, _max_sstable_size_in_bytes);
             }
         }
@@ -438,7 +444,7 @@ private:
             // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
             // avoid quadratic behavior until L0 is worth promoting.
             candidates = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                _table.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
         }
         return { std::move(candidates), can_promote };
     }
@@ -524,19 +530,19 @@ public:
         return _generations[level];
     }
 
-    int64_t get_estimated_tasks() const {
+    static int64_t get_estimated_tasks(const std::vector<std::vector<sstables::shared_sstable>>& levels, uint64_t max_sstable_size_in_bytes) {
         int64_t tasks = 0;
 
-        for (int i = static_cast<int>(_generations.size()) - 1; i >= 0; i--) {
-            const auto& sstables = _generations[i];
+        for (int i = static_cast<int>(levels.size()) - 1; i >= 0; i--) {
+            const auto& sstables = levels[i];
             uint64_t total_bytes_for_this_level = get_total_bytes(sstables);
-            uint64_t max_bytes_for_this_level = max_bytes_for_level(i);
+            uint64_t max_bytes_for_this_level = max_bytes_for_level(i, max_sstable_size_in_bytes);
 
             if (total_bytes_for_this_level < max_bytes_for_this_level) {
                 continue;
             }
             // If there is 1 byte over TBL - (MBL * 1.001), there is still a task left, so we need to round up.
-            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / _max_sstable_size_in_bytes);
+            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / max_sstable_size_in_bytes);
         }
         return tasks;
     }

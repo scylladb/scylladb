@@ -221,8 +221,8 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, std::vector<shared_sstable> candidates) {
-    auto gc_before = gc_clock::now() - cf.schema()->gc_grace_seconds();
+time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<shared_sstable> candidates) {
+    auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
 
     if (candidates.empty()) {
         return compaction_descriptor();
@@ -233,7 +233,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, 
 
     if (db_clock::now() - _last_expired_check > _options.expired_sstable_check_frequency) {
         clogger.debug("TWCS expired check sufficiently far in the past, checking for fully expired SSTables");
-        expired = get_fully_expired_sstables(cf, candidates, gc_before);
+        expired = table_s.fully_expired_sstables(candidates);
         _last_expired_check = db_clock::now();
     } else {
         clogger.debug("TWCS skipping check for fully expired SSTables");
@@ -241,11 +241,11 @@ time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, 
 
     if (!expired.empty()) {
         clogger.debug("Going to compact {} expired sstables", expired.size());
-        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), cf.get_sstable_set(), service::get_local_compaction_priority());
+        return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), table_s.get_sstable_set(), service::get_local_compaction_priority());
     }
 
-    auto compaction_candidates = get_next_non_expired_sstables(cf, std::move(candidates), gc_before);
-    return compaction_descriptor(std::move(compaction_candidates), cf.get_sstable_set(), service::get_local_compaction_priority());
+    auto compaction_candidates = get_next_non_expired_sstables(table_s, std::move(candidates), gc_before);
+    return compaction_descriptor(std::move(compaction_candidates), table_s.get_sstable_set(), service::get_local_compaction_priority());
 }
 
 time_window_compaction_strategy::bucket_compaction_mode
@@ -264,9 +264,9 @@ time_window_compaction_strategy::compaction_mode(const bucket_t& bucket, timesta
 }
 
 std::vector<shared_sstable>
-time_window_compaction_strategy::get_next_non_expired_sstables(column_family& cf,
+time_window_compaction_strategy::get_next_non_expired_sstables(table_state& table_s,
         std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before) {
-    auto most_interesting = get_compaction_candidates(cf, non_expiring_sstables);
+    auto most_interesting = get_compaction_candidates(table_s, non_expiring_sstables);
 
     if (!most_interesting.empty()) {
         return most_interesting;
@@ -288,14 +288,14 @@ time_window_compaction_strategy::get_next_non_expired_sstables(column_family& cf
 }
 
 std::vector<shared_sstable>
-time_window_compaction_strategy::get_compaction_candidates(column_family& cf, std::vector<shared_sstable> candidate_sstables) {
+time_window_compaction_strategy::get_compaction_candidates(table_state& table_s, std::vector<shared_sstable> candidate_sstables) {
     auto p = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
     _highest_window_seen = std::max(_highest_window_seen, p.second);
 
-    update_estimated_compaction_by_tasks(p.first, cf.min_compaction_threshold(), cf.schema()->max_compaction_threshold());
+    update_estimated_compaction_by_tasks(p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
-    return newest_bucket(std::move(p.first), cf.min_compaction_threshold(), cf.schema()->max_compaction_threshold(),
+    return newest_bucket(std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
         _options.sstable_window_size, _highest_window_seen, _stcs_options);
 }
 
