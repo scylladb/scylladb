@@ -24,7 +24,6 @@
 #include "cql3/statements/property_definitions.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction_strategy.hh"
-#include "database_fwd.hh"
 #include "db_clock.hh"
 
 namespace compaction {

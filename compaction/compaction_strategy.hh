@@ -32,9 +32,6 @@
 #include "flat_mutation_reader.hh"
 #include "table_state.hh"
 
-class table;
-using column_family = table;
-
 struct mutation_source_metadata;
 class compaction_backlog_tracker;
 

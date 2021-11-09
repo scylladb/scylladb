@@ -126,7 +126,7 @@ private:
      * Gets the timestamp that DateTieredCompactionStrategy considers to be the "current time".
      * @return the maximum timestamp across all SSTables.
      */
-    static int64_t get_now(lw_shared_ptr<const sstable_list> shared_set);
+    static int64_t get_now(lw_shared_ptr<const sstables::sstable_list> shared_set);
 
     /**
      * Removes all sstables with max timestamp older than maxSSTableAge.
