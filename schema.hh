@@ -706,7 +706,7 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, schema_registry* registry, const raw_schema&, std::optional<raw_view_info>);
+    schema(private_tag, schema_registry& registry, const raw_schema&, std::optional<raw_view_info>);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
