@@ -86,6 +86,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
 
     friend class schema_registry;
 private:
+    void pair_with(const schema& s);
     schema_ptr do_load(schema_factory factory);
 public:
     schema_registry_entry(table_schema_version v, schema_registry& r);
@@ -125,7 +126,9 @@ class schema_registry {
     std::unique_ptr<db::schema_ctxt> _ctxt;
 
     friend class schema_registry_entry;
+    friend class schema;
     schema_registry_entry& get_entry(table_schema_version) const;
+    void pair_with_entry(const schema& s);
     // Duration for which unused entries are kept alive to avoid
     // too frequent re-requests and syncs. Default is 1 second.
     schema_registry_entry::erase_clock::duration grace_period() const;
