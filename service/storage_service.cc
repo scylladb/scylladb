@@ -2631,6 +2631,13 @@ future<> storage_service::do_drain() {
 
         tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
 
+        db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+            return bm.drain();
+        }).get();
+
+        set_mode(mode::DRAINING, "shutting down migration manager", false);
+        _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
+
         // Interrupt on going compaction and shutdown to prevent further compaction
         _db.invoke_on_all([] (auto& db) {
             return db.get_compaction_manager().drain();
@@ -2638,13 +2645,6 @@ future<> storage_service::do_drain() {
 
         set_mode(mode::DRAINING, "flushing column families", false);
         flush_column_families();
-
-        db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
-            return bm.drain();
-        }).get();
-
-        set_mode(mode::DRAINING, "shutting down migration manager", false);
-        _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
 
         _db.invoke_on_all([] (auto& db) {
             return db.commitlog()->shutdown();
