@@ -1764,7 +1764,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
 
         output_mgr->set_test_param_names({{"flush@ (MiB)", "{:<12}"}}, test_result::stats_names());
 
-        cf.run_with_compaction_disabled([&] {
+        db.get_compaction_manager().run_with_compaction_disabled(&cf, [&] {
             return seastar::async([&] {
                 auto gen = ds.make_generator(s, cfg);
                 while (auto mopt = gen()) {
@@ -1866,11 +1866,11 @@ static std::initializer_list<test_group> test_groups = {
 
 // Disables compaction for given tables.
 // Compaction will be resumed when the returned object dies.
-auto make_compaction_disabling_guard(std::vector<table*> tables) {
+auto make_compaction_disabling_guard(database& db, std::vector<table*> tables) {
     shared_promise<> pr;
     for (auto&& t : tables) {
         // FIXME: discarded future.
-        (void)t->run_with_compaction_disabled([f = shared_future<>(pr.get_shared_future())] {
+        (void)db.get_compaction_manager().run_with_compaction_disabled(t, [f = shared_future<>(pr.get_shared_future())] {
             return f.get_future();
         });
     }
@@ -2034,7 +2034,7 @@ int main(int argc, char** argv) {
                         return requested_test_groups.contains(tc.name);
                     });
 
-                    auto compaction_guard = make_compaction_disabling_guard(boost::copy_range<std::vector<table*>>(
+                    auto compaction_guard = make_compaction_disabling_guard(db, boost::copy_range<std::vector<table*>>(
                         enabled_datasets | boost::adaptors::transformed([&] (auto&& ds) {
                             return &find_table(db, *ds);
                         })));
