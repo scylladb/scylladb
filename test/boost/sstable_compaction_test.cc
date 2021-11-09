@@ -1402,22 +1402,19 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst = env.reusable_sst(s, tmp.path().string(), 1).get0();
 
-        column_family_for_tests cf(env.manager());
+        column_family_for_tests cf(env.manager(), s);
         auto close_cf = deferred_stop(cf);
 
         auto ssts = std::vector<shared_sstable>{ sst };
+
         auto expired = get_fully_expired_sstables(*cf, ssts, gc_clock::now());
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst->generation() == 1);
 
-        /*
-         * FIXME: Uncomment this code once https://github.com/scylladb/scylla/issues/8872 is fixed
         auto ret = compact_sstables(sstables::compaction_descriptor(ssts, cf->get_sstable_set(), default_priority_class()), *cf, sst_gen).get0();
-        BOOST_REQUIRE(ret.start_size == sst->bytes_on_disk());
-        BOOST_REQUIRE(ret.total_keys_written == 0);
         BOOST_REQUIRE(ret.new_sstables.empty());
-        */
+        BOOST_REQUIRE(ret.end_size == 0);
     });
 }
 
