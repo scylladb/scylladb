@@ -1627,12 +1627,6 @@ schema_ptr schema::make_reversed() const {
     return make_lw_shared<schema>(schema::reversed_tag{}, *this);
 }
 
-schema_ptr schema::get_reversed() const {
-    return local_schema_registry().get_or_load(utils::UUID_gen::negate(_raw._version), [this] (table_schema_version) {
-        return frozen_schema(make_reversed());
-    });
-}
-
 raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
         : _base_id(std::move(base_id))
         , _base_name(std::move(base_name))

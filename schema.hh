@@ -987,19 +987,6 @@ public:
     // different C++ objects).
     // The schema's version is also reversed using UUID_gen::negate().
     schema_ptr make_reversed() const;
-
-    // Get the reversed counterpart of this schema from the schema registry.
-    //
-    // If not present in the registry, create one (via \ref make_reversed()) and
-    // load it. Unlike \ref make_reversed(), this method guarantees that double
-    // reversing will return the very same C++ object:
-    //
-    //      auto schema = make_schema();
-    //      auto reverse_schema = schema->get_reversed();
-    //      assert(reverse_schema->get_reversed().get() == schema.get());
-    //      assert(schema->get_reversed().get() == reverse_schema.get());
-    //
-    schema_ptr get_reversed() const;
 };
 
 lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name, std::string_view cf_name,
