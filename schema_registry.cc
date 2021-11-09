@@ -38,6 +38,21 @@ schema_version_loading_failed::schema_version_loading_failed(table_schema_versio
         : std::runtime_error{format("Failed to load schema version {}", v)}
 { }
 
+void schema_registry_entry::pair_with(const schema& s) {
+    if (std::find(_schemas.begin(), _schemas.end(), &s) != _schemas.end()) {
+        slogger.trace("Registry entry already paired with schema@{} of version {}", fmt::ptr(&s), s.version());
+        return;
+    }
+    s._registry_entry = this;
+    _schemas.push_back(&s);
+    _erase_timer.cancel();
+    if (_state == state::LOADING) {
+        _schema_promise.set_value(s.shared_from_this());
+        _schema_promise = {};
+    }
+    _state = state::LOADED;
+}
+
 schema_registry_entry::~schema_registry_entry() {
     for (auto& s : _schemas) {
         s->_registry_entry = nullptr;
@@ -94,6 +109,20 @@ schema_registry_entry& schema_registry::get_entry(table_schema_version v) const 
     return e;
 }
 
+void schema_registry::pair_with_entry(const schema& s) {
+    const auto v = s.version();
+    auto i = _entries.find(v);
+    slogger.trace("Pairing schema @{} of version {} of {}.{} with {} entry", fmt::ptr(&s), s.version(), s.ks_name(), s.cf_name(),
+            (i == _entries.end()) ? "new" : "existing");
+    if (i == _entries.end()) {
+        auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
+        _entries.emplace(v, e_ptr);
+        e_ptr->pair_with(s);
+    } else {
+        i->second->pair_with(s);
+    }
+}
+
 schema_registry_entry::erase_clock::duration schema_registry::grace_period() const {
     return std::chrono::seconds(_ctxt->schema_registry_grace_period());
 }
@@ -106,9 +135,8 @@ future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const as
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
-        auto f = e_ptr->start_loading(loader);
         _entries.emplace(v, e_ptr);
-        return f;
+        return e_ptr->start_loading(loader);
     }
     schema_registry_entry& e = *i->second;
     if (e._state == schema_registry_entry::state::LOADING) {
@@ -133,9 +161,8 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
-        auto s = e_ptr->load(loader(v));
         _entries.emplace(v, e_ptr);
-        return s;
+        return e_ptr->load(loader(v));
     }
     schema_registry_entry& e = *i->second;
     if (e._state == schema_registry_entry::state::LOADING) {
@@ -147,18 +174,15 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
 schema_ptr schema_registry_entry::do_load(schema_factory factory) {
     _factory = std::move(factory);
     auto s = get_schema();
-    if (_state == state::LOADING) {
-        _schema_promise.set_value(s);
-        _schema_promise = {};
-    }
-    _state = state::LOADED;
     slogger.trace("Loaded {} = {}", _version, *s);
     return s;
 }
 
 schema_ptr schema_registry_entry::load(frozen_schema fs) {
     return do_load([this, fs = std::move(fs)] {
-        return fs.unfreeze(*_registry._ctxt);
+        auto s = fs.unfreeze(*_registry._ctxt);
+        pair_with(*s);
+        return s;
     });
 }
 
@@ -197,9 +221,6 @@ schema_ptr schema_registry_entry::get_schema() {
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
-        _erase_timer.cancel();
-        s->_registry_entry = this;
-        _schemas.push_back(&*s);
         return s;
     } else {
         return _schemas.front()->shared_from_this();
