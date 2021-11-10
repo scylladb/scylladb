@@ -79,21 +79,6 @@ schema_registry::schema_registry(const db::schema_ctxt& ctxt) : _ctxt(std::make_
 schema_registry::schema_registry(const db::config& cfg) : schema_registry(db::schema_ctxt(cfg)) { }
 schema_registry::~schema_registry() = default;
 
-schema_ptr schema_registry::learn(const schema_ptr& s) {
-    if (s->registry_entry()) {
-        return std::move(s);
-    }
-    auto i = _entries.find(s->version());
-    if (i != _entries.end()) {
-        return i->second->get_schema();
-    }
-    slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
-    auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
-    auto loaded_s = e_ptr->load(frozen_schema(s));
-    _entries.emplace(s->version(), e_ptr);
-    return loaded_s;
-}
-
 schema_registry_entry& schema_registry::get_entry(table_schema_version v) const {
     auto i = _entries.find(v);
     if (i == _entries.end()) {

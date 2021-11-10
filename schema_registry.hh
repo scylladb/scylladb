@@ -163,14 +163,6 @@ public:
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.
     schema_ptr get(table_schema_version) const;
-
-    // Attempts to add given schema to the registry. If the registry already
-    // knows about the schema, returns existing entry, otherwise returns back
-    // the schema which was passed as argument. Users should prefer to use the
-    // schema_ptr returned by this method instead of the one passed to it,
-    // because doing so ensures that the entry will be kept in the registry as
-    // long as the schema is actively used.
-    schema_ptr learn(const schema_ptr&);
 };
 
 // Schema pointer which can be safely accessed/passed across shards via
