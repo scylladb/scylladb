@@ -25,6 +25,9 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "db/system_keyspace.hh"
+#include "db/query_context.hh"
+#include "to_string.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 
@@ -142,7 +145,11 @@ void feature_service::unregister_feature(feature& f) {
 void feature_service::enable(const sstring& name) {
     if (auto it = _registered_features.find(name); it != _registered_features.end()) {
         auto&& f = it->second;
-        f.get().enable();
+        auto& f_ref = f.get();
+        if (db::qctx && !f_ref) {
+            persist_enabled_feature_info(f_ref);
+        }
+        f_ref.enable();
     }
 }
 
@@ -262,6 +269,20 @@ std::set<sstring> feature_service::to_feature_set(sstring features_string) {
     return features;
 }
 
+void feature_service::persist_enabled_feature_info(const gms::feature& f) const {
+    // Executed in seastar::async context, because `gms::feature::enable`
+    // is only allowed to run within a thread context
+
+    std::optional<sstring> raw_old_value = db::system_keyspace::get_scylla_local_param(ENABLED_FEATURES_KEY).get0();
+    if (!raw_old_value) {
+        db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, f.name()).get0();
+        return;
+    }
+    auto feats_set = to_feature_set(*raw_old_value);
+    feats_set.emplace(f.name());
+    db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, ::join(",", feats_set)).get0();
+}
+
 void feature_service::enable(const std::set<std::string_view>& list) {
     for (gms::feature& f : {
         std::ref(_udf_feature),
@@ -285,6 +306,9 @@ void feature_service::enable(const std::set<std::string_view>& list) {
     })
     {
         if (list.contains(f.name())) {
+            if (db::qctx && !f) {
+                persist_enabled_feature_info(f);
+            }
             f.enable();
         }
     }

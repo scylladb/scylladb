@@ -54,6 +54,9 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
 /**
  * A gossip feature tracks whether all the nodes the current one is
  * aware of support the specified feature.
+ *
+ * A pointer to `cql3::query_processor` can be optionally supplied
+ * if the instance needs to persist enabled features in a system table.
  */
 class feature_service final {
     void register_feature(feature& f);
@@ -73,6 +76,10 @@ public:
     db::schema_features cluster_schema_features() const;
     std::set<std::string_view> known_feature_set();
     std::set<std::string_view> supported_feature_set();
+
+    // Key in the 'system.scylla_local' table, that is used to
+    // persist enabled features
+    static constexpr const char* ENABLED_FEATURES_KEY = "enabled_features";
 
 private:
     gms::feature _udf_feature;
@@ -169,6 +176,10 @@ public:
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);
+    // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
+    // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
+    // function to preserve readability.
+    void persist_enabled_feature_info(const gms::feature& f) const;
 };
 
 } // namespace gms
