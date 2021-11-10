@@ -212,3 +212,6 @@ def client_no_transform(client):
     client.meta.events = HierarchicalEmitter()
     yield client
     client.meta.events = old_events
+
+def is_aws(dynamodb):
+    return dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com')
