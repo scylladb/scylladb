@@ -20,8 +20,9 @@
 import pytest
 import time
 import re
+import math
 from botocore.exceptions import ClientError
-from util import new_test_table, random_string, full_query, unique_table_name
+from util import new_test_table, random_string, full_query, unique_table_name, is_aws
 from contextlib import contextmanager
 
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
@@ -189,17 +190,28 @@ def test_update_ttl_errors(dynamodb):
 
 # Basic test that expiration indeed expires items that should be expired,
 # and doesn't expire items which shouldn't be expired.
-# This is an extremely slow test - DynamoDB documentation says that
+# On AWS, this is an extremely slow test - DynamoDB documentation says that
 # expiration may even be delayed for 48 hours. But in practice, at the time
 # of this writing, for tiny tables we see delays of around 10 minutes.
 # The following test is set to always run for "duration" seconds, currently
-# 15 minutes. During this time, we expect to see the items which should
+# 20 minutes on AWS. During this time, we expect to see the items which should
 # have expired to be expired - and the items that should not have expired
 # should still exist.
+# When running against Scylla configured (for testing purposes) to expire
+# items with very short delays, "duration" can be set much lower so this
+# test will finish in a much more reasonable time.
 @pytest.mark.veryslow
 @pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration(dynamodb):
-    duration = 900
+    if is_aws(dynamodb):
+        duration = 1200
+    else:
+        duration = 3
+    # delta is a quarter of the test duration, but no less than one second,
+    # and we use it to schedule some expirations a bit after the test starts,
+    # not immediately.
+    delta = math.ceil(duration / 4)
+    assert delta >= 1
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
@@ -226,18 +238,24 @@ def test_ttl_expiration(dynamodb):
         # be ignored and p3 should never expire:
         p3 = random_string()
         table.put_item(Item={'p': p3, 'expiration': 162777600})
-        # This item has as its expiration time one minute into the future,
-        # so should expire by the time the test ends:
+        # This item has as its expiration delta into the future, which is a
+        # small part of the test duration, so should expire by the time the
+        # test ends:
         p4 = random_string()
-        table.put_item(Item={'p': p4, 'expiration': int(time.time())+60})
-        # This item starts with expiration time two minutes into the future,
-        # but below every minute move it again, so it should never expire:
+        table.put_item(Item={'p': p4, 'expiration': int(time.time())+delta})
+        # This item starts with expiration time delta into the future,
+        # but before it expires we will move it again, so it will never expire:
         p5 = random_string()
-        table.put_item(Item={'p': p5, 'expiration': int(time.time())+120})
-        # This item has an expiration time 10 hours into the future, so it
+        table.put_item(Item={'p': p5, 'expiration': int(time.time())+delta})
+        # This item has an expiration time two durations into the future, so it
         # will not expire by the time the test ends:
         p6 = random_string()
-        table.put_item(Item={'p': p6, 'expiration': int(time.time())+36000})
+        table.put_item(Item={'p': p6, 'expiration': int(time.time()+duration*2)})
+        # Like p4, this item has an expiration time delta into the future,
+        # here the expiration time is wrongly encoded as a string, not a
+        # number, so the item should never expire:
+        p7 = random_string()
+        table.put_item(Item={'p': p7, 'expiration': str(int(time.time())+delta)})
         # We could have just done time.sleep(duration) here, but in case a
         # user is watching this long test, let's output the status every
         # minute, and it also allows us to test what happens when an item
@@ -259,12 +277,14 @@ def test_ttl_expiration(dynamodb):
                 print("p5 alive")
             if 'Item' in table.get_item(Key={'p': p6}):
                 print("p6 alive")
-            # Always keep p5's expiration two minutes into the future :-)
+            if 'Item' in table.get_item(Key={'p': p7}):
+                print("p7 alive")
+            # Always keep p5's expiration delta into the future
             table.update_item(Key={'p': p5},
-                AttributeUpdates={'expiration': {'Value': int(time.time())+120, 'Action': 'PUT'}})
-            time.sleep(60)
+                AttributeUpdates={'expiration': {'Value': int(time.time())+delta, 'Action': 'PUT'}})
+            time.sleep(duration/15.0)
 
-        # After the delay, p1,p3,p5,p6 should be alive, p0,p2,p4 should not
+        # After the delay, p1,p3,p5,p6,p7 should be alive, p0,p2,p4 should not
         assert not 'Item' in table.get_item(Key={'p': p0})
         assert 'Item' in table.get_item(Key={'p': p1})
         assert not 'Item' in table.get_item(Key={'p': p2})
@@ -272,6 +292,7 @@ def test_ttl_expiration(dynamodb):
         assert not 'Item' in table.get_item(Key={'p': p4})
         assert 'Item' in table.get_item(Key={'p': p5})
         assert 'Item' in table.get_item(Key={'p': p6})
+        assert 'Item' in table.get_item(Key={'p': p7})
 
 # While it probably makes little sense to do this, the designated
 # expiration-time attribute *may* be the hash or range key attributes.
