@@ -101,7 +101,7 @@ future<> unset_rpc_controller(http_context& ctx) {
 
 future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
     return register_api(ctx, "storage_service", "The storage service API", [&ss, &g, &cdc_gs, &sys_ks] (http_context& ctx, routes& r) {
-            set_storage_service(ctx, r, ss, g.local(), cdc_gs, sys_ks);
+            set_storage_service(ctx, r, ss, g, cdc_gs, sys_ks);
         });
 }
 

@@ -43,7 +43,7 @@ sstring validate_keyspace(http_context& ctx, const parameters& param);
 // containing the description of the respective no_such_column_family error.
 std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ls);
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ls);
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, routes& r);
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb);

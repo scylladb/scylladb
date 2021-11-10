@@ -396,7 +396,7 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<request> req) {
         auto id = ctx.db.local().get_config().host_id;
         return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -584,7 +584,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::get_current_generation_number.set(r, [&g](std::unique_ptr<request> req) {
         gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
-        return g.get_current_generation_number(ep).then([](int res) {
+        return g.local().get_current_generation_number(ep).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
@@ -848,7 +848,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ss.local().get_operation_mode().then([&g] (auto mode) {
             bool is_initialized = mode >= service::storage_service::mode::STARTING;
             if (mode == service::storage_service::mode::NORMAL) {
-                is_initialized = g.is_enabled();
+                is_initialized = g.local().is_enabled();
             }
             return make_ready_future<json::json_return_type>(is_initialized);
         });
@@ -1052,11 +1052,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
       });
 
     ss::get_cluster_name.set(r, [&g](const_req req) {
-        return g.get_cluster_name();
+        return g.local().get_cluster_name();
     });
 
     ss::get_partitioner_name.set(r, [&g](const_req req) {
-        return g.get_partitioner_name();
+        return g.local().get_partitioner_name();
     });
 
     ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {
