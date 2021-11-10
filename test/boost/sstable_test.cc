@@ -768,7 +768,7 @@ SEASTAR_TEST_CASE(sub_partitions_read) {
   schema_ptr s = large_partition_schema(*registry);
   return for_each_sstable_version([s, registry = std::move(registry)] (const sstables::sstable::version_types version) {
    return test_env::do_with_async([s, version] (test_env& env) {
-        auto sstp = load_large_partition_sst(*s->registry(), env, version).get();
+        auto sstp = load_large_partition_sst(s->registry(), env, version).get();
         auto nrows = count_rows(env, sstp, s, "18wX", "18xB").get();
         BOOST_REQUIRE(nrows == 5);
    });

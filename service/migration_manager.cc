@@ -350,7 +350,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     return map_reduce(mutations, [this, src](const frozen_mutation& fm) {
         // schema table's schema is not syncable so just use get_schema_definition()
         return get_schema_definition(fm.schema_version(), src, _messaging).then([&fm](schema_ptr s) {
-            s->registry_entry()->mark_synced();
+            s->registry_entry().mark_synced();
             return fm.unfreeze(std::move(s));
         });
     }, std::vector<mutation>(), [](std::vector<mutation>&& all, mutation&& m) {
@@ -1069,7 +1069,7 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
         return make_ready_future<>();
     }
 
-    return s->registry_entry()->maybe_sync([this, s, endpoint] {
+    return s->registry_entry().maybe_sync([this, s, endpoint] {
         // Serialize schema sync by always doing it on shard 0.
         if (this_shard_id() == 0) {
             mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
@@ -1077,7 +1077,7 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
         } else {
             return container().invoke_on(0, [gs = global_schema_ptr(s), endpoint] (migration_manager& local_mm) {
                 schema_ptr s = gs.get();
-                schema_registry_entry& e = *s->registry_entry();
+                schema_registry_entry& e = s->registry_entry();
                 mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
                 return local_mm.merge_schema_from(endpoint);
             });

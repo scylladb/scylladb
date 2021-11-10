@@ -873,7 +873,7 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
-    schema->registry_entry()->mark_synced();
+    schema->registry_entry().mark_synced();
 
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
@@ -910,7 +910,7 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema) {
 bool database::update_column_family(schema_ptr s) {
     column_family& cfm = find_column_family(s->id());
     bool columns_changed = !cfm.schema()->equal_columns(*s);
-    s->registry_entry()->mark_synced();
+    s->registry_entry().mark_synced();
     cfm.set_schema(s);
     find_keyspace(s->ks_name()).metadata()->add_or_update_column_family(s);
     if (s->is_view()) {

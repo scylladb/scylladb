@@ -435,7 +435,7 @@ schema::schema(const schema& o, const std::function<void(schema&)>& transform)
         }
     }
 
-    o.registry()->pair_with_entry(*this);
+    o.registry().pair_with_entry(*this);
 }
 
 schema::schema(const schema& o)
@@ -482,16 +482,13 @@ schema::~schema() {
     }
 }
 
-schema_registry_entry*
+schema_registry_entry&
 schema::registry_entry() const noexcept {
-    return _registry_entry;
+    return *_registry_entry;
 }
 
-schema_registry* schema::registry() const noexcept {
-    if (!_registry_entry) {
-        return nullptr;
-    }
-    return &_registry_entry->registry();
+schema_registry& schema::registry() const noexcept {
+    return _registry_entry->registry();
 }
 
 sstring schema::thrift_key_validator() const {
@@ -965,7 +962,7 @@ schema_builder::schema_builder(schema_registry& registry, std::string_view ks_na
 }
 
 schema_builder::schema_builder(const schema_ptr s)
-    : schema_builder(*s->registry(), s->_raw)
+    : schema_builder(s->registry(), s->_raw)
 {
     if (s->is_view()) {
         _view_info = s->view_info()->raw();

@@ -963,9 +963,8 @@ public:
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;
     // May be called from different shard
-    schema_registry_entry* registry_entry() const noexcept;
-    // Null when registry_entry() is null
-    schema_registry* registry() const noexcept;
+    schema_registry_entry& registry_entry() const noexcept;
+    schema_registry& registry() const noexcept;
     // Returns true iff this schema version was synced with on current node.
     // Schema version is said to be synced with when its mutations were merged
     // into current node's schema, so that current node's schema is at least as

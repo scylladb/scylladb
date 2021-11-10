@@ -47,7 +47,7 @@ class simple_schema {
     table_schema_version _v_def_version;
 
     simple_schema(schema_ptr s, api::timestamp_type timestamp)
-        : _registry(make_lw_shared<tests::schema_registry_wrapper>(*s->registry()))
+        : _registry(make_lw_shared<tests::schema_registry_wrapper>(s->registry()))
         , _s(s)
         , _timestamp(timestamp)
     {}

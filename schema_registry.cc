@@ -330,20 +330,20 @@ schema_ptr global_schema_ptr::get() const {
         // object originated so as long as this object lives the registry entries lives too
         // and it is safe to reference them on foreign shards.
         if (_base_schema) {
-            registered_bs = registered_schema(*_base_schema->registry_entry());
-            if (_base_schema->registry_entry()->is_synced()) {
-                registered_bs->registry_entry()->mark_synced();
+            registered_bs = registered_schema(_base_schema->registry_entry());
+            if (_base_schema->registry_entry().is_synced()) {
+                registered_bs->registry_entry().mark_synced();
             }
         }
-        schema_ptr s = registered_schema(*_ptr->registry_entry());
+        schema_ptr s = registered_schema(_ptr->registry_entry());
         if (s->is_view()) {
             if (!s->view_info()->base_info()) {
                 // we know that registered_bs is valid here because we make sure of it in the constructors.
                 s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*registered_bs));
             }
         }
-        if (_ptr->registry_entry()->is_synced()) {
-            s->registry_entry()->mark_synced();
+        if (_ptr->registry_entry().is_synced()) {
+            s->registry_entry().mark_synced();
         }
         return s;
     }
@@ -352,11 +352,11 @@ schema_ptr global_schema_ptr::get() const {
 global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         : _ptr(ptr)
         , _cpu_of_origin(this_shard_id()) {
-    _ptr->registry_entry()->ensure_frozen();
+    _ptr->registry_entry().ensure_frozen();
     if (_ptr->is_view()) {
         if (_ptr->view_info()->base_info()) {
             _base_schema = _ptr->view_info()->base_info()->base_schema();
-            _base_schema->registry_entry()->ensure_frozen();
+            _base_schema->registry_entry().ensure_frozen();
         } else {
             on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", _ptr->ks_name(), _ptr->cf_name()));
         }

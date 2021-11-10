@@ -95,7 +95,7 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
         tests::schema_registry_wrapper registry;
         auto s = registry->get_or_load(random_schema_version(), [&registry] (table_schema_version v) { return random_schema(registry, v); });
         BOOST_REQUIRE(!s->is_synced());
-        s->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
+        s->registry_entry().maybe_sync([] { return make_ready_future<>(); }).get();
         BOOST_REQUIRE(s->is_synced());
     });
 }
@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
         tests::schema_registry_wrapper registry;
         auto s = registry->get_or_load(random_schema_version(), [&registry] (table_schema_version v) { return random_schema(registry, v); });
         BOOST_REQUIRE(!s->is_synced());
-        s->registry_entry()->maybe_sync([] { return later(); }).get();
+        s->registry_entry().maybe_sync([] { return later(); }).get();
         BOOST_REQUIRE(s->is_synced());
     });
 }
@@ -118,14 +118,14 @@ SEASTAR_TEST_CASE(test_failed_sync_can_be_retried) {
 
         promise<> fail_sync;
 
-        auto f1 = s->registry_entry()->maybe_sync([&fail_sync] () mutable {
+        auto f1 = s->registry_entry().maybe_sync([&fail_sync] () mutable {
             return fail_sync.get_future().then([] {
                 throw std::runtime_error("sync failed");
             });
         });
 
         // concurrent maybe_sync should attach the the current one
-        auto f2 = s->registry_entry()->maybe_sync([] { return make_ready_future<>(); });
+        auto f2 = s->registry_entry().maybe_sync([] { return make_ready_future<>(); });
 
         fail_sync.set_value();
 
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_failed_sync_can_be_retried) {
 
         BOOST_REQUIRE(!s->is_synced());
 
-        s->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
+        s->registry_entry().maybe_sync([] { return make_ready_future<>(); }).get();
         BOOST_REQUIRE(s->is_synced());
     });
 }

@@ -123,7 +123,7 @@ static bytes get_available_token_column_name(const schema& schema) {
 view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im, bool new_token_column_computation) const {
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
-    schema_builder builder{*schema->registry(), schema->ks_name(), index_table_name(im.name())};
+    schema_builder builder{schema->registry(), schema->ks_name(), index_table_name(im.name())};
     auto target_info = target_parser::parse(schema, im);
     const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
     auto target_type = target_info.type;

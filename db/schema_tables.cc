@@ -2089,7 +2089,7 @@ static data_type expand_user_type(data_type original) {
 }
 
 static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstring& name, const schema::dropped_column& column, api::timestamp_type timestamp, mutation& m) {
-    auto ckey = clustering_key::from_exploded(*dropped_columns(*table->registry()), {utf8_type->decompose(table->cf_name()), utf8_type->decompose(name)});
+    auto ckey = clustering_key::from_exploded(*dropped_columns(table->registry()), {utf8_type->decompose(table->cf_name()), utf8_type->decompose(name)});
     db_clock::time_point tp(db_clock::duration(column.timestamp));
     m.set_clustered_cell(ckey, "dropped_time", tp, timestamp);
 
@@ -2103,7 +2103,7 @@ static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstrin
 }
 
 mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
-    auto& registry = *table->registry();
+    auto& registry = table->registry();
     schema_ptr s = tables(registry);
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
@@ -2136,7 +2136,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
 
     // For property that can be null (and can be changed), we insert tombstones, to make sure
     // we don't keep a property the user has removed
-    auto& registry = *table->registry();
+    auto& registry = table->registry();
     schema_ptr s = tables(registry);
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     mutation m{s, pkey};
@@ -2237,7 +2237,7 @@ static void make_update_indices_mutations(
 }
 
 static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, std::vector<mutation>& mutations) {
-    auto& registry = *table->registry();
+    auto& registry = table->registry();
     schema_ptr s = dropped_columns(registry);
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), utf8_type->decompose(name)});
@@ -2251,7 +2251,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
         api::timestamp_type timestamp,
         bool from_thrift,
         std::vector<mutation>& mutations) {
-    auto& registry = *old_table->registry();
+    auto& registry = old_table->registry();
     mutation columns_mutation(columns(registry), partition_key::from_singular(*columns(registry), old_table->ks_name()));
     mutation view_virtual_columns_mutation(view_virtual_columns(registry), partition_key::from_singular(*columns(registry), old_table->ks_name()));
     mutation computed_columns_mutation(computed_columns(registry), partition_key::from_singular(*columns(registry), old_table->ks_name()));
@@ -2335,7 +2335,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
             schema_ptr table_or_view,
             api::timestamp_type timestamp,
             std::vector<mutation>& mutations) {
-    auto& registry = *schema_table->registry();
+    auto& registry = schema_table->registry();
     auto pkey = partition_key::from_singular(*schema_table, table_or_view->ks_name());
     mutation m{schema_table, pkey};
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
@@ -2768,7 +2768,7 @@ static void add_index_to_schema_mutation(schema_ptr table,
 
 static void drop_index_from_schema_mutation(schema_ptr table, const index_metadata& index, long timestamp, std::vector<mutation>& mutations)
 {
-    auto& registry = *table->registry();
+    auto& registry = table->registry();
     schema_ptr s = indexes(registry);
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), utf8_type->decompose(index.name())});
@@ -2937,7 +2937,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 
     // For properties that can be null (and can be changed), we insert tombstones, to make sure
     // we don't keep a property the user has removed
-    auto& registry = *view->registry();
+    auto& registry = view->registry();
     schema_ptr s = views(registry);
     auto pkey = partition_key::from_singular(*s, view->ks_name());
     mutation m{s, pkey};

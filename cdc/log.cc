@@ -194,7 +194,7 @@ public:
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
         bool is_cdc = new_schema.cdc_options().enabled();
         bool was_cdc = old_schema.cdc_options().enabled();
-        auto& registry = *new_schema.registry();
+        auto& registry = new_schema.registry();
 
         // we need to create or modify the log & stream schemas iff either we changed cdc status (was != is)
         // or if cdc is on now unconditionally, since then any actual base schema changes will affect the column 
@@ -505,7 +505,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
 }
 
 static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
-    schema_builder b(*s.registry(), s.ks_name(), log_name(s.cf_name()));
+    schema_builder b(s.registry(), s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner("com.scylladb.dht.CDCPartitioner");
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
