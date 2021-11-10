@@ -160,7 +160,7 @@ Contain information about the status of each endpoint in the cluster.
 Equivalent of the `nodetool status` command.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.cluster_status (
     peer inet PRIMARY KEY,
     dc text,
@@ -183,7 +183,7 @@ Equivalent of the `nodetool statusbinary` plus the `Thrift active` and `Native T
 TODO: include control-plane diagnostics-plane protocols here too.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.protocol_servers (
     name text PRIMARY KEY,
     is_running boolean,
@@ -206,7 +206,7 @@ Implemented by `protocol_servers_table` in `db/system_keyspace.cc`.
 Size estimates for individual token-ranges of each keyspace/table.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.size_estimates (
     keyspace_name text,
     table_name text,
@@ -226,7 +226,7 @@ The list of snapshots on the node.
 Equivalent to the `nodetool listsnapshots` command.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.snapshots (
     keyspace_name text,
     table_name text,
@@ -246,7 +246,7 @@ Data is grouped so that related items stay together and are easily queried.
 Roughly equivalent of the `nodetool info`, `nodetool gettraceprobability` and `nodetool statusgossup` commands.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.runtime_info (
     group text,
     item text,
@@ -264,7 +264,7 @@ Equivalent of the `nodetool describe_ring $KEYSPACE` command (when filtered for 
 Overlaps with the output of `nodetool ring`.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.token_ring (
     keyspace_name text,
     start_token text,
@@ -284,7 +284,7 @@ All version-related information.
 Equivalent of `nodetool version` command, but contains more versions.
 
 Schema:
-```CQL
+```cql
 CREATE TABLE system.versions (
     key text PRIMARY KEY,
     build_id text,
