@@ -293,6 +293,20 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     // Set trailing shorter than the length of the log
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
     BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+    // check that configuration from snapshot is used and not config entries from a trailing
+    add_entry(log, cfg);
+    add_entry(log, cfg);
+    add_entry(log, log_entry::dummy{});
+    auto snp_idx = log.last_idx();
+    log.apply_snapshot(log_snapshot(log, snp_idx), 10);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), snp_idx);
+    // Check that configuration from the log is used if it has higher index then snapshot idx
+    add_entry(log, log_entry::dummy{});
+    snp_idx = log.last_idx();
+    add_entry(log, cfg);
+    add_entry(log, cfg);
+    log.apply_snapshot(log_snapshot(log, snp_idx), 10);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), log.last_idx());
 }
 
 void test_election_single_node_helper(raft::fsm_config fcfg) {
@@ -2214,4 +2228,62 @@ BOOST_AUTO_TEST_CASE(test_read_barrier) {
     // check that it completes immediately
     output = AA.get_output();
     BOOST_CHECK(output.max_read_id_with_quorum);
+}
+
+BOOST_AUTO_TEST_CASE(test_append_entry_inside_snapshot) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    communicate(A, B, C);
+
+    // Add new entry and commit it with B
+    A.add_entry(log_entry::dummy{});
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    auto append = std::get<raft::append_request>(output.messages.back().second);
+    B.step(A_id, std::move(append));
+    output = B.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    auto reply = std::get<raft::append_reply>(output.messages.back().second);
+    A.step(B_id, std::move(reply)); // A commits last entry here
+
+    // propagate commit index to B
+    A.tick();
+    communicate(A, B);
+
+    // generate new message for C, first one will be empty
+    // so feed it back to A and get next one
+    A.tick();
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    append = std::get<raft::append_request>(output.messages.back().second);
+    C.step(A_id, std::move(append));
+    output = C.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    reply = std::get<raft::append_reply>(output.messages.back().second);
+    A.step(C_id, std::move(reply));
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    append = std::get<raft::append_request>(output.messages.back().second);
+
+    // Now send it to C and ignore the reply
+    C.step(A_id, std::move(append));
+    (void)C.get_output();
+    // C snapshots the log
+    C.apply_snapshot(log_snapshot(C.get_log(), C.log_last_idx()), 0, true);
+
+    // Try to add one more entry
+    A.add_entry(log_entry::dummy{});
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(!C.get_log().empty());
 }

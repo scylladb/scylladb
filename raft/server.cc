@@ -202,6 +202,10 @@ private:
     template <typename T> future<> add_entry_internal(T command, wait_type type);
     template <typename Message> void send_message(server_id id, Message m);
 
+    // Abort all snapshot transfer.
+    // Called when a server id is out of the configuration
+    void abort_snapshot_transfer(server_id id);
+
     // Abort all snapshot transfers.
     // Called when no longer a leader or on shutdown
     void abort_snapshot_transfers();
@@ -548,7 +552,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 auto& [snp, is_local, old_id] = *batch.snp;
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
-                co_await _persistence->store_snapshot_descriptor(snp, _config.snapshot_trailing);
+                co_await _persistence->store_snapshot_descriptor(snp, is_local ? _config.snapshot_trailing : 0);
                 _stats.store_snapshot++;
                 // Drop previous snapshot since it is no longer used
                  _state_machine->drop_snapshot(old_id);
@@ -583,9 +587,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // module needs to know who should it send the messages to (actual
             // network addresses of the joining servers).
             configuration_diff rpc_diff;
-            if (batch.rpc_configuration) {
+            if (batch.configuration) {
                 const server_address_set& current_rpc_config = get_rpc_config();
-                rpc_diff = diff_address_sets(get_rpc_config(), *batch.rpc_configuration);
+                rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
                 for (const auto& addr: rpc_diff.joining) {
                     add_to_rpc_config(addr);
                     _rpc->add_server(addr.id, addr.info);
@@ -602,8 +606,9 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 }
             }
 
-            if (batch.rpc_configuration) {
+            if (batch.configuration) {
                 for (const auto& addr: rpc_diff.leaving) {
+                    abort_snapshot_transfer(addr.id);
                     remove_from_rpc_config(addr);
                     _rpc->remove_server(addr.id);
                 }
@@ -611,7 +616,6 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
             // Process committed entries.
             if (batch.committed.size()) {
-                notify_waiters(_awaited_commits, batch.committed);
                 _stats.queue_entries_for_apply += batch.committed.size();
                 co_await _apply_entries.push_eventually(std::move(batch.committed));
             }
@@ -715,6 +719,13 @@ future<> server_impl::applier_fiber() {
                     logger.trace("[{}] applier fiber: received empty batch", _id);
                     continue;
                 }
+
+                // Completion notification code assumes that previous snapshot is applied
+                // before new entries are committed, otherwise it asserts that some
+                // notifications were missing. To prevent a committed entry to
+                // be notified before an erlier snapshot is applied do both
+                // notification and snapshot application in the same fiber
+                notify_waiters(_awaited_commits, batch);
 
                 std::vector<command_cref> commands;
                 commands.reserve(batch.size());
@@ -849,6 +860,17 @@ future<> server_impl::read_barrier() {
 
     logger.trace("[{}] read_barrier read index {}, append index {}", _id, read_idx, _applied_idx);
     co_return co_await wait_for_apply(read_idx);
+}
+
+void server_impl::abort_snapshot_transfer(server_id id) {
+    auto it = _snapshot_transfers.find(id);
+    if (it != _snapshot_transfers.end()) {
+        auto& [f, as, tid] = it->second;
+        logger.trace("[{}] Request abort of snapshot transfer to {}", _id, id);
+        as.request_abort();
+        _aborted_snapshot_transfers.emplace(tid, std::move(f));
+        _snapshot_transfers.erase(it);
+    }
 }
 
 void server_impl::abort_snapshot_transfers() {

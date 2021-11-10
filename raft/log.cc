@@ -81,7 +81,7 @@ void log::truncate_uncommitted(index_t idx) {
 }
 
 void log::init_last_conf_idx() {
-    for (auto it = _log.rbegin(); it != _log.rend(); ++it) {
+    for (auto it = _log.rbegin(); it != _log.rend() && (**it).idx != _snapshot.idx; ++it) {
         if (std::holds_alternative<configuration>((**it).data)) {
             if (_last_conf_idx == index_t{0}) {
                 _last_conf_idx = (**it).idx;
@@ -112,9 +112,10 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
         return std::make_pair(true, term_t(0));
     }
 
-    // We got some very old AppendEntries we can safely ignore.
+    // We got an AppendEntries inside out snapshot, it has to much by
+    // log matching property
     if (idx < _snapshot.idx) {
-        return std::make_pair(false, last_term());
+        return std::make_pair(true, last_term());
     }
 
     term_t my_term;
@@ -203,6 +204,7 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
             // If an existing entry conflicts with a new one (same
             // index but different terms), delete the existing
             // entry and all that follow it (§5.3).
+            assert(e->idx > _snapshot.idx);
             truncate_uncommitted(e->idx);
         }
         // Assert log monotonicity
@@ -248,9 +250,13 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t trailing) {
 
     _stable_idx = std::max(idx, _stable_idx);
 
-    if (_first_idx > _prev_conf_idx) {
+    if (idx >= _prev_conf_idx) {
+        // The log cannot be truncated beyond snapshot index, so
+        // if previous config index is smaller we can forget it.
         _prev_conf_idx = index_t{0};
-        if (_first_idx > _last_conf_idx) {
+        if (idx >= _last_conf_idx) {
+            // If last config index is included in the snapshot
+            // use the config from the snapshot as last one
             _last_conf_idx = index_t{0};
         }
     }

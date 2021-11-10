@@ -361,7 +361,7 @@ fsm_output fsm::get_output() {
              _observed._last_term != _log.last_term())) {
         configuration last_log_conf = _log.get_configuration();
         last_log_conf.current.merge(last_log_conf.previous);
-        output.rpc_configuration = last_log_conf.current;
+        output.configuration = last_log_conf.current;
     }
 
     // Advance the observed state.
