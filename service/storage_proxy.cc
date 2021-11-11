@@ -948,34 +948,29 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
 
     // We may continue collecting prepare responses in the background after the reply is ready
     (void)do_with(paxos::prepare_summary(_live_endpoints.size()), std::move(request_tracker), shared_from_this(),
-            [this, ballot] (paxos::prepare_summary& summary, auto& request_tracker, shared_ptr<paxos_response_handler>& prh) mutable {
+            [this, ballot] (paxos::prepare_summary& summary, auto& request_tracker, shared_ptr<paxos_response_handler>& prh) mutable -> future<> {
         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: sending ballot {} to {}", _id, ballot, _live_endpoints);
-        return parallel_for_each(_live_endpoints, [this, &summary, ballot, &request_tracker] (gms::inet_address peer) mutable {
-            return futurize_invoke([&] {
+        auto handle_one_msg = [this, &summary, ballot, &request_tracker] (gms::inet_address peer) mutable -> future<> {
+            paxos::prepare_response response;
+            try {
                 // To generate less network traffic, only the closest replica (first one in the list of participants)
                 // sends query result content while other replicas send digests needed to check consistency.
                 bool only_digest = peer != _live_endpoints[0];
                 auto da = digest_algorithm(get_local_storage_proxy());
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
-                    return paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
+                    response = co_await paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
-                    return _proxy->_messaging.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
+                    response = co_await _proxy->_messaging.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
                             tracing::make_trace_info(tr_state));
                 }
-            }).then_wrapped([this, &summary, &request_tracker, peer, ballot]
-                              (future<paxos::prepare_response> response_f) mutable {
-                if (!request_tracker.p) {
-                    response_f.ignore_ready_future();
-                    return; // ignore the response since a completion was already signaled
-                }
-
-                if (response_f.failed()) {
-                    auto ex = response_f.get_exception();
+            } catch (...) {
+                if (request_tracker.p) {
+                    auto ex = std::current_exception();
                     if (is_timeout_exception(ex)) {
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: timeout while sending ballot {} to {}", _id,
-                                ballot, peer);
+                                    ballot, peer);
                         auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(),
                                     _cl_for_paxos, summary.committed_ballots_by_replica.size(),  _required_participants,
                                     db::write_type::CAS));
@@ -991,88 +986,93 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                             request_tracker.set_exception(std::move(e));
                         }
                     }
-                    return;
                 }
+                co_return;
+            }
 
-                auto on_prepare_response = [&] (auto&& response) {
-                    using T = std::decay_t<decltype(response)>;
-                    if constexpr (std::is_same_v<T, utils::UUID>) {
-                        tracing::trace(tr_state, "prepare_ballot: got more up to date ballot {} from /{}", response, peer);
-                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got more up to date ballot {} from {}", _id, response, peer);
-                        // We got an UUID that prevented our proposal from succeeding
-                        summary.update_most_recent_promised_ballot(response);
-                        summary.promised = false;
-                        request_tracker.set_value(std::move(summary));
-                        return;
-                    } else if constexpr (std::is_same_v<T, paxos::promise>) {
-                        utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID();
+            if (!request_tracker.p) {
+                co_return;
+            }
 
-                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
-                        tracing::trace(tr_state, "prepare_ballot: got a response {} from /{}", response, peer);
+            auto on_prepare_response = [&] (auto&& response) {
+                using T = std::decay_t<decltype(response)>;
+                if constexpr (std::is_same_v<T, utils::UUID>) {
+                    tracing::trace(tr_state, "prepare_ballot: got more up to date ballot {} from /{}", response, peer);
+                    paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got more up to date ballot {} from {}", _id, response, peer);
+                    // We got an UUID that prevented our proposal from succeeding
+                    summary.update_most_recent_promised_ballot(response);
+                    summary.promised = false;
+                    request_tracker.set_value(std::move(summary));
+                    return;
+                } else if constexpr (std::is_same_v<T, paxos::promise>) {
+                    utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID();
 
-                        // Find the newest learned value among all replicas that answered.
-                        // It will be used to "repair" replicas that did not learn this value yet.
-                        if (response.most_recent_commit) {
-                            mrc_ballot = response.most_recent_commit->ballot;
+                    paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
+                    tracing::trace(tr_state, "prepare_ballot: got a response {} from /{}", response, peer);
 
-                            if (!summary.most_recent_commit ||
-                                    summary.most_recent_commit->ballot.timestamp() < mrc_ballot.timestamp()) {
-                                summary.most_recent_commit = std::move(response.most_recent_commit);
-                            }
+                    // Find the newest learned value among all replicas that answered.
+                    // It will be used to "repair" replicas that did not learn this value yet.
+                    if (response.most_recent_commit) {
+                        mrc_ballot = response.most_recent_commit->ballot;
+
+                        if (!summary.most_recent_commit ||
+                            summary.most_recent_commit->ballot.timestamp() < mrc_ballot.timestamp()) {
+                            summary.most_recent_commit = std::move(response.most_recent_commit);
                         }
+                    }
 
-                        // cannot throw since the memory was reserved ahead
-                        summary.committed_ballots_by_replica.emplace(peer, mrc_ballot);
+                    // cannot throw since the memory was reserved ahead
+                    summary.committed_ballots_by_replica.emplace(peer, mrc_ballot);
 
-                        if (response.accepted_proposal) {
-                            summary.update_most_recent_promised_ballot(response.accepted_proposal->ballot);
+                    if (response.accepted_proposal) {
+                        summary.update_most_recent_promised_ballot(response.accepted_proposal->ballot);
 
-                            // If some response has an accepted proposal, then we should replay the proposal with the highest ballot.
-                            // So find the highest accepted proposal here.
-                            if (!summary.most_recent_proposal || response.accepted_proposal > summary.most_recent_proposal) {
-                                summary.most_recent_proposal = std::move(response.accepted_proposal);
-                            }
+                        // If some response has an accepted proposal, then we should replay the proposal with the highest ballot.
+                        // So find the highest accepted proposal here.
+                        if (!summary.most_recent_proposal || response.accepted_proposal > summary.most_recent_proposal) {
+                            summary.most_recent_proposal = std::move(response.accepted_proposal);
                         }
+                    }
 
-                        // Check if the query result attached to the promise matches query results received from other participants.
-                        if (request_tracker.digests_match) {
-                            if (response.data_or_digest) {
-                                foreign_ptr<lw_shared_ptr<query::result>> data;
-                                if (std::holds_alternative<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest)) {
-                                    data = std::move(std::get<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest));
-                                }
-                                auto& digest = data ? data->digest() : std::get<query::result_digest>(*response.data_or_digest);
-                                if (request_tracker.digest) {
-                                    if (*request_tracker.digest != digest) {
-                                        request_tracker.digests_match = false;
-                                    }
-                                } else {
-                                    request_tracker.digest = digest;
-                                }
-                                if (request_tracker.digests_match && !summary.data && data) {
-                                    summary.data = std::move(data);
+                    // Check if the query result attached to the promise matches query results received from other participants.
+                    if (request_tracker.digests_match) {
+                        if (response.data_or_digest) {
+                            foreign_ptr<lw_shared_ptr<query::result>> data;
+                            if (std::holds_alternative<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest)) {
+                                data = std::move(std::get<foreign_ptr<lw_shared_ptr<query::result>>>(*response.data_or_digest));
+                            }
+                            auto& digest = data ? data->digest() : std::get<query::result_digest>(*response.data_or_digest);
+                            if (request_tracker.digest) {
+                                if (*request_tracker.digest != digest) {
+                                    request_tracker.digests_match = false;
                                 }
                             } else {
-                                request_tracker.digests_match = false;
+                                request_tracker.digest = digest;
                             }
-                            if (!request_tracker.digests_match) {
-                                request_tracker.digest.reset();
-                                summary.data.reset();
+                            if (request_tracker.digests_match && !summary.data && data) {
+                                summary.data = std::move(data);
                             }
+                        } else {
+                            request_tracker.digests_match = false;
                         }
-
-                        if (summary.committed_ballots_by_replica.size() == _required_participants) { // got all replies
-                            tracing::trace(tr_state, "prepare_ballot: got enough replies to proceed");
-                            paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got enough replies to proceed", _id);
-                            request_tracker.set_value(std::move(summary));
+                        if (!request_tracker.digests_match) {
+                            request_tracker.digest.reset();
+                            summary.data.reset();
                         }
-                    } else {
-                        static_assert(dependent_false<T>::value, "unexpected type!");
                     }
-                };
-                std::visit(on_prepare_response, response_f.get0());
-             });
-        });
+
+                    if (summary.committed_ballots_by_replica.size() == _required_participants) { // got all replies
+                        tracing::trace(tr_state, "prepare_ballot: got enough replies to proceed");
+                        paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got enough replies to proceed", _id);
+                        request_tracker.set_value(std::move(summary));
+                    }
+                } else {
+                    static_assert(dependent_false<T>::value, "unexpected type!");
+                }
+            };
+            std::visit(on_prepare_response, std::move(response));
+        };
+        co_return co_await parallel_for_each(_live_endpoints, handle_one_msg);
     });
 
     return f;
