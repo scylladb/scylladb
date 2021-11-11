@@ -1111,27 +1111,23 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
 
     // We may continue collecting propose responses in the background after the reply is ready
     (void)do_with(std::move(request_tracker), shared_from_this(), [this, timeout_if_partially_accepted, proposal = std::move(proposal)]
-                           (auto& request_tracker, shared_ptr<paxos_response_handler>& prh) {
+                           (auto& request_tracker, shared_ptr<paxos_response_handler>& prh) -> future<> {
         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: sending commit {} to {}", _id, *proposal, _live_endpoints);
-        return parallel_for_each(_live_endpoints, [this, &request_tracker, timeout_if_partially_accepted, proposal = std::move(proposal)] (gms::inet_address peer) mutable {
-            return futurize_invoke([&] {
+        auto handle_one_msg = [this, &request_tracker, timeout_if_partially_accepted, proposal = std::move(proposal)] (gms::inet_address peer) mutable -> future<> {
+            bool is_timeout = false;
+            std::optional<bool> accepted;
+
+            try {
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
-                    return paxos::paxos_state::accept(tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
+                    accepted = co_await paxos::paxos_state::accept(tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
-                    return _proxy->_messaging.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
+                    accepted = co_await _proxy->_messaging.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
                 }
-            }).then_wrapped([this, &request_tracker, timeout_if_partially_accepted, proposal, peer] (future<bool> accepted_f) {
-                if (!request_tracker.p) {
-                    accepted_f.ignore_ready_future();
-                    // Ignore the response since a completion was already signaled.
-                    return;
-                }
-
-                bool is_timeout = false;
-                if (accepted_f.failed()) {
-                    auto ex = accepted_f.get_exception();
+            } catch(...) {
+                if (request_tracker.p) {
+                    auto ex = std::current_exception();
                     if (is_timeout_exception(ex)) {
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: timeout while sending proposal {} to {}",
                                 _id, *proposal, peer);
@@ -1141,74 +1137,82 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                                 *proposal, peer, ex);
                         request_tracker.errors++;
                     }
-                } else {
-                    bool accepted = accepted_f.get0();
-                    tracing::trace(tr_state, "accept_proposal: got \"{}\" from /{}", accepted ? "accepted" : "rejected", peer);
-                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got \"{}\" from {}", _id,
-                            accepted ? "accepted" : "rejected", peer);
-
-                    accepted ? request_tracker.accepts++ : request_tracker.rejects++;
                 }
-                /**
-                 * The code has two modes of operation, controlled by the timeout_if_partially_accepted parameter.
-                 *
-                 * In timeout_if_partially_accepted is false, we will return a failure as soon as a majority of nodes reject
-                 * the proposal. This is used when replaying a proposal from an earlier leader.
-                 *
-                 * Otherwise, we wait for either all replicas to respond or until we achieve
-                 * the desired quorum. We continue to wait for all replicas even after we know we cannot succeed
-                 * because we need to know if no node at all has accepted our proposal or if at least one has.
-                 * In the former case, a proposer is guaranteed no-one will replay its value; in the
-                 * latter we don't, so we must timeout in case another leader replays it before we
-                 * can; see CASSANDRA-6013.
-                 */
-                if (request_tracker.accepts == _required_participants) {
-                    tracing::trace(tr_state, "accept_proposal: got enough accepts to proceed");
-                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough accepts to proceed", _id);
-                    request_tracker.set_value(true);
-                } else if (is_timeout) {
-                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(),
-                                _cl_for_paxos, request_tracker.non_error_replies(), _required_participants, db::write_type::CAS));
-                    request_tracker.set_exception(std::move(e));
-                } else if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
-                    // We got one too many errors. The quorum is no longer reachable. We can fail here
-                    // timeout_if_partially_accepted or not because failing is always safe - a client cannot
-                    // assume that the value was not committed.
-                    auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
-                                _schema->cf_name(), _cl_for_paxos, request_tracker.non_error_replies(),
-                                request_tracker.errors, _required_participants, db::write_type::CAS));
-                    request_tracker.set_exception(std::move(e));
-                } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
-                    // In case there is no need to reply with a timeout if at least one node is accepted
-                    // we can fail the request as soon is we know a quorum is unreachable.
-                    tracing::trace(tr_state, "accept_proposal: got enough rejects to proceed");
-                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough rejects to proceed", _id);
+            }
+
+            if (!request_tracker.p) {
+                // Ignore the response since a completion was already signaled.
+                co_return;
+            }
+
+            if (accepted) {
+                tracing::trace(tr_state, "accept_proposal: got \"{}\" from /{}", *accepted ? "accepted" : "rejected", peer);
+                paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got \"{}\" from {}", _id,
+                        accepted ? "accepted" : "rejected", peer);
+
+                *accepted ? request_tracker.accepts++ : request_tracker.rejects++;
+            }
+
+            /**
+            * The code has two modes of operation, controlled by the timeout_if_partially_accepted parameter.
+            *
+            * In timeout_if_partially_accepted is false, we will return a failure as soon as a majority of nodes reject
+            * the proposal. This is used when replaying a proposal from an earlier leader.
+            *
+            * Otherwise, we wait for either all replicas to respond or until we achieve
+            * the desired quorum. We continue to wait for all replicas even after we know we cannot succeed
+            * because we need to know if no node at all has accepted our proposal or if at least one has.
+            * In the former case, a proposer is guaranteed no-one will replay its value; in the
+            * latter we don't, so we must timeout in case another leader replays it before we
+            * can; see CASSANDRA-6013.
+            */
+            if (request_tracker.accepts == _required_participants) {
+                tracing::trace(tr_state, "accept_proposal: got enough accepts to proceed");
+                paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough accepts to proceed", _id);
+                request_tracker.set_value(true);
+            } else if (is_timeout) {
+                auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(),
+                            _cl_for_paxos, request_tracker.non_error_replies(), _required_participants, db::write_type::CAS));
+                request_tracker.set_exception(std::move(e));
+            } else if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
+                // We got one too many errors. The quorum is no longer reachable. We can fail here
+                // timeout_if_partially_accepted or not because failing is always safe - a client cannot
+                // assume that the value was not committed.
+                auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
+                            _schema->cf_name(), _cl_for_paxos, request_tracker.non_error_replies(),
+                            request_tracker.errors, _required_participants, db::write_type::CAS));
+                request_tracker.set_exception(std::move(e));
+            } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
+                // In case there is no need to reply with a timeout if at least one node is accepted
+                // we can fail the request as soon is we know a quorum is unreachable.
+                tracing::trace(tr_state, "accept_proposal: got enough rejects to proceed");
+                paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough rejects to proceed", _id);
+                request_tracker.set_value(false);
+            } else if (request_tracker.all_replies() == _live_endpoints.size()) { // wait for all replies
+                if (request_tracker.accepts == 0 && request_tracker.errors == 0) {
+                    tracing::trace(tr_state, "accept_proposal: proposal is fully rejected");
+                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is fully rejected", _id);
+                    // Return false if fully refused. Consider errors as accepts here since it
+                    // is not possible to know for sure.
                     request_tracker.set_value(false);
-                } else if (request_tracker.all_replies() == _live_endpoints.size()) { // wait for all replies
-                    if (request_tracker.accepts == 0 && request_tracker.errors == 0) {
-                        tracing::trace(tr_state, "accept_proposal: proposal is fully rejected");
-                        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is fully rejected", _id);
-                        // Return false if fully refused. Consider errors as accepts here since it
-                        // is not possible to know for sure.
-                        request_tracker.set_value(false);
-                    } else {
-                        // We got some rejects, but not all, and there were errors. So we can't know for
-                        // sure that the proposal is fully rejected, and it is obviously not
-                        // accepted, either.
-                        paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is partially rejected", _id);
-                        tracing::trace(tr_state, "accept_proposal: proposal is partially rejected");
-                        _proxy->get_stats().cas_write_timeout_due_to_uncertainty++;
-                        // TODO: we report write timeout exception to be compatible with Cassandra,
-                        // which uses write_timeout_exception to signal any "unknown" state.
-                        // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
-                        auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(),
-                                    _schema->cf_name(), _cl_for_paxos, request_tracker.accepts, _required_participants,
-                                    db::write_type::CAS));
-                        request_tracker.set_exception(std::move(e));
-                    }
-                } // wait for more replies
-            }); // send_paxos_accept.then_wrapped
-        }); // parallel_for_each
+                } else {
+                    // We got some rejects, but not all, and there were errors. So we can't know for
+                    // sure that the proposal is fully rejected, and it is obviously not
+                    // accepted, either.
+                    paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is partially rejected", _id);
+                    tracing::trace(tr_state, "accept_proposal: proposal is partially rejected");
+                    _proxy->get_stats().cas_write_timeout_due_to_uncertainty++;
+                    // TODO: we report write timeout exception to be compatible with Cassandra,
+                    // which uses write_timeout_exception to signal any "unknown" state.
+                    // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
+                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(),
+                                _schema->cf_name(), _cl_for_paxos, request_tracker.accepts, _required_participants,
+                                db::write_type::CAS));
+                    request_tracker.set_exception(std::move(e));
+                }
+            } // wait for more replies
+        };
+        co_return co_await parallel_for_each(_live_endpoints, handle_one_msg);
     }); // do_with
 
     return f;
