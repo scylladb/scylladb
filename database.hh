@@ -1264,6 +1264,17 @@ public:
         user,
     };
 
+    struct drain_progress {
+        int32_t total_cfs;
+        int32_t remaining_cfs;
+
+        drain_progress& operator+=(const drain_progress& other) {
+            total_cfs += other.total_cfs;
+            remaining_cfs += other.remaining_cfs;
+            return *this;
+        }
+    };
+
 private:
     ::cf_stats _cf_stats;
     static constexpr size_t max_count_concurrent_reads{100};
@@ -1303,6 +1314,7 @@ private:
 
     database_config _dbcfg;
     flush_controller _memtable_controller;
+    drain_progress _drain_progress {};
 
     reader_concurrency_semaphore _read_concurrency_sem;
     reader_concurrency_semaphore _streaming_concurrency_sem;
@@ -1371,7 +1383,16 @@ public:
         return _wasm_engine.get();
     }
 
+    drain_progress get_drain_progress() const noexcept {
+        return _drain_progress;
+    }
+
+    future<> drain();
+
 private:
+    future<> flush_non_system_column_families();
+    future<> flush_system_column_families();
+
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
     friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);

@@ -293,20 +293,6 @@ private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
     /* Used for tracking drain progress */
-public:
-    struct drain_progress {
-        int32_t total_cfs;
-        int32_t remaining_cfs;
-
-        drain_progress& operator+=(const drain_progress& other) {
-            total_cfs += other.total_cfs;
-            remaining_cfs += other.remaining_cfs;
-            return *this;
-        }
-    };
-private:
-    drain_progress _drain_progress{};
-
 
     endpoint_lifecycle_notifier& _lifecycle_notifier;
 
@@ -403,8 +389,6 @@ public:
     future<> drain_on_shutdown();
 
     future<> stop_transport();
-
-    void flush_column_families();
 
 private:
     bool should_bootstrap();
@@ -783,10 +767,6 @@ public:
 
     future<bool> is_starting();
 
-    drain_progress get_drain_progress() const {
-        return _drain_progress;
-    }
-
     /**
      * Shuts node off to writes, empties memtables and the commit log.
      * There are two differences between drain and the normal shutdown hook:
@@ -802,7 +782,7 @@ public:
 private:
     promise<> _drain_finished;
     std::optional<shared_promise<>> _transport_stopped;
-    future<> do_drain(bool on_shutdown);
+    future<> do_drain();
     /**
      * Seed data to the endpoints that will be responsible for it at the future
      *

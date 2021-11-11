@@ -1304,7 +1304,7 @@ future<> storage_service::stop_transport() {
 future<> storage_service::drain_on_shutdown() {
     assert(this_shard_id() == 0);
     return (_operation_mode == mode::DRAINING || _operation_mode == mode::DRAINED) ?
-        _drain_finished.get_future() : do_drain(true);
+        _drain_finished.get_future() : do_drain();
 }
 
 future<> storage_service::init_messaging_service_part() {
@@ -2602,41 +2602,6 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
     });
 }
 
-// Runs inside seastar::async context
-void storage_service::flush_column_families() {
-    container().invoke_on_all([] (auto& ss) {
-        auto& local_db = ss._db.local();
-        auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return !is_system_keyspace(cf->schema()->ks_name());
-        });
-        // count CFs first
-        auto total_cfs = boost::distance(non_system_cfs);
-        ss._drain_progress.total_cfs = total_cfs;
-        ss._drain_progress.remaining_cfs = total_cfs;
-        // flush
-        return parallel_for_each(non_system_cfs, [&ss] (auto&& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return cf->flush().then([&ss] {
-                ss._drain_progress.remaining_cfs--;
-            });
-        });
-    }).get();
-    // flush the system ones after all the rest are done, just in case flushing modifies any system state
-    // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-    container().invoke_on_all([] (auto& ss) {
-        auto& local_db = ss._db.local();
-        auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return is_system_keyspace(cf->schema()->ks_name());
-        });
-        return parallel_for_each(system_cfs, [&ss] (auto&& uuid_and_cf) {
-            auto cf = uuid_and_cf.second;
-            return cf->flush();
-        });
-    }).get();
-}
-
 future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
         if (ss._operation_mode == mode::DRAINED) {
@@ -2645,28 +2610,18 @@ future<> storage_service::drain() {
         }
 
         ss.set_mode(mode::DRAINING, "starting drain process", true);
-        return ss.do_drain(false).then([&ss] {
+        return ss.do_drain().then([&ss] {
             ss._drain_finished.set_value();
             ss.set_mode(mode::DRAINED, true);
         });
     });
 }
 
-future<> storage_service::do_drain(bool on_shutdown) {
-    return seastar::async([this, on_shutdown] {
+future<> storage_service::do_drain() {
+    return seastar::async([this] {
         stop_transport().get();
 
         tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
-
-        if (!on_shutdown) {
-            // Interrupt on going compaction and shutdown to prevent further compaction
-            _db.invoke_on_all([] (auto& db) {
-                return db.get_compaction_manager().drain();
-            }).get();
-        }
-
-        set_mode(mode::DRAINING, "flushing column families", false);
-        flush_column_families();
 
         db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
             return bm.drain();
@@ -2675,9 +2630,8 @@ future<> storage_service::do_drain(bool on_shutdown) {
         set_mode(mode::DRAINING, "shutting down migration manager", false);
         _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
 
-        _db.invoke_on_all([] (auto& db) {
-            return db.commitlog()->shutdown();
-        }).get();
+        set_mode(mode::DRAINING, "flushing column families", false);
+        _db.invoke_on_all(&database::drain).get();
     });
 }
 

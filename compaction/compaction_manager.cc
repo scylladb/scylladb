@@ -556,6 +556,10 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, column_fam
 }
 
 future<> compaction_manager::drain() {
+    if (!*_early_abort_subscription) {
+        return make_ready_future<>();
+    }
+
     _state = state::disabled;
     return stop_ongoing_compactions("drain");
 }
