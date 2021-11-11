@@ -294,6 +294,52 @@ def test_ttl_expiration(dynamodb):
         assert 'Item' in table.get_item(Key={'p': p6})
         assert 'Item' in table.get_item(Key={'p': p7})
 
+# test_ttl_expiration above used a table with just a hash key. Because the
+# code to *delete* items in a table which also has a range key is subtly
+# different than the code for just a hash key, we want to test the case of
+# such a table as well. This test is simpler than test_ttl_expiration because
+# all we want to check is that the deletion works - not the expiration time
+# parsing and semantics.
+@pytest.mark.veryslow
+@pytest.mark.xfail(reason="TTL not implemented yet #5060")
+def test_ttl_expiration_with_rangekey(dynamodb):
+    # Note that unlike test_ttl_expiration, this test doesn't have a fixed
+    # duration - it finishes as soon as the item we expect to be expired
+    # is expired.
+    if is_aws(dynamodb):
+        max_duration = 1200
+    else:
+        max_duration = 3
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                               { 'AttributeName': 'c', 'AttributeType': 'S' }]) as table:
+        # Enable TTL, using the attribute "expiration":
+        client = table.meta.client
+        ttl_spec = {'AttributeName': 'expiration', 'Enabled': True}
+        response = client.update_time_to_live(TableName=table.name,
+            TimeToLiveSpecification=ttl_spec)
+        assert response['TimeToLiveSpecification'] == ttl_spec
+        # This item should never expire, it is missing the "expiration"
+        # attribute:
+        p1 = random_string()
+        c1 = random_string()
+        table.put_item(Item={'p': p1, 'c': c1})
+        # This item should expire ASAP, as its "expiration" has already
+        # passed, one minute ago:
+        p2 = random_string()
+        c2 = random_string()
+        table.put_item(Item={'p': p2, 'c': c2, 'expiration': int(time.time())-60})
+        start_time = time.time()
+        while time.time() < start_time + max_duration:
+            if ('Item' in table.get_item(Key={'p': p1, 'c': c1})) and not ('Item' in table.get_item(Key={'p': p2, 'c': c2})):
+                # p2 expired, p1 didn't. We're done
+                break
+            time.sleep(max_duration/15.0)
+        assert 'Item' in table.get_item(Key={'p': p1, 'c': c1})
+        assert not 'Item' in table.get_item(Key={'p': p2, 'c': c2})
+
 # While it probably makes little sense to do this, the designated
 # expiration-time attribute *may* be the hash or range key attributes.
 # So let's test that this indeed works and items indeed expire
