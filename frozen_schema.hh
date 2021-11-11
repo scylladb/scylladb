@@ -35,7 +35,7 @@ class frozen_schema {
     bytes _data;
 public:
     explicit frozen_schema(bytes);
-    frozen_schema(const schema_ptr&);
+    explicit frozen_schema(const schema_ptr&);
     frozen_schema(frozen_schema&&) = default;
     frozen_schema(const frozen_schema&) = default;
     frozen_schema& operator=(const frozen_schema&) = default;
