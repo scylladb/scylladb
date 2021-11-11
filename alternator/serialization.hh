@@ -23,6 +23,7 @@
 
 #include <string>
 #include <string_view>
+#include <optional>
 #include "types.hh"
 #include "schema_fwd.hh"
 #include "keys.hh"
@@ -63,6 +64,10 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
 // If v encodes a number (i.e., it is a {"N": [...]}, returns an object representing it.  Otherwise,
 // raises ValidationException with diagnostic.
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
+
+// try_unwrap_number is like unwrap_number, but returns an unset optional
+// when the given v does not encode a number.
+std::optional<big_decimal> try_unwrap_number(const rjson::value& v);
 
 // Check if a given JSON object encodes a set (i.e., it is a {"SS": [...]}, or "NS", "BS"
 // and returns set's type and a pointer to that set. If the object does not encode a set,

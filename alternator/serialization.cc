@@ -270,6 +270,21 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
     }
 }
 
+std::optional<big_decimal> try_unwrap_number(const rjson::value& v) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        return std::nullopt;
+    }
+    auto it = v.MemberBegin();
+    if (it->name != "N" || !it->value.IsString()) {
+        return std::nullopt;
+    }
+    try {
+        return big_decimal(rjson::to_string_view(it->value));
+    } catch (const marshal_exception& e) {
+        return std::nullopt;
+    }
+}
+
 const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         return {"", nullptr};
