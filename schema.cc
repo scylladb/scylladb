@@ -1635,7 +1635,9 @@ bool schema::equal_columns(const schema& other) const {
 }
 
 schema_ptr schema::make_reversed() const {
-    return make_lw_shared<schema>(schema::reversed_tag{}, *this);
+    return registry().get_or_load(utils::UUID_gen::negate(version()), [this] (table_schema_version) {
+        return make_lw_shared<schema>(schema::reversed_tag{}, *this);
+    });
 }
 
 raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)

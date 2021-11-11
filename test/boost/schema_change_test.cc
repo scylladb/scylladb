@@ -835,5 +835,8 @@ SEASTAR_TEST_CASE(test_schema_make_reversed) {
     BOOST_REQUIRE(schema->version() == re_reversed_schema->version());
     BOOST_REQUIRE(reversed_schema->version() != re_reversed_schema->version());
 
+    BOOST_REQUIRE(re_reversed_schema.get() == schema.get());
+    BOOST_REQUIRE(schema->make_reversed().get() == reversed_schema.get());
+
     return make_ready_future<>();
 }
