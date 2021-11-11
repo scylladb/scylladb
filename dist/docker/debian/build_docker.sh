@@ -25,6 +25,10 @@ product="$(<build/SCYLLA-PRODUCT-FILE)"
 version="$(<build/SCYLLA-VERSION-FILE)"
 release="$(<build/SCYLLA-RELEASE-FILE)"
 
+if [[ "$version" = *rc* ]]; then
+ version=$(echo $version |sed 's/\(.*\)\.)*/\1~/')
+fi
+
 mode="release"
 
 if uname -m | grep x86_64 ; then
