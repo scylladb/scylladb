@@ -194,6 +194,7 @@ public:
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
         bool is_cdc = new_schema.cdc_options().enabled();
         bool was_cdc = old_schema.cdc_options().enabled();
+        auto& registry = *new_schema.registry();
 
         // we need to create or modify the log & stream schemas iff either we changed cdc status (was != is)
         // or if cdc is on now unconditionally, since then any actual base schema changes will affect the column 
@@ -214,7 +215,7 @@ public:
             auto log_schema = was_cdc ? db.find_column_family(old_schema.ks_name(), logname).schema() : nullptr;
 
             if (!is_cdc) {
-                auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
+                auto log_mut = db::schema_tables::make_drop_table_mutations(registry, keyspace.metadata(), log_schema, timestamp);
 
                 mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
                 return;
@@ -238,7 +239,7 @@ public:
             auto& keyspace = db.find_keyspace(schema.ks_name());
             auto log_schema = db.find_column_family(schema.ks_name(), logname).schema();
 
-            auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
+            auto log_mut = db::schema_tables::make_drop_table_mutations(db.get_schema_registry(), keyspace.metadata(), log_schema, timestamp);
 
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
         }

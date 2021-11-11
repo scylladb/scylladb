@@ -193,9 +193,7 @@ schema_ptr schema_registry_entry::do_load(schema_factory factory) {
 
 schema_ptr schema_registry_entry::load(frozen_schema fs) {
     return do_load([this, fs = std::move(fs)] {
-        auto s = fs.unfreeze(*_registry._ctxt);
-        pair_with(*s);
-        return s;
+        return fs.unfreeze(_registry);
     });
 }
 

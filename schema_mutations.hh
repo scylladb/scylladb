@@ -80,7 +80,7 @@ public:
             , _dropped_columns(std::move(dropped_columns))
             , _scylla_tables(std::move(scylla_tables))
     { }
-    explicit schema_mutations(frozen_schema_mutations);
+    schema_mutations(schema_registry& registry, frozen_schema_mutations);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;

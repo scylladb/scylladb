@@ -2374,13 +2374,13 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
 
 std::vector<schema_ptr> system_keyspace::all_tables(schema_registry& registry, const db::config& cfg) {
     std::vector<schema_ptr> r;
-    auto schema_tables = db::schema_tables::all_tables(schema_features::full());
+    auto schema_tables = db::schema_tables::all_tables(registry, schema_features::full());
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
     r.insert(r.end(), { built_indexes(registry), hints(registry), batchlog(registry), paxos(registry), local(registry),
                     peers(registry), peer_events(registry), range_xfers(registry),
                     compactions_in_progress(registry), compaction_history(registry),
                     sstable_activity(registry), clients(registry), size_estimates(registry), large_partitions(registry), large_rows(registry), large_cells(registry),
-                    scylla_local(registry), db::schema_tables::scylla_table_schema_history(),
+                    scylla_local(registry), db::schema_tables::scylla_table_schema_history(registry),
                     v3::views_builds_in_progress(registry), v3::built_views(registry),
                     v3::scylla_views_builds_in_progress(registry),
                     v3::truncated(registry),

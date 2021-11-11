@@ -82,7 +82,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
                 false)).get();
-    db.add_column_family(db.find_keyspace(db::schema_tables::NAME), db::schema_tables::dropped_columns(), {});
+    db.add_column_family(db.find_keyspace(db::schema_tables::NAME), db::schema_tables::dropped_columns(db.get_schema_registry()), {});
 
     std::vector<schema_ptr> schemas;
 
@@ -125,7 +125,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
                             db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, p->keyspace(), p->column_family()));
             }
-            auto schema = db::schema_tables::dropped_columns();
+            auto schema = db::schema_tables::dropped_columns(db.get_schema_registry());
             cql3::statements::modification_statement::json_cache_opt json_cache{};
             cql3::update_parameters params(schema, cql3::query_options::DEFAULT, api::new_timestamp(), schema->default_time_to_live(), cql3::update_parameters::prefetch_data(schema));
             auto pkeys = p->build_partition_keys(cql3::query_options::DEFAULT, json_cache);

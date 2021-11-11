@@ -608,7 +608,7 @@ future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_meta
 
     db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);
-    auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_keyspace_mutations(db.get_schema_registry(), ksm, api::new_timestamp());
     return announce(std::move(mutations));
 }
 
@@ -624,7 +624,7 @@ future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadat
 
     db.validate_new_keyspace(*ksm);
     mlogger.info("Create new Keyspace: {}", ksm);
-    auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
+    auto mutations = db::schema_tables::make_create_keyspace_mutations(db.get_schema_registry(), ksm, timestamp);
     return announce(std::move(mutations));
 }
 
@@ -714,7 +714,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 future<> migration_manager::do_announce_new_type(user_type new_type) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(new_type->_keyspace);
-    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_type_mutations(db.get_schema_registry(), keyspace.metadata(), new_type, api::new_timestamp());
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
@@ -731,7 +731,7 @@ future<> migration_manager::announce_type_update(user_type updated_type) {
 future<> migration_manager::announce_new_function(shared_ptr<cql3::functions::user_function> func) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
-    auto mutations = db::schema_tables::make_create_function_mutations(func, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_function_mutations(db.get_schema_registry(), func, api::new_timestamp());
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
@@ -739,14 +739,14 @@ future<> migration_manager::announce_function_drop(
         shared_ptr<cql3::functions::user_function> func) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_function_mutations(func, api::new_timestamp());
+    auto mutations = db::schema_tables::make_drop_function_mutations(db.get_schema_registry(), func, api::new_timestamp());
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
 future<> migration_manager::announce_new_aggregate(shared_ptr<cql3::functions::user_aggregate> aggregate) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_create_aggregate_mutations(aggregate, api::new_timestamp());
+    auto mutations = db::schema_tables::make_create_aggregate_mutations(db.get_schema_registry(), aggregate, api::new_timestamp());
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
@@ -754,7 +754,7 @@ future<> migration_manager::announce_aggregate_drop(
         shared_ptr<cql3::functions::user_aggregate> aggregate) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
-    auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
+    auto mutations = db::schema_tables::make_drop_aggregate_mutations(db.get_schema_registry(), aggregate, api::new_timestamp());
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
@@ -821,8 +821,9 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
             throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
+        auto& registry = db.get_schema_registry();
 
-        return seastar::async([this, keyspace, schema, &old_cfm, drop_views, &db] {
+        return seastar::async([this, keyspace, schema, &old_cfm, drop_views, &db, &registry] {
             // If drop_views is false (the default), we don't allow to delete a
             // table which has views which aren't part of an index. If drop_views
             // is true, we delete those views as well.
@@ -842,12 +843,12 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                 drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), api::new_timestamp(), false);
             }
             auto ts = api::new_timestamp();
-            auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
+            auto mutations = db::schema_tables::make_drop_table_mutations(registry, keyspace, schema, ts);
             mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
             for (auto& v : views) {
                 if (!old_cfm.get_index_manager().is_index(v)) {
                     mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
-                    auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, api::new_timestamp());
+                    auto m = db::schema_tables::make_drop_view_mutations(registry, keyspace, v, api::new_timestamp());
                     mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
                 }
             }
@@ -869,7 +870,7 @@ future<> migration_manager::announce_type_drop(user_type dropped_type)
     auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
     mlogger.info("Drop User Type: {}", dropped_type->get_name_as_string());
     auto mutations =
-            db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
+            db::schema_tables::make_drop_type_mutations(db.get_schema_registry(), keyspace.metadata(), dropped_type, api::new_timestamp());
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
@@ -930,7 +931,7 @@ future<> migration_manager::announce_view_drop(const sstring& ks_name,
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
-        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), api::new_timestamp());
+        auto mutations = db::schema_tables::make_drop_view_mutations(db.get_schema_registry(), keyspace, view_ptr(std::move(view)), api::new_timestamp());
         return include_keyspace_and_announce(*keyspace, std::move(mutations));
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",
@@ -949,9 +950,10 @@ public static void announceAggregateDrop(UDAggregate udf, boolean announceLocall
 
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
+    auto& db = get_local_storage_proxy().get_db().local();
     netw::messaging_service::msg_addr id{endpoint, 0};
     auto schema_features = _feat.cluster_schema_features();
-    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, db.get_schema_registry(), schema_features);
     auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
@@ -1086,19 +1088,20 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
 // Doesn't affect current node's schema in any way.
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
-    return local_schema_registry().get_or_load(v, [&ms, dst] (table_schema_version v) {
+    auto& proxy = get_storage_proxy();
+    auto& db = proxy.local().local_db();
+    auto& registry = db.get_schema_registry();
+    return registry.get_or_load(v, [&ms, dst, &proxy, &db, &registry] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
-        return ms.send_get_schema_version(dst, v).then([] (frozen_schema s) {
-            auto& proxy = get_storage_proxy();
+        return ms.send_get_schema_version(dst, v).then([&proxy, &db, &registry] (frozen_schema s) {
             // Since the latest schema version is always present in the schema registry
             // we only happen to query already outdated schema version, which is
             // referenced by the incoming request.
             // That means the column mapping for the schema should always be inserted
             // with TTL (refresh TTL in case column mapping already existed prior to that).
-            auto us = s.unfreeze(db::schema_ctxt(proxy));
+            auto us = s.unfreeze(registry);
             // if this is a view - we might need to fix it's schema before registering it.
             if (us->is_view()) {
-                auto& db = proxy.local().local_db();
                 schema_ptr base_schema = db.find_schema(us->view_info()->base_id());
                 auto fixed_view = db::schema_tables::maybe_fix_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema,
                         db::schema_tables::preserve_version::yes);

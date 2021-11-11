@@ -121,7 +121,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
 
             {
                 testlog.info("Applying a no-op tombstone to v1 column definition");
-                auto s = db::schema_tables::columns();
+                auto s = db::schema_tables::columns(e.local_db().get_schema_registry());
                 auto pkey = partition_key::from_singular(*s, table_schema->ks_name());
                 mutation m(s, pkey);
                 auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
@@ -191,14 +191,14 @@ SEASTAR_TEST_CASE(test_sort_type_in_update) {
         auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
         auto type1 = user_type_impl::get_instance("ks", to_bytes("type1"), {}, {}, true);
-        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, api::new_timestamp());
+        auto muts1 = db::schema_tables::make_create_type_mutations(e.local_db().get_schema_registry(), keyspace, type1, api::new_timestamp());
 
         auto type3 = user_type_impl::get_instance("ks", to_bytes("type3"), {}, {}, true);
-        auto muts3 = db::schema_tables::make_create_type_mutations(keyspace, type3, api::new_timestamp());
+        auto muts3 = db::schema_tables::make_create_type_mutations(e.local_db().get_schema_registry(), keyspace, type3, api::new_timestamp());
 
         // type2 must be created after type1 and type3. This tests that announce sorts them.
         auto type2 = user_type_impl::get_instance("ks", to_bytes("type2"), {"field1", "field3"}, {type1, type3}, true);
-        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, api::new_timestamp());
+        auto muts2 = db::schema_tables::make_create_type_mutations(e.local_db().get_schema_registry(), keyspace, type2, api::new_timestamp());
 
         auto muts = muts2;
         muts.insert(muts.end(), muts1.begin(), muts1.end());
@@ -456,10 +456,10 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
         auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
         auto type1 = user_type_impl::get_instance("ks", to_bytes("foo"), {"foo_k", "extra"}, {int32_type, int32_type}, true);
-        auto muts1 = db::schema_tables::make_create_type_mutations(keyspace, type1, api::new_timestamp());
+        auto muts1 = db::schema_tables::make_create_type_mutations(e.local_db().get_schema_registry(), keyspace, type1, api::new_timestamp());
 
         auto type2 = user_type_impl::get_instance("ks", to_bytes("bar"), {"bar_k", "extra"}, {type1, int32_type}, true);
-        auto muts2 = db::schema_tables::make_create_type_mutations(keyspace, type2, api::new_timestamp());
+        auto muts2 = db::schema_tables::make_create_type_mutations(e.local_db().get_schema_registry(), keyspace, type2, api::new_timestamp());
 
         auto muts = muts1;
         muts.insert(muts.end(), muts2.begin(), muts2.end());
@@ -807,7 +807,7 @@ SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
             // are hardcoded. If there is some information in the schema object that is not serialized into
             // mutations (say... the sharder - for now, at least), the two schema objects may differ, if
             // one is not careful.
-            for (auto s: db::schema_tables::all_tables(db::schema_features::full())) {
+            for (auto s: db::schema_tables::all_tables(db.get_schema_registry(), db::schema_features::full())) {
                 BOOST_REQUIRE_EQUAL(s->get_sharder().shard_count(), 1);
             }
         }).get();

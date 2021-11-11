@@ -175,16 +175,17 @@ future<> service::client_state::has_access(const database& db, const sstring& ks
         }
     }
 
-    static thread_local std::unordered_set<auth::resource> readable_system_resources = [] {
-        std::unordered_set<auth::resource> tmp;
+    static thread_local std::unordered_set<auth::resource> readable_system_resources;
+    if (readable_system_resources.empty()) {
+        auto& registry = db.get_schema_registry();
+        std::unordered_set<auth::resource> readable_system_resources;
         for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
-            tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
+            readable_system_resources.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
         }
-        for (auto cf : db::schema_tables::all_table_names(db::schema_features::full())) {
-            tmp.insert(auth::make_data_resource(db::schema_tables::NAME, cf));
+        for (auto cf : db::schema_tables::all_table_names(registry, db::schema_features::full())) {
+            readable_system_resources.insert(auth::make_data_resource(db::schema_tables::NAME, cf));
         }
-        return tmp;
-    }();
+    }
 
     if (cmd.permission == auth::permission::SELECT && readable_system_resources.contains(cmd.resource)) {
         return make_ready_future();

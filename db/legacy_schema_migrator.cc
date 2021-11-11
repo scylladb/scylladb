@@ -582,6 +582,8 @@ public:
 
         std::vector<mutation> mutations;
 
+        auto& registry = _qp.db().get_schema_registry();
+
         for (auto& ks : _keyspaces) {
             auto ksm = ::make_lw_shared<keyspace_metadata>(ks.name
                             , ks.replication_params["class"] // TODO, make ksm like c3?
@@ -589,14 +591,14 @@ public:
                             , ks.durable_writes);
 
             // we want separate time stamps for tables/types, so cannot bulk them into the ksm.
-            for (auto&& m : db::schema_tables::make_create_keyspace_mutations(ksm, ks.timestamp.time_since_epoch().count(), false)) {
+            for (auto&& m : db::schema_tables::make_create_keyspace_mutations(registry, ksm, ks.timestamp.time_since_epoch().count(), false)) {
                 mutations.emplace_back(std::move(m));
             }
             for (auto& t : ks.tables) {
                 db::schema_tables::add_table_or_view_to_schema_mutation(t.metadata, t.timestamp.time_since_epoch().count(), true, mutations);
             }
             for (auto& t : ks.types) {
-                db::schema_tables::add_type_to_schema_mutation(t.metadata, t.timestamp.time_since_epoch().count(), mutations);
+                db::schema_tables::add_type_to_schema_mutation(registry, t.metadata, t.timestamp.time_since_epoch().count(), mutations);
             }
         }
         return _qp.proxy().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
@@ -604,7 +606,7 @@ public:
 
     future<> flush_schemas() {
         return _qp.proxy().get_db().invoke_on_all([this] (database& db) {
-            return parallel_for_each(db::schema_tables::all_table_names(schema_features::full()), [this, &db](const sstring& cf_name) {
+            return parallel_for_each(db::schema_tables::all_table_names(db.get_schema_registry(), schema_features::full()), [this, &db](const sstring& cf_name) {
                 auto& cf = db.find_column_family(db::schema_tables::NAME, cf_name);
                 return cf.flush();
             });

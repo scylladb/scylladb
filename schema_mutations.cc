@@ -45,14 +45,14 @@ frozen_schema_mutations::frozen_schema_mutations(const schema_mutations& sm) : c
     }
 }
 
-schema_mutations::schema_mutations(frozen_schema_mutations fsm)
-    : _columnfamilies(fsm.columnfamilies.to_mutation(fsm.is_view ? db::schema_tables::views() : db::schema_tables::tables()))
-    , _columns(fsm.columns.to_mutation(db::schema_tables::columns()))
-    , _view_virtual_columns(fsm.view_virtual_columns ? mutation_opt{fsm.view_virtual_columns.value().to_mutation(db::schema_tables::view_virtual_columns())} : std::nullopt)
-    , _computed_columns(fsm.computed_columns ? mutation_opt{fsm.computed_columns.value().to_mutation(db::schema_tables::computed_columns())} : std::nullopt)
-    , _indices(fsm.indices ? mutation_opt{fsm.indices.value().to_mutation(db::schema_tables::indexes())} : std::nullopt)
-    , _dropped_columns(fsm.dropped_columns ? mutation_opt{fsm.dropped_columns.value().to_mutation(db::schema_tables::dropped_columns())} : std::nullopt)
-    , _scylla_tables(fsm.scylla_tables ? mutation_opt{fsm.scylla_tables.value().to_mutation(db::schema_tables::scylla_tables())} : std::nullopt)
+schema_mutations::schema_mutations(schema_registry& registry, frozen_schema_mutations fsm)
+    : _columnfamilies(fsm.columnfamilies.to_mutation(fsm.is_view ? db::schema_tables::views(registry) : db::schema_tables::tables(registry)))
+    , _columns(fsm.columns.to_mutation(db::schema_tables::columns(registry)))
+    , _view_virtual_columns(fsm.view_virtual_columns ? mutation_opt{fsm.view_virtual_columns.value().to_mutation(db::schema_tables::view_virtual_columns(registry))} : std::nullopt)
+    , _computed_columns(fsm.computed_columns ? mutation_opt{fsm.computed_columns.value().to_mutation(db::schema_tables::computed_columns(registry))} : std::nullopt)
+    , _indices(fsm.indices ? mutation_opt{fsm.indices.value().to_mutation(db::schema_tables::indexes(registry))} : std::nullopt)
+    , _dropped_columns(fsm.dropped_columns ? mutation_opt{fsm.dropped_columns.value().to_mutation(db::schema_tables::dropped_columns(registry))} : std::nullopt)
+    , _scylla_tables(fsm.scylla_tables ? mutation_opt{fsm.scylla_tables.value().to_mutation(db::schema_tables::scylla_tables(registry))} : std::nullopt)
 {}
 
 void schema_mutations::copy_to(std::vector<mutation>& dst) const {
