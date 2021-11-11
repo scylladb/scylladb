@@ -800,12 +800,6 @@ static future<> sleep_approx_50ms() {
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
 }
 
-static future<std::optional<paxos_response_handler::ballot_and_data>> sleep_and_restart() {
-    return sleep_approx_50ms().then([] {
-         return std::optional<paxos_response_handler::ballot_and_data>(); // continue
-    });
-}
-
 /**
  * Begin a Paxos session by sending a prepare request and completing any in-progress requests seen in the replies.
  *
@@ -815,118 +809,115 @@ static future<std::optional<paxos_response_handler::ballot_and_data>> sleep_and_
 future<paxos_response_handler::ballot_and_data>
 paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
     if (!_proxy->features().cluster_supports_lwt()) {
-        return make_exception_future<paxos_response_handler::ballot_and_data>(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
+        co_return coroutine::make_exception(std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support."));
     }
 
-    return do_with(api::timestamp_type(0), shared_from_this(), [this, &cs, &contentions, is_write]
-            (api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
-        return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use, is_write] {
-            if (storage_proxy::clock_type::now() > _cas_timeout) {
-                return make_exception_future<std::optional<ballot_and_data>>(
-                        mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl_for_paxos, 0,
-                                _required_participants, db::write_type::CAS)
-                        );
+    api::timestamp_type min_timestamp_micros_to_use = 0;
+    auto _ = shared_from_this(); // hold the handler until co-routine ends
+
+    while(true) {
+        if (storage_proxy::clock_type::now() > _cas_timeout) {
+            co_return coroutine::make_exception(
+                mutation_write_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl_for_paxos, 0, _required_participants, db::write_type::CAS)
+            );
+        }
+
+        // We want a timestamp that is guaranteed to be unique for that node (so that the ballot is
+        // globally unique), but if we've got a prepare rejected already we also want to make sure
+        // we pick a timestamp that has a chance to be promised, i.e. one that is greater that the
+        // most recently known in progress (#5667). Lastly, we don't want to use a timestamp that is
+        // older than the last one assigned by ClientState or operations may appear out-of-order
+        // (#7801).
+        api::timestamp_type ballot_micros = cs.get_timestamp_for_paxos(min_timestamp_micros_to_use);
+        // Note that ballotMicros is not guaranteed to be unique if two proposal are being handled
+        // concurrently by the same coordinator. But we still need ballots to be unique for each
+        // proposal so we have to use getRandomTimeUUIDFromMicros.
+        utils::UUID ballot = utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ballot_micros});
+
+        paxos::paxos_state::logger.debug("CAS[{}] Preparing {}", _id, ballot);
+        tracing::trace(tr_state, "Preparing {}", ballot);
+
+        paxos::prepare_summary summary = co_await prepare_ballot(ballot);
+
+        if (!summary.promised) {
+            paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
+            tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
+            contentions++;
+            co_await sleep_approx_50ms();
+            continue;
+        }
+
+        min_timestamp_micros_to_use = utils::UUID_gen::micros_timestamp(summary.most_recent_promised_ballot) + 1;
+
+        std::optional<paxos::proposal> in_progress = std::move(summary.most_recent_proposal);
+
+        // If we have an in-progress accepted ballot greater than the most recent commit
+        // we know, then it's an in-progress round that needs to be completed, so do it.
+        if (in_progress &&
+            (!summary.most_recent_commit || (summary.most_recent_commit && in_progress->ballot.timestamp() > summary.most_recent_commit->ballot.timestamp()))) {
+            paxos::paxos_state::logger.debug("CAS[{}] Finishing incomplete paxos round {}", _id, *in_progress);
+            tracing::trace(tr_state, "Finishing incomplete paxos round {}", *in_progress);
+            if (is_write) {
+                ++_proxy->get_stats().cas_write_unfinished_commit;
+            } else {
+                ++_proxy->get_stats().cas_read_unfinished_commit;
             }
 
-            // We want a timestamp that is guaranteed to be unique for that node (so that the ballot is
-            // globally unique), but if we've got a prepare rejected already we also want to make sure
-            // we pick a timestamp that has a chance to be promised, i.e. one that is greater that the
-            // most recently known in progress (#5667). Lastly, we don't want to use a timestamp that is
-            // older than the last one assigned by ClientState or operations may appear out-of-order
-            // (#7801).
-            api::timestamp_type ballot_micros = cs.get_timestamp_for_paxos(min_timestamp_micros_to_use);
-            // Note that ballotMicros is not guaranteed to be unique if two proposal are being handled
-            // concurrently by the same coordinator. But we still need ballots to be unique for each
-            // proposal so we have to use getRandomTimeUUIDFromMicros.
-            utils::UUID ballot = utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ballot_micros});
+            auto refreshed_in_progress = make_lw_shared<paxos::proposal>(ballot, std::move(in_progress->update));
 
-            paxos::paxos_state::logger.debug("CAS[{}] Preparing {}", _id, ballot);
-            tracing::trace(tr_state, "Preparing {}", ballot);
+            bool is_accepted = co_await accept_proposal(refreshed_in_progress, false);
 
-            return prepare_ballot(ballot)
-                    .then([this, &contentions, ballot, &min_timestamp_micros_to_use, is_write] (paxos::prepare_summary summary) {
-                if (!summary.promised) {
-                    paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
-                    tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
-                    contentions++;
-                    return sleep_and_restart();
+            if (is_accepted) {
+                try {
+                    co_await learn_decision(std::move(refreshed_in_progress), false);
+                    continue;
+                } catch (mutation_write_timeout_exception& e) {
+                    e.type = db::write_type::CAS;
+                    // we're still doing preparation for the paxos rounds, so we want to use the CAS (see CASSANDRA-8672)
+                    co_return coroutine::make_exception(std::move(e));
                 }
+            } else {
+                paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
+                tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
+                // sleep a random amount to give the other proposer a chance to finish
+                contentions++;
+                co_await sleep_approx_50ms();
+                continue;
+            }
+            assert(true); // no fall through
+        }
 
-                min_timestamp_micros_to_use = utils::UUID_gen::micros_timestamp(summary.most_recent_promised_ballot) + 1;
+        // To be able to propose our value on a new round, we need a quorum of replica to have learn
+        // the previous one. Why is explained at:
+        // https://issues.apache.org/jira/browse/CASSANDRA-5062?focusedCommentId=13619810&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-13619810)
+        // Since we waited for quorum nodes, if some of them haven't seen the last commit (which may
+        // just be a timing issue, but may also mean we lost messages), we pro-actively "repair"
+        // those nodes, and retry.
+        auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-                std::optional<paxos::proposal> in_progress = std::move(summary.most_recent_proposal);
+        inet_address_vector_replica_set missing_mrc = summary.replicas_missing_most_recent_commit(_schema, now_in_sec);
+        if (missing_mrc.size() > 0) {
+            paxos::paxos_state::logger.debug("CAS[{}] Repairing replicas that missed the most recent commit", _id);
+            tracing::trace(tr_state, "Repairing replicas that missed the most recent commit");
+            std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>, 1>
+                m{std::make_tuple(make_lw_shared<paxos::proposal>(std::move(*summary.most_recent_commit)), _schema, _key.token(), std::move(missing_mrc))};
+            // create_write_response_handler is overloaded for paxos::proposal and will
+            // create cas_mutation holder, which consequently will ensure paxos::learn is
+            // used.
+            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout);
 
-                // If we have an in-progress accepted ballot greater than the most recent commit
-                // we know, then it's an in-progress round that needs to be completed, so do it.
-                if (in_progress &&
-                        (!summary.most_recent_commit ||
-                         (summary.most_recent_commit &&
-                         in_progress->ballot.timestamp() > summary.most_recent_commit->ballot.timestamp()))) {
-                    paxos::paxos_state::logger.debug("CAS[{}] Finishing incomplete paxos round {}", _id, *in_progress);
-                    tracing::trace(tr_state, "Finishing incomplete paxos round {}", *in_progress);
-                    if (is_write) {
-                        ++_proxy->get_stats().cas_write_unfinished_commit;
-                    } else {
-                        ++_proxy->get_stats().cas_read_unfinished_commit;
-                    }
-
-                    auto refreshed_in_progress = make_lw_shared<paxos::proposal>(ballot, std::move(in_progress->update));
-
-                    return accept_proposal(refreshed_in_progress, false).then([this, &contentions, refreshed_in_progress] (bool is_accepted) mutable {
-                        if (is_accepted) {
-                            return learn_decision(std::move(refreshed_in_progress), false).then([] {
-                                    return make_ready_future<std::optional<ballot_and_data>>(std::optional<ballot_and_data>());
-                            }).handle_exception_type([] (mutation_write_timeout_exception& e) {
-                                e.type = db::write_type::CAS;
-                                // we're still doing preparation for the paxos rounds, so we want to use the CAS (see cASSANDRA-8672)
-                                return make_exception_future<std::optional<ballot_and_data>>(std::move(e));
-                            });
-                        } else {
-                            paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
-                            tracing::trace(tr_state, "Some replicas have already promised a higher ballot than ours; aborting");
-                            // sleep a random amount to give the other proposer a chance to finish
-                            contentions++;
-                            return sleep_and_restart();
-                        }
-                    });
-                }
-
-                // To be able to propose our value on a new round, we need a quorum of replica to have learn
-                // the previous one. Why is explained at:
-                // https://issues.apache.org/jira/browse/CASSANDRA-5062?focusedCommentId=13619810&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-13619810)
-                // Since we waited for quorum nodes, if some of them haven't seen the last commit (which may
-                // just be a timing issue, but may also mean we lost messages), we pro-actively "repair"
-                // those nodes, and retry.
-                auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
-
-                inet_address_vector_replica_set missing_mrc = summary.replicas_missing_most_recent_commit(_schema, now_in_sec);
-                if (missing_mrc.size() > 0) {
-                    paxos::paxos_state::logger.debug("CAS[{}] Repairing replicas that missed the most recent commit", _id);
-                    tracing::trace(tr_state, "Repairing replicas that missed the most recent commit");
-                    std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>, 1>
-                      m{std::make_tuple(make_lw_shared<paxos::proposal>(std::move(*summary.most_recent_commit)), _schema, _key.token(), std::move(missing_mrc))};
-                    // create_write_response_handler is overloaded for paxos::proposal and will
-                    // create cas_mutation holder, which consequently will ensure paxos::learn is
-                    // used.
-                    auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout);
-
-                    // TODO: provided commits did not invalidate the prepare we just did above (which they
-                    // didn't), we could just wait for all the missing most recent commits to
-                    // acknowledge this decision and then move on with proposing our value.
-                    return f.then_wrapped([prh = shared_from_this()] (future<> f) {
-                        if (f.failed()) {
-                            paxos::paxos_state::logger.debug("CAS[{}] Failure during commit repair {}", prh->_id, f.get_exception());
-                        } else {
-                            f.ignore_ready_future();
-                        }
-                        return std::optional<ballot_and_data>(); // continue
-                    });
-                }
-
-                return make_ready_future<std::optional<ballot_and_data>>(ballot_and_data{ballot, std::move(summary.data)});
-            });
-        });
-    });
+            // TODO: provided commits did not invalidate the prepare we just did above (which they
+            // didn't), we could just wait for all the missing most recent commits to
+            // acknowledge this decision and then move on with proposing our value.
+            try {
+                co_await std::move(f);
+            } catch(...) {
+                paxos::paxos_state::logger.debug("CAS[{}] Failure during commit repair {}", _id, std::current_exception());
+                continue;
+            }
+        }
+        co_return ballot_and_data{ballot, std::move(summary.data)};
+    }
 }
 
 template<class T> struct dependent_false : std::false_type {};
