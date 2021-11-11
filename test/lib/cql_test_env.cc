@@ -647,7 +647,7 @@ public:
                 view_update_generator.stop().get();
             });
 
-            distributed_loader::init_system_keyspace(db, ss).get();
+            distributed_loader::init_system_keyspace(db, ss, *cfg).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {

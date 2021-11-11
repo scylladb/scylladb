@@ -22,10 +22,14 @@
  */
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/test_services.hh"
+#include "test/lib/cql_test_env.hh"
 
 #include "db/virtual_table.hh"
 #include "db/system_keyspace.hh"
+#include "db/config.hh"
+#include "test/lib/cql_assertions.hh"
 
 namespace db {
 
@@ -69,4 +73,45 @@ SEASTAR_TEST_CASE(test_set_cell) {
     table.test_set_cell();
 
     return make_ready_future<>();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_system_config_table_read) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        auto res = env.execute_cql("SELECT * FROM system.config WHERE name = 'partitioner';").get0();
+        assert_that(res).is_rows().with_size(1).with_row({
+            { utf8_type->decompose(sstring("partitioner")) },
+            { utf8_type->decompose(sstring("default")) },
+            { utf8_type->decompose(sstring("string")) },
+            { utf8_type->decompose(format("\"{}\"", env.local_db().get_config().partitioner())) }
+        });
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_system_config_table_update) {
+    if (smp::count < 2) {
+        fmt::print("This test should be run with at least 2 CPUs\n");
+        return;
+    }
+
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        auto value = env.local_db().get_config().failure_detector_timeout_in_ms();
+        smp::invoke_on_others([&env, value] {
+            BOOST_REQUIRE_EQUAL(env.local_db().get_config().failure_detector_timeout_in_ms(), value);
+        }).get();
+
+        env.execute_cql(format("UPDATE system.config SET value = '{}' WHERE name = 'failure_detector_timeout_in_ms';", value + 10)).get();
+
+        smp::invoke_on_others([&env, value] {
+            BOOST_REQUIRE_EQUAL(env.local_db().get_config().failure_detector_timeout_in_ms(), value + 10);
+        }).get();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_system_config_table_no_live_update) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        BOOST_REQUIRE_THROW(
+            env.execute_cql("UPDATE system.config SET value = 'foo' WHERE name = 'cluster_name';").get(),
+            exceptions::mutation_write_failure_exception
+        );
+    }).get();
 }

@@ -149,7 +149,7 @@ table::make_reader(schema_ptr s,
                            tracing::trace_state_ptr trace_state,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
-    if (_virtual_reader) {
+    if (_virtual_reader) [[unlikely]] {
         return (*_virtual_reader).make_reader(s, std::move(permit), range, slice, pc, trace_state, fwd, fwd_mr);
     }
 
@@ -1905,15 +1905,25 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
     }
 }
 
-void
-table::apply(const mutation& m, db::rp_handle&& h) {
-    do_apply(std::move(h), m);
+future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h)] () mutable {
+        do_apply(std::move(h), m);
+    }, timeout);
 }
 
-void
-table::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
-    do_apply(std::move(h), m, m_schema);
+template void table::do_apply(db::rp_handle&&, const mutation&);
+
+future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    if (_virtual_writer) [[unlikely]] {
+        return (*_virtual_writer)(m);
+    }
+
+    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
+        do_apply(std::move(h), m, m_schema);
+    }, timeout);
 }
+
+template void table::do_apply(db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
 
 future<>
 write_memtable_to_sstable(flat_mutation_reader reader,

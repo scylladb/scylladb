@@ -92,7 +92,9 @@ public:
     enum class config_source : uint8_t {
         None,
         SettingsFile,
-        CommandLine
+        CommandLine,
+        CQL,
+        Internal
     };
 
     struct config_src {
@@ -136,8 +138,10 @@ public:
         bool matches(std::string_view name) const;
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
-        virtual value_status status() const = 0;
-        virtual config_source source() const = 0;
+        virtual bool set_value(sstring, config_source = config_source::Internal) = 0;
+        virtual value_status status() const noexcept = 0;
+        virtual config_source source() const noexcept = 0;
+        sstring source_name() const noexcept;
         json::json_return_type value_as_json() const;
     };
 
@@ -195,23 +199,26 @@ public:
                 std::initializer_list<T> allowed_values = {})
                 : named_value(file, name, {}, liveness::MustRestart, vs, t, desc, allowed_values) {
         }
-        value_status status() const override {
+        value_status status() const noexcept override {
             return _value_status;
         }
-        config_source source() const override {
+        config_source source() const noexcept override {
             return _source;
         }
         bool is_set() const {
             return _source > config_source::None;
         }
-        MyType & operator()(const T& t) {
+        MyType & operator()(const T& t, config_source src = config_source::Internal) {
             if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
                 throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
             }
             the_value().set(t);
+            if (src > config_source::None) {
+                _source = src;
+            }
             return *this;
         }
-        MyType & operator()(T&& t, config_source src = config_source::None) {
+        MyType & operator()(T&& t, config_source src = config_source::Internal) {
             if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
                 throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
             }
@@ -238,6 +245,7 @@ public:
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&) override;
+        bool set_value(sstring, config_source = config_source::Internal) override;
     };
 
     typedef std::reference_wrapper<config_src> cfg_ref;

@@ -56,6 +56,8 @@ public:
 
     // Keep this object alive as long as the returned mutation_source is alive.
     virtual mutation_source as_mutation_source() = 0;
+
+    virtual future<> apply(const frozen_mutation&);
 };
 
 // Produces results by filling a memtable on each read.
@@ -122,6 +124,21 @@ public:
     virtual future<> execute(reader_permit p, result_collector& c, const query_restrictions&) { return execute(p, c); }
 
     mutation_source as_mutation_source() override;
+};
+
+class virtual_table_update_exception : public std::exception {
+    sstring _cause;
+public:
+    explicit virtual_table_update_exception(sstring cause) noexcept
+        : _cause(std::move(cause))
+    { }
+
+    virtual const char* what() const noexcept override { return _cause.c_str(); }
+
+    // This method is to avoid potential exceptions while copying the string
+    // and thus to be used when the exception is handled and is about to
+    // be thrown away
+    sstring grab_cause() noexcept { return std::move(_cause); }
 };
 
 }

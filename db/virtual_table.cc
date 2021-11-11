@@ -204,4 +204,10 @@ future<> result_collector::emit_row(clustering_row&& cr) {
     return take(mutation_fragment(*_schema, _permit, std::move(cr)));
 }
 
+future<> virtual_table::apply(const frozen_mutation&) {
+    return make_exception_future<>(
+        virtual_table_update_exception("this virtual table doesn't allow updates")
+    );
+}
+
 }

@@ -124,7 +124,7 @@ class rp_handle;
 class data_listeners;
 class large_data_handler;
 
-future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);
+future<> system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg);
 
 }
 
@@ -589,6 +589,8 @@ private:
     void rebuild_statistics();
 private:
     mutation_source_opt _virtual_reader;
+    std::optional<noncopyable_function<future<>(const frozen_mutation&)>> _virtual_writer;
+
     // Creates a mutation reader which covers given sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
@@ -612,13 +614,14 @@ private:
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
-public:
-    sstring dir() const {
-        return _config.datadir;
-    }
 
     logalloc::region_group& dirty_memory_region_group() const {
         return _config.dirty_memory_manager->region_group();
+    }
+
+public:
+    sstring dir() const {
+        return _config.datadir;
     }
 
     seastar::gate& async_gate() { return _async_gate; }
@@ -710,6 +713,10 @@ public:
         _virtual_reader = std::move(virtual_reader);
     }
 
+    void set_virtual_writer(noncopyable_function<future<>(const frozen_mutation&)> writer) {
+        _virtual_writer.emplace(std::move(writer));
+    }
+
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.
     //
@@ -745,8 +752,15 @@ public:
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
-    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
-    void apply(const mutation& m, db::rp_handle&& = {});
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
+        do_apply(std::move(h), m, m_schema);
+    }
+    void apply(const mutation& m, db::rp_handle&& h = {}) {
+        do_apply(std::move(h), m);
+    }
+
+    future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
+    future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
 
     // Returns at most "cmd.limit" rows
     // The saved_querier parameter is an input-output parameter which contains
@@ -1395,7 +1409,7 @@ private:
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
-    friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss);
+    friend future<> db::system_keyspace_make(distributed<database>& db, distributed<service::storage_service>& ss, db::config& cfg);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 

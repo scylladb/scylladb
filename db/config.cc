@@ -910,6 +910,13 @@ std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s) {
     return os;
 }
 
+std::istream& operator>>(std::istream& is, db::seed_provider_type& s) {
+    // FIXME -- this operator is used, in particular, by boost lexical_cast<>
+    // it's here just to make the code compile, but it's not yet called for real
+    throw std::runtime_error("reading seed_provider_type from istream is not implemented");
+    return is;
+}
+
 }
 
 namespace utils {
