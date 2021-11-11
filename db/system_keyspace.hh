@@ -100,19 +100,19 @@ struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
 class system_keyspace {
-    static schema_ptr raft_config();
-    static schema_ptr local();
-    static schema_ptr peers();
-    static schema_ptr peer_events();
-    static schema_ptr range_xfers();
-    static schema_ptr compactions_in_progress();
-    static schema_ptr compaction_history();
-    static schema_ptr sstable_activity();
-    static schema_ptr large_partitions();
-    static schema_ptr large_rows();
-    static schema_ptr large_cells();
-    static schema_ptr scylla_local();
-    static schema_ptr clients();
+    static schema_ptr raft_config(schema_registry& registry);
+    static schema_ptr local(schema_registry& registry);
+    static schema_ptr peers(schema_registry& registry);
+    static schema_ptr peer_events(schema_registry& registry);
+    static schema_ptr range_xfers(schema_registry& registry);
+    static schema_ptr compactions_in_progress(schema_registry& registry);
+    static schema_ptr compaction_history(schema_registry& registry);
+    static schema_ptr sstable_activity(schema_registry& registry);
+    static schema_ptr large_partitions(schema_registry& registry);
+    static schema_ptr large_rows(schema_registry& registry);
+    static schema_ptr large_cells(schema_registry& registry);
+    static schema_ptr scylla_local(schema_registry& registry);
+    static schema_ptr clients(schema_registry& registry);
     static future<> setup_version(distributed<gms::feature_service>& feat, sharded<netw::messaging_service>& ms, const db::config& cfg);
     static future<> check_health(const sstring& cluster_name);
     static future<> force_blocking_flush(sstring cfname);
@@ -122,7 +122,7 @@ class system_keyspace {
     template <typename Value>
     static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
-    static schema_ptr size_estimates();
+    static schema_ptr size_estimates(schema_registry& registry);
 public:
     static constexpr auto NAME = "system";
     static constexpr auto HINTS = "hints";
@@ -163,23 +163,23 @@ public:
         static constexpr auto BUILT_VIEWS = "built_views";
         static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
         static constexpr auto CDC_LOCAL = "cdc_local";
-        static schema_ptr batches();
-        static schema_ptr built_indexes();
-        static schema_ptr local();
-        static schema_ptr truncated();
-        static schema_ptr peers();
-        static schema_ptr peer_events();
-        static schema_ptr range_xfers();
-        static schema_ptr compaction_history();
-        static schema_ptr sstable_activity();
-        static schema_ptr size_estimates();
-        static schema_ptr large_partitions();
-        static schema_ptr scylla_local();
-        static schema_ptr available_ranges();
-        static schema_ptr views_builds_in_progress();
-        static schema_ptr built_views();
-        static schema_ptr scylla_views_builds_in_progress();
-        static schema_ptr cdc_local();
+        static schema_ptr batches(schema_registry& registry);
+        static schema_ptr built_indexes(schema_registry& registry);
+        static schema_ptr local(schema_registry& registry);
+        static schema_ptr truncated(schema_registry& registry);
+        static schema_ptr peers(schema_registry& registry);
+        static schema_ptr peer_events(schema_registry& registry);
+        static schema_ptr range_xfers(schema_registry& registry);
+        static schema_ptr compaction_history(schema_registry& registry);
+        static schema_ptr sstable_activity(schema_registry& registry);
+        static schema_ptr size_estimates(schema_registry& registry);
+        static schema_ptr large_partitions(schema_registry& registry);
+        static schema_ptr scylla_local(schema_registry& registry);
+        static schema_ptr available_ranges(schema_registry& registry);
+        static schema_ptr views_builds_in_progress(schema_registry& registry);
+        static schema_ptr built_views(schema_registry& registry);
+        static schema_ptr scylla_views_builds_in_progress(schema_registry& registry);
+        static schema_ptr cdc_local(schema_registry& registry);
     };
 
     struct legacy {
@@ -193,15 +193,15 @@ public:
         static constexpr auto FUNCTIONS = "schema_functions";
         static constexpr auto AGGREGATES = "schema_aggregates";
 
-        static schema_ptr keyspaces();
-        static schema_ptr column_families();
-        static schema_ptr columns();
-        static schema_ptr triggers();
-        static schema_ptr usertypes();
-        static schema_ptr functions();
-        static schema_ptr aggregates();
-        static schema_ptr hints();
-        static schema_ptr batchlog();
+        static schema_ptr keyspaces(schema_registry& registry);
+        static schema_ptr column_families(schema_registry& registry);
+        static schema_ptr columns(schema_registry& registry);
+        static schema_ptr triggers(schema_registry& registry);
+        static schema_ptr usertypes(schema_registry& registry);
+        static schema_ptr functions(schema_registry& registry);
+        static schema_ptr aggregates(schema_registry& registry);
+        static schema_ptr hints(schema_registry& registry);
+        static schema_ptr batchlog(schema_registry& registry);
     };
 
     static constexpr const char* extra_durable_tables[] = { PAXOS };
@@ -220,12 +220,12 @@ public:
     using view_name = system_keyspace_view_name;
     using view_build_progress = system_keyspace_view_build_progress;
 
-    static schema_ptr hints();
-    static schema_ptr batchlog();
-    static schema_ptr paxos();
-    static schema_ptr built_indexes(); // TODO (from Cassandra): make private
-    static schema_ptr raft();
-    static schema_ptr raft_snapshots();
+    static schema_ptr hints(schema_registry& registry);
+    static schema_ptr batchlog(schema_registry& registry);
+    static schema_ptr paxos(schema_registry& registry);
+    static schema_ptr built_indexes(schema_registry& registry); // TODO (from Cassandra): make private
+    static schema_ptr raft(schema_registry& registry);
+    static schema_ptr raft_snapshots(schema_registry& registry);
 
     static table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
     static table_schema_version generate_schema_version(const char* keyspace_name, const char* table_name, uint16_t offset = 0);
@@ -262,7 +262,7 @@ public:
     static future<> set_scylla_local_param(const sstring& key, const sstring& value);
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
-    static std::vector<schema_ptr> all_tables(const db::config& cfg);
+    static std::vector<schema_ptr> all_tables(schema_registry& registry, const db::config& cfg);
     static future<> make(distributed<database>& db, distributed<service::storage_service>& ss);
 
     /// overloads
@@ -381,7 +381,7 @@ public:
     /**
      * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
      */
-    static mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
+    static mutation make_size_estimates_mutation(schema_registry& registry, const sstring& ks, std::vector<range_estimates> estimates);
 
     static future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
     static future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);

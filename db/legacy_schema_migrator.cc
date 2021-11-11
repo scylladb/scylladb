@@ -163,10 +163,12 @@ public:
 
         typedef std::tuple<future<result_set_type>, future<result_set_type>, future<result_set_type>, future<db::schema_tables::legacy::schema_mutations>> result_tuple;
 
+        auto& registry = _qp.db().get_schema_registry();
+
         return when_all(_qp.execute_internal(tq, { dst.name, cf_name }),
                         _qp.execute_internal(cq, { dst.name, cf_name }),
                         _qp.execute_internal(zq, { dst.name, cf_name }),
-                        db::schema_tables::legacy::read_table_mutations(_sp, dst.name, cf_name, db::system_keyspace::legacy::column_families()))
+                        db::schema_tables::legacy::read_table_mutations(_sp, dst.name, cf_name, db::system_keyspace::legacy::column_families(registry)))
                     .then([this, &dst, cf_name, timestamp](result_tuple&& t) {
 
             result_set_type tables = std::get<0>(t).get0();

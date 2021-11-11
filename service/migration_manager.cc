@@ -805,7 +805,7 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name)
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
+    auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(db.get_schema_registry(), keyspace.metadata(), api::new_timestamp());
     return announce(std::move(mutations));
 }
 

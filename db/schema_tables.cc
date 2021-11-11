@@ -1741,7 +1741,7 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     return mutations;
 }
 
-std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
+std::vector<mutation> make_drop_keyspace_mutations(schema_registry& registry, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
 {
     std::vector<mutation> mutations;
     for (auto&& schema_table : all_tables(schema_features::full())) {
@@ -1750,7 +1750,7 @@ std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metada
         m.partition().apply(tombstone{timestamp, gc_clock::now()});
         mutations.emplace_back(std::move(m));
     }
-    auto&& schema = db::system_keyspace::built_indexes();
+    auto&& schema = db::system_keyspace::built_indexes(registry);
     auto pkey = partition_key::from_exploded(*schema, {utf8_type->decompose(keyspace->name())});
     mutation m{schema, pkey};
     m.partition().apply(tombstone{timestamp, gc_clock::now()});
@@ -3225,8 +3225,9 @@ table_schema_version schema_mutations::digest() const {
 future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
     sstring keyspace_name, sstring table_name, schema_ptr s)
 {
+    auto& registry = proxy.local().get_db().local().get_schema_registry();
     mutation cf_m = co_await read_schema_partition_for_table(proxy, s, keyspace_name, table_name);
-    mutation col_m = co_await read_schema_partition_for_table(proxy, db::system_keyspace::legacy::columns(), keyspace_name, table_name);
+    mutation col_m = co_await read_schema_partition_for_table(proxy, db::system_keyspace::legacy::columns(registry), keyspace_name, table_name);
     co_return schema_mutations{std::move(cf_m), std::move(col_m)};
 }
 
