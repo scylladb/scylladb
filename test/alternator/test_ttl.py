@@ -402,6 +402,38 @@ def test_ttl_expiration_range(dynamodb):
         assert not 'Item' in table.get_item(Key={'p': p, 'c': c1})
         assert 'Item' in table.get_item(Key={'p': p, 'c': c2})
 
+# In the above key-attribute tests, the key attribute we used for the
+# expiration-time attribute had the expected numeric type. If the key
+# attribute has a non-numeric type (e.g., string), it can never contain
+# an expiration time, so nothing will ever expire - but although DynamoDB
+# knows this, it doesn't refuse this setting anyway - although it could.
+# This test demonstrates that:
+@pytest.mark.veryslow
+@pytest.mark.xfail(reason="TTL not implemented yet #5060")
+def test_ttl_expiration_hash_wrong_type(dynamodb):
+    if is_aws(dynamodb):
+        duration = 900
+    else:
+        duration = 3
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        ttl_spec = {'AttributeName': 'p', 'Enabled': True}
+        table.meta.client.update_time_to_live(TableName=table.name,
+            TimeToLiveSpecification=ttl_spec)
+        # p1 is in the past, but it's a string, not the required numeric type,
+        # so the item should never expire.
+        p1 = str(int(time.time()) - 60)
+        table.put_item(Item={'p': p1})
+        start_time = time.time()
+        while time.time() < start_time + duration:
+            print(f"--- {int(time.time()-start_time)} seconds")
+            if 'Item' in table.get_item(Key={'p': p1}):
+                print("p1 alive")
+            time.sleep(duration/15)
+        # After the delay, p2 should be alive, p1 should not
+        assert 'Item' in table.get_item(Key={'p': p1})
+
 # Test how in a table with a GSI or LSI, expiring an item also removes it
 # from the GSI and LSI.
 # We already tested above the various reasons for an item expiring or not
