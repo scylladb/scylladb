@@ -2836,6 +2836,20 @@ class small_vector(object):
         return int(self.ref['_capacity_end']) - int(self.ref['_begin'])
 
 
+class boost_small_vector(object):
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __iter__(self):
+        e = self.ref['m_holder']['m_start']
+        for i in range(0, self.ref['m_holder']['m_size']):
+            yield e.dereference()
+            e += 1
+
+    def __len__(self):
+        return self.ref['m_holder']['m_size']
+
+
 class chunked_vector(object):
     def __init__(self, ref):
         self.ref = ref
