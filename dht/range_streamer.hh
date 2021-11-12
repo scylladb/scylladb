@@ -109,7 +109,7 @@ public:
         , _address(address)
         , _description(std::move(description))
         , _reason(reason)
-        , _stream_plan(_description) {
+    {
         _abort_source.check();
     }
 
@@ -177,7 +177,6 @@ private:
     streaming::stream_reason _reason;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
-    stream_plan _stream_plan;
     // Retry the stream plan _nr_max_retry times
     unsigned _nr_retried = 0;
     unsigned _nr_max_retry = 5;
