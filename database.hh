@@ -1381,9 +1381,6 @@ private:
 
     sharded<semaphore>& _sst_dir_semaphore;
 
-    bool _supports_infinite_bound_range_deletions = false;
-    gms::feature::listener_registration _infinite_bound_range_deletions_reg;
-
     std::unique_ptr<wasm::engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
@@ -1655,10 +1652,6 @@ public:
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
-    }
-
-    bool supports_infinite_bound_range_deletions() {
-        return _supports_infinite_bound_range_deletions;
     }
 
     // Get the maximum result size for an unlimited query, appropriate for the
