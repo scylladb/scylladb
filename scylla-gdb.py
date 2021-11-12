@@ -3064,10 +3064,17 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\n")
 
             group = std_shared_ptr(ioq['_group']).get().dereference()
-            fg = group['_fg']
-            fq = ioq['_fq']
+            try:
+                f_groups = [ std_unique_ptr(x) for x in std_vector(group['_fgs']) ]
+                f_queues = boost_small_vector(ioq['_streams'])
+            except gdb.error:
+                f_groups = [ group['_fg'] ]
+                f_queues = [ ioq['_fq'] ]
 
-            if True:
+            gdb.write("\t{} streams\n".format(len(f_groups)))
+            gdb.write("\n")
+
+            for fg, fq in zip(f_groups, f_queues):
                 gdb.write("\tMax capacity:        {}\n".format(self.ticket(fg['_maximum_capacity'])))
                 gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(fg['_capacity_tail']).get())))
                 gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(fg['_capacity_head']).get())))
