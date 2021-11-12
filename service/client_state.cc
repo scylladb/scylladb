@@ -63,27 +63,22 @@ void service::client_state::set_login(auth::authenticated_user user) {
 
 future<> service::client_state::check_user_can_login() {
     if (auth::is_anonymous(*_user)) {
-        return make_ready_future();
+        co_return;
     }
 
     auto& role_manager = _auth_service->underlying_role_manager();
 
-    return role_manager.exists(*_user->name).then([this](bool exists) mutable {
-        if (!exists) {
-            return make_exception_future<>(exceptions::authentication_exception(
-                            format("User {} doesn't exist - create it with CREATE USER query first",
-                                            *_user->name)));
-        }
-        return make_ready_future();
-    }).then([this, &role_manager] {
-        return role_manager.can_login(*_user->name).then([this](bool can_login) {
-            if (!can_login) {
-                return make_exception_future<>(exceptions::authentication_exception(format("{} is not permitted to log in", *_user->name)));
-            }
+    const bool exists = co_await role_manager.exists(*_user->name);
 
-            return make_ready_future();
-        });
-    });
+    if (!exists) {
+        throw exceptions::authentication_exception(
+                format("User {} doesn't exist - create it with CREATE USER query first", *_user->name));
+    }
+
+    bool can_login = co_await role_manager.can_login(*_user->name);
+    if (!can_login) {
+        throw exceptions::authentication_exception(format("{} is not permitted to log in", *_user->name));
+    }
 }
 
 void service::client_state::validate_login() const {
@@ -102,24 +97,25 @@ void service::client_state::ensure_not_anonymous() const {
 future<> service::client_state::has_all_keyspaces_access(
                 auth::permission p) const {
     if (_is_internal) {
-        return make_ready_future();
+        co_return;
     }
     validate_login();
 
-    return do_with(auth::resource(auth::resource_kind::data), [this, p](const auto& r) {
-        return ensure_has_permission({p, r});
-    });
+    auth::resource r{auth::resource_kind::data};
+    co_return co_await ensure_has_permission({p, r});
 }
 
 future<> service::client_state::has_keyspace_access(const database& db, const sstring& ks,
                 auth::permission p) const {
-    return do_with(ks, auth::make_data_resource(ks), [this, p, &db](auto const& ks, auto const& r) {
-        return has_access(db, ks, {p, r});
-    });
+    auth::resource r = auth::make_data_resource(ks);
+    co_return co_await has_access(db, ks, {p, r});
 }
 
 future<> service::client_state::has_column_family_access(const database& db, const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
+    // NOTICE: callers of this function tend to assume that this error will be thrown
+    // synchronously and will be intercepted in a try-catch block. Thus, this function can only
+    // be translated to a coroutine after all such callers are inspected and amended first.
     validation::validate_column_family(db, ks, cf);
 
     return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t, &db](const auto& ks, const auto& r) {
@@ -128,12 +124,8 @@ future<> service::client_state::has_column_family_access(const database& db, con
 }
 
 future<> service::client_state::has_schema_access(const database& db, const schema& s, auth::permission p) const {
-    return do_with(
-            s.ks_name(),
-            auth::make_data_resource(s.ks_name(),s.cf_name()),
-            [this, p, &db](auto const& ks, auto const& r) {
-        return has_access(db, ks, {p, r});
-    });
+    auth::resource r = auth::make_data_resource(s.ks_name(), s.cf_name());
+    co_return co_await has_access(db, s.ks_name(), {p, r});
 }
 
 future<> service::client_state::has_access(const database& db, const sstring& ks, auth::command_desc cmd) const {
@@ -226,21 +218,19 @@ future<> service::client_state::has_access(const database& db, const sstring& ks
 
 future<bool> service::client_state::check_has_permission(auth::command_desc cmd) const {
     if (_is_internal) {
-        return make_ready_future<bool>(true);
+        co_return true;
     }
 
-    return do_with(cmd.resource.parent(), [this, cmd](const std::optional<auth::resource>& parent_r) {
-        return auth::get_permissions(*_auth_service, *_user, cmd.resource).then(
-                [this, p = cmd.permission, &parent_r](auth::permission_set set) {
-            if (set.contains(p)) {
-                return make_ready_future<bool>(true);
-            }
-            if (parent_r) {
-                return check_has_permission({p, *parent_r});
-            }
-            return make_ready_future<bool>(false);
-        });
-    });
+    std::optional<auth::resource> parent_r = cmd.resource.parent();
+
+    auth::permission_set set = co_await auth::get_permissions(*_auth_service, *_user, cmd.resource);
+    if (set.contains(cmd.permission)) {
+        co_return true;
+    }
+    if (parent_r) {
+        co_return co_await check_has_permission({cmd.permission, *parent_r});
+    }
+    co_return false;
 }
 
 future<> service::client_state::ensure_has_permission(auth::command_desc cmd) const {
