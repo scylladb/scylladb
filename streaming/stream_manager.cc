@@ -214,13 +214,13 @@ stream_bytes stream_manager::get_progress(UUID plan_id) const {
 }
 
 future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
-    return get_stream_manager().invoke_on_all([plan_id] (auto& sm) {
+    return container().invoke_on_all([plan_id] (auto& sm) {
         sm.remove_progress(plan_id);
     });
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [plan_id, peer] (auto& sm) {
             return sm.get_progress(plan_id, peer);
         },
@@ -230,7 +230,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gm
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [plan_id] (auto& sm) {
             return sm.get_progress(plan_id);
         },
@@ -240,11 +240,13 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) co
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_address peer) const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [peer] (auto& sm) {
             stream_bytes ret;
             for (auto& sbytes : sm._stream_bytes) {
-                ret += sbytes.second[peer];
+                if (sbytes.second.contains(peer)) {
+                    ret += sbytes.second.at(peer);
+                }
             }
             return ret;
         },
@@ -254,7 +256,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_addres
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards() const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [] (auto& sm) {
             stream_bytes ret;
             for (auto& sbytes : sm._stream_bytes) {
@@ -312,7 +314,7 @@ void stream_manager::on_remove(inet_address endpoint) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
         //FIXME: discarded future.
-        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        (void)container().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
@@ -324,7 +326,7 @@ void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) 
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
         //FIXME: discarded future.
-        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        (void)container().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
@@ -336,7 +338,7 @@ void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_dead", endpoint);
         //FIXME: discarded future.
-        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        (void)container().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_dead", endpoint);
