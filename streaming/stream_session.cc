@@ -121,8 +121,8 @@ void stream_manager::init_messaging_service_handler() {
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status, permit] () mutable {
-                return source().then([plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+            auto get_next_mutation_fragment = [&sm = container(), source, plan_id, from, s, cmd_status, permit] () mutable {
+                return source().then([&sm, plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -142,7 +142,7 @@ void stream_manager::init_messaging_service_handler() {
                         frozen_mutation_fragment& fmf = std::get<0>(*opt);
                         auto sz = fmf.representation().size();
                         auto mf = fmf.unfreeze(*s, permit);
-                        streaming::get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+                        sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                         return make_ready_future<mutation_fragment_opt>(std::move(mf));
                     } else {
                         // If the sender has sent stream_mutation_fragments_cmd it means it is
