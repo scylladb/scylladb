@@ -3050,19 +3050,22 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\n")
 
             group = std_shared_ptr(ioq['_group']).get().dereference()
-            gdb.write("\tMax capacity:        {}\n".format(self.ticket(group['_fg']['_maximum_capacity'])))
-            gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_tail']).get())))
-            gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_head']).get())))
-            gdb.write("\n")
+            fg = group['_fg']
+            fq = ioq['_fq']
 
-            queue = ioq['_fq']
-            gdb.write("\tResources executing: {}\n".format(self.ticket(queue['_resources_executing'])))
-            gdb.write("\tResources queued:    {}\n".format(self.ticket(queue['_resources_queued'])))
-            handles = std_priority_queue(queue['_handles'])
-            gdb.write("\tHandles: ({})\n".format(len(handles)))
-            for pclass_ptr in handles:
-                pass
-                self._print_io_priority_class(pclass_ptr, names_from_ptrs)
+            if True:
+                gdb.write("\tMax capacity:        {}\n".format(self.ticket(fg['_maximum_capacity'])))
+                gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(fg['_capacity_tail']).get())))
+                gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(fg['_capacity_head']).get())))
+                gdb.write("\n")
+
+                gdb.write("\tResources executing: {}\n".format(self.ticket(fq['_resources_executing'])))
+                gdb.write("\tResources queued:    {}\n".format(self.ticket(fq['_resources_queued'])))
+                handles = std_priority_queue(fq['_handles'])
+                gdb.write("\tHandles: ({})\n".format(len(handles)))
+                for pclass_ptr in handles:
+                    pass
+                    self._print_io_priority_class(pclass_ptr, names_from_ptrs)
 
             pending = circular_buffer(ioq['_sink']['_pending_io'])
             gdb.write("\tPending in sink: ({})\n".format(len(pending)))
