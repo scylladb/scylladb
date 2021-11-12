@@ -2836,6 +2836,20 @@ class small_vector(object):
         return int(self.ref['_capacity_end']) - int(self.ref['_begin'])
 
 
+class boost_small_vector(object):
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __iter__(self):
+        e = self.ref['m_holder']['m_start']
+        for i in range(0, self.ref['m_holder']['m_size']):
+            yield e.dereference()
+            e += 1
+
+    def __len__(self):
+        return self.ref['m_holder']['m_size']
+
+
 class chunked_vector(object):
     def __init__(self, ref):
         self.ref = ref
@@ -3050,19 +3064,29 @@ class scylla_io_queues(gdb.Command):
             gdb.write("\n")
 
             group = std_shared_ptr(ioq['_group']).get().dereference()
-            gdb.write("\tMax capacity:        {}\n".format(self.ticket(group['_fg']['_maximum_capacity'])))
-            gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_tail']).get())))
-            gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_head']).get())))
+            try:
+                f_groups = [ std_unique_ptr(x) for x in std_vector(group['_fgs']) ]
+                f_queues = boost_small_vector(ioq['_streams'])
+            except gdb.error:
+                f_groups = [ group['_fg'] ]
+                f_queues = [ ioq['_fq'] ]
+
+            gdb.write("\t{} streams\n".format(len(f_groups)))
             gdb.write("\n")
 
-            queue = ioq['_fq']
-            gdb.write("\tResources executing: {}\n".format(self.ticket(queue['_resources_executing'])))
-            gdb.write("\tResources queued:    {}\n".format(self.ticket(queue['_resources_queued'])))
-            handles = std_priority_queue(queue['_handles'])
-            gdb.write("\tHandles: ({})\n".format(len(handles)))
-            for pclass_ptr in handles:
-                pass
-                self._print_io_priority_class(pclass_ptr, names_from_ptrs)
+            for fg, fq in zip(f_groups, f_queues):
+                gdb.write("\tMax capacity:        {}\n".format(self.ticket(fg['_maximum_capacity'])))
+                gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(fg['_capacity_tail']).get())))
+                gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(fg['_capacity_head']).get())))
+                gdb.write("\n")
+
+                gdb.write("\tResources executing: {}\n".format(self.ticket(fq['_resources_executing'])))
+                gdb.write("\tResources queued:    {}\n".format(self.ticket(fq['_resources_queued'])))
+                handles = std_priority_queue(fq['_handles'])
+                gdb.write("\tHandles: ({})\n".format(len(handles)))
+                for pclass_ptr in handles:
+                    pass
+                    self._print_io_priority_class(pclass_ptr, names_from_ptrs)
 
             pending = circular_buffer(ioq['_sink']['_pending_io'])
             gdb.write("\tPending in sink: ({})\n".format(len(pending)))
