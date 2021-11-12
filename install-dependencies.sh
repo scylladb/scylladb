@@ -283,7 +283,7 @@ elif [ "$ID" = "fedora" ]; then
         echo "Please remove the package and try to run this script again."
         exit 1
     fi
-    yum install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
+    dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
     pip3 install "geomet<0.3,>=0.1"
     # Disable C extensions
     pip3 install scylla-driver --install-option="--no-murmur3" --install-option="--no-libev" --install-option="--no-cython"
@@ -316,7 +316,7 @@ elif [ "$ID" = "fedora" ]; then
         fi
     fi
 elif [ "$ID" = "centos" ]; then
-    yum install -y "${centos_packages[@]}"
+    dnf install -y "${centos_packages[@]}"
     echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
 elif [ "$ID" == "arch" ]; then
     # main
