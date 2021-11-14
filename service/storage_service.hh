@@ -41,7 +41,7 @@
 
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
-#include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/condition-variable.hh>
@@ -196,6 +196,7 @@ public:
         storage_service_config config,
         sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm,
+        locator::effective_replication_map_factory& erm_factory,
         sharded<netw::messaging_service>& ms,
         sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
@@ -241,7 +242,7 @@ private:
     void install_schema_version_change_listener();
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
-        return _shared_token_metadata.get()->clone_async().then([] (token_metadata tm) {
+        return get_token_metadata_ptr()->clone_async().then([] (token_metadata tm) {
             // bump the token_metadata ring_version
             // to invalidate cached token/replication mappings
             // when the modified token_metadata is committed.
@@ -250,6 +251,14 @@ private:
         });
     }
 public:
+
+    locator::effective_replication_map_factory& get_erm_factory() noexcept {
+        return _erm_factory;
+    }
+
+    const locator::effective_replication_map_factory& get_erm_factory() const noexcept {
+        return _erm_factory;
+    }
 
     token_metadata_ptr get_token_metadata_ptr() const noexcept {
         return _shared_token_metadata.get();
@@ -266,6 +275,7 @@ private:
     }
     /* This abstraction maintains the token/endpoint metadata information */
     shared_token_metadata& _shared_token_metadata;
+    locator::effective_replication_map_factory& _erm_factory;
 
     /* CDC generation management service.
      * It is sharded<>& and not simply a reference because the service will not yet be started

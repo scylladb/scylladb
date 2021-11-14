@@ -681,7 +681,7 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting effective_replication_map factory");
             erm_factory.start().get();
-            auto stop_locator_registry = deferred_stop(erm_factory);
+            auto stop_erm_factory = deferred_stop(erm_factory);
 
             supervisor::notify("starting migration manager notifier");
             mm_notifier.start().get();
@@ -824,7 +824,7 @@ int main(int ac, char** av) {
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
                 std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks),
-                std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata),
+                std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
                 std::ref(raft_gr), std::ref(lifecycle_notifier)).get();
 

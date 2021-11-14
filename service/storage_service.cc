@@ -112,6 +112,7 @@ storage_service::storage_service(abort_source& abort_source,
     storage_service_config config,
     sharded<service::migration_manager>& mm,
     locator::shared_token_metadata& stm,
+    locator::effective_replication_map_factory& erm_factory,
     sharded<netw::messaging_service>& ms,
     sharded<cdc::generation_service>& cdc_gen_service,
     sharded<repair_service>& repair,
@@ -127,6 +128,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _repair(repair)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
+        , _erm_factory(erm_factory)
         , _cdc_gen_service(cdc_gen_service)
         , _lifecycle_notifier(elc_notif)
         , _sys_dist_ks(sys_dist_ks)

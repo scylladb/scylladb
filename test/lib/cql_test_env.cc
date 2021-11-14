@@ -486,7 +486,7 @@ public:
 
             sharded<locator::effective_replication_map_factory> erm_factory;
             erm_factory.start().get();
-            auto stop_locator_registry = deferred_stop(erm_factory);
+            auto stop_erm_factory = deferred_stop(erm_factory);
 
             sharded<service::migration_notifier> mm_notif;
             mm_notif.start().get();
@@ -574,7 +574,7 @@ public:
                 std::ref(gossiper),
                 std::ref(sys_dist_ks),
                 std::ref(feature_service), sscfg, std::ref(mm),
-                std::ref(token_metadata), std::ref(ms),
+                std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(cdc_generation_service),
                 std::ref(repair),
                 std::ref(raft_gr), std::ref(elc_notif)).get();

@@ -69,7 +69,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
 
         sharded<locator::effective_replication_map_factory> erm_factory;
         erm_factory.start().get();
-        auto stop_locator_registry = deferred_stop(erm_factory);
+        auto stop_erm_factory = deferred_stop(erm_factory);
 
         mm_notif.start().get();
         auto stop_mm_notif = defer([&mm_notif] { mm_notif.stop().get(); });
@@ -104,7 +104,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             std::ref(db), std::ref(gms::get_gossiper()),
             std::ref(sys_dist_ks),
             std::ref(feature_service), sscfg,
-            std::ref(migration_manager), std::ref(token_metadata),
+            std::ref(migration_manager), std::ref(token_metadata), std::ref(erm_factory),
             std::ref(_messaging),
             std::ref(cdc_generation_service), std::ref(repair),
             std::ref(raft_gr), std::ref(elc_notif)).get();
