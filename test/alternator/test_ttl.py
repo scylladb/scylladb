@@ -201,7 +201,6 @@ def test_update_ttl_errors(dynamodb):
 # items with very short delays, "duration" can be set much lower so this
 # test will finish in a much more reasonable time.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration(dynamodb):
     duration = 1200 if is_aws(dynamodb) else 3
     # delta is a quarter of the test duration, but no less than one second,
@@ -298,7 +297,6 @@ def test_ttl_expiration(dynamodb):
 # all we want to check is that the deletion works - not the expiration time
 # parsing and semantics.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration_with_rangekey(dynamodb):
     # Note that unlike test_ttl_expiration, this test doesn't have a fixed
     # duration - it finishes as soon as the item we expect to be expired
@@ -340,7 +338,6 @@ def test_ttl_expiration_with_rangekey(dynamodb):
 # Just like test_ttl_expiration() above, these tests are extremely slow
 # because DynamoDB delays expiration by around 10 minutes.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration_hash(dynamodb):
     duration = 1200 if is_aws(dynamodb) else 3
     with new_test_table(dynamodb,
@@ -368,7 +365,6 @@ def test_ttl_expiration_hash(dynamodb):
         assert 'Item' in table.get_item(Key={'p': p2})
 
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration_range(dynamodb):
     duration = 1200 if is_aws(dynamodb) else 3
     with new_test_table(dynamodb,
@@ -403,7 +399,6 @@ def test_ttl_expiration_range(dynamodb):
 # knows this, it doesn't refuse this setting anyway - although it could.
 # This test demonstrates that:
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration_hash_wrong_type(dynamodb):
     duration = 900 if is_aws(dynamodb) else 3
     with new_test_table(dynamodb,
@@ -433,7 +428,6 @@ def test_ttl_expiration_hash_wrong_type(dynamodb):
 # test as soon as the item expires, instead of after a fixed "duration" as
 # in the above tests.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration_gsi_lsi(dynamodb):
     # In our experiments we noticed that when a table has secondary indexes,
     # items are expired with significant delay. Whereas a 10 minute delay
@@ -522,7 +516,6 @@ def test_ttl_expiration_gsi_lsi(dynamodb):
 # table already exists - so after such a change GSIs will no longer be a
 # special case.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
 def test_ttl_expiration_lsi_key(dynamodb):
     # In my experiments, a 30-minute (1800 seconds) is the typical delay
     # for expiration in this test for DynamoDB
@@ -576,7 +569,7 @@ def test_ttl_expiration_lsi_key(dynamodb):
 # content), and a special userIdentity flag saying that this is not a regular
 # REMOVE but an expiration.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL not implemented yet #5060")
+@pytest.mark.xfail(reason="TTL expiration event in streams not yet marked")
 def test_ttl_expiration_streams(dynamodb, dynamodbstreams):
     # In my experiments, a 30-minute (1800 seconds) is the typical
     # expiration delay in this test. If the test doesn't finish within
