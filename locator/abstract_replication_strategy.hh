@@ -214,4 +214,8 @@ inline mutable_effective_replication_map_ptr make_effective_replication_map(abst
 // Apply the replication strategy over the current configuration and the given token_metadata.
 future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
 
+class effective_replication_map_factory {
+    // TODO: create and erase effective_replication_map
+};
+
 }

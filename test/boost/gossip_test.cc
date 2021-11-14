@@ -67,6 +67,10 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
 
+        sharded<locator::effective_replication_map_factory> erm_factory;
+        erm_factory.start().get();
+        auto stop_locator_registry = deferred_stop(erm_factory);
+
         mm_notif.start().get();
         auto stop_mm_notif = defer([&mm_notif] { mm_notif.stop().get(); });
 
