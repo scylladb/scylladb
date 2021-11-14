@@ -63,11 +63,11 @@ sstring column_identifier::to_string() const {
 }
 
 sstring column_identifier::to_cql_string() const {
-    return util::maybe_quote(_text);
+    return util::quote(_text);
 }
 
 sstring column_identifier_raw::to_cql_string() const {
-    return util::maybe_quote(_text);
+    return util::quote(_text);
 }
 
 column_identifier_raw::column_identifier_raw(sstring raw_text, bool keep_case)

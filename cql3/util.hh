@@ -87,7 +87,25 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
 /// forbids non-alpha-numeric characters in identifier names.
 /// Quoting involves wrapping the string in double-quotes ("). A double-quote
 /// character itself is quoted by doubling it.
+/// Using maybe_quote() is not recommended, because while usually avoiding
+/// quotes for lowercase names is recommended, it can not be avoided if the
+/// name is a CQL keyword - and this function is not aware of the full list
+/// of keywords. So always quoting - with quote() - is recommended.
+[[deprecated("use quote instead")]]
 sstring maybe_quote(const sstring& s);
+
+/// quote() takes an identifier - the name of a column, table or keyspace -
+/// and transforms it to a string which can be safely used in CQL commands.
+/// Quoting involves wrapping the name in double-quotes ("). A double-quote
+/// character itself is quoted by doubling it.
+/// Quoting is necessary when the identifier contains non-alpha-numeric
+/// characters, when it contains uppercase letters (which will be folded to
+/// lowercase if not quoted), or when the identifier is one of many CQL
+/// keywords. But it's allowed - and easier - to just unconditionally
+/// quote the identifier name in CQL, so that is what we'll do.
+/// Unconditionally quoting the identifier name is useful so we don't need
+/// to keep track of which names are CQL keywords (see issue #9450).
+sstring quote(const sstring& s);
 
 // Check whether timestamp is not too far in the future as this probably
 // indicates its incorrectness (for example using other units than microseconds).
