@@ -319,6 +319,8 @@ namespace locator {
 
 class effective_replication_map_factory : public peering_sharded_service<effective_replication_map_factory> {
     std::unordered_map<effective_replication_map::factory_key, effective_replication_map*> _effective_replication_maps;
+    future<> _background_work = make_ready_future<>();
+    bool _stopped = false;
 
 public:
     // looks up the effective_replication_map on the local shard.
@@ -329,11 +331,19 @@ public:
     // Therefore create should be called first on shard 0, then on all other shards.
     future<effective_replication_map_ptr> create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
 
+    future<> stop() noexcept;
+
+    bool stopped() const noexcept {
+        return _stopped;
+    }
+
 private:
     effective_replication_map_ptr find_effective_replication_map(const effective_replication_map::factory_key& key) const;
     effective_replication_map_ptr insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key);
 
     bool erase_effective_replication_map(effective_replication_map* erm);
+
+    void submit_background_work(future<> fut);
 
     friend class effective_replication_map;
 };

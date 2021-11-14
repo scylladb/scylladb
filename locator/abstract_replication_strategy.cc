@@ -348,6 +348,17 @@ future<> effective_replication_map::clear_gently() noexcept {
 effective_replication_map::~effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
+        try {
+            struct background_clear_holder {
+                locator::replication_map replication_map;
+                locator::token_metadata_ptr tmptr;
+            };
+            auto holder = make_lw_shared<background_clear_holder>({std::move(_replication_map), std::move(_tmptr)});
+            auto fut = when_all(utils::clear_gently(holder->replication_map), utils::clear_gently(holder->tmptr)).discard_result().then([holder] {});
+            _factory->submit_background_work(std::move(fut));
+        } catch (...) {
+            // ignore
+        }
     }
 }
 
@@ -417,6 +428,32 @@ bool effective_replication_map_factory::erase_effective_replication_map(effectiv
     rslogger.debug("erase_effective_replication_map: erased {} [{}]", key, fmt::ptr(erm));
     _effective_replication_maps.erase(it);
     return true;
+}
+
+future<> effective_replication_map_factory::stop() noexcept {
+    _stopped = true;
+    if (!_effective_replication_maps.empty()) {
+        for (auto& [key, erm] : _effective_replication_maps) {
+            rslogger.debug("effective_replication_map_factory::stop found outstanding map {} [{}]", key, fmt::ptr(erm));
+        }
+        on_internal_error_noexcept(rslogger, "effective_replication_map_factory stopped with outstanding maps");
+    }
+    return std::exchange(_background_work, make_ready_future<>());
+}
+
+void effective_replication_map_factory::submit_background_work(future<> fut) {
+    if (fut.available() && !fut.failed()) {
+        return;
+    }
+    if (_stopped) {
+        on_internal_error(rslogger, "Cannot submit background work: registry already stopped");
+    }
+    _background_work = _background_work.then([fut = std::move(fut)] () mutable {
+        return std::move(fut).handle_exception([] (std::exception_ptr ex) {
+            // Ignore errors since we have nothing else to do about them.
+            rslogger.warn("effective_replication_map_factory background task failed: {}. Ignored.", std::move(ex));
+        });
+    });
 }
 
 } // namespace locator
