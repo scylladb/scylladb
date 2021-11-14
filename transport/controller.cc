@@ -65,6 +65,10 @@ std::vector<socket_address> controller::listen_addresses() const {
     return _listen_addresses;
 }
 
+bool controller::is_server_running() const {
+    return bool(_server);
+}
+
 future<> controller::start_server() {
     if (!_ops_sem.try_wait()) {
         throw std::runtime_error(format("CQL server is stopping, try again later"));

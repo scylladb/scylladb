@@ -124,6 +124,10 @@ std::vector<socket_address> redis_service::listen_addresses() const {
     return _listen_addresses;
 }
 
+bool redis_service::is_server_running() const {
+    return !_listen_addresses.empty();
+}
+
 future<> redis_service::start_server()
 {
     // 1. Create keyspace/tables used by redis API if not exists.

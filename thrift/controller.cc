@@ -55,6 +55,10 @@ std::vector<socket_address> thrift_controller::listen_addresses() const {
     return {};
 }
 
+bool thrift_controller::is_server_running() const {
+    return bool(_server);
+}
+
 future<> thrift_controller::start_server() {
     if (!_ops_sem.try_wait()) {
         throw std::runtime_error(format("Thrift server is stopping, try again later"));

@@ -183,7 +183,7 @@ void set_transport_controller(http_context& ctx, routes& r, cql_transport::contr
 
     ss::is_native_transport_running.set(r, [&ctl] (std::unique_ptr<request> req) {
         return smp::submit_to(0, [&] {
-            return !ctl.listen_addresses().empty();
+            return ctl.is_server_running();
         }).then([] (bool running) {
             return make_ready_future<json::json_return_type>(running);
         });

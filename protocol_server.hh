@@ -37,6 +37,8 @@ public:
     virtual sstring protocol_version() const = 0;
     /// Addresses the server is listening on, should be empty when server is not running.
     virtual std::vector<socket_address> listen_addresses() const = 0;
+    /// Check if the server is running.
+    virtual bool is_server_running() const = 0;
     /// Start the server.
     /// Can be called multiple times, in any state of the server.
     virtual future<> start_server() = 0;
