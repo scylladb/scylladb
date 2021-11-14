@@ -68,8 +68,8 @@ using namespace std::chrono_literals;
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms);
 
-migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, gms::gossiper& gossiper) :
-        _notifier(notifier), _feat(feat), _messaging(ms), _gossiper(gossiper)
+migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, gms::gossiper& gossiper, service::raft_group_registry& raft_gr) :
+        _notifier(notifier), _feat(feat), _messaging(ms), _gossiper(gossiper), _raft_gr(raft_gr)
         , _schema_push([this] { return passive_announce(); })
 {
 }

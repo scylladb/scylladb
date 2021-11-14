@@ -53,6 +53,7 @@
 #include "message/msg_addr.hh"
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
+#include "service/raft/raft_group_registry.hh"
 
 #include <vector>
 
@@ -88,10 +89,11 @@ private:
     netw::messaging_service& _messaging;
     gms::gossiper& _gossiper;
     seastar::abort_source _as;
+    service::raft_group_registry& _raft_gr;
     serialized_action _schema_push;
     utils::UUID _schema_version_to_publish;
 public:
-    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, gms::gossiper& gossiper);
+    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
