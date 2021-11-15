@@ -256,6 +256,11 @@ struct timeout_error : public error {
     using error::error;
 };
 
+struct state_machine_error: public error {
+    state_machine_error(std::experimental::source_location l = std::experimental::source_location::current())
+        : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
+};
+
 struct no_other_voting_member : public error {
     no_other_voting_member() : error("Cannot stepdown because there is no other voting member") {}
 };

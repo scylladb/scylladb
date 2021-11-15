@@ -356,7 +356,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
         }
     }
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
-    logger.trace("{} waiting for entry {}.{}", id(), eid.term, eid.idx);
+    logger.trace("[{}] waiting for entry {}.{}", id(), eid.term, eid.idx);
 
     // This will track the commit/apply status of the entry
     auto [it, inserted] = container.emplace(eid.idx, op_status{eid.term, promise<>()});
@@ -400,7 +400,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type) {
     }
     assert(inserted);
     co_await it->second.done.get_future();
-    logger.trace("{} done waiting for {}.{}", id(), eid.term, eid.idx);
+    logger.trace("[{}] done waiting for {}.{}", id(), eid.term, eid.idx);
     co_return;
 }
 
@@ -415,7 +415,7 @@ future<> server_impl::add_entry_internal(T command, wait_type type) {
 future<entry_id> server_impl::add_entry_on_leader(command cmd) {
     // Wait for a new slot to become available
     co_await _fsm->wait_max_log_size();
-    logger.trace("Adding entry after log size limit check.");
+    logger.trace("[{}] adding entry after log size limit check", id());
 
     const log_entry& e = _fsm->add_entry(std::move(cmd));
 
@@ -428,6 +428,7 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
         // configuration.
         co_return add_entry_reply{not_a_leader{server_id{}}};
     }
+    logger.trace("[{}] adding a forwarded entry from {}", id(), from);
     try {
         co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd))};
     } catch (raft::not_a_leader& e) {
@@ -438,7 +439,7 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
 future<> server_impl::add_entry(command command, wait_type type) {
     _stats.add_command++;
     server_id leader = _fsm->current_leader();
-    logger.trace("An entry is submitted");
+    logger.trace("[{}] an entry is submitted", id());
     if (!_config.enable_forwarding) {
         if (leader != _id) {
             throw not_a_leader{leader};
@@ -448,18 +449,18 @@ future<> server_impl::add_entry(command command, wait_type type) {
     }
     while (true) {
         if (leader == server_id{}) {
-            logger.trace("The leader is unknown, waiting through uncertainty");
+            logger.trace("[{}] the leader is unknown, waiting through uncertainty", id());
             co_await wait_for_leader();
             leader = _fsm->current_leader();
         } else {
             auto reply = co_await [&] {
                 if (leader == _id) {
-                    logger.trace("An entry proceeds on a leader");
+                    logger.trace("[{}] an entry proceeds on a leader", id());
                     // Make a copy of the command since we may still
                     // retry and forward it.
                     return execute_add_entry(leader, command);
                 } else {
-                    logger.trace("Forwarding the entry to {}", leader);
+                    logger.trace("[{}] forwarding the entry to {}", leader, id());
                     return _rpc->send_add_entry(leader, command);
                 }
             }();
@@ -483,15 +484,15 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
         // Wait for a new slot to become available
         auto cfg = get_configuration().current;
         for (auto& addr : add) {
-            logger.trace("Adding server {}", addr.id);
+            logger.trace("[{}] adding server {}", id(), addr.id);
             auto [it, inserted] = cfg.insert(addr);
             if (!inserted) {
-                logger.warn("The server {} already exists in configuration of {}", addr.id, _id);
+                logger.warn("[{}] the server {} already exists in configuration of {}", id(), addr.id);
             }
         }
-        for (auto& id : del) {
-            logger.trace("Removing server {}", id);
-            cfg.erase(server_address{.id = id});
+        for (auto& to_remove: del) {
+            logger.trace("[{}] removing server {}", id(), to_remove);
+            cfg.erase(server_address{.id = to_remove});
         }
         co_await enter_joint_configuration(cfg);
         // Wait for transition joint->non-joint outside on the
@@ -535,7 +536,7 @@ future<> server_impl::modify_config(std::vector<server_address> add, std::vector
                     // still retry and forward them.
                     return execute_modify_config(leader, add, del);
                 } else {
-                    logger.trace("Forwarding the entry to {}", leader);
+                    logger.trace("[{}] forwarding the entry to {}", id(), leader);
                     return _rpc->send_modify_config(leader, add, del);
                 }
             }();
@@ -936,7 +937,11 @@ future<> server_impl::applier_fiber() {
 
                 auto size = commands.size();
                 if (size) {
-                    co_await _state_machine->apply(std::move(commands));
+                    try {
+                        co_await _state_machine->apply(std::move(commands));
+                    } catch (...) {
+                        std::throw_with_nested(raft::state_machine_error{});
+                    }
                     _stats.applied_entries += size;
                 }
 

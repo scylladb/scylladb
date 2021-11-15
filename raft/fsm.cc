@@ -537,6 +537,7 @@ void fsm::tick_leader() {
         logger.trace("tick[{}]: stepdown is active", _my_id);
         auto me = leader_state().tracker.find(_my_id);
         if (me == nullptr || !me->can_vote) {
+            logger.trace("tick[{}]: not aborting stepdown because we have been removed from the configuration", _my_id);
             // Do not abort stepdown if not part of the current
             // config or non voting member since the node cannot
             // be a leader any longer
