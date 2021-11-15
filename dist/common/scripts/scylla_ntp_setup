@@ -66,18 +66,18 @@ if __name__ == '__main__':
 
     target = None
     if os.path.exists('/lib/systemd/systemd-timesyncd'):
-        if systemd_unit('systemd-timesyncd').is_active():
+        if systemd_unit('systemd-timesyncd').is_active() == 'active':
             print('ntp is already configured, skip setup')
             sys.exit(0)
         target = 'systemd-timesyncd'
     if shutil.which('chronyd'):
-        if get_chrony_unit().is_active():
+        if get_chrony_unit().is_active() == 'active':
             print('ntp is already configured, skip setup')
             sys.exit(0)
         if not target:
             target = 'chrony'
     if shutil.which('ntpd'):
-        if get_ntp_unit().is_active():
+        if get_ntp_unit().is_active() == 'active':
             print('ntp is already configured, skip setup')
             sys.exit(0)
         if not target:
