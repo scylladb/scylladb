@@ -1046,12 +1046,8 @@ void writer::maybe_record_large_partitions(const sstables::sstable& sst, const s
     size_entry.max_value = std::max(size_entry.max_value, partition_size);
     row_count_entry.max_value = std::max(row_count_entry.max_value, rows);
     auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get0();
-    if (ret.size) [[unlikely]] {
-        size_entry.above_threshold++;
-    }
-    if (ret.rows) [[unlikely]] {
-        row_count_entry.above_threshold++;
-    }
+    size_entry.above_threshold += unsigned(bool(ret.size));
+    row_count_entry.above_threshold += unsigned(bool(ret.rows));
 }
 
 void writer::maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
