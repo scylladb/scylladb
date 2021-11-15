@@ -222,7 +222,8 @@ future<> stream_transfer_task::execute() {
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
     auto reason = session->get_reason();
-    return get_stream_manager().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (stream_manager& sm) mutable {
+    auto& sm = session->manager();
+    return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (stream_manager& sm) mutable {
         auto& tbl = sm.db().find_column_family(cf_id);
       return sm.db().obtain_reader_permit(tbl, "stream-transfer-task", db::no_timeout).then([&sm, &tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason] (reader_permit permit) mutable {
         auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, [&sm, plan_id, addr = id.addr] (size_t sz) {
@@ -239,9 +240,9 @@ future<> stream_transfer_task::execute() {
             return si->reader.close();
         });
       });
-    }).then([this, plan_id, cf_id, id] {
+    }).then([this, plan_id, cf_id, id, &sm] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
-        return get_local_stream_manager().ms().send_stream_mutation_done(id, plan_id, _ranges,
+        return sm.ms().send_stream_mutation_done(id, plan_id, _ranges,
                 cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
             sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
             std::rethrow_exception(ep);
