@@ -43,6 +43,12 @@ template <typename T>
 using range = wrapping_range<T>;
 
 using ring_position = dht::ring_position;
+
+// Note: the bounds of a  clustering range don't necessarily satisfy `rb.end()->value() >= lb.end()->value()`,
+// where `lb`, `rb` are the left and right bound respectively, if the bounds use non-full clustering
+// key prefixes. Inclusiveness of the range's bounds must be taken into account during comparisons.
+// For example, consider clustering key type consisting of two ints. Then [0:1, 0:] is a valid non-empty range
+// (e.g. it includes the key 0:2) even though 0: < 0:1 w.r.t the clustering prefix order.
 using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
 // If `range` was supposed to be used with a comparator `cmp`, then
