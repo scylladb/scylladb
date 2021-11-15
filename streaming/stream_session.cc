@@ -87,7 +87,7 @@ void stream_manager::init_messaging_service_handler() {
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
         return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] (auto& sm) mutable {
-            auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
+            auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
             auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;

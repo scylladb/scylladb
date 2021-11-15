@@ -45,9 +45,9 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstring description_,
+future<stream_state> stream_result_future::init_sending_side(stream_manager& mgr, UUID plan_id_, sstring description_,
         std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
-    auto sr = ::make_shared<stream_result_future>(plan_id_, description_, coordinator_);
+    auto sr = ::make_shared<stream_result_future>(mgr, plan_id_, description_, coordinator_);
     get_local_stream_manager().register_sending(sr);
 
     for (auto& listener : listeners_) {
@@ -65,7 +65,7 @@ future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstr
     return sr->_done.get_future();
 }
 
-shared_ptr<stream_result_future> stream_result_future::init_receiving_side(UUID plan_id, sstring description, inet_address from) {
+shared_ptr<stream_result_future> stream_result_future::init_receiving_side(stream_manager& mgr, UUID plan_id, sstring description, inet_address from) {
     auto& sm = get_local_stream_manager();
     auto sr = sm.get_receiving_stream(plan_id);
     if (sr) {
@@ -76,7 +76,7 @@ shared_ptr<stream_result_future> stream_result_future::init_receiving_side(UUID 
     }
     sslog.info("[Stream #{}] Executing streaming plan for {} with peers={}, slave", plan_id, description, from);
     bool is_receiving = true;
-    sr = ::make_shared<stream_result_future>(plan_id, description, is_receiving);
+    sr = ::make_shared<stream_result_future>(mgr, plan_id, description, is_receiving);
     sm.register_receiving(sr);
     return sr;
 }

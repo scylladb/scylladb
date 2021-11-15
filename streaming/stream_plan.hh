@@ -86,7 +86,6 @@ public:
         , _reason(reason)
         , _coordinator(make_shared<stream_coordinator>())
     {
-        (void)_mgr;
     }
 
     /**
