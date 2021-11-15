@@ -259,11 +259,9 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
         throw api_error::validation(format("{}: expected number, found type '{}'", diagnostic, it->name));
     }
     try {
-        if (it->value.IsNumber()) {
-             // FIXME(sarna): should use big_decimal constructor with numeric values directly:
-            return big_decimal(rjson::print(it->value));
-        }
         if (!it->value.IsString()) {
+            // We shouldn't reach here. Callers normally validate their input
+            // earlier with validate_value().
             throw api_error::validation(format("{}: improperly formatted number constant", diagnostic));
         }
         return big_decimal(rjson::to_string_view(it->value));

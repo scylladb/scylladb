@@ -180,3 +180,33 @@ def test_invalid_numbers(test_table_s):
                 Key={'p': {'S': p}},
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': {'N': s}})
+
+# In DynamoDB's JSON format, a number value is represented as map with key
+# "N" and the value is a *string* containing the number. E.g., {"N": "123"}.
+# Using a string instead of a number in the JSON is important to guarantee
+# the full range of DynamoDB's floating point even if the JSON libraries
+# do not understand them. But can a user use a number in the JSON anyway?
+# E.g., would {"N": 123} work as a number value? It turns out that the
+# answer is no - it doesn't work. Let's check that:
+def test_number_in_json(test_table_s):
+    # We must use client_no_transform() to build the JSON encoding
+    # ourselves instead of boto3 doing it automatically for us.
+    with client_no_transform(test_table_s.meta.client) as client:
+        p = random_string()
+        # Alternator reads numeric inputs in several code paths which may
+        # handle errors differently, so let's verify several of them.
+        # It turns out that all code paths call the same validate_value()
+        # function, so result in the same error.
+        with pytest.raises(ClientError, match='SerializationException'):
+            client.update_item(TableName=test_table_s.name,
+                Key={'p': {'S': p}},
+                UpdateExpression='SET a = :val',
+                # Note that we're passing a number 123 here, not a string
+                # '123', and that is wrong.
+                ExpressionAttributeValues={':val': {'N': 123}})
+        with pytest.raises(ClientError, match='SerializationException'):
+            client.update_item(TableName=test_table_s.name,
+                Key={'p': {'S': p}},
+                UpdateExpression='SET a = :vgood',
+                ConditionExpression='a < :vbad',
+                ExpressionAttributeValues={':vgood': {'N': '1'}, ':vbad': {'N': 123}})

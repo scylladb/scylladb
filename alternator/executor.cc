@@ -1133,7 +1133,12 @@ void validate_value(const rjson::value& v, const char* caller) {
         if (!it->value.IsString()) {
             throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
         }
-    } else if (type != "N" && type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
+    } else if (type == "N") {
+        if (!it->value.IsString()) {
+            // DynamoDB uses a SerializationException in this case, not ValidationException.
+            throw api_error::serialization(format("{}: number value must be encoded as string '{}'", caller, v));
+        }
+    } else if (type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
         // TODO: can do more sanity checks on the content of the above types.
         throw api_error::validation(format("{}: unknown type {} for value {}", caller, type, v));
     }
