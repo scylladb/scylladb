@@ -184,14 +184,18 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     _logger.info("exception while advertising new connection: {}", std::current_exception());
                 }
                 // Block while monitoring for lifetime/errors.
-                return conn->process().finally([this, conn] {
-                    return unadvertise_connection(conn);
-                }).handle_exception([this] (std::exception_ptr ep) {
-                    if (is_broken_pipe_or_connection_reset(ep)) {
-                        // expected if another side closes a connection or we're shutting down
-                        return;
+                return conn->process().then_wrapped([this, conn] (auto f) {
+                    try {
+                        f.get();
+                    } catch (...) {
+                        auto ep = std::current_exception();
+                        if (!is_broken_pipe_or_connection_reset(ep)) {
+                            // some exceptions are expected if another side closes a connection
+                            // or we're shutting down
+                            _logger.info("exception while processing connection: {}", ep);
+                        }
                     }
-                    _logger.info("exception while processing connection: {}", ep);
+                    return unadvertise_connection(conn);
                 });
             });
             return stop_iteration::no;
