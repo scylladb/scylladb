@@ -293,18 +293,23 @@ public:
         return *this;
     }
 
-    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
-    flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt_, const query::clustering_row_ranges& ck_ranges = {}) {
-        testlog.trace("Expect {}, ranges={}", rt_, ck_ranges);
+private:
+    void apply_rt(const range_tombstone& rt_, const query::clustering_row_ranges& ck_ranges = {}) {
         auto rt = trim(maybe_drop_deletion_time(rt_), ck_ranges);
-        _check_rts = true;
         // If looking at any tombstones (which is likely), read them.
         // For finer range restriction the test should call
-        // may_produce_tombstones() before the corresponding
-        // produces_range_tombstone()
+        // may_produce_tombstones() before the relevant produces*()
         may_produce_tombstones({position_in_partition(rt.position()), position_in_partition(rt.end_position())}, ck_ranges);
         testlog.trace("Applying {} to expected range tombstone list", rt);
         _expected_tombstones.apply(*_reader.schema(), rt);
+    }
+
+public:
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
+        testlog.trace("Expect {}, ranges={}", rt, ck_ranges);
+        apply_rt(rt, ck_ranges);
+        _check_rts = true;
         _rt_ck_ranges = ck_ranges;
         return *this;
     }
@@ -324,15 +329,17 @@ public:
 
     flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf) {
         testlog.trace("Expect {}", mutation_fragment::printer(s, mf));
+        if (mf.is_range_tombstone()) {
+            apply_rt(mf.as_range_tombstone());
+            return *this;
+        }
+
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected {}, but got end of stream", mutation_fragment::printer(*_reader.schema(), mf)));
         }
         if (!mfopt->equal(s, mf)) {
             BOOST_FAIL(format("Expected {}, but got {}", mutation_fragment::printer(*_reader.schema(), mf), mutation_fragment::printer(*_reader.schema(), *mfopt)));
-        }
-        if (mf.is_range_tombstone()) {
-            apply_rt_unchecked(mf.as_range_tombstone());
         }
         return *this;
     }
