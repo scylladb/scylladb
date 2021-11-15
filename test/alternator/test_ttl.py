@@ -670,3 +670,53 @@ def read_entire_stream(dynamodbstreams, table):
             records.extend(response['Records'])
             iter = response.get('NextShardIterator')
     return records
+
+# Whereas tests above use tiny tables with just a few items, this one creates
+# a table with significantly more items - one that will need to be scanned
+# in more than one page - so verifies that the expiration scanner service
+# does the paging properly.
+@pytest.mark.veryslow
+def test_ttl_expiration_long(dynamodb):
+    # Write 100*N items to the table, 1/100th of them are expired. The test
+    # completes when all of them are expired (or on timeout).
+    # To compilicate matter for the paging that we're trying to test,
+    # have N partitions with 100 items in each, so potentially the paging
+    # might stop in the middle of a partition.
+    # We need to pick a relatively big N to cause the 100*N items to exceed
+    # the size of a single page (I tested this by stopping the scanner after
+    # the first page and checking which N starts to generate incorrect results)
+    N=400
+    max_duration = 1200 if is_aws(dynamodb) else 10
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' },
+                               { 'AttributeName': 'c', 'AttributeType': 'N' }]) as table:
+        ttl_spec = {'AttributeName': 'expiration', 'Enabled': True}
+        response = table.meta.client.update_time_to_live(TableName=table.name,
+            TimeToLiveSpecification=ttl_spec)
+        with table.batch_writer() as batch:
+            for p in range(N):
+                for c in range(100):
+                    # Only the first item (c==0) in each partition will expire
+                    expiration = int(time.time())-60 if c==0 else int(time.time())+3600
+                    batch.put_item(Item={
+                        'p': p, 'c': c, 'expiration': expiration })
+        start_time = time.time()
+        while time.time() < start_time + max_duration:
+            # We could have used Select=COUNT here, but Alternator doesn't
+            # implement it yet (issue #5058).
+            count = 0
+            response = table.scan(ConsistentRead=True)
+            if 'Count' in response:
+                count += response['Count']
+            while 'LastEvaluatedKey' in response:
+                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'],
+                    ConsistentRead=True)
+                if 'Count' in response:
+                    count += response['Count']
+            print(count)
+            if count == 99*N:
+                break
+            time.sleep(max_duration/15.0)
+        assert count == 99*N
