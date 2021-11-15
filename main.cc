@@ -395,6 +395,7 @@ sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
 sharded<database>* the_database;
+sharded<streaming::stream_manager> *the_stream_manager;
 }
 
 int main(int ac, char** av) {
@@ -488,7 +489,7 @@ int main(int ac, char** av) {
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
     sharded<sstables_loader> sst_loader;
-    sharded<streaming::stream_manager>& stream_manager = streaming::get_stream_manager();
+    sharded<streaming::stream_manager> stream_manager;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -1039,6 +1040,7 @@ int main(int ac, char** av) {
                 stop_raft_rpc->cancel();
             }
 
+            debug::the_stream_manager = &stream_manager;
             supervisor::notify("starting streaming service");
             stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging), std::ref(mm), std::ref(gossiper)).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {

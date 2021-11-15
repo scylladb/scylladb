@@ -210,14 +210,4 @@ private:
     future<> uninit_messaging_service_handler();
 };
 
-extern distributed<stream_manager> _the_stream_manager;
-
-inline distributed<stream_manager>& get_stream_manager() {
-    return _the_stream_manager;
-}
-
-inline stream_manager& get_local_stream_manager() {
-    return _the_stream_manager.local();
-}
-
 } // namespace streaming
