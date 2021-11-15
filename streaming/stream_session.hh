@@ -335,6 +335,9 @@ public:
         return _session_info;
     }
 
+    stream_manager& manager() noexcept { return _mgr; }
+    const stream_manager& manager() const noexcept { return _mgr; }
+
     future<> update_progress();
 
     void receive_task_completed(UUID cf_id);
