@@ -804,25 +804,27 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s, reader_permit permit);
 
-// Mutation vector cannot be empty, all mutations should have the same schema.
-flat_mutation_reader flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation>,
+// All mutations should have the same schema.
+flat_mutation_reader make_flat_mutation_reader_from_mutations(schema_ptr schema, reader_permit permit, std::vector<mutation>,
         const dht::partition_range& pr = query::full_partition_range, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
-// Mutation vector cannot be empty, all mutations should have the same schema.
-inline flat_mutation_reader flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
-    return flat_mutation_reader_from_mutations(std::move(permit), std::move(ms), query::full_partition_range, fwd);
+// All mutations should have the same schema.
+inline flat_mutation_reader make_flat_mutation_reader_from_mutations(schema_ptr schema, reader_permit permit, std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
+    return make_flat_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, fwd);
 }
 
-// Mutation vector cannot be empty, all mutations should have the same schema.
+// All mutations should have the same schema.
 flat_mutation_reader
-flat_mutation_reader_from_mutations(reader_permit permit,
+make_flat_mutation_reader_from_mutations(schema_ptr schema,
+                                    reader_permit permit,
                                     std::vector<mutation> ms,
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
-// Mutation vector cannot be empty, all mutations should have the same schema.
+// All mutations should have the same schema.
 flat_mutation_reader
-flat_mutation_reader_from_mutations(reader_permit permit,
+make_flat_mutation_reader_from_mutations(schema_ptr schema,
+                                    reader_permit permit,
                                     std::vector<mutation> ms,
                                     const dht::partition_range& pr,
                                     const query::partition_slice& slice,

@@ -1660,7 +1660,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
     db::view::view_update_builder builder = co_await db::view::make_view_update_builder(
             base,
             std::move(views),
-            flat_mutation_reader_from_mutations(std::move(permit), {std::move(m)}),
+            make_flat_mutation_reader_from_mutations(m.schema(), std::move(permit), {std::move(m)}),
             std::move(existings),
             now);
 

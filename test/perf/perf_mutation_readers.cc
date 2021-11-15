@@ -166,7 +166,7 @@ future<> combined::consume_all(flat_mutation_reader mr) const
 PERF_TEST_F(combined, one_row)
 {
     std::vector<flat_mutation_reader> mrs;
-    mrs.emplace_back(flat_mutation_reader_from_mutations(permit(), one_row_stream()));
+    mrs.emplace_back(make_flat_mutation_reader_from_mutations(schema().schema(), permit(), one_row_stream()));
     return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
 }
 
@@ -174,7 +174,7 @@ PERF_TEST_F(combined, single_active)
 {
     std::vector<flat_mutation_reader> mrs;
     mrs.reserve(4);
-    mrs.emplace_back(flat_mutation_reader_from_mutations(permit(), single_stream()));
+    mrs.emplace_back(make_flat_mutation_reader_from_mutations(schema().schema(), permit(), single_stream()));
     for (auto i = 0; i < 3; i++) {
         mrs.emplace_back(make_empty_flat_reader(schema().schema(), permit()));
     }
@@ -186,7 +186,7 @@ PERF_TEST_F(combined, many_overlapping)
     std::vector<flat_mutation_reader> mrs;
     mrs.reserve(4);
     for (auto i = 0; i < 4; i++) {
-        mrs.emplace_back(flat_mutation_reader_from_mutations(permit(), single_stream()));
+        mrs.emplace_back(make_flat_mutation_reader_from_mutations(schema().schema(), permit(), single_stream()));
     }
     return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
 }
@@ -197,7 +197,7 @@ PERF_TEST_F(combined, disjoint_interleaved)
         boost::copy_range<std::vector<flat_mutation_reader>>(
             disjoint_interleaved_streams()
             | boost::adaptors::transformed([this] (auto&& ms) {
-                return flat_mutation_reader_from_mutations(permit(), std::move(ms));
+                return schema().schema(), make_flat_mutation_reader_from_mutations(schema().schema(), permit(), std::move(ms));
             })
         )
     ));
@@ -209,7 +209,7 @@ PERF_TEST_F(combined, disjoint_ranges)
         boost::copy_range<std::vector<flat_mutation_reader>>(
             disjoint_ranges_streams()
             | boost::adaptors::transformed([this] (auto&& ms) {
-                return flat_mutation_reader_from_mutations(permit(), std::move(ms));
+                return make_flat_mutation_reader_from_mutations(schema().schema(), permit(), std::move(ms));
             })
         )
     ));
@@ -221,7 +221,7 @@ PERF_TEST_F(combined, overlapping_partitions_disjoint_rows)
         boost::copy_range<std::vector<flat_mutation_reader>>(
             overlapping_partitions_disjoint_rows_streams()
             | boost::adaptors::transformed([this] (auto&& ms) {
-                return flat_mutation_reader_from_mutations(permit(), std::move(ms));
+                return make_flat_mutation_reader_from_mutations(schema().schema(), permit(), std::move(ms));
             })
         )
     ));
@@ -293,7 +293,7 @@ PERF_TEST_F(clustering_combined, ranges_generic)
         boost::copy_range<std::vector<flat_mutation_reader>>(
             almost_disjoint_clustering_ranges()
             | boost::adaptors::transformed([this] (auto&& mb) {
-                return flat_mutation_reader_from_mutations(permit(), {std::move(mb.m)});
+                return make_flat_mutation_reader_from_mutations(schema().schema(), permit(), {std::move(mb.m)});
             })
         )
     ));
@@ -304,7 +304,7 @@ PERF_TEST_F(clustering_combined, ranges_specialized)
     auto rbs = boost::copy_range<std::vector<reader_bounds>>(
         almost_disjoint_clustering_ranges() | boost::adaptors::transformed([this] (auto&& mb) {
             return reader_bounds{
-                flat_mutation_reader_from_mutations(permit(), {std::move(mb.m)}),
+                make_flat_mutation_reader_from_mutations(schema().schema(), permit(), {std::move(mb.m)}),
                 std::move(mb.lower), std::move(mb.upper)};
         }));
     auto q = std::make_unique<simple_position_reader_queue>(*schema().schema(), std::move(rbs));

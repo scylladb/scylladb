@@ -509,7 +509,7 @@ public:
         , _cmp(*_query_schema)
         , _create_reader(std::move(create_reader))
         , _filter(std::move(filter))
-        , _dummy_reader(flat_mutation_reader_from_mutations(
+        , _dummy_reader(make_flat_mutation_reader_from_mutations(_query_schema,
                 std::move(permit), {mutation(_query_schema, std::move(pk))}, _query_schema->full_slice(), fwd_sm))
         , _reversed(reversed)
     {
@@ -800,13 +800,13 @@ sstable_set_impl::create_single_key_sstable_reader(
     // we want to emit partition_start/end if no rows were found,
     // to prevent https://github.com/scylladb/scylla/issues/3552.
     //
-    // Use `flat_mutation_reader_from_mutations` with an empty mutation to emit
+    // Use `make_flat_mutation_reader_from_mutations` with an empty mutation to emit
     // the partition_start/end pair and append it to the list of readers passed
     // to make_combined_reader to ensure partition_start/end are emitted even if
     // all sstables actually containing the partition were filtered.
     auto num_readers = readers.size();
     if (num_readers != num_sstables) {
-        readers.push_back(flat_mutation_reader_from_mutations(permit, {mutation(schema, *pos.key())}, slice, fwd));
+        readers.push_back(make_flat_mutation_reader_from_mutations(schema, permit, {mutation(schema, *pos.key())}, slice, fwd));
     }
     sstable_histogram.add(num_readers);
     return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);

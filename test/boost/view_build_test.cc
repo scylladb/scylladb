@@ -441,7 +441,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             auto& pc = service::get_local_streaming_priority();
 
             auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
-            sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
+            sst->write_components(make_flat_mutation_reader_from_mutations(m.schema(), std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;
@@ -551,7 +551,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         auto& pc = service::get_local_streaming_priority();
 
         auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
-        sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
+        sst->write_components(make_flat_mutation_reader_from_mutations(m.schema(), std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
 
@@ -628,7 +628,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             auto& pc = service::get_local_streaming_priority();
 
             auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
-            sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
+            sst->write_components(make_flat_mutation_reader_from_mutations(m.schema(), std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;
