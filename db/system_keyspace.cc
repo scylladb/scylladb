@@ -90,6 +90,7 @@
 #include "service/paxos/paxos_state.hh"
 #include "utils/build_id.hh"
 #include "query-result-set.hh"
+#include "compaction/compaction_manager.hh"
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
@@ -440,32 +441,6 @@ schema_ptr system_keyspace::built_indexes() {
        return builder.build(schema_builder::compact_storage::no);
     }();
     return range_xfers;
-}
-
-/*static*/ schema_ptr system_keyspace::compactions_in_progress() {
-    static thread_local auto compactions_in_progress = [] {
-        schema_builder builder(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
-        // partition key
-        {{"id", uuid_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-            {"columnfamily_name", utf8_type},
-            {"inputs", set_type_impl::get_instance(int32_type, true)},
-            {"keyspace_name", utf8_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "unfinished compactions"
-        );
-       builder.with_version(generate_schema_version(builder.uuid()));
-       return builder.build(schema_builder::compact_storage::no);
-    }();
-    return compactions_in_progress;
 }
 
 /*static*/ schema_ptr system_keyspace::compaction_history() {
@@ -1803,10 +1778,12 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
 
 class cluster_status_table : public memtable_filling_virtual_table {
 private:
+    database& _db;
     service::storage_service& _ss;
 public:
-    cluster_status_table(service::storage_service& ss)
+    cluster_status_table(database& db, service::storage_service& ss)
             : memtable_filling_virtual_table(build_schema())
+            , _db(db)
             , _ss(ss) {}
 
     static schema_ptr build_schema() {
@@ -1820,6 +1797,7 @@ public:
             .with_column("tokens", int32_type)
             .with_column("owns", float_type)
             .with_column("host_id", uuid_type)
+            .with_column("snitch", utf8_type)
             .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }
@@ -1854,10 +1832,126 @@ public:
                 }
 
                 set_cell(cr, "tokens", int32_t(tm.get_tokens(endpoint).size()));
+                set_cell(cr, "snitch", _db.get_snitch_name());
 
                 mutation_sink(std::move(m));
             }
         });
+    }
+};
+
+class compactions_in_progress_table : public streaming_virtual_table {
+private:
+    distributed<database>& _db;
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::COMPACTIONS_IN_PROGRESS);
+        return schema_builder(system_keyspace::NAME, system_keyspace::COMPACTIONS_IN_PROGRESS, std::make_optional(id))
+            .with_column("id", uuid_type, column_kind::partition_key)
+            .with_column("type", utf8_type)
+            .with_column("keyspace_name", utf8_type)
+            .with_column("columnfamily_name", utf8_type)
+            .with_column("total_partitions", long_type)
+            .with_column("total_keys_written", long_type)
+            .with_column("shard_id", int32_type)
+            .with_column("inputs", set_type_impl::get_instance(int32_type, true))
+            .with_version(system_keyspace::generate_schema_version(id))
+            .with_null_sharder()
+            .build();
+    }
+    future<> execute(reader_permit, result_collector& result, const query_restrictions& qr) override {
+        if (this_shard_id() != 0) {
+            // we use the null sharder
+            co_return;
+        }
+
+        struct compaction_info {
+            partition_key pk;
+            int shard_id;
+            sstables::compaction_info info;
+        };
+        struct shard_info {
+            int shard_id;
+            std::vector<sstables::compaction_info> compactions;
+        };
+        auto compare_keys = [this] (const compaction_info& lh, const compaction_info& rh) {
+            return dht::ring_position_less_comparator(*schema())(dht::decorate_key(*schema(), lh.pk),
+                                                                 dht::decorate_key(*schema(), rh.pk));
+        };
+        using compaction_set = std::set<compaction_info, decltype(compare_keys)>;
+        class reduce {
+            compactions_in_progress_table& _table;
+            compaction_set _set;
+            const query_restrictions& _qr;
+        public:
+            future<> operator()(const shard_info& si) {
+                for (const auto& ci : si.compactions) {
+                    auto pk = partition_key::from_single_value(*_table.schema(), data_value(ci.compaction_uuid).serialize_nonnull());
+                    if (_table.contains_key(_qr.partition_range(), dht::decorate_key(*_table.schema(), pk))) {
+                        _set.insert({pk, si.shard_id, ci});
+                    }
+                }
+                co_return;
+            }
+            compaction_set get() && { return std::move(_set); }
+            reduce(compactions_in_progress_table& table, compaction_set::key_compare compare_keys, const query_restrictions& qr)
+                : _table{table}
+                , _set{compare_keys}
+                , _qr{qr}
+            {}
+        };
+        auto compactions = co_await _db.map_reduce(reduce{*this, std::move(compare_keys), qr}, [] (database& db) {
+            return shard_info{this_shard_id(), db.get_compaction_manager().get_compactions()};
+        });
+        for (const auto& c : compactions) {
+            co_await result.emit_partition_start(dht::decorate_key(*schema(), c.pk));
+            clustering_row cr{clustering_key::make_empty()};
+            auto& cells = cr.cells();
+            set_cell(cells, "shard_id", c.shard_id);
+            set_cell(cells, "type", sstables::compaction_name(c.info.type));
+            set_cell(cells, "keyspace_name", c.info.ks_name);
+            set_cell(cells, "columnfamily_name", c.info.cf_name);
+            set_cell(cells, "total_partitions", (int64_t)c.info.total_partitions);
+            set_cell(cells, "total_keys_written", (int64_t)c.info.total_keys_written);
+            co_await result.emit_row(std::move(cr));
+            co_await result.emit_partition_end();
+        }
+    }
+public:
+    compactions_in_progress_table(distributed<database>& db)
+        : streaming_virtual_table(build_schema())
+        , _db(db) {
+        _shard_aware = true;
+    }
+};
+
+class log_levels_table : public memtable_filling_virtual_table {
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "log_levels");
+        return schema_builder(system_keyspace::NAME, "log_levels", std::make_optional(id))
+            .with_column("logger", utf8_type, column_kind::partition_key)
+            .with_column("level", utf8_type)
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        auto names = logging::logger_registry().get_all_logger_names();
+        for (const auto& name : names) {
+            auto pk = partition_key::from_single_value(*schema(), data_value(name).serialize_nonnull());
+            if (!this_shard_owns(dht::decorate_key(*schema(), pk))) {
+                continue;
+            }
+            mutation m(schema(), pk);
+            row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
+            set_cell(cr, "level", logging::level_name(logging::logger_registry().get_logger_level(name)));
+            mutation_sink(std::move(m));
+        }
+        return make_ready_future<>();
+    }
+public:
+    log_levels_table()
+            : memtable_filling_virtual_table(build_schema()) {
+        _shard_aware = true;
     }
 };
 
@@ -2474,13 +2568,15 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     auto& ss = dist_ss.local();
 
     // Add built-in virtual tables here.
-    add_table(std::make_unique<cluster_status_table>(ss));
+    add_table(std::make_unique<cluster_status_table>(db, ss));
     add_table(std::make_unique<token_ring_table>(db, ss));
     add_table(std::make_unique<snapshots_table>(dist_db));
     add_table(std::make_unique<protocol_servers_table>(ss));
     add_table(std::make_unique<runtime_info_table>(dist_db, ss));
     add_table(std::make_unique<versions_table>());
     add_table(std::make_unique<db_config_table>(cfg));
+    add_table(std::make_unique<compactions_in_progress_table>(dist_db));
+    add_table(std::make_unique<log_levels_table>());
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
@@ -2489,7 +2585,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
-                    compactions_in_progress(), compaction_history(),
+                    compaction_history(),
                     sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     v3::views_builds_in_progress(), v3::built_views(),

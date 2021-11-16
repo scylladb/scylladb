@@ -105,7 +105,6 @@ class system_keyspace {
     static schema_ptr peers();
     static schema_ptr peer_events();
     static schema_ptr range_xfers();
-    static schema_ptr compactions_in_progress();
     static schema_ptr compaction_history();
     static schema_ptr sstable_activity();
     static schema_ptr large_partitions();

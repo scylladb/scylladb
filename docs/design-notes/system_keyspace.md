@@ -170,6 +170,7 @@ CREATE TABLE system.cluster_status (
     host_id uuid,
     load text,
     owns float,
+    snitch text,
     status text,
     tokens int,
     up boolean
@@ -298,6 +299,42 @@ CREATE TABLE system.versions (
 ```
 
 Implemented by `versions_table` in `db/system_keyspace.cc`.
+
+## system.compactions\_in\_progress
+
+Information about currently-running compactions.
+Equivalent of the `nodetool compactionstats` command.
+
+Schema:
+```cql
+CREATE TABLE system.compactions_in_progress (
+    id uuid PRIMARY KEY,
+    type test,
+    keyspace_name text,
+    columnfamily_name text,
+    total_partitions bigint,
+    total_keys_written bigint,
+    shard_id int,
+    inputs set<int>
+)
+```
+
+Implemented by `compactions_in_progress_table` in `db/system_keyspace.cc`.
+
+## system.log\_levels
+
+Current values of all defined logger levels.
+Equivalent of `nodetool getlogginglevels`.
+
+Schema:
+```cql
+CREATE TABLE system.log_levels {
+    logger text PRIMARY KEY,
+    level text
+}
+```
+
+Implemented by `log_levels_table` in `db/system_keyspace.cc`.
 
 ## system.config
 
