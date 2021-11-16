@@ -102,7 +102,7 @@ concept Executable = requires (Op o, typename Op::state_type& s, const context& 
 // We will say that such operations `understand time'.
 template <typename Op>
 concept HasReadyTime = requires(Op o) {
-    { o.ready } -> std::same_as<std::optional<raft::logical_clock::time_point>>;
+    { o.ready } -> std::convertible_to<std::optional<raft::logical_clock::time_point>>;
 };
 
 // An operation which can specify a specific thread on which it can be executed.
@@ -110,7 +110,7 @@ concept HasReadyTime = requires(Op o) {
 // If the operation specifies a thread, it won't be executed on any other thread.
 template <typename Op>
 concept HasThread = requires(Op o) {
-    { o.thread } -> std::same_as<std::optional<thread_id>>;
+    { o.thread } -> std::convertible_to<std::optional<thread_id>>;
 };
 
 // An operation which finished with an unexpected / unhandled exception.
