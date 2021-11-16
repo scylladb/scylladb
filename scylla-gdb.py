@@ -3032,8 +3032,7 @@ class scylla_io_queues(gdb.Command):
             return f"Ticket(weight: {self.ref['_weight']}, size: {self.ref['_size']})"
 
     @staticmethod
-    def _print_io_priority_class(pclass_ptr, names_from_ptrs, indent = '\t\t'):
-        pclass = seastar_lw_shared_ptr(pclass_ptr).get().dereference()
+    def _print_io_priority_class(pclass, names_from_ptrs, indent = '\t\t'):
         gdb.write("{}Class {}:\n".format(indent, names_from_ptrs.get(pclass.address, pclass.address)))
         slist = intrusive_slist(pclass['_queue'], link='_hook')
         for entry in slist:
@@ -3067,9 +3066,11 @@ class scylla_io_queues(gdb.Command):
             try:
                 f_groups = [ std_unique_ptr(x) for x in std_vector(group['_fgs']) ]
                 f_queues = boost_small_vector(ioq['_streams'])
+                fq_pclass = lambda x : x.dereference()
             except gdb.error:
                 f_groups = [ group['_fg'] ]
                 f_queues = [ ioq['_fq'] ]
+                fq_pclass = lambda x : seastar_lw_shared_ptr(x).get().dereference()
 
             gdb.write("\t{} streams\n".format(len(f_groups)))
             gdb.write("\n")
@@ -3085,8 +3086,7 @@ class scylla_io_queues(gdb.Command):
                 handles = std_priority_queue(fq['_handles'])
                 gdb.write("\tHandles: ({})\n".format(len(handles)))
                 for pclass_ptr in handles:
-                    pass
-                    self._print_io_priority_class(pclass_ptr, names_from_ptrs)
+                    self._print_io_priority_class(fq_pclass(pclass_ptr), names_from_ptrs)
 
             pending = circular_buffer(ioq['_sink']['_pending_io'])
             gdb.write("\tPending in sink: ({})\n".format(len(pending)))
