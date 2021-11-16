@@ -748,6 +748,11 @@ future<> migration_manager::announce_new_type(user_type new_type) {
     return do_announce_new_type(new_type);
 }
 
+future<std::vector<mutation>> migration_manager::prepare_update_type_announcement(user_type updated_type) {
+    mlogger.info("Prepare Update User Type: {}", updated_type->get_name_as_string());
+    return do_prepare_new_type_announcement(updated_type);
+}
+
 future<> migration_manager::announce_type_update(user_type updated_type) {
     mlogger.info("Update User Type: {}", updated_type->get_name_as_string());
     return do_announce_new_type(updated_type);
