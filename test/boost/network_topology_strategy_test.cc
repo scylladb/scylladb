@@ -285,14 +285,12 @@ void heavy_origin_test() {
         }
     }
 
-    int total_rf = 0;
     auto& random_engine = seastar::testing::local_random_engine;
     std::vector<double> token_points(total_eps, 0.0);
     boost::algorithm::iota(token_points, 1.0);
     std::shuffle(token_points.begin(), token_points.end(), random_engine);
     auto token_point_iterator = token_points.begin();
     for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
-        total_rf += dc_replication[dc];
         config_options.emplace(to_sstring(dc),
                                 to_sstring(dc_replication[dc]));
         for (int rack = 0; rack < dc_racks[dc]; ++rack) {
