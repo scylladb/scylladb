@@ -266,6 +266,7 @@ future<> compaction_manager::perform_major_compaction(column_family* cf) {
     }
     auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
+    cmlog.debug("Major compaction task {} cf={}: started", fmt::ptr(task.get()), fmt::ptr(cf));
 
     // first take major compaction semaphore, then exclusely take compaction lock for column family.
     // it cannot be the other way around, or minor compaction for this column family would be
@@ -300,6 +301,7 @@ future<> compaction_manager::perform_major_compaction(column_family* cf) {
     }).then_wrapped([this, task] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
+        cmlog.debug("Major compaction task {} cf={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
         try {
             f.get();
             _stats.completed_tasks++;
@@ -320,6 +322,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
 
     auto task = make_lw_shared<compaction_manager::task>(cf, type);
     _tasks.push_back(task);
+    cmlog.debug("{} task {} cf={}: started", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_data&)>>(std::move(job));
 
@@ -337,9 +340,10 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
             // compaction and some of them may not even belong to current shard.
             return job(task->compaction_data);
         });
-    }).then_wrapped([this, task, job_ptr = std::move(job_ptr)] (future<> f) {
+    }).then_wrapped([this, task, job_ptr = std::move(job_ptr), type] (future<> f) {
         _stats.active_tasks--;
         _tasks.remove(task);
+        cmlog.debug("{} task {} cf={}: done", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
         try {
             f.get();
         } catch (sstables::compaction_stopped_exception& e) {
@@ -394,11 +398,18 @@ void compaction_manager::task::finish_compaction() {
 }
 
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task, sstring reason) {
+    cmlog.debug("Stopping task {} cf={}", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
     task->stopping = true;
     task->compaction_data.stop(reason);
     auto f = task->compaction_done.get_future();
-    return f.then([task] {
+    return f.then_wrapped([task] (future<> f) {
         task->stopping = false;
+        if (f.failed()) {
+            auto ex = f.get_exception();
+            cmlog.debug("Stopping task {} cf={}: task returned error: {}", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf), ex);
+            return make_exception_future<>(std::move(ex));
+        }
+        cmlog.debug("Stopping task {} cf={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
         return make_ready_future<>();
     });
 }
@@ -649,6 +660,7 @@ void compaction_manager::submit(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction);
     _tasks.push_back(task);
     _stats.pending_tasks++;
+    cmlog.debug("Compaction task {} cf={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
     task->compaction_done = repeat([this, task, cf] () mutable {
         if (!can_proceed(task)) {
@@ -709,6 +721,7 @@ void compaction_manager::submit(column_family* cf) {
         });
     }).finally([this, task] {
         _tasks.remove(task);
+        cmlog.debug("Compaction task {} cf={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
     });
 }
 
@@ -716,6 +729,7 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Reshape);
     _tasks.push_back(task);
     _stats.pending_tasks++;
+    cmlog.debug("Offstrategy compaction task {} cf={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
     task->compaction_done = repeat([this, task, cf] () mutable {
         if (!can_proceed(task)) {
@@ -756,6 +770,7 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
         });
     }).finally([this, task] {
         _tasks.remove(task);
+        cmlog.debug("Offstrategy compaction task {} cf={}: done", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
     });
 }
 
@@ -771,6 +786,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
 future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
     auto task = make_lw_shared<compaction_manager::task>(cf, options.type());
     _tasks.push_back(task);
+    cmlog.debug("{} task {} cf={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
     auto sstables = std::make_unique<std::vector<sstables::shared_sstable>>(get_func(*cf));
     // sort sstables by size in descending order, such that the smallest files will be rewritten first
@@ -834,9 +850,10 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
         });
-    }).finally([this, task, sstables = std::move(sstables)] {
+    }).finally([this, task, sstables = std::move(sstables), type = options.type()] {
         _stats.pending_tasks -= sstables->size();
         _tasks.remove(task);
+        cmlog.debug("{} task {} cf={}: done", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
     });
 
     return task->compaction_done.get_future().then([task] {});
@@ -1000,7 +1017,20 @@ future<> compaction_manager::remove(column_family* cf) {
     // Wait for the termination of an ongoing compaction on cf, if any.
     co_await when_all_succeed(stop_ongoing_compactions("column family removal", cf), std::move(close_gate));
 #ifdef DEBUG
-    assert(std::find_if(_tasks.begin(), _tasks.end(), [cf] (auto& task) { return task->compacting_cf == cf; }) == _tasks.end());
+    auto found = false;
+    sstring msg;
+    for (auto& task : _tasks) {
+        if (task->compacting_cf == cf) {
+            if (!msg.empty()) {
+                msg += "\n";
+            }
+            msg += format("Found compaction task {} cf={} after remove", fmt::ptr(task.get()), fmt::ptr(cf));
+            found = true;
+        }
+    }
+    if (found) {
+        on_internal_error_noexcept(cmlog, msg);
+    }
 #endif
     _compaction_state.erase(cf);
     co_return;
