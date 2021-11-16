@@ -748,11 +748,12 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
                     }
-                    _tasks.remove(task);
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 });
             });
         });
+    }).finally([this, task] {
+        _tasks.remove(task);
     });
 }
 
