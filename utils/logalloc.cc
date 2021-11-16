@@ -1457,7 +1457,7 @@ private:
         }
     }
 
-    void compact_segment_locked(segment* seg, segment_descriptor& desc) {
+    void compact_segment_locked(segment* seg, segment_descriptor& desc) noexcept {
         auto seg_occupancy = desc.occupancy();
         llogger.debug("Compacting segment {} from region {}, {}", fmt::ptr(seg), id(), seg_occupancy);
 
