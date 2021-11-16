@@ -30,6 +30,8 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 
+#include <cfloat>
+
 static logging::logger llog("sstables_loader");
 
 namespace {
