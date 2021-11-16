@@ -248,7 +248,6 @@ redistribute(const std::vector<float>& p, unsigned me, unsigned k) {
     hr_logger.trace("pp[me({})]  = {}", me, pp[me]);
 
     std::vector<float> deficit(rf);
-    float total_deficit = 0;
     int mixed_count = 0;
     for (unsigned j = 0; j < rf; j++) {
         float NPj = rf * p[j];
@@ -257,7 +256,6 @@ redistribute(const std::vector<float>& p, unsigned me, unsigned k) {
             // mixed node
             mixed_count++;
             deficit[j] = deficit_j;
-            total_deficit += deficit_j;
         }
     }
     // Each of the mixed nodes have the same same surplus:
