@@ -559,16 +559,13 @@ void fsm::tick() {
     _clock.advance();
 
     auto has_stable_leader = [this]() {
-        // We may have received a C_new which does not contain the
-        // current leader.  If the configuration is joint, the
-        // leader will drive down the transition to C_new even if
-        // it is not part of it. But if it is C_new already, it
+        // A leader that is not voting member of a current configuration
         // has likely have stepped down.  Since the failure
         // detector may still report the leader node as alive and
         // healthy, we must not apply the stable leader rule
         // in this case.
         const configuration& conf = _log.get_configuration();
-        return current_leader() && (conf.is_joint() || conf.current.contains(server_address{current_leader()})) &&
+        return current_leader() && conf.can_vote(current_leader()) &&
             _failure_detector.is_alive(current_leader());
     };
 
