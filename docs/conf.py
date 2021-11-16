@@ -78,7 +78,7 @@ smv_tag_whitelist = multiversion_regex_builder(TAGS)
 BRANCHES = ['branch-4.4', 'branch-4.5', 'master']
 smv_branch_whitelist = multiversion_regex_builder(BRANCHES)
 # Defines which version is considered to be the latest stable version.
-smv_latest_version = 'branch-4.4'
+smv_latest_version = 'branch-4.5'
 smv_rename_latest_version = 'stable'
 # Must be listed in smv_tag_whitelist or smv_branch_whitelist.
 # Whitelist pattern for remotes (set to None to use local branches only)
