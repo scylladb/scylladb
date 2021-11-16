@@ -53,6 +53,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 
+#include <cfloat>
+
 logging::logger rlogger("repair");
 
 void node_ops_info::check_abort() {
