@@ -301,8 +301,6 @@ namespace {
 static const sstring delta_mode_string_keys = "keys";
 static const sstring delta_mode_string_full = "full";
 
-static const std::string_view image_mode_string_on  = "on";
-static const std::string_view image_mode_string_off = "off";
 static const std::string_view image_mode_string_full = delta_mode_string_full;
 
 sstring to_string(cdc::delta_mode dm) {
@@ -354,11 +352,11 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"enabled\": " + p.second);
             }
         } else if (key == "preimage") {
-            if (is_true || val == image_mode_string_on) {
+            if (is_true) {
                 _preimage = image_mode::on;
             } else if (val == image_mode_string_full) {
                 _preimage = image_mode::full;
-            } else if (val == image_mode_string_off || is_false) {
+            } else if (is_false) {
                 _preimage = image_mode::off;
             } else {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"preimage\": " + p.second);
