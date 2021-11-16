@@ -63,6 +63,7 @@
 #include "schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
+#include "utils/fmt-compat.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"
@@ -149,7 +150,7 @@ public:
     };
 
     static sstring fmt_query(const char* fmt, const char* table) {
-        return fmt::format(fmt, db::system_keyspace::NAME, table);
+        return fmt::format(fmt::runtime(fmt), db::system_keyspace::NAME, table);
     }
 
     typedef ::shared_ptr<cql3::untyped_result_set> result_set_type;

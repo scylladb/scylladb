@@ -33,6 +33,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "types/set.hh"
 #include "types/list.hh"
+#include "utils/fmt-compat.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -714,7 +715,7 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         for (auto&& view : views_matching) {
             auto name = make_view_name();
             auto f = e.local_view_builder().wait_until_built("ks", name);
-            e.execute_cql(fmt::format(view, name)).get();
+            e.execute_cql(fmt::format(fmt::runtime(view), name)).get();
             f.get();
             auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows()
@@ -739,7 +740,7 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         for (auto&& view : views_not_matching) {
             auto name = make_view_name();
             auto f = e.local_view_builder().wait_until_built("ks", name);
-            e.execute_cql(fmt::format(view, name)).get();
+            e.execute_cql(fmt::format(fmt::runtime(view), name)).get();
             f.get();
             auto msg = e.execute_cql(format("select p1, p2, c, v from {}", name)).get0();
             assert_that(msg).is_rows().is_empty();

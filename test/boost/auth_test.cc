@@ -45,6 +45,8 @@
 #include "db/config.hh"
 #include "cql3/query_processor.hh"
 
+#include "utils/fmt-compat.hh"
+
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
@@ -174,7 +176,7 @@ namespace {
 void require_table_protected(cql_test_env& env, const char* table) {
     using exception_predicate::message_contains;
     using unauth = exceptions::unauthorized_exception;
-    const auto q = [&] (const char* stmt) { return env.execute_cql(fmt::format(stmt, table)).get(); };
+    const auto q = [&] (const char* stmt) { return env.execute_cql(fmt::format(fmt::runtime(stmt), table)).get(); };
     BOOST_TEST_INFO(table);
     BOOST_REQUIRE_EXCEPTION(q("ALTER TABLE {} ALTER role TYPE blob"), unauth, message_contains("is protected"));
     BOOST_REQUIRE_EXCEPTION(q("ALTER TABLE {} RENAME role TO user"), unauth, message_contains("is protected"));

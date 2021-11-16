@@ -58,6 +58,7 @@
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/stall_free.hh"
+#include "utils/fmt-compat.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -164,7 +165,7 @@ public:
     }
     void operator() (const char* fmt, const auto& param1, const auto&... params) {
         const auto begin = _line_buf.begin();
-        auto it = fmt::format_to(begin, fmt, param1, params...);
+        auto it = fmt::format_to(begin, fmt::runtime(fmt), param1, params...);
         _wr(std::string_view(begin, it - begin));
     }
 };
