@@ -45,7 +45,7 @@ You can run unit tests with:
 or launch a Scylla server locally with:
 
 ```console
-./tools/toolchain/dbuild ./build/dev/scylla --workdir tmp --developer-mode 1 --smp 1 --memory 1G
+./tools/toolchain/dbuild ./build/dev/scylla --workdir tmp --smp 1 --memory 1G
 ```
 
 For more help with build targets, run:
