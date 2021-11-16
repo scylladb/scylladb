@@ -76,6 +76,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/utf8.hh"
+#include "utils/fmt-compat.hh"
 
 namespace sstables {
 
@@ -771,7 +772,7 @@ protected:
     template <typename... Args>
     void log(log_level level, std::string_view fmt, const Args&... args) const {
         if (clogger.is_enabled(level)) {
-            auto msg = fmt::format(fmt, args...);
+            auto msg = fmt::format(fmt::runtime(fmt), args...);
             clogger.log(level, "[{} {}.{} {}] {}", _type, _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid, msg);
         }
     }

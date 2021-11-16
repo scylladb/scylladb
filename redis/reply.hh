@@ -27,6 +27,7 @@
 #include <seastar/core/print.hh>
 #include "seastar/core/scattered_message.hh"
 #include "redis/exceptions.hh"
+#include "utils/fmt-compat.hh"
 
 namespace redis {
 
@@ -106,7 +107,7 @@ private:
     template<typename... Args>
     static inline sstring make_message(const char* fmt, Args&&... args) noexcept {
         try {
-            return fmt::format(fmt, std::forward<Args>(args)...);
+            return fmt::format(fmt::runtime(fmt), std::forward<Args>(args)...);
         } catch (...) {
             return sstring();
         }   

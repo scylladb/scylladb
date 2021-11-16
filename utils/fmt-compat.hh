@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-present ScyllaDB
+ * Copyright (C) 2021-present ScyllaDB
  */
 
 /*
@@ -21,17 +21,21 @@
 
 #pragma once
 
-#include <utility>
-#include "utils/fmt-compat.hh"
+#include <fmt/core.h>
 
-namespace thrift {
+// compatibility between fmt < 8 (that doesn't have fmt::runtime())
+// and fmt 8 (that requires it)
 
-template <typename Ex, typename... Args>
-Ex
-make_exception(const char* fmt, Args&&... args) {
-    Ex ex;
-    ex.why = fmt::format(fmt::runtime(fmt), std::forward<Args>(args)...);
-    return ex;
+#if FMT_VERSION < 8'00'00
+
+namespace fmt {
+
+// fmt 8 requires that non-constant format strings be wrapped with
+// fmt::runtime(), supply a nop-op version for older fmt
+auto runtime(auto fmt_string) {
+    return fmt_string;
 }
 
 }
+
+#endif

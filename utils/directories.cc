@@ -24,6 +24,7 @@
 #include "supervisor.hh"
 #include "directories.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/fmt-compat.hh"
 #include "db/config.hh"
 #include "lister.hh"
 
@@ -109,7 +110,7 @@ future<> directories::create_and_verify(directories::set dir_set) {
 template <typename... Args>
 static inline
 future<> verification_error(fs::path path, const char* fstr, Args&&... args) {
-    auto emsg = fmt::format(fstr, std::forward<Args>(args)...);
+    auto emsg = fmt::format(fmt::runtime(fstr), std::forward<Args>(args)...);
     startlog.error("{}: {}", path.string(), emsg);
     return make_exception_future<>(std::runtime_error(emsg));
 }

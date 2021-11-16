@@ -49,6 +49,7 @@
 #include "compaction/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
 #include "utils/rjson.hh"
+#include "utils/fmt-compat.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 #include <regex>
@@ -3491,7 +3492,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
         generate_with_inclusiveness_permutations({0,1,2,3},{0,1,2,3});
 
         for (auto&& test_case  : test_cases) {
-            auto msg = e.execute_cql(fmt::format(select_query_template,test_case.generate_cql_slice_expresion(column_names))).get0();
+            auto msg = e.execute_cql(fmt::format(fmt::runtime(select_query_template) ,test_case.generate_cql_slice_expresion(column_names))).get0();
             assert_that(msg).is_rows().with_rows(test_case.genrate_results_for_validation(ordering));
         }
     });
