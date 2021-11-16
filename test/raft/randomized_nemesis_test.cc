@@ -321,6 +321,8 @@ public:
     using send_message_t = std::function<void(raft::server_id dst, message_t)>;
 
 private:
+    raft::server_id _id;
+
     snapshots_t<State>& _snapshots;
 
     logical_timer _timer;
@@ -340,80 +342,107 @@ private:
     // no more in-progress methods running on this object.
     seastar::gate _gate;
 
+    size_t _snapshot_applications = 0;
+    size_t _read_barrier_executions = 0;
+
 public:
-    rpc(snapshots_t<State>& snaps, send_message_t send)
-        : _snapshots(snaps), _send(std::move(send)) {
+    rpc(raft::server_id id, snapshots_t<State>& snaps, send_message_t send)
+        : _id(id), _snapshots(snaps), _send(std::move(send)) {
     }
 
-    // Message is delivered to us
-    future<> receive(raft::server_id src, message_t payload) {
+    // Message is delivered to us.
+    // The caller must ensure that `abort()` wasn't called yet.
+    void receive(raft::server_id src, message_t payload) {
+        assert(!_gate.is_closed());
         assert(_client);
         auto& c = *_client;
 
-        co_await std::visit(make_visitor(
-        [&] (snapshot_message m) -> future<> {
-            _snapshots.emplace(m.ins.snp.id, std::move(m.snapshot_payload));
+        std::visit(make_visitor(
+        [&] (snapshot_message m) {
+            static const size_t max_concurrent_snapshot_applications = 5; // TODO: configurable
+            if (_snapshot_applications >= max_concurrent_snapshot_applications) {
+                tlogger.warn(
+                    "{}: cannot apply snapshot from {} (id: {}) due to too many concurrent requests, dropping it",
+                    _id, src, m.ins.snp.id);
+                // Should we send some message back instead?
+                return;
+            }
 
-            co_await with_gate(_gate, [&] () -> future<> {
-                auto reply = co_await c.apply_snapshot(src, std::move(m.ins));
+            ++_snapshot_applications;
+            (void)[] (rpc& self, raft::server_id src, snapshot_message m, gate::holder holder) -> future<> {
+                try {
+                    self._snapshots.emplace(m.ins.snp.id, std::move(m.snapshot_payload));
+                    auto reply = co_await self._client->apply_snapshot(src, std::move(m.ins));
 
-                _send(src, snapshot_reply_message{
-                    .reply = std::move(reply),
-                    .reply_id = m.reply_id
-                });
-            });
+                    self._send(src, snapshot_reply_message{
+                        .reply = std::move(reply),
+                        .reply_id = m.reply_id
+                    });
+                } catch (...) {
+                    tlogger.warn("{}: exception when applying snapshot from {}: {}", self._id, src, std::current_exception());
+                }
+
+                --self._snapshot_applications;
+            }(*this, src, std::move(m), _gate.hold());
         },
-        [this] (snapshot_reply_message m) -> future<> {
+        [this] (snapshot_reply_message m) {
             auto it = _reply_promises.find(m.reply_id);
             if (it != _reply_promises.end()) {
-            std::get<promise<raft::snapshot_reply>>(it->second).set_value(std::move(m.reply));
+                std::get<promise<raft::snapshot_reply>>(it->second).set_value(std::move(m.reply));
             }
-            co_return;
         },
-        [&] (raft::append_request m) -> future<> {
+        [&] (raft::append_request m) {
             c.append_entries(src, std::move(m));
-            co_return;
         },
-        [&] (raft::append_reply m) -> future<> {
+        [&] (raft::append_reply m) {
             c.append_entries_reply(src, std::move(m));
-            co_return;
         },
-        [&] (raft::vote_request m) -> future<> {
+        [&] (raft::vote_request m) {
             c.request_vote(src, std::move(m));
-            co_return;
         },
-        [&] (raft::vote_reply m) -> future<> {
+        [&] (raft::vote_reply m) {
             c.request_vote_reply(src, std::move(m));
-            co_return;
         },
-        [&] (raft::timeout_now m) -> future<> {
+        [&] (raft::timeout_now m) {
             c.timeout_now_request(src, std::move(m));
-            co_return;
         },
-        [&] (raft::read_quorum m) -> future<> {
+        [&] (raft::read_quorum m) {
             c.read_quorum_request(src, std::move(m));
-            co_return;
         },
-        [&] (raft::read_quorum_reply m) -> future<> {
+        [&] (raft::read_quorum_reply m) {
             c.read_quorum_reply(src, std::move(m));
-            co_return;
         },
-        [&] (execute_barrier_on_leader m) -> future<> {
-            co_await with_gate(_gate, [&] () -> future<> {
-                auto reply = co_await c.execute_read_barrier(src);
+        [&] (execute_barrier_on_leader m) {
+            static const size_t max_concurrent_read_barrier_executions = 100; // TODO: configurable
+            if (_read_barrier_executions >= max_concurrent_read_barrier_executions) {
+                tlogger.warn(
+                    "{}: cannot execute read barrier for {} due to too many concurrent requests, dropping it",
+                    _id, src);
+                // Should we send some message back instead?
+                return;
+            }
 
-                _send(src, execute_barrier_on_leader_reply{
-                    .reply = std::move(reply),
-                    .reply_id = m.reply_id
-                });
-            });
+            ++_read_barrier_executions;
+            (void)[] (rpc& self, raft::server_id src, execute_barrier_on_leader m, gate::holder holder) -> future<> {
+                try {
+                    auto reply = co_await self._client->execute_read_barrier(src);
+
+                    self._send(src, execute_barrier_on_leader_reply{
+                        .reply = std::move(reply),
+                        .reply_id = m.reply_id
+                    });
+                } catch (...) {
+                    tlogger.warn("{}: exception when executing read barrier for {}: {}", self._id, src, std::current_exception());
+                }
+
+                --self._read_barrier_executions;
+            }(*this, src, std::move(m), _gate.hold());
         },
-        [this] (execute_barrier_on_leader_reply m) -> future<> {
+        [this] (execute_barrier_on_leader_reply m) {
             auto it = _reply_promises.find(m.reply_id);
             if (it != _reply_promises.end()) {
                 std::get<promise<raft::read_barrier_reply>>(it->second).set_value(std::move(m.reply));
             }
-            co_return;
         }
         ), std::move(payload));
     }
@@ -812,90 +841,6 @@ private:
     }
 };
 
-// A queue of messages that have arrived at a given Raft server and are waiting to be processed
-// by that server (which may be a long computation, hence returning a `future<>`).
-// Its purpose is to serve as a ``bridge'' between `network` and a server's `rpc` instance.
-// The `network`'s delivery function will `push()` a message onto this queue and `receive_fiber()`
-// will eventually forward the message to `rpc` by calling `rpc::receive()`.
-// `push()` may fail if the queue is full, meaning that the queue expects the caller (`network`
-// in our case) to retry later.
-template <typename State>
-class delivery_queue {
-    struct delivery {
-        raft::server_id src;
-        typename rpc<State>::message_t payload;
-    };
-
-    struct aborted_exception {};
-
-    seastar::queue<delivery> _queue;
-    rpc<State>& _rpc;
-
-    std::optional<future<>> _receive_fiber;
-
-public:
-    delivery_queue(rpc<State>& rpc)
-        : _queue(std::numeric_limits<size_t>::max()), _rpc(rpc) {
-    }
-
-    ~delivery_queue() {
-        assert(!_receive_fiber);
-    }
-
-    void push(raft::server_id src, const typename rpc<State>::message_t& p) {
-        assert(_receive_fiber);
-        bool pushed = _queue.push(delivery{src, p});
-        // The queue is practically unbounded...
-        assert(pushed);
-
-        // If the queue is growing then the test infrastructure must have some kind of a liveness problem
-        // (which may eventually cause OOM). Let's warn the user.
-        if (_queue.size() > 100) {
-            tlogger.warn("delivery_queue: large queue size ({})", _queue.size());
-        }
-    }
-
-    // Start the receiving fiber.
-    // Can be executed at most once. When restarting a ``crashed'' server, create a new queue.
-    void start() {
-        assert(!_receive_fiber);
-        _receive_fiber = receive_fiber();
-    }
-
-    // Stop the receiving fiber (if it's running). The returned future resolves
-    // when the fiber finishes. Must be called before destruction (unless the fiber was never started).
-    future<> abort() {
-        _queue.abort(std::make_exception_ptr(aborted_exception{}));
-        if (_receive_fiber) {
-            try {
-                co_await *std::exchange(_receive_fiber, std::nullopt);
-            } catch (const aborted_exception&) {}
-        }
-    }
-
-private:
-    future<> receive_fiber() {
-        // TODO: configurable
-        static const size_t _max_receive_concurrency = 20;
-
-        std::vector<delivery> batch;
-        while (true) {
-            // TODO: there is most definitely a better way to do this, but let's assume this is good enough (for now...)
-            // Unfortunately seastar does not yet have a multi-consumer queue implementation.
-            batch.push_back(co_await _queue.pop_eventually());
-            while (!_queue.empty() && batch.size() < _max_receive_concurrency) {
-                batch.push_back(_queue.pop());
-            }
-
-            co_await parallel_for_each(batch, [&] (delivery& m) {
-                return _rpc.receive(m.src, std::move(m.payload));
-            });
-
-            batch.clear();
-        }
-    }
-};
-
 using reconfigure_result_t = std::variant<std::monostate,
     timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress>;
 
@@ -944,7 +889,6 @@ class raft_server {
     raft::server_id _id;
 
     std::unique_ptr<snapshots_t<typename M::state_t>> _snapshots;
-    std::unique_ptr<delivery_queue<typename M::state_t>> _queue;
     std::unique_ptr<raft::server> _server;
 
     // The following objects are owned by _server:
@@ -979,9 +923,8 @@ public:
 
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
-        auto rpc_ = std::make_unique<rpc<state_t>>(*snapshots, std::move(send_rpc));
+        auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
         auto persistence_ = std::make_unique<persistence<state_t>>(*snapshots, first_server ? std::optional{id} : std::nullopt, M::init);
-        auto queue = std::make_unique<delivery_queue<state_t>>(*rpc_);
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
@@ -993,7 +936,6 @@ public:
         return std::make_unique<raft_server>(initializer{
             ._id = id,
             ._snapshots = std::move(snapshots),
-            ._queue = std::move(queue),
             ._server = std::move(server),
             ._sm = sm_ref,
             ._rpc = rpc_ref
@@ -1010,14 +952,11 @@ public:
     // Start the server. Can be called at most once.
     //
     // TODO: implement server ``crashes'' and ``restarts''.
-    // A crashed server needs a new delivery queue to be created in order to restart but must
-    // reuse the previous `persistence`. Perhaps the delivery queue should be created in `start`?
     future<> start() {
         assert(!_started);
         _started = true;
 
         co_await _server->start();
-        _queue->start();
     }
 
     // Stop the given server. Must be called before the server is destroyed
@@ -1027,7 +966,6 @@ public:
         // Abort everything before waiting on the gate close future
         // so currently running operations finish earlier.
         if (_started) {
-            co_await _queue->abort();
             co_await _server->abort();
         }
         co_await std::move(f);
@@ -1075,7 +1013,7 @@ public:
     void deliver(raft::server_id src, const typename rpc<typename M::state_t>::message_t& m) {
         assert(_started);
         if (!_gate.is_closed()) {
-            _queue->push(src, m);
+            _rpc.receive(src, m);
         }
     }
 
@@ -1084,7 +1022,6 @@ private:
         raft::server_id _id;
 
         std::unique_ptr<snapshots_t<typename M::state_t>> _snapshots;
-        std::unique_ptr<delivery_queue<typename M::state_t>> _queue;
         std::unique_ptr<raft::server> _server;
 
         impure_state_machine<M>& _sm;
@@ -1094,7 +1031,6 @@ private:
     raft_server(initializer i)
         : _id(i._id)
         , _snapshots(std::move(i._snapshots))
-        , _queue(std::move(i._queue))
         , _server(std::move(i._server))
         , _sm(i._sm)
         , _rpc(i._rpc) {
