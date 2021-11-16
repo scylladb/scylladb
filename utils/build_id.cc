@@ -3,7 +3,7 @@
  */
 
 #include "build_id.hh"
-#include <fmt/printf.h>
+#include <fmt/ostream.h>
 #include <link.h>
 #include <seastar/core/align.hh>
 #include <sstream>
