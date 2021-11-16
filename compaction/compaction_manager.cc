@@ -1006,20 +1006,20 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
 future<> compaction_manager::remove(column_family* cf) {
     auto handle = _compaction_state.extract(cf);
 
-  if (!handle.empty()) {
-    auto& c_state = handle.mapped();
+    if (!handle.empty()) {
+        auto& c_state = handle.mapped();
 
-    // We need to guarantee that a task being stopped will not retry to compact
-    // a column family being removed.
-    // The requirement above is provided by stop_ongoing_compactions().
-    _postponed.erase(cf);
+        // We need to guarantee that a task being stopped will not retry to compact
+        // a column family being removed.
+        // The requirement above is provided by stop_ongoing_compactions().
+        _postponed.erase(cf);
 
-    // Wait for the termination of an ongoing compaction on cf, if any.
-    co_await stop_ongoing_compactions("column family removal", cf);
+        // Wait for the termination of an ongoing compaction on cf, if any.
+        co_await stop_ongoing_compactions("column family removal", cf);
 
-    // Wait for all functions running under gate to terminate.
-    co_await c_state.gate.close();
-  }
+        // Wait for all functions running under gate to terminate.
+        co_await c_state.gate.close();
+    }
 #ifdef DEBUG
     auto found = false;
     sstring msg;
