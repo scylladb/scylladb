@@ -1449,7 +1449,7 @@ parallelized_select_statement::do_execute(
     };
 
     // dispatch execution of this statement to other nodes
-    return qp.forwarder().dispatch(req).then([this] (query::forward_result res) {
+    return qp.forwarder().dispatch(req, state.get_trace_state()).then([this] (query::forward_result res) {
         auto meta = make_shared<metadata>(*_selection->get_result_metadata());
         auto rs = std::make_unique<result_set>(std::move(meta));
         rs->add_column_value(*res.query_results[0]);

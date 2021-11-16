@@ -16,6 +16,7 @@
 #include "message/messaging_service_fwd.hh"
 #include "query-request.hh"
 #include "replica/database_fwd.hh"
+#include "tracing/trace_state.hh"
 
 namespace service {
 
@@ -43,11 +44,11 @@ public:
 
     // Splits given `forward_request` and distributes execution of resulting
     // subrequests across a cluster.
-    future<query::forward_result> dispatch(query::forward_request req);
+    future<query::forward_result> dispatch(query::forward_request req, tracing::trace_state_ptr tr_state);
 
 private:
     // Used to execute a `forward_request` on remote node.
-    future<query::forward_result> execute(query::forward_request req);
+    future<query::forward_result> execute(query::forward_request req, std::optional<tracing::trace_info> tr_info);
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 

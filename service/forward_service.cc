@@ -23,6 +23,8 @@
 #include "replica/database.hh"
 #include "schema_registry.hh"
 #include "service/pager/query_pagers.hh"
+#include "tracing/trace_state.hh"
+#include "tracing/tracing.hh"
 #include "utils/fb_utilities.hh"
 
 #include "cql3/column_identifier.hh"
@@ -100,7 +102,18 @@ static shared_ptr<cql3::selection::selection> mock_selection(
     return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, std::move(raw_selectors));
 }
 
-future<query::forward_result> forward_service::execute(query::forward_request req) {
+future<query::forward_result> forward_service::execute(
+    query::forward_request req,
+    std::optional<tracing::trace_info> tr_info
+) {
+    tracing::trace_state_ptr tr_state;
+    if (tr_info) {
+        tr_state = tracing::tracing::get_local_tracing_instance().create_session(*tr_info);
+        tracing::begin(tr_state);
+    }
+
+    tracing::trace(tr_state, "Executing forward_request");
+
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
 
     auto reduction_types = std::move(req.reduction_types);
@@ -110,7 +123,7 @@ future<query::forward_result> forward_service::execute(query::forward_request re
     auto selection = mock_selection(reduction_types, schema, _db.local());
     auto query_state = make_lw_shared<service::query_state>(
         client_state::for_internal_calls(),
-        nullptr,
+        tr_state,
         empty_service_permit() // FIXME: it probably shouldn't be empty.
     );
     auto query_options = make_lw_shared<cql3::query_options>(
@@ -162,8 +175,8 @@ future<query::forward_result> forward_service::execute(query::forward_request re
 void forward_service::init_messaging_service() {
     ser::forward_request_rpc_verbs::register_forward_request(
         &_messaging,
-        [this](query::forward_request req) -> future<query::forward_result> {
-            return execute(req);
+        [this](query::forward_request req, std::optional<tracing::trace_info> tr_info) -> future<query::forward_result> {
+            return execute(req, tr_info);
         }
     );
 }
@@ -172,7 +185,7 @@ future<> forward_service::uninit_messaging_service() {
     return ser::forward_request_rpc_verbs::unregister(&_messaging);
 }
 
-future<query::forward_result> forward_service::dispatch(query::forward_request req) {
+future<query::forward_result> forward_service::dispatch(query::forward_request req, tracing::trace_state_ptr tr_state) {
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
     replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
@@ -204,26 +217,37 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
         vnodes_per_addr[endpoint_addr].push_back(*vnode);
     }
 
+    tracing::trace(tr_state, "Dispatching forward_request to {} endpoints", vnodes_per_addr.size());
+
+    std::optional<tracing::trace_info> tr_info = tracing::make_trace_info(tr_state);
     std::optional<query::forward_result> result;
     // Forward request to each endpoint and merge results.
     co_await parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
-        [this, &req, &result] (auto vnodes_with_addr) -> future<> {
+        [this, &req, &result, &tr_state, &tr_info] (auto vnodes_with_addr) -> future<> {
             auto& addr = vnodes_with_addr.first;
             auto& partition_range = vnodes_with_addr.second;
             auto req_with_modified_pr = req;
             req_with_modified_pr.pr = partition_range;
 
+            tracing::trace(tr_state, "Sending forward_request to {}", addr);
             flogger.debug("dispatching forward_request={} to address={}", req_with_modified_pr, addr);
 
             query::forward_result partial_result = co_await [&] {
                 if (utils::fb_utilities::is_me(addr.addr)) {
-                    return execute(req_with_modified_pr);
+                    return execute(req_with_modified_pr, tr_info);
                 } else {
                     return ser::forward_request_rpc_verbs::send_forward_request(
-                        &_messaging, addr, req_with_modified_pr
+                        &_messaging, addr, req_with_modified_pr, tr_info
                     );
                 }
             }();
+
+            query::forward_result::printer partial_result_printer{
+                .types = req.reduction_types,
+                .res = partial_result
+            };
+            tracing::trace(tr_state, "Received forward_result={} from {}", partial_result_printer, addr);
+            flogger.debug("received forward_result={} from {}", partial_result_printer, addr);
 
             if (result) {
                 result->merge(partial_result, req.reduction_types);
@@ -232,6 +256,13 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
             }
         }
     );
+
+    query::forward_result::printer result_printer{
+        .types = req.reduction_types,
+        .res = *result
+    };
+    tracing::trace(tr_state, "Merged result is {}", result_printer);
+    flogger.debug("merged result is {}", result_printer);
 
     co_return *result;
 }
