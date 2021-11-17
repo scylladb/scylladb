@@ -52,6 +52,8 @@ private:
     cf_properties _properties;
     bool _if_not_exists;
 
+    view_ptr prepare_view(database& db) const;
+
 public:
     create_view_statement(
             cf_name view_name,

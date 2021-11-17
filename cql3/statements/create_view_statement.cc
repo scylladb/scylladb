@@ -142,7 +142,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(query_processor& qp) const {
+view_ptr create_view_statement::prepare_view(database& db) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -152,7 +152,6 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    auto&& db = qp.db();
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate(db, schema_extensions);
 
@@ -346,7 +345,14 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
-    return make_ready_future<>().then([definition = view_ptr(builder.build()), &mm = qp.get_migration_manager()]() mutable {
+    return view_ptr(builder.build());
+}
+
+future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(query_processor& qp) const {
+    auto&& db = qp.db();
+    auto definition = prepare_view(db);
+
+    return make_ready_future<>().then([definition, &mm = qp.get_migration_manager()]() mutable {
         return mm.announce_new_view(definition);
     }).then_wrapped([this] (auto&& f) {
         try {
