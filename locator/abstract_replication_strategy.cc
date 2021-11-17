@@ -345,6 +345,12 @@ future<> effective_replication_map::clear_gently() noexcept {
     co_await utils::clear_gently(_tmptr);
 }
 
+effective_replication_map::~effective_replication_map() {
+    if (is_registered()) {
+        _factory->erase_effective_replication_map(this);
+    }
+}
+
 effective_replication_map::factory_key effective_replication_map::make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
@@ -377,11 +383,28 @@ effective_replication_map_ptr effective_replication_map_factory::insert_effectiv
     auto [it, inserted] = _effective_replication_maps.insert({key, erm.get()});
     if (inserted) {
         rslogger.debug("insert_effective_replication_map: inserted {} [{}]", key, fmt::ptr(erm.get()));
+        erm->set_factory(*this, std::move(key));
         return erm;
     }
     auto res = it->second->shared_from_this();
     rslogger.debug("insert_effective_replication_map: found {} [{}]", key, fmt::ptr(res.get()));
     return res;
+}
+
+bool effective_replication_map_factory::erase_effective_replication_map(effective_replication_map* erm) {
+    const auto& key = erm->get_factory_key();
+    auto it = _effective_replication_maps.find(key);
+    if (it == _effective_replication_maps.end()) {
+        rslogger.warn("Could not unregister effective_replication_map {} [{}]: key not found", key, fmt::ptr(erm));
+        return false;
+    }
+    if (it->second != erm) {
+        rslogger.warn("Could not unregister effective_replication_map {} [{}]: different instance [{}] is currently registered", key, fmt::ptr(erm), fmt::ptr(it->second));
+        return false;
+    }
+    rslogger.debug("erase_effective_replication_map: erased {} [{}]", key, fmt::ptr(erm));
+    _effective_replication_maps.erase(it);
+    return true;
 }
 
 } // namespace locator

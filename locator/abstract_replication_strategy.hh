@@ -56,6 +56,7 @@ using replication_strategy_config_options = std::map<sstring, sstring>;
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
 
 class effective_replication_map;
+class effective_replication_map_factory;
 
 class abstract_replication_strategy {
     friend class effective_replication_map;
@@ -163,8 +164,11 @@ private:
     token_metadata_ptr _tmptr;
     replication_map _replication_map;
     size_t _replication_factor;
+    std::optional<factory_key> _factory_key = std::nullopt;
+    effective_replication_map_factory* _factory = nullptr;
 
     friend class abstract_replication_strategy;
+    friend class effective_replication_map_factory;
 public:
     explicit effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
         : _rs(std::move(rs))
@@ -174,6 +178,7 @@ public:
     { }
     effective_replication_map() = delete;
     effective_replication_map(effective_replication_map&&) = default;
+    ~effective_replication_map();
 
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept {
         return _tmptr;
@@ -227,6 +232,19 @@ private:
 
 public:
     static factory_key make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr);
+
+    const factory_key& get_factory_key() const noexcept {
+        return *_factory_key;
+    }
+
+    void set_factory(effective_replication_map_factory& factory, factory_key key) noexcept {
+        _factory = &factory;
+        _factory_key.emplace(std::move(key));
+    }
+
+    bool is_registered() const noexcept {
+        return _factory != nullptr;
+    }
 };
 
 using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;
@@ -315,7 +333,9 @@ private:
     effective_replication_map_ptr find_effective_replication_map(const effective_replication_map::factory_key& key) const;
     effective_replication_map_ptr insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key);
 
-    // TODO: erase effective_replication_map when destroyed
+    bool erase_effective_replication_map(effective_replication_map* erm);
+
+    friend class effective_replication_map;
 };
 
 }
