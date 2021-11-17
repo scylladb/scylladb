@@ -86,7 +86,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/schema_tables.hh"
 
-#include "redis/service.hh"
+#include "redis/controller.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "cdc/generation_service.hh"
@@ -1349,13 +1349,13 @@ int main(int ac, char** av) {
             }
             ss.local().register_protocol_server(alternator_ctl);
 
-            redis_service redis(proxy, auth_service, mm, *cfg, gossiper);
+            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [&redis] {
-                    return redis.start_server();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&redis_ctl] {
+                    return redis_ctl.start_server();
                 }).get();
             }
-            ss.local().register_protocol_server(redis);
+            ss.local().register_protocol_server(redis_ctl);
 
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();

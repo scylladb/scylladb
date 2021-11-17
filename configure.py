@@ -1076,7 +1076,7 @@ alternator = [
 ]
 
 redis = [
-        'redis/service.cc',
+        'redis/controller.cc',
         'redis/server.cc',
         'redis/query_processor.cc',
         'redis/protocol_parser.rl',
