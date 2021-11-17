@@ -129,7 +129,7 @@ void sstable_writer_k_l::maybe_flush_pi_block(file_writer& out,
         // block includes them), but we set block_next_start_offset after - so
         // even if we wrote a lot of open tombstones, we still get a full
         // block size of new data.
-        auto& rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
+        auto rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
                 clustering_key_prefix::from_range(clustering_key.values()));
         for (const auto& rt : rts) {
             auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
