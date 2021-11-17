@@ -165,6 +165,7 @@ public:
     future<> announce_type_drop(user_type dropped_type);
 
     future<> announce_new_view(view_ptr view);
+    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
 
     future<> announce_view_update(view_ptr view);
 

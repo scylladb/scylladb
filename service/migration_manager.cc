@@ -905,8 +905,7 @@ future<> migration_manager::announce_type_drop(user_type dropped_type)
     return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
 }
 
-future<> migration_manager::announce_new_view(view_ptr view)
-{
+future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(view_ptr view) {
 #if 0
     view.metadata.validate();
 #endif
@@ -918,10 +917,14 @@ future<> migration_manager::announce_new_view(view_ptr view)
         }
         mlogger.info("Create new view: {}", view);
         auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), api::new_timestamp());
-        return include_keyspace_and_announce(*keyspace, std::move(mutations));
+        co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const no_such_keyspace& e) {
-        throw exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name()));
+        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
     }
+}
+
+future<> migration_manager::announce_new_view(view_ptr view) {
+    co_return co_await announce(co_await prepare_new_view_announcement(std::move(view)));
 }
 
 future<> migration_manager::announce_view_update(view_ptr view)
