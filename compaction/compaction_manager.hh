@@ -126,12 +126,19 @@ private:
     semaphore _major_compaction_sem{1};
 
     struct compaction_state {
+        // Used both by compaction tasks that refer to the compaction_state
+        // and by any function running under run_with_compaction_disabled().
+        seastar::gate gate;
+
         // Prevents table from running major and minor compaction at the same time.
         rwlock lock;
-        // Used to wait for termination of any function running under run_with_compaction_disabled().
-        seastar::gate with_compaction_disabled_gate;
 
-        bool compaction_disabled() const;
+        // Raised by any function running under run_with_compaction_disabled();
+        long compaction_disabled_counter = 0;
+
+        bool compaction_disabled() const noexcept {
+            return compaction_disabled_counter > 0;
+        }
     };
     std::unordered_map<table*, compaction_state> _compaction_state;
 

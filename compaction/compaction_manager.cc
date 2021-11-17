@@ -357,18 +357,16 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
     return task->compaction_done.get_future().then([task] {});
 }
 
-bool compaction_manager::compaction_state::compaction_disabled() const {
-    return with_compaction_disabled_gate.get_count() > 0;
-}
-
 future<>
 compaction_manager::run_with_compaction_disabled(table* t, std::function<future<> ()> func) {
     auto& c_state = _compaction_state[t];
-    auto holder = c_state.with_compaction_disabled_gate.hold();
-    co_await stop_ongoing_compactions("user-triggered operation", t);
+    auto holder = c_state.gate.hold();
+
+    c_state.compaction_disabled_counter++;
 
     std::exception_ptr err;
     try {
+        co_await stop_ongoing_compactions("user-triggered operation", t);
         co_await func();
     } catch (...) {
         err = std::current_exception();
@@ -378,8 +376,7 @@ compaction_manager::run_with_compaction_disabled(table* t, std::function<future<
     assert(_compaction_state.contains(t));
 #endif
     // submit compaction request if we're the last holder of the gate which is still opened.
-    if (!c_state.with_compaction_disabled_gate.is_closed() && c_state.with_compaction_disabled_gate.get_count() == 1) {
-        holder.release();
+    if (--c_state.compaction_disabled_counter == 0 && !c_state.gate.is_closed()) {
         submit(t);
     }
     if (err) {
@@ -1011,8 +1008,8 @@ future<> compaction_manager::remove(column_family* cf) {
     // The requirement above is provided by stop_ongoing_compactions().
     _postponed.erase(cf);
 
-    // Wait for all functions running under with_compaction_disabled_gate to terminate.
-    auto close_gate = _compaction_state[cf].with_compaction_disabled_gate.close();
+    // Wait for all functions running under gate to terminate.
+    auto close_gate = _compaction_state[cf].gate.close();
 
     // Wait for the termination of an ongoing compaction on cf, if any.
     co_await when_all_succeed(stop_ongoing_compactions("column family removal", cf), std::move(close_gate));
