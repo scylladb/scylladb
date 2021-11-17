@@ -209,27 +209,38 @@ raft::server& raft_group_registry::group0() {
 
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
     auto gid = new_grp.gid;
-    auto [it, inserted] = _servers.emplace(std::move(gid), std::move(new_grp));
 
-    if (!inserted) {
+    if (_servers.contains(gid)) {
         on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same gid={}", gid));
     }
-    if (_servers.size() == 1 && this_shard_id() == 0) {
-        _group0_id = gid;
-    }
-    auto& grp = it->second;
+
     try {
         // start the server instance prior to arming the ticker timer.
         // By the time the tick() is executed the server should already be initialized.
-        co_await grp.server->start();
+        co_await new_grp.server->start();
     } catch (...) {
-        // remove server from the map to prevent calling `abort()` on a
-        // non-started instance when `raft_group_registry::uninit` is called.
-        _servers.erase(it);
         on_internal_error(rslog, std::current_exception());
     }
 
-    grp.ticker->arm_periodic(raft_tick_interval);
+    std::exception_ptr ex;
+    raft::server& server = *new_grp.server;
+
+    try {
+        auto [it, inserted] = _servers.emplace(std::move(gid), std::move(new_grp));
+
+        if (_servers.size() == 1 && this_shard_id() == 0) {
+            _group0_id = gid;
+        }
+
+        it->second.ticker->arm_periodic(raft_tick_interval);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (ex) {
+        co_await server.abort();
+        std::rethrow_exception(ex);
+    }
 }
 
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {
