@@ -364,10 +364,22 @@ future<effective_replication_map_ptr> effective_replication_map_factory::create_
         co_return erm;
     }
 
+    // try to find a reference erm on shard 0
+    // TODO:
+    // - use hash of key to distribute the load
+    // - instaintiate only on NUMA nodes
+    auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<effective_replication_map_ptr>> {
+        auto erm = ermf.find_effective_replication_map(key);
+        co_return make_foreign<effective_replication_map_ptr>(std::move(erm));
+    });
     mutable_effective_replication_map_ptr new_erm;
-        // FIXME: indentation prepared for followup patch
+    if (ref_erm) {
+        auto rf = ref_erm->get_replication_factor();
+        auto local_replication_map = co_await ref_erm->clone_endpoints_gently();
+        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_replication_map), rf);
+    } else {
         new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
-
+    }
     co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
 }
 

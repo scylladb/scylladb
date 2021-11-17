@@ -317,7 +317,7 @@ struct hash<locator::effective_replication_map::factory_key> {
 
 namespace locator {
 
-class effective_replication_map_factory {
+class effective_replication_map_factory : public peering_sharded_service<effective_replication_map_factory> {
     std::unordered_map<effective_replication_map::factory_key, effective_replication_map*> _effective_replication_maps;
 
 public:
