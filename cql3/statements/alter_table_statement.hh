@@ -90,6 +90,7 @@ private:
     void add_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void alter_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void drop_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
+    std::pair<schema_builder, std::vector<view_ptr>> prepare_schema_update(database& db) const;
 };
 
 }

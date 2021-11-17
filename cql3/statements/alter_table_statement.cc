@@ -293,9 +293,7 @@ void alter_table_statement::drop_column(const schema& schema, const table& cf, s
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
+std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(database& db) const {
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
@@ -409,6 +407,15 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         }
         break;
     }
+
+    return make_pair(std::move(cfm), std::move(view_updates));
+}
+
+future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
+{
+    database& db = qp.db();
+
+    auto [cfm, view_updates] = prepare_schema_update(db);
 
     return qp.get_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), std::nullopt)
         .then([this] {
