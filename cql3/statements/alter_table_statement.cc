@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_table_statement.hh"
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
@@ -411,21 +412,37 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
     return make_pair(std::move(cfm), std::move(view_updates));
 }
 
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+alter_table_statement::prepare_schema_mutations(query_processor& qp) const {
+  database& db = qp.db();
+  auto& mm = qp.get_migration_manager();
+  auto [cfm, view_updates] = prepare_schema_update(db);
+  auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), std::nullopt);
+
+  using namespace cql_transport;
+  auto ret = ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
+
+  co_return std::make_pair(std::move(ret), std::move(m));
+}
+
 future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
 {
     database& db = qp.db();
+    auto& mm = qp.get_migration_manager();
 
     auto [cfm, view_updates] = prepare_schema_update(db);
+    co_await mm.announce_column_family_update(cfm.build(), false, std::move(view_updates), std::nullopt);
 
-    return qp.get_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), std::nullopt)
-        .then([this] {
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::UPDATED,
-                    event::schema_change::target_type::TABLE,
-                    keyspace(),
-                    column_family());
-        });
+    using namespace cql_transport;
+    co_return ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

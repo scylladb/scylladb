@@ -86,6 +86,9 @@ public:
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
     virtual future<::shared_ptr<messages::result_message>> execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
+    virtual bool has_prepare_schema_mutations() const override { return true; }
 private:
     void add_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void alter_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
