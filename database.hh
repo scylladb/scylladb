@@ -1192,6 +1192,8 @@ private:
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
 
+    future<> shutdown() noexcept;
+
     future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
 
     /** Note: return by shared pointer value, since the meta data is

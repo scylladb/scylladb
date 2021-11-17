@@ -132,6 +132,11 @@ keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locato
     , _erm_factory(erm_factory)
 {}
 
+future<> keyspace::shutdown() noexcept {
+    update_effective_replication_map({});
+    return make_ready_future<>();
+}
+
 lw_shared_ptr<keyspace_metadata> keyspace::metadata() const {
     return _metadata;
 }
@@ -2071,6 +2076,9 @@ future<> database::shutdown() {
     co_await close_tables(database::table_kind::user);
     co_await close_tables(database::table_kind::system);
     co_await _large_data_handler->stop();
+    for (auto& [ks_name, ks] : _keyspaces) {
+        co_await ks.shutdown();
+    }
 }
 
 future<> database::stop() {
