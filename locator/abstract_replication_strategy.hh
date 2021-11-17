@@ -302,7 +302,20 @@ namespace locator {
 class effective_replication_map_factory {
     std::unordered_map<effective_replication_map::factory_key, effective_replication_map*> _effective_replication_maps;
 
-    // TODO: create and erase effective_replication_map
+public:
+    // looks up the effective_replication_map on the local shard.
+    // If not found, tries to look one up for reference on shard 0
+    // so its replication map can be cloned.  Otherwise, calculates the
+    // effective_replication_map for the local shard.
+    //
+    // Therefore create should be called first on shard 0, then on all other shards.
+    future<effective_replication_map_ptr> create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
+
+private:
+    effective_replication_map_ptr find_effective_replication_map(const effective_replication_map::factory_key& key) const;
+    effective_replication_map_ptr insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key);
+
+    // TODO: erase effective_replication_map when destroyed
 };
 
 }

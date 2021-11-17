@@ -349,6 +349,41 @@ effective_replication_map::factory_key effective_replication_map::make_factory_k
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
 
+future<effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
+    // lookup key on local shard
+    auto key = effective_replication_map::make_factory_key(rs, tmptr);
+    auto erm = find_effective_replication_map(key);
+    if (erm) {
+        rslogger.debug("create_effective_replication_map: found {} [{}]", key, fmt::ptr(erm.get()));
+        co_return erm;
+    }
+
+    mutable_effective_replication_map_ptr new_erm;
+        // FIXME: indentation prepared for followup patch
+        new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
+
+    co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
+}
+
+effective_replication_map_ptr effective_replication_map_factory::find_effective_replication_map(const effective_replication_map::factory_key& key) const {
+    auto it = _effective_replication_maps.find(key);
+    if (it != _effective_replication_maps.end()) {
+        return it->second->shared_from_this();
+    }
+    return {};
+}
+
+effective_replication_map_ptr effective_replication_map_factory::insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key) {
+    auto [it, inserted] = _effective_replication_maps.insert({key, erm.get()});
+    if (inserted) {
+        rslogger.debug("insert_effective_replication_map: inserted {} [{}]", key, fmt::ptr(erm.get()));
+        return erm;
+    }
+    auto res = it->second->shared_from_this();
+    rslogger.debug("insert_effective_replication_map: found {} [{}]", key, fmt::ptr(res.get()));
+    return res;
+}
+
 } // namespace locator
 
 std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type t) {
