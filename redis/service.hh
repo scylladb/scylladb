@@ -64,7 +64,7 @@ namespace redis {
 // Redis 2.0 according to the above quite so that is the version we are going to use.
 constexpr const char* version = "2.0";
 
-class redis_service : public protocol_server {
+class controller : public protocol_server {
     seastar::sharded<redis::query_processor> _query_processor;
     seastar::shared_ptr<seastar::sharded<redis_transport::redis_server>> _server;
     seastar::sharded<service::storage_proxy>& _proxy;
@@ -76,9 +76,9 @@ class redis_service : public protocol_server {
 private:
     seastar::future<> listen(seastar::sharded<auth::service>& auth_service, db::config& cfg);
 public:
-    redis_service(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
+    controller(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
             seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper);
-    ~redis_service();
+    ~controller();
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;

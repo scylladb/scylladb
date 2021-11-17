@@ -29,11 +29,11 @@
 #include "auth/common.hh"
 #include "database.hh"
 
-static logging::logger slogger("redis_service");
+static logging::logger slogger("controller");
 
 namespace redis {
 
-redis_service::redis_service(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
+controller::controller(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
         seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper)
     : _proxy(proxy)
     , _auth_service(auth_service)
@@ -43,11 +43,11 @@ redis_service::redis_service(seastar::sharded<service::storage_proxy>& proxy, se
 {
 }
 
-redis_service::~redis_service()
+controller::~controller()
 {
 }
 
-future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db::config& cfg)
+future<> controller::listen(seastar::sharded<auth::service>& auth_service, db::config& cfg)
 {
     if (_server) {
         return make_ready_future<>();
@@ -110,27 +110,27 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
     });
 }
 
-sstring redis_service::name() const {
+sstring controller::name() const {
     return "redis";
 }
 
-sstring redis_service::protocol() const {
+sstring controller::protocol() const {
     return "RESP";
 }
 
-sstring redis_service::protocol_version() const {
+sstring controller::protocol_version() const {
     return ::redis::version;
 }
 
-std::vector<socket_address> redis_service::listen_addresses() const {
+std::vector<socket_address> controller::listen_addresses() const {
     return _listen_addresses;
 }
 
-bool redis_service::is_server_running() const {
+bool controller::is_server_running() const {
     return !_listen_addresses.empty();
 }
 
-future<> redis_service::start_server()
+future<> controller::start_server()
 {
     // 1. Create keyspace/tables used by redis API if not exists.
     // 2. Initialize the redis query processor.
@@ -146,9 +146,9 @@ future<> redis_service::start_server()
     });
 }
 
-future<> redis_service::stop_server()
+future<> controller::stop_server()
 {
-    // If the redis protocol disable, the redis_service::init is not
+    // If the redis protocol disable, the controller::init is not
     // invoked at all. Do nothing if `_server is null.
     if (_server) {
         return _server->stop().then([this] {
@@ -159,7 +159,7 @@ future<> redis_service::stop_server()
     return make_ready_future<>();
 }
 
-future<> redis_service::request_stop_server() {
+future<> controller::request_stop_server() {
     return stop_server();
 }
 
