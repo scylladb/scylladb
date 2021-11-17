@@ -60,10 +60,16 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     service::migration_notifier migration_notifier;
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.known_feature_set());
-    locator::shared_token_metadata token_metadata([] () noexcept { return db::schema_tables::hold_merge_lock(); });
-    locator::effective_replication_map_factory erm_factory;
+    sharded<locator::shared_token_metadata> token_metadata;
+    sharded<locator::effective_replication_map_factory> erm_factory;
     abort_source as;
     sharded<semaphore> sst_dir_sem;
+
+    token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
+    auto stop_token_metadata = deferred_stop(token_metadata);
+
+    erm_factory.start().get();
+    auto stop_erm_factory = deferred_stop(erm_factory);
 
     sst_dir_sem.start(1).get();
     auto sst_dir_sem_stop = deferred_stop(sst_dir_sem);
@@ -73,7 +79,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         locator::i_endpoint_snitch::create_snitch(cfg.endpoint_snitch()).get();
     }
 
-    database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata, as, sst_dir_sem);
+    database db(cfg, dbcfg, migration_notifier, feature_service, token_metadata.local(), as, sst_dir_sem);
     auto stop_db = deferred_stop(db);
 
     // Mock system_schema keyspace to be able to parse modification statements
@@ -83,7 +89,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
                 false),
-                erm_factory).get();
+                erm_factory.local()).get();
     db.add_column_family(db.find_keyspace(db::schema_tables::NAME), db::schema_tables::dropped_columns(), {});
 
     std::vector<schema_ptr> schemas;
@@ -100,7 +106,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         assert(p);
-        db.create_keyspace(p->get_keyspace_metadata(*token_metadata.get()), erm_factory).get();
+        db.create_keyspace(p->get_keyspace_metadata(*token_metadata.local().get()), erm_factory.local()).get();
         return db.find_keyspace(name);
     };
 
@@ -116,7 +122,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
-            db.create_keyspace(p->get_keyspace_metadata(*token_metadata.get()), erm_factory).get();
+            db.create_keyspace(p->get_keyspace_metadata(*token_metadata.local().get()), erm_factory.local()).get();
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             auto type = p->create_type(db);
             find_or_create_keyspace(p->keyspace()).add_user_type(std::move(type));
