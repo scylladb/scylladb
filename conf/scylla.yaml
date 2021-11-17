@@ -435,6 +435,7 @@ commitlog_total_space_in_mb: -1
 #    certificate: conf/scylla.crt
 #    keyfile: conf/scylla.key
 #    truststore: <none, use system trust>
+#    certficate_revocation_list: <none>
 #    require_client_auth: False
 #    priority_string: <none, use default>
 
@@ -444,6 +445,7 @@ commitlog_total_space_in_mb: -1
 #    certificate: conf/scylla.crt
 #    keyfile: conf/scylla.key
 #    truststore: <none, use system trust>
+#    certficate_revocation_list: <none>
 #    require_client_auth: False
 #    priority_string: <none, use default>
 
