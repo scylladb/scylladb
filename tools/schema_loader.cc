@@ -35,7 +35,7 @@
 #include "db/schema_tables.hh"
 #include "database.hh"
 #include "gms/feature_service.hh"
-#include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/snitch_base.hh"
 #include "tools/schema_loader.hh"
 #include "utils/fb_utilities.hh"
@@ -61,6 +61,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.known_feature_set());
     locator::shared_token_metadata token_metadata([] () noexcept { return db::schema_tables::hold_merge_lock(); });
+    locator::effective_replication_map_factory erm_factory;
     abort_source as;
     sharded<semaphore> sst_dir_sem;
 
@@ -81,7 +82,8 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
                 db::schema_tables::NAME,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
-                false)).get();
+                false),
+                erm_factory).get();
     db.add_column_family(db.find_keyspace(db::schema_tables::NAME), db::schema_tables::dropped_columns(), {});
 
     std::vector<schema_ptr> schemas;
@@ -98,7 +100,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         assert(p);
-        db.create_keyspace(p->get_keyspace_metadata(*token_metadata.get())).get();
+        db.create_keyspace(p->get_keyspace_metadata(*token_metadata.get()), erm_factory).get();
         return db.find_keyspace(name);
     };
 
@@ -114,7 +116,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
-            db.create_keyspace(p->get_keyspace_metadata(*token_metadata.get())).get();
+            db.create_keyspace(p->get_keyspace_metadata(*token_metadata.get()), erm_factory).get();
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             auto type = p->create_type(db);
             find_or_create_keyspace(p->keyspace()).add_user_type(std::move(type));
