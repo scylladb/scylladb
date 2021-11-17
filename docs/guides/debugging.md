@@ -4,7 +4,7 @@
 
 GDB is a source level debugger for C, C++ and more languages. It allows
 inspecting the internal state of a program as it is running as well the
-post-mortem inspection of crashed programs.
+post-mortem inspection of crashed programs. 
 
 You can attach GDB to a running process, run a process inside GDB or
 examine a coredump.
