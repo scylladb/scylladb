@@ -724,6 +724,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "certificate : (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the internode communication.\n"
         "keyfile : (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
         "truststore : (Default: <system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"
+        "certficate_revocation_list : (Default: <none> ) PEM encoded certificate revocation list.\n"
         "\n"
         "The advanced settings are:\n"
         "\n"
@@ -737,6 +738,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
         "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
         "truststore : (Default: <system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"
+        "certficate_revocation_list : (Default: <none> ) PEM encoded certificate revocation list.\n"
         "\n"
         "The advanced settings are:\n"
         "\n"
@@ -1092,6 +1094,9 @@ future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, d
 
     if (options.contains("truststore")) {
         co_await creds.set_x509_trust_file(options.at("truststore"), seastar::tls::x509_crt_format::PEM);
+    }
+    if (options.contains("certficate_revocation_list")) {
+        co_await creds.set_x509_crl_file(options.at("certficate_revocation_list"), seastar::tls::x509_crt_format::PEM);
     }
 }
 
