@@ -267,9 +267,14 @@ public:
         return _current_tombstone;
     }
 
-    const std::deque<range_tombstone>& range_tombstones_for_row(const clustering_key_prefix& ck) {
+    std::vector<range_tombstone> range_tombstones_for_row(const clustering_key_prefix& ck) {
         drop_unneeded_tombstones(ck);
-        return _range_tombstones;
+        std::vector<range_tombstone> result(_range_tombstones.begin(), _range_tombstones.end());
+        auto cmp = [&] (const range_tombstone& rt1, const range_tombstone& rt2) {
+            return _cmp(rt1.start_bound(), rt2.start_bound());
+        };
+        std::sort(result.begin(), result.end(), cmp);
+        return result;
     }
 
     std::deque<range_tombstone> range_tombstones() && {
