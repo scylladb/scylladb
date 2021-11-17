@@ -488,6 +488,7 @@ protected:
     const unsigned _total_input_sstables;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
+    std::unordered_set<shared_sstable> _new_partial_sstables;
     std::vector<shared_sstable> _new_unused_sstables;
     std::vector<shared_sstable> _all_new_sstables;
     lw_shared_ptr<sstable_set> _compacting;
@@ -555,7 +556,7 @@ protected:
 
     void setup_new_sstable(shared_sstable& sst) {
         _all_new_sstables.push_back(sst);
-        _new_unused_sstables.push_back(sst);
+        _new_partial_sstables.insert(sst);
         for (auto ancestor : _ancestors) {
             sst->add_ancestor(ancestor);
         }
@@ -565,6 +566,8 @@ protected:
         writer->writer.consume_end_of_stream();
         writer->sst->open_data().get0();
         _end_size += writer->sst->bytes_on_disk();
+        _new_unused_sstables.push_back(writer->sst);
+        _new_partial_sstables.erase(writer->sst);
     }
 
     sstable_writer_config make_sstable_writer_config(compaction_type type) {
@@ -763,7 +766,7 @@ private:
         // Delete either partially or fully written sstables of a compaction that
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
-        for (auto& sst : _new_unused_sstables) {
+        for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
             log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
             sst->mark_for_deletion();
         }
