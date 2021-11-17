@@ -927,8 +927,7 @@ future<> migration_manager::announce_new_view(view_ptr view) {
     co_return co_await announce(co_await prepare_new_view_announcement(std::move(view)));
 }
 
-future<> migration_manager::announce_view_update(view_ptr view)
-{
+future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view) {
 #if 0
     view.metadata.validate();
 #endif
@@ -937,18 +936,22 @@ future<> migration_manager::announce_view_update(view_ptr view)
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
         auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
         if (!old_view->is_view()) {
-            throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
+            co_return coroutine::make_exception(exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table"));
         }
 #if 0
         oldCfm.validateCompatility(cfm);
 #endif
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
         auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), api::new_timestamp(), true);
-        return include_keyspace_and_announce(*keyspace, std::move(mutations));
+        co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const std::out_of_range& e) {
-        throw exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
-                                                         view->cf_name(), view->ks_name()));
+        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
+                                                         view->cf_name(), view->ks_name())));
     }
+}
+
+future<> migration_manager::announce_view_update(view_ptr view) {
+    co_return co_await announce(co_await prepare_view_update_announcement(std::move(view)));
 }
 
 future<> migration_manager::announce_view_drop(const sstring& ks_name,

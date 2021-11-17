@@ -168,6 +168,7 @@ public:
     future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
 
     future<> announce_view_update(view_ptr view);
+    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view);
 
     future<> announce_view_drop(const sstring& ks_name, const sstring& cf_name);
 
