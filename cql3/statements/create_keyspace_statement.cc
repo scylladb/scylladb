@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "prepared_statement.hh"
@@ -110,26 +111,47 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
 #endif
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(query_processor& qp) const
-{
-    return make_ready_future<>().then([this, p = qp.proxy().shared_from_this(), &mm = qp.get_migration_manager()] {
-        const auto& tm = *p->get_token_metadata_ptr();
-        return mm.announce_new_keyspace(_attrs->as_ks_metadata(_name, tm));
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::CREATED,
-                    event::schema_change::target_type::KEYSPACE,
-                    this->keyspace());
-        } catch (const exceptions::already_exists_exception& e) {
-            if (_if_not_exists) {
-                return ::shared_ptr<cql_transport::event::schema_change>();
-            }
-            throw e;
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
+    using namespace cql_transport;
+    auto p = qp.proxy().shared_from_this();
+    const auto& tm = *p->get_token_metadata_ptr();
+    ::shared_ptr<event::schema_change> ret;
+    std::vector<mutation> m;
+
+    try {
+        m = qp.get_migration_manager().prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), api::new_timestamp());
+
+        ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::CREATED,
+                event::schema_change::target_type::KEYSPACE,
+                keyspace());
+    } catch (const exceptions::already_exists_exception& e) {
+        if (!_if_not_exists) {
+          co_return coroutine::exception(std::current_exception());
         }
-    });
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
+}
+
+
+future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(query_processor& qp) const {
+    auto p = qp.proxy().shared_from_this();
+    const auto& tm = *p->get_token_metadata_ptr();
+    try {
+       co_await qp.get_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name, tm));
+
+        using namespace cql_transport;
+        co_return ::make_shared<event::schema_change>(
+                event::schema_change::change_type::CREATED,
+                event::schema_change::target_type::KEYSPACE,
+                keyspace());
+    } catch (const exceptions::already_exists_exception& e) {
+        if (_if_not_exists) {
+            co_return ::shared_ptr<cql_transport::event::schema_change>();
+        }
+        co_return coroutine::exception(std::current_exception());
+    }
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
