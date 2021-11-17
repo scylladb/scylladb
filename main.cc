@@ -1349,7 +1349,7 @@ int main(int ac, char** av) {
             }
             ss.local().register_protocol_server(alternator_ctl);
 
-            redis_service redis(proxy, auth_service, mm, *cfg, gossiper);
+            redis::redis_service redis(proxy, auth_service, mm, *cfg, gossiper);
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&redis] {
                     return redis.start_server();

@@ -31,6 +31,8 @@
 
 static logging::logger slogger("redis_service");
 
+namespace redis {
+
 redis_service::redis_service(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
         seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper)
     : _proxy(proxy)
@@ -159,4 +161,6 @@ future<> redis_service::stop_server()
 
 future<> redis_service::request_stop_server() {
     return stop_server();
+}
+
 }

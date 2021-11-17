@@ -64,8 +64,6 @@ namespace redis {
 // Redis 2.0 according to the above quite so that is the version we are going to use.
 constexpr const char* version = "2.0";
 
-}
-
 class redis_service : public protocol_server {
     seastar::sharded<redis::query_processor> _query_processor;
     seastar::shared_ptr<seastar::sharded<redis_transport::redis_server>> _server;
@@ -90,3 +88,5 @@ public:
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
 };
+
+}
