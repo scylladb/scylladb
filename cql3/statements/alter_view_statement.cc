@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -111,19 +112,29 @@ view_ptr alter_view_statement::prepare_view(database& db) const {
     return view_ptr(builder.build());
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> alter_view_statement::prepare_schema_mutations(query_processor& qp) const {
+    auto m = co_await qp.get_migration_manager().prepare_view_update_announcement(prepare_view(qp.db()));
 
-    return qp.get_migration_manager().announce_view_update(prepare_view(db)).then([this] {
-        using namespace cql_transport;
+    using namespace cql_transport;
+    auto ret = ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
 
-        return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TABLE,
-                keyspace(),
-                column_family());
-    });
+    co_return std::make_pair(std::move(ret), std::move(m));
+}
+
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const {
+    co_await qp.get_migration_manager().announce_view_update(prepare_view(qp.db()));
+
+    using namespace cql_transport;
+
+    co_return ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
