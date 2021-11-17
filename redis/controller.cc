@@ -126,10 +126,6 @@ std::vector<socket_address> controller::listen_addresses() const {
     return _listen_addresses;
 }
 
-bool controller::is_server_running() const {
-    return !_listen_addresses.empty();
-}
-
 future<> controller::start_server()
 {
     // 1. Create keyspace/tables used by redis API if not exists.

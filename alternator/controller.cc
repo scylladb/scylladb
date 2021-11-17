@@ -68,10 +68,6 @@ std::vector<socket_address> controller::listen_addresses() const {
     return _listen_addresses;
 }
 
-bool controller::is_server_running() const {
-    return !_listen_addresses.empty();
-}
-
 future<> controller::start_server() {
     return seastar::async([this] {
         _listen_addresses.clear();

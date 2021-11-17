@@ -49,14 +49,10 @@ sstring thrift_controller::protocol_version() const {
 }
 
 std::vector<socket_address> thrift_controller::listen_addresses() const {
-    if (_addr) {
+    if (_server && _addr) {
         return {*_addr};
     }
     return {};
-}
-
-bool thrift_controller::is_server_running() const {
-    return bool(_server);
 }
 
 future<> thrift_controller::start_server() {

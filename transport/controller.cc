@@ -62,11 +62,7 @@ sstring controller::protocol_version() const {
 }
 
 std::vector<socket_address> controller::listen_addresses() const {
-    return _listen_addresses;
-}
-
-bool controller::is_server_running() const {
-    return bool(_server);
+    return _server ? _listen_addresses : std::vector<socket_address>();
 }
 
 future<> controller::start_server() {
