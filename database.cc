@@ -1062,7 +1062,8 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), options);
 
-    update_effective_replication_map(co_await calculate_effective_replication_map(_replication_strategy, stm.get()));
+    auto erm = co_await get_erm_factory().create_effective_replication_map(_replication_strategy, stm.get());
+    update_effective_replication_map(std::move(erm));
 }
 
 void
