@@ -38,7 +38,7 @@ for the implementation of writes, each with different advantages. You should
 carefully consider which of the options makes more sense for your intended
 use case and configure alternator_write_isolation accordingly. There is
 currently no default for this option: Trying to run Scylla with an Alternator
-port selected but without configuring write isolation will result in an error
+port selected but without configuring write isolation will result in an error message,
 asking you to set it.
 
 In addition to (or instead of) serving HTTP requests on alternator_port,
