@@ -696,7 +696,7 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
     }
 }
 
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt) {
+future<std::vector<mutation>> migration_manager::prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt) {
     warn(unimplemented::cause::VALIDATION);
 #if 0
     cfm.validate();
@@ -720,11 +720,15 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
             co_await coroutine::maybe_yield();
         }
         get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
-        co_return co_await include_keyspace_and_announce(*keyspace, std::move(mutations));
+        co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const no_such_column_family& e) {
-        throw exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
-                                                         cfm->cf_name(), cfm->ks_name()));
+        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
+                                                         cfm->cf_name(), cfm->ks_name())));
     }
+}
+
+future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt) {
+    co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, std::move(view_updates), ts_opt));
 }
 
 future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
