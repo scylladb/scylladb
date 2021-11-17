@@ -37,6 +37,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/query_processor.hh"
@@ -81,8 +82,9 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-void alter_type_statement::do_announce_migration(database& db, service::migration_manager& mm, ::keyspace& ks) const
+future<> alter_type_statement::do_announce_migration(database& db, service::migration_manager& mm) const
 {
+    auto&& ks = db.find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
     // Shouldn't happen, unless we race with a drop
@@ -103,7 +105,7 @@ void alter_type_statement::do_announce_migration(database& db, service::migratio
 
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
-    mm.announce_type_update(updated).get();
+    co_await mm.announce_type_update(updated);
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
         auto cfm = schema_builder(schema);
@@ -118,9 +120,9 @@ void alter_type_statement::do_announce_migration(database& db, service::migratio
         }
         if (modified) {
             if (schema->is_view()) {
-                mm.announce_view_update(view_ptr(cfm.build())).get();
+                co_await mm.announce_view_update(view_ptr(cfm.build()));
             } else {
-                mm.announce_column_family_update(cfm.build(), false, {}, std::nullopt).get();
+                co_await mm.announce_column_family_update(cfm.build(), false, {}, std::nullopt);
             }
         }
     }
@@ -128,21 +130,18 @@ void alter_type_statement::do_announce_migration(database& db, service::migratio
 
 future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(query_processor& qp) const
 {
-    return seastar::async([this, &qp] {
-        database& db = qp.db();
-        try {
-            auto&& ks = db.find_keyspace(keyspace());
-            do_announce_migration(db, qp.get_migration_manager(), ks);
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::UPDATED,
-                    event::schema_change::target_type::TYPE,
-                    keyspace(),
-                    _name.get_string_type_name());
-        } catch (no_such_keyspace& e) {
-            throw exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace()));
-        }
-    });
+    database& db = qp.db();
+    try {
+        co_await do_announce_migration(db, qp.get_migration_manager());
+        using namespace cql_transport;
+        co_return ::make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::TYPE,
+                keyspace(),
+                _name.get_string_type_name());
+    } catch (no_such_keyspace& e) {
+        co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
+    }
 }
 
 alter_type_statement::add_or_alter::add_or_alter(const ut_name& name, bool is_add, shared_ptr<column_identifier> field_name, shared_ptr<cql3_type::raw> field_type)
