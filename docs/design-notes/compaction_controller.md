@@ -12,7 +12,7 @@ that would guarantee fairness between classes, it would not guarantee that the c
 progressing at optimal speed.
 
 Compactions could be too fast: this could be seen in compaction graphs when compaction was a visible
-peak. While fast compactions are nice, ee take a lot of resources away from the foreground requests
+peak. While fast compactions are nice, they take a lot of resources away from the foreground requests
 to achieve that speed depressing latencies momentaneously. It would be better to run compactions
 more slowly in that case, turning the fast peak into a better distributed plateau.
 
