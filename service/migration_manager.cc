@@ -629,15 +629,17 @@ future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata
     return announce_new_keyspace(ksm, api::new_timestamp());
 }
 
-future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp)
-{
+std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp) {
     auto& proxy = get_local_storage_proxy();
     auto& db = proxy.get_db().local();
 
     db.validate_new_keyspace(*ksm);
     mlogger.info("Create new Keyspace: {}", ksm);
-    auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
-    return announce(std::move(mutations));
+    return db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
+}
+
+future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp) {
+    return announce(prepare_new_keyspace_announcement(std::move(ksm), timestamp));
 }
 
 future<> migration_manager::announce_new_column_family(schema_ptr cfm)
