@@ -136,7 +136,7 @@ public:
 // Holds the full replication_map resulting from applying the
 // effective replication strategy over the given token_metadata
 // and replication_strategy_config_options.
-class effective_replication_map {
+class effective_replication_map : public enable_lw_shared_from_this<effective_replication_map> {
 public:
     struct factory_key {
         replication_strategy_type rs_type;
