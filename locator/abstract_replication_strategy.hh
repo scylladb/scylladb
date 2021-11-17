@@ -114,7 +114,8 @@ public:
     // returns the node itself as the natural_endpoints and the node will not
     // appear in the pending_endpoints.
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
-    replication_strategy_type get_type() const { return _my_type; }
+    replication_strategy_type get_type() const noexcept { return _my_type; }
+    const replication_strategy_config_options get_config_options() const noexcept { return _config_options; }
 
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.
@@ -136,6 +137,27 @@ public:
 // effective replication strategy over the given token_metadata
 // and replication_strategy_config_options.
 class effective_replication_map {
+public:
+    struct factory_key {
+        replication_strategy_type rs_type;
+        long ring_version;
+        replication_strategy_config_options rs_config_options;
+
+        factory_key(replication_strategy_type rs_type_, const replication_strategy_config_options& rs_config_options_, long ring_version_)
+            : rs_type(std::move(rs_type_))
+            , ring_version(ring_version_)
+            , rs_config_options(std::move(rs_config_options_))
+        {}
+
+        factory_key(factory_key&&) = default;
+        factory_key(const factory_key&) = default;
+
+        bool operator==(const factory_key& o) const = default;
+        bool operator!=(const factory_key& o) const = default;
+
+        sstring to_sstring() const;
+    };
+
 private:
     abstract_replication_strategy::ptr_type _rs;
     token_metadata_ptr _tmptr;
@@ -202,6 +224,9 @@ public:
 
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<bool(inet_address_vector_replica_set)> should_add_range) const;
+
+public:
+    static factory_key make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr);
 };
 
 using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;
@@ -214,7 +239,69 @@ inline mutable_effective_replication_map_ptr make_effective_replication_map(abst
 // Apply the replication strategy over the current configuration and the given token_metadata.
 future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
 
+} // namespace locator
+
+std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type);
+std::ostream& operator<<(std::ostream& os, const locator::effective_replication_map::factory_key& key);
+
+template <>
+struct fmt::formatter<locator::effective_replication_map::factory_key> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const locator::effective_replication_map::factory_key& key, FormatContext& ctx) {
+        std::ostringstream os;
+        os << key;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
+
+template<>
+struct appending_hash<locator::effective_replication_map::factory_key> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const locator::effective_replication_map::factory_key& key) const {
+        feed_hash(h, key.rs_type);
+        feed_hash(h, key.ring_version);
+        for (const auto& [opt, val] : key.rs_config_options) {
+            h.update(opt.c_str(), opt.size());
+            h.update(val.c_str(), val.size());
+        }
+    }
+};
+
+struct factory_key_hasher : public hasher {
+    XXH64_state_t _state;
+    factory_key_hasher(uint64_t seed = 0) noexcept {
+        XXH64_reset(&_state, seed);
+    }
+    void update(const char* ptr, size_t length) noexcept {
+        XXH64_update(&_state, ptr, length);
+    }
+    size_t finalize() {
+        return static_cast<size_t>(XXH64_digest(&_state));
+    }
+};
+
+namespace std {
+
+template <>
+struct hash<locator::effective_replication_map::factory_key> {
+    size_t operator()(const locator::effective_replication_map::factory_key& key) const {
+        factory_key_hasher h;
+        appending_hash<locator::effective_replication_map::factory_key>{}(h, key);
+        return h.finalize();
+    }
+};
+
+} // namespace std
+
+namespace locator {
+
 class effective_replication_map_factory {
+    std::unordered_map<effective_replication_map::factory_key, effective_replication_map*> _effective_replication_maps;
+
     // TODO: create and erase effective_replication_map
 };
 

@@ -345,4 +345,32 @@ future<> effective_replication_map::clear_gently() noexcept {
     co_await utils::clear_gently(_tmptr);
 }
 
+effective_replication_map::factory_key effective_replication_map::make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr) {
+    return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
+}
+
 } // namespace locator
+
+std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type t) {
+    switch (t) {
+    case locator::replication_strategy_type::simple:
+        return os << "simple";
+    case locator::replication_strategy_type::local:
+        return os << "local";
+    case locator::replication_strategy_type::network_topology:
+        return os << "network_topology";
+    case locator::replication_strategy_type::everywhere_topology:
+        return os << "everywhere_topology";
+    };
+}
+
+std::ostream& operator<<(std::ostream& os, const locator::effective_replication_map::factory_key& key) {
+    os << key.rs_type;
+    os << '.' << key.ring_version;
+    char sep = ':';
+    for (const auto& [opt, val] : key.rs_config_options) {
+        os << sep << opt << '=' << val;
+        sep = ',';
+    }
+    return os;
+}
