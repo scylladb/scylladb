@@ -58,6 +58,7 @@ namespace statements {
 class alter_view_statement : public schema_altering_statement {
 private:
     std::optional<cf_prop_defs> _properties;
+    view_ptr prepare_view(database& db) const;
 public:
     alter_view_statement(cf_name view_name, std::optional<cf_prop_defs> properties);
 

@@ -78,9 +78,7 @@ void alter_view_statement::validate(service::storage_proxy&, const service::clie
     // validated in announce_migration()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
+view_ptr alter_view_statement::prepare_view(database& db) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
@@ -110,7 +108,14 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
                 "the corresponding data in the parent table.");
     }
 
-    return qp.get_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
+    return view_ptr(builder.build());
+}
+
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
+{
+    database& db = qp.db();
+
+    return qp.get_migration_manager().announce_view_update(prepare_view(db)).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(
