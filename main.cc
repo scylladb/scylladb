@@ -86,7 +86,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/schema_tables.hh"
 
-#include "redis/service.hh"
+#include "redis/controller.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "cdc/generation_service.hh"

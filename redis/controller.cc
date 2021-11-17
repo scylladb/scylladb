@@ -20,7 +20,7 @@
  */
 
 #include "timeout_config.hh"
-#include "redis/service.hh"
+#include "redis/controller.hh"
 #include "redis/keyspace_utils.hh"
 #include "redis/server.hh"
 #include "service/storage_proxy.hh"
