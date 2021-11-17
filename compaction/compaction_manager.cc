@@ -260,12 +260,21 @@ private:
     virtual void remove_sstable(sstables::shared_sstable sst)  override { }
 };
 
+compaction_manager::compaction_state& compaction_manager::get_compaction_state(table* t) {
+    try {
+        return _compaction_state.at(t);
+    } catch (std::out_of_range&) {
+        // Note: don't dereference t as it might not exist
+        throw std::out_of_range(format("Compaction state for table [{}] not found", fmt::ptr(t)));
+    }
+}
+
 future<> compaction_manager::perform_major_compaction(column_family* cf) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
 
-    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, _compaction_state[cf]);
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, get_compaction_state(cf));
     _tasks.push_back(task);
     cmlog.debug("Major compaction task {} cf={}: started", fmt::ptr(task.get()), fmt::ptr(cf));
 
@@ -321,7 +330,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstables::compact
         return make_ready_future<>();
     }
 
-    auto task = make_lw_shared<compaction_manager::task>(cf, type, _compaction_state[cf]);
+    auto task = make_lw_shared<compaction_manager::task>(cf, type, get_compaction_state(cf));
     _tasks.push_back(task);
     cmlog.debug("{} task {} cf={}: started", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
@@ -655,7 +664,7 @@ void compaction_manager::submit(column_family* cf) {
         return;
     }
 
-    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, _compaction_state[cf]);
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, get_compaction_state(cf));
     _tasks.push_back(task);
     _stats.pending_tasks++;
     cmlog.debug("Compaction task {} cf={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
@@ -724,7 +733,7 @@ void compaction_manager::submit(column_family* cf) {
 }
 
 void compaction_manager::submit_offstrategy(column_family* cf) {
-    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Reshape, _compaction_state[cf]);
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Reshape, get_compaction_state(cf));
     _tasks.push_back(task);
     _stats.pending_tasks++;
     cmlog.debug("Offstrategy compaction task {} cf={}: started", fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
@@ -782,7 +791,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
 }
 
 future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
-    auto task = make_lw_shared<compaction_manager::task>(cf, options.type(), _compaction_state[cf]);
+    auto task = make_lw_shared<compaction_manager::task>(cf, options.type(), get_compaction_state(cf));
     _tasks.push_back(task);
     cmlog.debug("{} task {} cf={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
@@ -1001,6 +1010,14 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
             return get_candidates(cf);
         }, can_purge_tombstones::no);
     });
+}
+
+void compaction_manager::add(column_family* cf) {
+    auto [_, inserted] = _compaction_state.insert({cf, compaction_state{}});
+    if (!inserted) {
+        auto s = cf->schema();
+        on_internal_error(cmlog, format("compaction_state for column family {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(cf)));
+    }
 }
 
 future<> compaction_manager::remove(column_family* cf) {

@@ -1207,6 +1207,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
         tlogger.warn("Writes disabled, column family no durable.");
     }
     set_metrics();
+    _compaction_manager.add(this);
 }
 
 partition_presence_checker

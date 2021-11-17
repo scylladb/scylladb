@@ -276,6 +276,11 @@ public:
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(table* t, std::function<future<> ()> func);
 
+    // Adds a column family to the compaction manager.
+    // Creates a compaction_state structure that can be used for submitting
+    // compaction jobs of all types.
+    void add(column_family* cf);
+
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
     future<> remove(column_family* cf);
@@ -283,6 +288,10 @@ public:
     const stats& get_stats() const {
         return _stats;
     }
+
+    // gets the table's compaction state
+    // throws std::out_of_range exception if not found.
+    compaction_state& get_compaction_state(table* t);
 
     const std::vector<sstables::compaction_info> get_compactions() const;
 
