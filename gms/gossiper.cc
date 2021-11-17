@@ -202,6 +202,10 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         return make_ready_future<>();
     }
 
+    if (is_isolated(from.addr)) {
+        return make_ready_future<>();
+    }
+
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
         logger.warn("ClusterName mismatch from {} {}!={}", from.addr, syn_msg.cluster_id(), get_cluster_name());
@@ -293,6 +297,10 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
+        return make_ready_future<>();
+    }
+
+    if (is_isolated(id.addr)) {
         return make_ready_future<>();
     }
 
@@ -392,6 +400,10 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
         return make_ready_future<>();
     }
 
+    if (is_isolated(from.addr)) {
+        return make_ready_future<>();
+    }
+
     msg_proc_guard mp(*this);
 
     auto& remote_ep_state_map = msg.get_endpoint_state_map();
@@ -400,6 +412,9 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
 }
 
 future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
+    if (is_isolated(from)) {
+        return make_exception_future(std::runtime_error(format("Node {} is isolated by {}", from, get_broadcast_address())));
+    }
     bool respond = true;
     if (!_advertise_myself) {
         respond = false;
@@ -556,6 +571,9 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
 
 // Runs inside seastar::async context
 void gossiper::do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification) {
+    if (is_isolated(node)) {
+        return;
+    }
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = this->lock_endpoint(node).get0();
@@ -770,6 +788,9 @@ future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_
         bool failed = false;
         try {
             logger.debug("failure_detector_loop: Send echo to node {}, status = started", node);
+            if (is_isolated(node)) {
+                throw std::runtime_error(format("Node {} is isolated by {}. Skip sending echo message to {}.", node, get_broadcast_address(), node));
+            }
             co_await _messaging.send_gossip_echo(netw::msg_addr(node), gossip_generation, max_duration);
             logger.debug("failure_detector_loop: Send echo to node {}, status = ok", node);
         } catch (...) {
@@ -1507,6 +1528,12 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     //     real_mark_alive(addr, local_state);
     //     return;
     // }
+
+    if (is_isolated(addr)) {
+        logger.debug("Skipped to mark node {} as alive because it is isloated", addr);
+        return;
+    }
+
     auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
     if (inserted) {
         // The node is not in the _pending_mark_alive_endpoints
@@ -1687,6 +1714,10 @@ bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     return false;
 }
 
+bool gossiper::is_isolated(const gms::inet_address& node) {
+    return _isolated_nodes_due_to_listener_failure.contains(node);
+}
+
 // Runs inside seastar::async context
 void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
@@ -1701,13 +1732,42 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     utils::chunked_vector<application_state> changed;
     auto&& remote_map = remote_state.get_application_state_map();
 
+    bool replicate_failed = false;
+    bool listener_failed = false;
+
+    auto isolate_node = [&] {
+        try {
+            logger.warn("Node {} is isolated by gossip because it failed to run gossip listener. A rolling restart is needed to recover!", addr);
+            _isolated_nodes_due_to_listener_failure.insert(addr);
+            container().invoke_on_others([addr] (gossiper& g) {
+                g._isolated_nodes_due_to_listener_failure.insert(addr);
+            }).get();
+            logger.info("Mark node {} as DOWN because it is isloated", addr);
+            convict(addr);
+        } catch (...) {
+            logger.error("Failed to isolate node {}", addr, std::current_exception());
+        }
+    };
+
     // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
     // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
     // Some values are set only once, so listeners would never be re-run.
     // Listeners should decide which failures are non-fatal and swallow them.
     auto run_listeners = seastar::defer([&] () noexcept {
-        for (auto&& key : changed) {
-            do_on_change_notifications(addr, key, remote_map.at(key));
+        if (replicate_failed) {
+            logger.warn("Skipped to run gossip listener for node={}, changed={}, remote_map={}",
+                    addr, changed, remote_map);
+            return;
+        }
+        try {
+            for (auto&& key : changed) {
+                do_on_change_notifications(addr, key, remote_map.at(key));
+            }
+        } catch (...) {
+            listener_failed = true;
+            logger.warn("Failed to run gossip listener for node={}, changed={}, remote_map={}: {}",
+                    addr, changed, remote_map, std::current_exception());
+            isolate_node();
         }
     });
 
@@ -1716,7 +1776,14 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     // would be inconsistent across shards. Changes listeners depend on state
     // being replicated to all shards.
     auto replicate_changes = seastar::defer([&] () noexcept {
-        replicate(addr, remote_map, changed).get();
+        try {
+            replicate(addr, remote_map, changed).get();
+        } catch (...) {
+            replicate_failed = true;
+            logger.warn("Failed to replicate app state for node={}, changed={}, remote_map={}: {}",
+                    addr, changed, remote_map, std::current_exception());
+            isolate_node();
+        }
     });
 
     // we need to make two loops here, one to apply, then another to notify,
