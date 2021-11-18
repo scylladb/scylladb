@@ -228,6 +228,7 @@ partition_slice::partition_slice(const partition_slice& s)
     , _specific_ranges(s._specific_ranges ? std::make_unique<specific_ranges>(*s._specific_ranges) : nullptr)
     , _cql_format(s._cql_format)
     , _partition_row_limit_low_bits(s._partition_row_limit_low_bits)
+    , _partition_row_limit_high_bits(s._partition_row_limit_high_bits)
 {}
 
 partition_slice::~partition_slice()
