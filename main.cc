@@ -1151,6 +1151,11 @@ int main(int ac, char** av) {
                 gossiper.local().unregister_(ss.local().shared_from_this()).get();
             });
 
+            gossiper.local().register_(mm.local().shared_from_this());
+            auto stop_mm_listening = defer_verbose_shutdown("migration manager notifications", [&gossiper, &mm] {
+                gossiper.local().unregister_(mm.local().shared_from_this()).get();
+            });
+
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();

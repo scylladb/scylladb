@@ -49,6 +49,7 @@
 #include <seastar/core/gate.hh>
 #include "gms/inet_address.hh"
 #include "gms/feature.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
 #include "message/msg_addr.hh"
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
@@ -63,6 +64,8 @@ namespace netw { class messaging_service; }
 namespace gms {
 
 class gossiper;
+enum class application_state;
+class versioned_value;
 
 }
 
@@ -72,6 +75,7 @@ template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
+                            public gms::i_endpoint_state_change_subscriber,
                             public seastar::peering_sharded_service<migration_manager> {
 private:
     migration_notifier& _notifier;
@@ -201,6 +205,15 @@ public:
     // Ensures that this node is synchronized with the returned schema. See schema::is_synced().
     // Intended to be used in the write path, which relies on synchronized schema.
     future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
+
+private:
+    virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    virtual void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override;
+    virtual void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
+    virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override {}
+    virtual void on_remove(gms::inet_address endpoint) override {}
+    virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override {}
+    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_statekey, const gms::versioned_value& newvalue) override {}
 };
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
