@@ -39,11 +39,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/schema_altering_statement.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
 #include "transport/messages/result_message.hh"
+#include "service/raft/raft_group_registry.hh"
+#include "service/migration_manager.hh"
 
 namespace cql3 {
 
@@ -89,19 +92,39 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
     }
 }
 
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+schema_altering_statement::prepare_schema_mutations(query_processor& qp) const {
+    assert(false);
+    co_return std::make_pair(::shared_ptr<cql_transport::event::schema_change>(), std::vector<mutation>());
+}
+
+bool schema_altering_statement::has_prepare_schema_mutations() const {
+    return false;
+}
+
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(query_processor& qp, service::query_state& state, const query_options& options) const {
+    auto& mm = qp.get_migration_manager();
+    ::shared_ptr<cql_transport::event::schema_change> ce;
+
+    if (has_prepare_schema_mutations()) {
+        auto [ret, m] = co_await prepare_schema_mutations(qp);
+
+        if (!m.empty()) {
+            co_await mm.announce(std::move(m));
+        }
+
+        ce = std::move(ret);
+    } else {
+        ce = co_await announce_migration(qp);
+    }
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-    return announce_migration(qp).then([this] (auto ce) {
-        ::shared_ptr<messages::result_message> result;
-        if (!ce) {
-            result = ::make_shared<messages::result_message::void_message>();
-        } else {
-            result = ::make_shared<messages::result_message::schema_change>(ce);
-        }
-        return make_ready_future<::shared_ptr<messages::result_message>>(result);
-    });
+    if (!ce) {
+        co_return ::make_shared<messages::result_message::void_message>();
+    } else {
+        co_return ::make_shared<messages::result_message::schema_change>(ce);
+    }
 }
 
 future<::shared_ptr<messages::result_message>>
