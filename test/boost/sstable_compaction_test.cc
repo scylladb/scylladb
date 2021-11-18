@@ -3935,9 +3935,28 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         auto s = builder.build();
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, s->compaction_strategy_options());
 
-        auto next_timestamp = [](auto step) {
-            using namespace std::chrono;
-            return (gc_clock::now().time_since_epoch() + duration_cast<microseconds>(step)).count();
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> distrib(1, 3600*24);
+
+        using namespace std::chrono;
+
+        // Make it easier to reproduce timing-based issues by running this test multiple times.
+        auto offset_duration = duration_cast<microseconds>(minutes(distrib(gen)));
+
+        auto now = gc_clock::now().time_since_epoch() + offset_duration;
+        // The twcs is configured with 8-hours time window. If the starting time
+        // is not aligned with that then some buckets may get less than this
+        // number of sstables in and potentially hit the minimal threshold of
+        // 4 sstables. Align the starting time not to make this happen.
+        auto now_in_minutes = duration_cast<minutes>(now);
+        constexpr auto window_size_in_minutes = 8 * 60;
+        forward_jump_clocks(minutes(window_size_in_minutes - now_in_minutes.count() % window_size_in_minutes));
+        now = gc_clock::now().time_since_epoch() + offset_duration;
+        assert(std::chrono::duration_cast<minutes>(now).count() % window_size_in_minutes == 0);
+
+        auto next_timestamp = [now](auto step) {
+            return (now + duration_cast<seconds>(step)).count();
         };
 
         auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
@@ -3959,13 +3978,6 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
         auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::sstable::version_types::md, big);
         };
-
-        // The twcs is configured with 8-hours time window. If the starting time
-        // is not aligned with that then some buckets may get less than this
-        // number of sstables in and potentially hit the minimal threshold of
-        // 4 sstables. Align the starting time not to make this happen.
-        auto hours = std::chrono::duration_cast<std::chrono::hours>(gc_clock::now().time_since_epoch());
-        forward_jump_clocks(std::chrono::hours(8 - hours.count() % 8));
 
         {
             // create set of 256 disjoint ssts that belong to the same time window and expect that twcs reshape allows them all to be compacted at once
