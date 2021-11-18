@@ -84,14 +84,15 @@ future<> migration_manager::drain()
     mlogger.info("stopping migration service");
     _as.request_abort();
 
-  return uninit_messaging_service().then([this] {
-    return parallel_for_each(_schema_pulls.begin(), _schema_pulls.end(), [] (auto&& e) {
-        serialized_action& sp = e.second;
-        return sp.join();
-    }).finally([this] {
-        return _background_tasks.close();
-    });
-  });
+    co_await uninit_messaging_service();
+    try {
+        co_await parallel_for_each(_schema_pulls, [] (auto&& e) {
+            return e.second.join();
+        });
+    } catch (...) {
+        mlogger.error("schema_pull failed: {}", std::current_exception());
+    }
+    co_await _background_tasks.close();
 }
 
 void migration_manager::init_messaging_service()
