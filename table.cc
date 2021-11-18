@@ -591,18 +591,18 @@ table::seal_active_memtable(flush_permit&& permit) {
 
 future<stop_iteration>
 table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
-  auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit))] () mutable -> future<stop_iteration> {
-    // Note that due to our sharded architecture, it is possible that
-    // in the face of a value change some shards will backup sstables
-    // while others won't.
-    //
-    // This is, in theory, possible to mitigate through a rwlock.
-    // However, this doesn't differ from the situation where all tables
-    // are coming from a single shard and the toggle happens in the
-    // middle of them.
-    //
-    // The code as is guarantees that we'll never partially backup a
-    // single sstable, so that is enough of a guarantee.
+    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit))] () mutable -> future<stop_iteration> {
+        // Note that due to our sharded architecture, it is possible that
+        // in the face of a value change some shards will backup sstables
+        // while others won't.
+        //
+        // This is, in theory, possible to mitigate through a rwlock.
+        // However, this doesn't differ from the situation where all tables
+        // are coming from a single shard and the toggle happens in the
+        // middle of them.
+        //
+        // The code as is guarantees that we'll never partially backup a
+        // single sstable, so that is enough of a guarantee.
 
         auto newtabs = std::vector<sstables::shared_sstable>();
         auto metadata = mutation_source_metadata{};
@@ -626,9 +626,9 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         });
 
         auto f = consumer(old->make_flush_reader(
-                    old->schema(),
-                    compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()", db::no_timeout),
-                    service::get_local_memtable_flush_priority()));
+            old->schema(),
+            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()", db::no_timeout),
+            service::get_local_memtable_flush_priority()));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
