@@ -169,17 +169,18 @@ struct configuration {
     }
 
     bool can_vote(server_id id) const {
+        bool can_vote = false;
         auto it = current.find(server_address{.id=id});
         if (it != current.end()) {
-            return it->can_vote;
+            can_vote |= it->can_vote;
         }
 
         it = previous.find(server_address{.id=id});
         if (it != previous.end()) {
-            return it->can_vote;
+            can_vote |= it->can_vote;
         }
 
-        return false;
+        return can_vote;
     }
 
     // Enter a joint configuration given a new set of servers.
