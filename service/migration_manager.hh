@@ -171,6 +171,7 @@ public:
 
     future<> passive_announce(utils::UUID version);
 
+    future<> drain();
     future<> stop();
 
     /**

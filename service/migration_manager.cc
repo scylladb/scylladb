@@ -73,12 +73,14 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
 {
 }
 
-future<> migration_manager::stop()
-{
-    if (_as.abort_requested()) {
-        return make_ready_future<>();
+future<> migration_manager::stop() {
+    if (!_as.abort_requested()) {
+        co_await drain();
     }
+}
 
+future<> migration_manager::drain()
+{
     mlogger.info("stopping migration service");
     _as.request_abort();
 

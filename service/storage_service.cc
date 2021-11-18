@@ -2626,7 +2626,7 @@ future<> storage_service::do_drain() {
         }).get();
 
         set_mode(mode::DRAINING, "shutting down migration manager", false);
-        _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
+        _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
 
         set_mode(mode::DRAINING, "flushing column families", false);
         _db.invoke_on_all(&database::drain).get();
