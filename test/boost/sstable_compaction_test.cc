@@ -3365,6 +3365,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         cfg.enable_incremental_backups = false;
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto stop_cf = deferred_stop(*cf);
         cf->mark_ready_for_writes();
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::null);
