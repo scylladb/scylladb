@@ -1009,11 +1009,11 @@ future<> compaction_manager::remove(column_family* cf) {
     // The requirement above is provided by stop_ongoing_compactions().
     _postponed.erase(cf);
 
-    // Wait for all functions running under gate to terminate.
-    auto close_gate = _compaction_state[cf].gate.close();
-
     // Wait for the termination of an ongoing compaction on cf, if any.
-    co_await when_all_succeed(stop_ongoing_compactions("column family removal", cf), std::move(close_gate));
+    co_await stop_ongoing_compactions("column family removal", cf);
+
+    // Wait for all functions running under gate to terminate.
+    co_await _compaction_state[cf].gate.close();
 #ifdef DEBUG
     auto found = false;
     sstring msg;
