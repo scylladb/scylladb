@@ -278,10 +278,14 @@ if __name__ == "__main__":
                     disk_properties["read_bandwidth"] = 2527296683 * nr_disks
                     disk_properties["write_iops"] = 156326 * nr_disks
                     disk_properties["write_bandwidth"] = 1063657088 * nr_disks
-            properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
-            yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
-            ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
-            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+            if "read_iops" in disk_properties:
+                properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
+                yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
+                ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
+                ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+            else:
+                logging.info('This is a supported AWS instance type but there are no preconfigured IO scheduler parameters for it. Running manual iotune.')
+                run_iotune()
         elif gcp_instance().is_gce_instance():
             idata = gcp_instance()
 
