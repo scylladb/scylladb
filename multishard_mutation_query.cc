@@ -805,30 +805,31 @@ public:
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
         distributed<database>& db,
-        schema_ptr s,
+        schema_ptr table_schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return do_query_on_all_shards<mutation_query_result_builder>(db, s, cmd, ranges, std::move(trace_state), timeout,
-            [s, &cmd] (query::result_memory_accounter&& accounter) {
-        return mutation_query_result_builder(*s, cmd.slice, std::move(accounter));
+    schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
+
+    return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
+            [table_schema, &cmd] (query::result_memory_accounter&& accounter) {
+        return mutation_query_result_builder(*table_schema, cmd.slice, std::move(accounter));
     });
 }
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards(
         distributed<database>& db,
-        schema_ptr s,
+        schema_ptr table_schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         query::result_options opts,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    if (cmd.slice.is_reversed()) {
-        s = s->make_reversed();
-    }
-    return do_query_on_all_shards<data_query_result_builder>(db, s, cmd, ranges, std::move(trace_state), timeout,
-            [s, &cmd, opts] (query::result_memory_accounter&& accounter) {
-        return data_query_result_builder(*s, cmd.slice, opts, std::move(accounter));
+    schema_ptr query_schema = cmd.slice.is_reversed() ? table_schema->make_reversed() : table_schema;
+
+    return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
+            [table_schema, &cmd, opts] (query::result_memory_accounter&& accounter) {
+        return data_query_result_builder(*table_schema, cmd.slice, opts, std::move(accounter));
     });
 }
