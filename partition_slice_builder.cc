@@ -74,7 +74,9 @@ partition_slice_builder::build() {
         std::move(static_columns),
         std::move(regular_columns),
         std::move(_options),
-        std::move(_specific_ranges)
+        std::move(_specific_ranges),
+        cql_serialization_format::internal(),
+        _partition_row_limit,
     };
 }
 
@@ -176,5 +178,10 @@ partition_slice_builder::without_partition_key_columns() {
 partition_slice_builder&
 partition_slice_builder::without_clustering_key_columns() {
     _options.remove<query::partition_slice::option::send_clustering_key>();
+    return *this;
+}
+
+partition_slice_builder& partition_slice_builder::with_partition_row_limit(uint64_t limit) {
+    _partition_row_limit = limit;
     return *this;
 }
