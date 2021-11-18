@@ -138,7 +138,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _batchlog_manager(bm)
         , _sys_dist_ks(sys_dist_ks)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
-        , _schema_version_publisher([this] { return publish_schema_version(); }) {
+{
     register_metrics();
 
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
@@ -219,16 +219,6 @@ bool storage_service::is_first_node() {
 
 bool storage_service::should_bootstrap() {
     return !db::system_keyspace::bootstrap_complete() && !is_first_node();
-}
-
-void storage_service::install_schema_version_change_listener() {
-    _listeners.emplace_back(make_lw_shared(_db.local().observable_schema_version().observe([this] (utils::UUID schema_version) {
-        (void)_schema_version_publisher.trigger();
-    })));
-}
-
-future<> storage_service::publish_schema_version() {
-    return _migration_manager.local().passive_announce(_db.local().get_version());
 }
 
 future<> storage_service::snitch_reconfigured() {
@@ -359,8 +349,6 @@ void storage_service::prepare_to_join(
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     _gossiper.start_gossiping(generation_number, app_states, advertise).get();
-
-    install_schema_version_change_listener();
 }
 
 void storage_service::maybe_start_sys_dist_ks() {
@@ -1472,11 +1460,6 @@ future<> storage_service::stop() {
         co_await (_group0 ?  _group0->abort() : make_ready_future<>());
     } catch (...) {
         slogger.error("failed to stop Raft Group 0: {}", std::current_exception());
-    }
-    try {
-        co_await _schema_version_publisher.join();
-    } catch (...) {
-        slogger.error("schema_version_publisher failed: {}", std::current_exception());
     }
     co_await std::move(_node_ops_abort_thread);
 }

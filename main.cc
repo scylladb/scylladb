@@ -1185,6 +1185,9 @@ int main(int ac, char** av) {
                 return ss.local().init_server(qp.local());
             }).get();
 
+            auto schema_change_announce = db.local().observable_schema_version().observe([&mm] (utils::UUID schema_version) mutable {
+                mm.local().passive_announce(std::move(schema_version));
+            });
             gossiper.local().wait_for_gossip_to_settle().get();
             sst_format_selector.sync();
 

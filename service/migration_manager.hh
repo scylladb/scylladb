@@ -88,6 +88,8 @@ private:
     netw::messaging_service& _messaging;
     gms::gossiper& _gossiper;
     seastar::abort_source _as;
+    serialized_action _schema_push;
+    utils::UUID _schema_version_to_publish;
 public:
     migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, gms::gossiper& gossiper);
 
@@ -169,7 +171,7 @@ public:
     // Returns a future on the local application of the schema
     future<> announce(std::vector<mutation> schema);
 
-    future<> passive_announce(utils::UUID version);
+    void passive_announce(utils::UUID version);
 
     future<> drain();
     future<> stop();
@@ -189,6 +191,8 @@ private:
     future<> do_announce_new_type(user_type new_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
+
+    future<> passive_announce();
 
     void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 

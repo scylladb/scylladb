@@ -70,12 +70,18 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms, gms::gossiper& gossiper) :
         _notifier(notifier), _feat(feat), _messaging(ms), _gossiper(gossiper)
+        , _schema_push([this] { return passive_announce(); })
 {
 }
 
 future<> migration_manager::stop() {
     if (!_as.abort_requested()) {
         co_await drain();
+    }
+    try {
+        co_await _schema_push.join();
+    } catch (...) {
+        mlogger.error("schema_push failed: {}", std::current_exception());
     }
 }
 
@@ -980,11 +986,15 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
  *
  * @param version The schema version to announce
  */
-future<> migration_manager::passive_announce(utils::UUID version) {
-    return _gossiper.container().invoke_on(0, [version] (auto&& gossiper) {
-        mlogger.debug("Gossiping my schema version {}", version);
-        return gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(version));
-    });
+void migration_manager::passive_announce(utils::UUID version) {
+    _schema_version_to_publish = std::move(version);
+    (void)_schema_push.trigger();
+}
+
+future<> migration_manager::passive_announce() {
+    assert(this_shard_id() == 0);
+    mlogger.debug("Gossiping my schema version {}", _schema_version_to_publish);
+    return _gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(_schema_version_to_publish));
 }
 
 #if 0
