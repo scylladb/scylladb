@@ -56,7 +56,7 @@ public:
             , _last_wdog_phase(0)
     {
         // Give each shard a good chance to sleep for up to 100ms
-        auto period = std::chrono::milliseconds(smp::count * 100);
+        auto period = std::chrono::seconds(smp::count * 100);
         // Don't make them fire all at once
         auto first = period + this_shard_id() * period / smp::count;
         _watchdog.arm(std::chrono::steady_clock::now() + first, {period});
