@@ -78,6 +78,9 @@ private:
 
         explicit task(column_family* cf, sstables::compaction_type type) : compacting_cf(cf), type(type) {}
 
+        task(task&&) = delete;
+        task(const task&) = delete;
+
         void setup_new_compaction();
         void finish_compaction();
     };
