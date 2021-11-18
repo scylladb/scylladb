@@ -1105,18 +1105,10 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
     for (const auto& e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
-    //FIXME: discarded future.
-    (void)_migration_manager.local().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
-        slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
-    });
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
-    //FIXME: discarded future.
-    (void)_migration_manager.local().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
-        slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
-    });
     if (get_token_metadata().is_member(endpoint)) {
         notify_up(endpoint);
     }
@@ -1171,12 +1163,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         }
         if (get_token_metadata().is_member(endpoint)) {
             do_update_system_peers_table(endpoint, state, value);
-            if (state == application_state::SCHEMA) {
-                //FIXME: discarded future.
-                (void)_migration_manager.local().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
-                    slogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
-                });
-            } else if (state == application_state::RPC_READY) {
+            if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
                 notify_cql_change(endpoint, ep_state->is_cql_ready());
             }

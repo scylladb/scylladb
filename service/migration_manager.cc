@@ -1160,12 +1160,33 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
 }
 
 void migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+    //FIXME: discarded future.
+    (void)schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
+        mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
+    });
 }
 
 void migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+    if (state == gms::application_state::SCHEMA) {
+        auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
+            mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+            return;
+        }
+        if (get_local_storage_proxy().get_token_metadata_ptr()->is_member(endpoint)) {
+            //FIXME: discarded future.
+            (void)schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
+                mlogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
+            });
+        }
+    }
 }
 
 void migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
+    //FIXME: discarded future.
+    (void)schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
+        mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
+    });
 }
 
 }
