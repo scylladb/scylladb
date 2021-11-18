@@ -185,14 +185,16 @@ future<> migration_notifier::unregister_listener(migration_listener* listener)
     return _listeners.remove(listener);
 }
 
-future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
+void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
     const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
-        return maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint);
+        // FIXME: discarded future
+        (void)maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint).handle_exception([endpoint] (auto ep) {
+            mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
+        });
     }
-    return make_ready_future<>();
 }
 
 bool migration_manager::have_schema_agreement() {
@@ -1160,10 +1162,7 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
 }
 
 void migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    //FIXME: discarded future.
-    (void)schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
-        mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
-    });
+    schedule_schema_pull(endpoint, ep_state);
 }
 
 void migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
@@ -1174,19 +1173,13 @@ void migration_manager::on_change(gms::inet_address endpoint, gms::application_s
             return;
         }
         if (get_local_storage_proxy().get_token_metadata_ptr()->is_member(endpoint)) {
-            //FIXME: discarded future.
-            (void)schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
-                mlogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
-            });
+            schedule_schema_pull(endpoint, *ep_state);
         }
     }
 }
 
 void migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    //FIXME: discarded future.
-    (void)schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
-        mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
-    });
+    schedule_schema_pull(endpoint, state);
 }
 
 }

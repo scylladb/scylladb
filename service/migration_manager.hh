@@ -94,10 +94,6 @@ public:
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
 
-    future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
-
-    future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
-
     future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
 
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
@@ -192,6 +188,10 @@ private:
     future<> do_announce_new_type(user_type new_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
+
+    void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+
+    future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
 
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
