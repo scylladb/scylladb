@@ -211,5 +211,7 @@ sstables::compaction_data& compaction_manager_test::register_compaction(utils::U
 
 void compaction_manager_test::deregister_compaction(const sstables::compaction_data& c) {
     auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data.compaction_uuid == c.compaction_uuid; });
-    _cm._tasks.remove(*it);
+    if (it != _cm._tasks.end()) {
+        _cm._tasks.erase(it);
+    }
 }
