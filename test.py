@@ -515,9 +515,14 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             log.flush();
             test.time_start = time.time()
             test.time_end = 0
+
+            path = test.path
+            args = test.args
+            if options.cpus:
+                path = 'taskset'
+                args = [ '-c', options.cpus, test.path, *test.args ]
             process = await asyncio.create_subprocess_exec(
-                test.path,
-                *test.args,
+                path, *args,
                 stderr=log,
                 stdout=log,
                 env=dict(os.environ,
@@ -616,10 +621,16 @@ def parse_cmd_line():
                         help="Skip tests which match the provided pattern")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
+    parser.add_argument('--cpus', action="store",
+                        help="Run the tests on those CPUs only (in taskset acceptible format). Consider using --jobs too")
     args = parser.parse_args()
 
     if not args.jobs:
-        nr_cpus = multiprocessing.cpu_count()
+        if not args.cpus:
+            nr_cpus = multiprocessing.cpu_count()
+        else:
+            nr_cpus = int(subprocess.check_output(['taskset', '-c', args.cpus, 'python', '-c', 'import os; print(len(os.sched_getaffinity(0)))']))
+
         cpus_per_test_job = 1
         sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
