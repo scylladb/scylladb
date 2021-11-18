@@ -3114,11 +3114,16 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        auto& cdata = compaction_manager_test(*cm).register_compaction(partial_sstable_run_identifier);
+        auto cm_test = compaction_manager_test(*cm);
+        auto& cdata = cm_test.register_compaction(partial_sstable_run_identifier);
+        auto deregister_compaction = defer([&] () noexcept {
+            cm_test.deregister_compaction(cdata);
+        });
 
         cf->compact_all_sstables().get();
 
-        compaction_manager_test(*cm).deregister_compaction(cdata);
+        deregister_compaction.cancel();
+        cm_test.deregister_compaction(cdata);
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
