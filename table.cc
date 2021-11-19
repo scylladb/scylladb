@@ -2364,6 +2364,18 @@ public:
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables) const override {
         return sstables::get_fully_expired_sstables(_t, sstables, gc_clock::now() - schema()->gc_grace_seconds());
     }
+    const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
+        return _t.compacted_undeleted_sstables();
+    }
+    sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
+        return _t.get_compaction_strategy();
+    }
+    reader_permit make_compaction_reader_permit() const override {
+        return _t.compaction_concurrency_semaphore().make_tracking_only_permit(schema().get(), "compaction", db::no_timeout);
+    }
+    sstables::sstable_writer_config configure_writer(sstring origin) const override {
+        return _t.get_sstables_manager().configure_writer(std::move(origin));
+    }
 };
 
 compaction::table_state& table::as_table_state() const noexcept {
