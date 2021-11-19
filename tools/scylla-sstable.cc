@@ -1110,7 +1110,9 @@ const std::vector<operation> operations{
 
 } // anonymous namespace
 
-int main(int argc, char** argv) {
+namespace tools {
+
+int scylla_sstable_main(int argc, char** argv) {
     app_template::config app_cfg;
     app_cfg.name = app_name;
 
@@ -1242,4 +1244,10 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
             return 0;
         });
     });
+}
+
+} // namespace tools
+
+int main(int argc, char** argv) {
+    return tools::scylla_sstable_main(argc, argv);
 }
