@@ -2547,7 +2547,7 @@ future<> system_keyspace_make(distributed<database>& dist_db, distributed<servic
                     std::map<sstring, sstring>{},
                     durable
                     );
-            co_await db.create_keyspace(ksm, true, database::system_keyspace::yes);
+            co_await db.create_keyspace(ksm, dist_ss.local().get_erm_factory(), true, database::system_keyspace::yes);
         }
         auto& ks = db.find_keyspace(ks_name);
         auto cfg = ks.make_column_family_config(*table, db);

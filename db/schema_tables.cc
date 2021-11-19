@@ -1139,7 +1139,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     co_await proxy.local().get_db().invoke_on_all([&] (database& db) -> future<> {
         for (auto&& val : created) {
             auto ksm = create_keyspace_from_schema_partition(val);
-            co_await db.create_keyspace(ksm);
+            co_await db.create_keyspace(ksm, proxy.local().get_erm_factory());
             co_await db.get_notifier().create_keyspace(ksm);
         }
         {

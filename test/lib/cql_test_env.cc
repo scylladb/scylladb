@@ -484,6 +484,10 @@ public:
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
+            sharded<locator::effective_replication_map_factory> erm_factory;
+            erm_factory.start().get();
+            auto stop_erm_factory = deferred_stop(erm_factory);
+
             sharded<service::migration_notifier> mm_notif;
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
@@ -570,7 +574,7 @@ public:
                 std::ref(gossiper),
                 std::ref(sys_dist_ks),
                 std::ref(feature_service), sscfg, std::ref(mm),
-                std::ref(token_metadata), std::ref(ms),
+                std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(cdc_generation_service),
                 std::ref(repair),
                 std::ref(raft_gr), std::ref(elc_notif)).get();
@@ -621,7 +625,7 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(ms)).get();
+            proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(ms)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(gossiper)).get();
@@ -640,12 +644,6 @@ public:
             bmcfg.write_request_timeout = 2s;
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
-
-            view_update_generator.start(std::ref(db)).get();
-            view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
-            auto stop_view_update_generator = defer([&view_update_generator] {
-                view_update_generator.stop().get();
-            });
 
             distributed_loader::init_system_keyspace(db, ss, *cfg).get();
 
@@ -667,6 +665,12 @@ public:
 
             auto shutdown_db = defer([&db] {
                 db.invoke_on_all(&database::shutdown).get();
+            });
+
+            view_update_generator.start(std::ref(db)).get();
+            view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
+            auto stop_view_update_generator = defer([&view_update_generator] {
+                view_update_generator.stop().get();
             });
 
             db::system_keyspace::init_local_cache().get();

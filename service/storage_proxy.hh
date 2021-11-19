@@ -65,7 +65,7 @@
 #include "service_permit.hh"
 #include "service/client_state.hh"
 #include "cdc/stats.hh"
-#include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
@@ -250,6 +250,14 @@ public:
     gms::feature_service& features() noexcept { return _features; }
     const gms::feature_service& features() const { return _features; }
 
+    locator::effective_replication_map_factory& get_erm_factory() noexcept {
+        return _erm_factory;
+    }
+
+    const locator::effective_replication_map_factory& get_erm_factory() const noexcept {
+        return _erm_factory;
+    }
+
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
@@ -258,6 +266,7 @@ private:
     distributed<database>& _db;
     gms::gossiper& _gossiper;
     const locator::shared_token_metadata& _shared_token_metadata;
+    locator::effective_replication_map_factory& _erm_factory;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
@@ -453,7 +462,7 @@ private:
     void connection_dropped(gms::inet_address);
 public:
     storage_proxy(distributed<database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

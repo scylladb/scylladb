@@ -345,4 +345,139 @@ future<> effective_replication_map::clear_gently() noexcept {
     co_await utils::clear_gently(_tmptr);
 }
 
+effective_replication_map::~effective_replication_map() {
+    if (is_registered()) {
+        _factory->erase_effective_replication_map(this);
+        try {
+            struct background_clear_holder {
+                locator::replication_map replication_map;
+                locator::token_metadata_ptr tmptr;
+            };
+            auto holder = make_lw_shared<background_clear_holder>({std::move(_replication_map), std::move(_tmptr)});
+            auto fut = when_all(utils::clear_gently(holder->replication_map), utils::clear_gently(holder->tmptr)).discard_result().then([holder] {});
+            _factory->submit_background_work(std::move(fut));
+        } catch (...) {
+            // ignore
+        }
+    }
+}
+
+effective_replication_map::factory_key effective_replication_map::make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr) {
+    return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
+}
+
+future<effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
+    // lookup key on local shard
+    auto key = effective_replication_map::make_factory_key(rs, tmptr);
+    auto erm = find_effective_replication_map(key);
+    if (erm) {
+        rslogger.debug("create_effective_replication_map: found {} [{}]", key, fmt::ptr(erm.get()));
+        co_return erm;
+    }
+
+    // try to find a reference erm on shard 0
+    // TODO:
+    // - use hash of key to distribute the load
+    // - instaintiate only on NUMA nodes
+    auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<effective_replication_map_ptr>> {
+        auto erm = ermf.find_effective_replication_map(key);
+        co_return make_foreign<effective_replication_map_ptr>(std::move(erm));
+    });
+    mutable_effective_replication_map_ptr new_erm;
+    if (ref_erm) {
+        auto rf = ref_erm->get_replication_factor();
+        auto local_replication_map = co_await ref_erm->clone_endpoints_gently();
+        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_replication_map), rf);
+    } else {
+        new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
+    }
+    co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
+}
+
+effective_replication_map_ptr effective_replication_map_factory::find_effective_replication_map(const effective_replication_map::factory_key& key) const {
+    auto it = _effective_replication_maps.find(key);
+    if (it != _effective_replication_maps.end()) {
+        return it->second->shared_from_this();
+    }
+    return {};
+}
+
+effective_replication_map_ptr effective_replication_map_factory::insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key) {
+    auto [it, inserted] = _effective_replication_maps.insert({key, erm.get()});
+    if (inserted) {
+        rslogger.debug("insert_effective_replication_map: inserted {} [{}]", key, fmt::ptr(erm.get()));
+        erm->set_factory(*this, std::move(key));
+        return erm;
+    }
+    auto res = it->second->shared_from_this();
+    rslogger.debug("insert_effective_replication_map: found {} [{}]", key, fmt::ptr(res.get()));
+    return res;
+}
+
+bool effective_replication_map_factory::erase_effective_replication_map(effective_replication_map* erm) {
+    const auto& key = erm->get_factory_key();
+    auto it = _effective_replication_maps.find(key);
+    if (it == _effective_replication_maps.end()) {
+        rslogger.warn("Could not unregister effective_replication_map {} [{}]: key not found", key, fmt::ptr(erm));
+        return false;
+    }
+    if (it->second != erm) {
+        rslogger.warn("Could not unregister effective_replication_map {} [{}]: different instance [{}] is currently registered", key, fmt::ptr(erm), fmt::ptr(it->second));
+        return false;
+    }
+    rslogger.debug("erase_effective_replication_map: erased {} [{}]", key, fmt::ptr(erm));
+    _effective_replication_maps.erase(it);
+    return true;
+}
+
+future<> effective_replication_map_factory::stop() noexcept {
+    _stopped = true;
+    if (!_effective_replication_maps.empty()) {
+        for (auto& [key, erm] : _effective_replication_maps) {
+            rslogger.debug("effective_replication_map_factory::stop found outstanding map {} [{}]", key, fmt::ptr(erm));
+        }
+        on_internal_error_noexcept(rslogger, "effective_replication_map_factory stopped with outstanding maps");
+    }
+    return std::exchange(_background_work, make_ready_future<>());
+}
+
+void effective_replication_map_factory::submit_background_work(future<> fut) {
+    if (fut.available() && !fut.failed()) {
+        return;
+    }
+    if (_stopped) {
+        on_internal_error(rslogger, "Cannot submit background work: registry already stopped");
+    }
+    _background_work = _background_work.then([fut = std::move(fut)] () mutable {
+        return std::move(fut).handle_exception([] (std::exception_ptr ex) {
+            // Ignore errors since we have nothing else to do about them.
+            rslogger.warn("effective_replication_map_factory background task failed: {}. Ignored.", std::move(ex));
+        });
+    });
+}
+
 } // namespace locator
+
+std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type t) {
+    switch (t) {
+    case locator::replication_strategy_type::simple:
+        return os << "simple";
+    case locator::replication_strategy_type::local:
+        return os << "local";
+    case locator::replication_strategy_type::network_topology:
+        return os << "network_topology";
+    case locator::replication_strategy_type::everywhere_topology:
+        return os << "everywhere_topology";
+    };
+}
+
+std::ostream& operator<<(std::ostream& os, const locator::effective_replication_map::factory_key& key) {
+    os << key.rs_type;
+    os << '.' << key.ring_version;
+    char sep = ':';
+    for (const auto& [opt, val] : key.rs_config_options) {
+        os << sep << opt << '=' << val;
+        sep = ',';
+    }
+    return os;
+}
