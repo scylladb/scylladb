@@ -645,12 +645,6 @@ public:
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
-            view_update_generator.start(std::ref(db)).get();
-            view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
-            auto stop_view_update_generator = defer([&view_update_generator] {
-                view_update_generator.stop().get();
-            });
-
             distributed_loader::init_system_keyspace(db, ss, *cfg).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
@@ -671,6 +665,12 @@ public:
 
             auto shutdown_db = defer([&db] {
                 db.invoke_on_all(&database::shutdown).get();
+            });
+
+            view_update_generator.start(std::ref(db)).get();
+            view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
+            auto stop_view_update_generator = defer([&view_update_generator] {
+                view_update_generator.stop().get();
             });
 
             db::system_keyspace::init_local_cache().get();
