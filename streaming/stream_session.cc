@@ -219,8 +219,10 @@ future<> stream_manager::uninit_messaging_service_handler() {
         ms.unregister_complete_message()).discard_result();
 }
 
-stream_session::stream_session(inet_address peer_)
-    : peer(peer_) {
+stream_session::stream_session(stream_manager& mgr, inet_address peer_)
+    : peer(peer_)
+    , _mgr(mgr)
+{
     //this.metrics = StreamingMetrics.get(connecting);
 }
 

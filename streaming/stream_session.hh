@@ -160,6 +160,7 @@ public:
     inet_address peer;
     unsigned dst_cpu_id = 0;
 private:
+    stream_manager& _mgr;
     // should not be null when session is started
     shared_ptr<stream_result_future> _stream_result;
 
@@ -217,7 +218,7 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_);
+    stream_session(stream_manager& mgr, inet_address peer_);
     ~stream_session();
 
     UUID plan_id() const;

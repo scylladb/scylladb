@@ -367,7 +367,7 @@ shared_ptr<stream_session> stream_manager::get_session(utils::UUID plan_id, gms:
         sslog.debug("{}", err.c_str());
         throw std::runtime_error(err);
     }
-    return coordinator->get_or_create_session(from);
+    return coordinator->get_or_create_session(*this, from);
 }
 
 } // namespace streaming
