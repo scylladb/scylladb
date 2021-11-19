@@ -414,6 +414,18 @@ static int scylla_main(int ac, char** av) {
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
     app_template::config app_cfg;
     app_cfg.name = "Scylla";
+    app_cfg.description =
+R"(scylla - NoSQL data store using the seastar framework, compatible with Apache Cassandra
+
+For more information, see https://github.com/scylladb/scylla.
+
+The scylla executable hosts multiple apps:
+* server (default) - the scylla server itself.
+
+Usage: scylla {app_name} [...]
+
+For more information about individual apps, run: scylla {app_name} --help
+)";
     app_cfg.default_task_quota = 500us;
     app_cfg.auto_handle_sigint_sigterm = false;
     app_cfg.max_networking_aio_io_control_blocks = 50000;
@@ -1460,5 +1472,29 @@ int main(int ac, char** av) {
         _exit(71);
     }
 
-    return scylla_main(ac, av);
+    std::function<int(int, char**)> main_func;
+
+    std::string exec_name;
+    if (ac >= 2) {
+        exec_name = av[1];
+    }
+
+    bool recognized = true;
+    if (exec_name == "server") {
+        main_func = scylla_main;
+    } else {
+        fmt::print("Unrecognized or missing app name (argv[1]={}), assuming server\n", exec_name);
+        main_func = scylla_main;
+        recognized = false;
+    }
+
+    if (recognized) {
+        // shift args to consume the recognized app name
+        --ac;
+        for (int i = 1; i < ac; ++i) {
+            std::swap(av[i], av[i + 1]);
+        }
+    }
+
+    return main_func(ac, av);
 }
