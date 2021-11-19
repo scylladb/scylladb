@@ -4046,6 +4046,67 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
   });
 }
 
+SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "test_twcs_compaction_across_buckets")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        std::map<sstring, sstring> opts = {
+                { time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+                { time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+        };
+        builder.set_compaction_strategy_options(std::move(opts));
+        auto s = builder.build();
+
+        auto next_timestamp = [] (std::chrono::hours step = std::chrono::hours(0)) {
+            return (gc_clock::now().time_since_epoch() - std::chrono::duration_cast<std::chrono::microseconds>(step)).count();
+        };
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+        auto pkey = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+
+        auto make_row = [&] (std::chrono::hours step) {
+            static thread_local int32_t value = 1;
+            mutation m(s, pkey);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(step));
+            return m;
+        };
+
+        column_family_for_tests cf(env.manager(), s);
+        auto close_cf = deferred_stop(cf);
+
+        constexpr unsigned windows = 10;
+
+        std::vector<shared_sstable> sstables_spanning_many_windows;
+        sstables_spanning_many_windows.reserve(windows + 1);
+
+        for (unsigned w = 0; w < windows; w++) {
+            sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {make_row(std::chrono::hours((w + 1) * 2))}));
+        }
+        auto deletion_mut = [&] () {
+            mutation m(s, pkey);
+            tombstone tomb(next_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        }();
+        sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {deletion_mut}));
+
+        auto ret = compact_sstables(sstables::compaction_descriptor(std::move(sstables_spanning_many_windows),
+            std::nullopt, default_priority_class()), *cf, sst_gen, replacer_fn_no_op()).get0();
+
+        BOOST_REQUIRE(ret.new_sstables.size() == 1);
+        assert_that(sstable_reader(ret.new_sstables[0], s, env.make_reader_permit()))
+            .produces(deletion_mut)
+            .produces_end_of_stream();
+    });
+}
+
 SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
     return test_env::do_with_async([tmpdirs = std::vector<decltype(tmpdir())>()] (test_env& env) mutable {
         for (const auto version : writable_sstable_versions) {
