@@ -187,6 +187,10 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         throw exceptions::invalid_request_exception(format("Materialized views cannot be created against other materialized views"));
     }
 
+    if (cdc::get_base_table(db, *schema)) {
+        throw exceptions::invalid_request_exception(format("Materialized views cannot be created on CDC Log tables"));
+    }
+
     if (schema->gc_grace_seconds().count() == 0) {
         throw exceptions::invalid_request_exception(fmt::format(
                 "Cannot create materialized view '{}' for base table "
