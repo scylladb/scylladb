@@ -210,7 +210,6 @@ public:
         return _bytes_received;
     }
 public:
-    stream_session();
     /**
      * Create new streaming session with the peer.
      *
