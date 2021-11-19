@@ -29,9 +29,11 @@
 #include "compaction_weight_registration.hh"
 #include "service/priority_manager.hh"
 #include "utils/UUID.hh"
+#include "table_state.hh"
 #include <seastar/core/thread.hh>
 
 class flat_mutation_reader;
+using namespace compaction;
 
 namespace sstables {
 
@@ -94,7 +96,7 @@ struct compaction_result {
 //
 // compaction_descriptor is responsible for specifying the type of compaction, and influencing
 // compaction behavior through its available member fields.
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf);
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s);
 
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

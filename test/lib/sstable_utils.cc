@@ -176,7 +176,7 @@ future<compaction_result> compact_sstables(sstables::compaction_descriptor descr
     descriptor.replacer = std::move(replacer);
     auto& cm = cf.get_compaction_manager();
     auto& cdata = compaction_manager_test(cm).register_compaction(descriptor.run_identifier, &cf);
-    return sstables::compact_sstables(std::move(descriptor), cdata, cf).then([&cdata, &cm] (sstables::compaction_result res) {
+    return sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).then([&cdata, &cm] (sstables::compaction_result res) {
         compaction_manager_test(cm).deregister_compaction(cdata);
         return res;
     });

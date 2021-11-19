@@ -936,7 +936,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
     auto compaction_type = descriptor.options.type();
     auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 
-    return sstables::compact_sstables(std::move(descriptor), cdata, *this).then([this, &cdata, compaction_type, start_size] (sstables::compaction_result res) {
+    return sstables::compact_sstables(std::move(descriptor), cdata, as_table_state()).then([this, &cdata, compaction_type, start_size] (sstables::compaction_result res) {
         if (compaction_type != sstables::compaction_type::Compaction) {
             return make_ready_future<>();
         }
@@ -1035,7 +1035,7 @@ future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
         };
         auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
 
-        auto ret = co_await sstables::compact_sstables(std::move(desc), info, *this);
+        auto ret = co_await sstables::compact_sstables(std::move(desc), info, as_table_state());
 
         // update list of reshape candidates without input but with output added to it
         auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
