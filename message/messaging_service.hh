@@ -302,7 +302,7 @@ public:
     static rpc::no_wait_type no_wait();
     bool is_shutting_down() { return _shutting_down; }
     gms::inet_address get_preferred_ip(gms::inet_address ep);
-    future<> init_local_preferred_ip_cache();
+    void init_local_preferred_ip_cache(const std::unordered_map<gms::inet_address, gms::inet_address>& ips_cache);
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
 
     future<> unregister_handler(messaging_verb verb);

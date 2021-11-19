@@ -1358,8 +1358,9 @@ future<> system_keyspace::setup(distributed<database>& db,
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await db::schema_tables::save_system_schema(qp.local(), NAME);
     co_await cache_truncation_record(db);
-    co_await ms.invoke_on_all([] (auto& ms){
-            return ms.init_local_preferred_ip_cache();
+    auto preferred_ips = co_await get_preferred_ips();
+    co_await ms.invoke_on_all([&preferred_ips] (auto& ms) {
+        return ms.init_local_preferred_ip_cache(preferred_ips);
     });
 }
 
