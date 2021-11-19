@@ -705,6 +705,10 @@ public:
         return _components->scylla_metadata->get_features();
     }
 
+    const scylla_metadata* get_scylla_metadata() const {
+        return _components->scylla_metadata ? &*_components->scylla_metadata : nullptr;
+    }
+
     utils::UUID run_identifier() const {
         return _run_identifier;
     }
