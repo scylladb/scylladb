@@ -1247,7 +1247,3 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
 }
 
 } // namespace tools
-
-int main(int argc, char** argv) {
-    return tools::scylla_sstable_main(argc, argv);
-}

@@ -258,7 +258,3 @@ $ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
 }
 
 } // namespace tools
-
-int main(int argc, char** argv) {
-    return tools::scylla_types_main(argc, argv);
-}

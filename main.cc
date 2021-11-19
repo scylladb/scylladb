@@ -96,6 +96,7 @@
 #include "service/storage_proxy.hh"
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
+#include "tools/entry_point.hh"
 
 #include "service/raft/raft_group_registry.hh"
 
@@ -421,6 +422,8 @@ For more information, see https://github.com/scylladb/scylla.
 
 The scylla executable hosts multiple apps:
 * server (default) - the scylla server itself.
+* types - a command-line tool to examine values belonging to scylla types.
+* sstable - a multifunctional command-line tool to examine the content of sstables.
 
 Usage: scylla {app_name} [...]
 
@@ -1482,6 +1485,10 @@ int main(int ac, char** av) {
     bool recognized = true;
     if (exec_name == "server") {
         main_func = scylla_main;
+    } else if (exec_name == "types") {
+        main_func = tools::scylla_types_main;
+    } else if (exec_name == "sstable") {
+        main_func = tools::scylla_sstable_main;
     } else {
         fmt::print("Unrecognized or missing app name (argv[1]={}), assuming server\n", exec_name);
         main_func = scylla_main;
