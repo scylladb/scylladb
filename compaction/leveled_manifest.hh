@@ -49,7 +49,6 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/partial_sort.hpp>
 #include "service/priority_manager.hh"
-#include "database.hh"
 
 class leveled_manifest {
     table_state& _table_s;

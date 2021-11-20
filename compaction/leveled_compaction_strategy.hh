@@ -29,7 +29,6 @@
 #include <seastar/core/sstring.hh>
 
 #include "compaction_strategy_type.hh"
-#include "database_fwd.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
 #include "compaction_backlog_manager.hh"
