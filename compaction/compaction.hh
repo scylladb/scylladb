@@ -22,7 +22,6 @@
 
 #pragma once
 
-#include "database_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "gc_clock.hh"

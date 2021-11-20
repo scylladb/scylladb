@@ -61,7 +61,6 @@
 #include "sstables/sstables_manager.hh"
 #include "compaction.hh"
 #include "compaction_manager.hh"
-#include "database.hh"
 #include "mutation_reader.hh"
 #include "schema.hh"
 #include "db/system_keyspace.hh"
