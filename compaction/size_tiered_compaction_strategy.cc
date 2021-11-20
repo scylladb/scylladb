@@ -20,7 +20,6 @@
  */
 
 #include "size_tiered_compaction_strategy.hh"
-#include "database.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptors.hpp>
