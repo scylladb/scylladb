@@ -936,7 +936,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, sstables::co
     auto compaction_type = descriptor.options.type();
     auto start_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
 
-    return sstables::compact_sstables(std::move(descriptor), cdata, *this).then([this, &cdata, compaction_type, start_size] (sstables::compaction_result res) {
+    return sstables::compact_sstables(std::move(descriptor), cdata, as_table_state()).then([this, &cdata, compaction_type, start_size] (sstables::compaction_result res) {
         if (compaction_type != sstables::compaction_type::Compaction) {
             return make_ready_future<>();
         }
@@ -1035,7 +1035,7 @@ future<> table::run_offstrategy_compaction(sstables::compaction_data& info) {
         };
         auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
 
-        auto ret = co_await sstables::compact_sstables(std::move(desc), info, *this);
+        auto ret = co_await sstables::compact_sstables(std::move(desc), info, as_table_state());
 
         // update list of reshape candidates without input but with output added to it
         auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
@@ -2362,7 +2362,19 @@ public:
         return _t.get_sstable_set();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables) const override {
-        return sstables::get_fully_expired_sstables(_t, sstables, gc_clock::now() - schema()->gc_grace_seconds());
+        return sstables::get_fully_expired_sstables(*this, sstables, gc_clock::now() - schema()->gc_grace_seconds());
+    }
+    const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
+        return _t.compacted_undeleted_sstables();
+    }
+    sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
+        return _t.get_compaction_strategy();
+    }
+    reader_permit make_compaction_reader_permit() const override {
+        return _t.compaction_concurrency_semaphore().make_tracking_only_permit(schema().get(), "compaction", db::no_timeout);
+    }
+    sstables::sstable_writer_config configure_writer(sstring origin) const override {
+        return _t.get_sstables_manager().configure_writer(std::move(origin));
     }
 };
 

@@ -871,7 +871,7 @@ future<> compaction_manager::perform_sstable_scrub_validate_mode(column_family* 
                             sstables::compaction_descriptor::default_max_sstable_bytes,
                             sst->run_identifier(),
                             sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
-                    return compact_sstables(std::move(desc), info, cf);
+                    return compact_sstables(std::move(desc), info, cf.as_table_state());
                 });
             } catch (sstables::compaction_stopped_exception&) {
                 throw; // let run_custom_job() handle this

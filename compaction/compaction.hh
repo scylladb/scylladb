@@ -22,16 +22,17 @@
 
 #pragma once
 
-#include "database_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "gc_clock.hh"
 #include "compaction_weight_registration.hh"
 #include "service/priority_manager.hh"
 #include "utils/UUID.hh"
+#include "table_state.hh"
 #include <seastar/core/thread.hh>
 
 class flat_mutation_reader;
+using namespace compaction;
 
 namespace sstables {
 
@@ -94,7 +95,7 @@ struct compaction_result {
 //
 // compaction_descriptor is responsible for specifying the type of compaction, and influencing
 // compaction behavior through its available member fields.
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, column_family& cf);
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s);
 
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
@@ -102,7 +103,7 @@ future<compaction_result> compact_sstables(sstables::compaction_descriptor descr
 // In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
 // and possibly doesn't contain any tombstone that covers cells in other sstables.
 std::unordered_set<sstables::shared_sstable>
-get_fully_expired_sstables(const column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
+get_fully_expired_sstables(const table_state& table_s, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
 
 // For tests, can drop after we virtualize sstables.
 flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_type_options::scrub::mode scrub_mode);

@@ -25,6 +25,13 @@
 #include "schema_fwd.hh"
 #include "sstables/sstable_set.hh"
 
+class reader_permit;
+
+namespace sstables {
+class compaction_strategy;
+struct sstable_writer_config;
+}
+
 namespace compaction {
 
 class table_state {
@@ -36,6 +43,10 @@ public:
     virtual bool compaction_enforce_min_threshold() const noexcept = 0;
     virtual const sstables::sstable_set& get_sstable_set() const = 0;
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables) const = 0;
+    virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept = 0;
+    virtual sstables::compaction_strategy& get_compaction_strategy() const noexcept = 0;
+    virtual reader_permit make_compaction_reader_permit() const = 0;
+    virtual sstables::sstable_writer_config configure_writer(sstring origin) const = 0;
 };
 
 }

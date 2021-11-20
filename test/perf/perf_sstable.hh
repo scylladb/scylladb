@@ -194,7 +194,7 @@ public:
                 };
                 descriptor.replacer = sstables::replacer_fn_no_op();
                 auto cdata = compaction_manager::create_compaction_data();
-                auto ret = sstables::compact_sstables(std::move(descriptor), cdata, *cf).get0();
+                auto ret = sstables::compact_sstables(std::move(descriptor), cdata, cf->as_table_state()).get0();
                 auto end = perf_sstable_test_env::now();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
