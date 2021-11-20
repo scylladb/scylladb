@@ -186,8 +186,10 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
     return timestamp;
 }
 
-static std::vector<shared_sstable> get_uncompacting_sstables(const column_family& cf, std::vector<shared_sstable> sstables) {
-    auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
+static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& table_s, std::vector<shared_sstable> sstables) {
+    auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*table_s.get_sstable_set().all());
+    auto& compacted_undeleted = table_s.compacted_undeleted_sstables();
+    all_sstables.insert(all_sstables.end(), compacted_undeleted.begin(), compacted_undeleted.end());
     boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
         return x->generation() < y->generation();
     });
@@ -1707,17 +1709,17 @@ compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cd
 }
 
 std::unordered_set<sstables::shared_sstable>
-get_fully_expired_sstables(const column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before) {
-    clogger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
+get_fully_expired_sstables(const table_state& table_s, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before) {
+    clogger.debug("Checking droppable sstables in {}.{}", table_s.schema()->ks_name(), table_s.schema()->cf_name());
 
     if (compacting.empty()) {
         return {};
     }
 
     std::unordered_set<sstables::shared_sstable> candidates;
-    auto uncompacting_sstables = get_uncompacting_sstables(cf, compacting);
+    auto uncompacting_sstables = get_uncompacting_sstables(table_s, compacting);
     // Get list of uncompacting sstables that overlap the ones being compacted.
-    std::vector<sstables::shared_sstable> overlapping = leveled_manifest::overlapping(*cf.schema(), compacting, uncompacting_sstables);
+    std::vector<sstables::shared_sstable> overlapping = leveled_manifest::overlapping(*table_s.schema(), compacting, uncompacting_sstables);
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
 
     for (auto& sstable : overlapping) {
@@ -1726,7 +1728,7 @@ get_fully_expired_sstables(const column_family& cf, const std::vector<sstables::
         }
     }
 
-    auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<int64_t>>(cf.compacted_undeleted_sstables()
+    auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<int64_t>>(table_s.compacted_undeleted_sstables()
         | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
     auto has_undeleted_ancestor = [&compacted_undeleted_gens] (auto& candidate) {
         // Get ancestors from sstable which is empty after restart. It works for this purpose because

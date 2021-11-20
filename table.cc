@@ -2362,7 +2362,7 @@ public:
         return _t.get_sstable_set();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables) const override {
-        return sstables::get_fully_expired_sstables(_t, sstables, gc_clock::now() - schema()->gc_grace_seconds());
+        return sstables::get_fully_expired_sstables(*this, sstables, gc_clock::now() - schema()->gc_grace_seconds());
     }
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
         return _t.compacted_undeleted_sstables();

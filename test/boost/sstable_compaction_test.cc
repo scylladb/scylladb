@@ -150,7 +150,7 @@ public:
         return _t->get_sstable_set();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables) const override {
-        return sstables::get_fully_expired_sstables(*_t, sstables, gc_clock::now() - schema()->gc_grace_seconds());
+        return sstables::get_fully_expired_sstables(_t->as_table_state(), sstables, gc_clock::now() - schema()->gc_grace_seconds());
     }
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
         return _compacted_undeleted;
@@ -1371,7 +1371,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/gc_clock::from_time_t(15));
+        auto expired = get_fully_expired_sstables(cf->as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(15));
         BOOST_REQUIRE(expired.size() == 0);
     }
 
@@ -1383,7 +1383,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto sst2 = add_sstable_for_overlapping_test(env, cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/gc_clock::from_time_t(25));
+        auto expired = get_fully_expired_sstables(cf->as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(25));
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst->generation() == 1);
@@ -1422,7 +1422,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 
         auto ssts = std::vector<shared_sstable>{ sst };
 
-        auto expired = get_fully_expired_sstables(*cf, ssts, gc_clock::now());
+        auto expired = get_fully_expired_sstables(cf->as_table_state(), ssts, gc_clock::now());
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst->generation() == 1);
