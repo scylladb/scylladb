@@ -130,7 +130,7 @@ public:
 
     // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
     // with identical timestamps, which can prevent an undeeded schema exchange
-    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> timestamp);
+    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> timestamp);
 
     future<> announce_new_column_family(schema_ptr cfm);
 

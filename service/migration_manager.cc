@@ -40,6 +40,8 @@
  */
 
 #include <seastar/core/sleep.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -671,7 +673,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
     }
 }
 
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) {
+future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt) {
     warn(unimplemented::cause::VALIDATION);
 #if 0
     cfm.validate();
@@ -686,24 +688,16 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
         mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
 
-        return seastar::async([this, cfm, old_schema, ts, keyspace, from_thrift, view_updates, &db] {
-            auto mutations = map_reduce(view_updates,
-                [keyspace, ts] (auto&& view) {
-                    auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
-                    mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
-                    auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, false);
-                    return make_ready_future<std::vector<mutation>>(std::move(mutations));
-                }, db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts, from_thrift),
-                [] (auto&& result, auto&& view_mutations) {
-                    std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(result));
-                    return std::move(result);
-                }).get0();
-
-            get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
-            return mutations;
-        }).then([this, keyspace] (auto&& mutations) {
-            return include_keyspace_and_announce(*keyspace, std::move(mutations));
-        });
+        auto mutations = db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts, from_thrift);
+        for (auto&& view : view_updates) {
+            auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
+            mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
+            auto view_mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, false);
+            std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(mutations));
+            co_await coroutine::maybe_yield();
+        }
+        get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
+        co_return co_await include_keyspace_and_announce(*keyspace, std::move(mutations));
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
                                                          cfm->cf_name(), cfm->ks_name()));
