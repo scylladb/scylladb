@@ -1519,6 +1519,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto eps = strat.calculate_natural_endpoints(end_token, *tmptr).get0();
                 current_replica_endpoints.emplace(r, std::move(eps));
+                seastar::thread::maybe_yield();
             }
             auto temp = tmptr->clone_after_all_left().get0();
             // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
