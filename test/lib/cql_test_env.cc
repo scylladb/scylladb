@@ -134,6 +134,7 @@ private:
     sharded<service::migration_notifier>& _mnotifier;
     sharded<qos::service_level_controller>& _sl_controller;
     sharded<service::migration_manager>& _mm;
+    sharded<db::batchlog_manager>& _batchlog_manager;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -181,7 +182,8 @@ public:
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<service::migration_notifier>& mnotifier,
             sharded<service::migration_manager>& mm,
-            sharded<qos::service_level_controller> &sl_controller)
+            sharded<qos::service_level_controller> &sl_controller,
+            sharded<db::batchlog_manager>& batchlog_manager)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -190,6 +192,7 @@ public:
             , _mnotifier(mnotifier)
             , _sl_controller(sl_controller)
             , _mm(mm)
+            , _batchlog_manager(batchlog_manager)
     {
         adjust_rlimit();
     }
@@ -387,6 +390,10 @@ public:
 
     virtual sharded<service::migration_manager>& migration_manager() override {
         return _mm;
+    }
+
+    virtual sharded<db::batchlog_manager>& batchlog_manager() override {
+        return _batchlog_manager;
     }
 
     virtual future<> refresh_client_state() override {
@@ -775,7 +782,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
