@@ -93,6 +93,7 @@ private:
                                               const sstring& name,
                                               index_metadata_kind kind,
                                               const index_options_map& options);
+    void validate_while_executing(service::storage_proxy& proxy) const;
 };
 
 }

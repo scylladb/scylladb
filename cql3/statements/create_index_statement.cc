@@ -82,6 +82,14 @@ create_index_statement::check_access(service::storage_proxy& proxy, const servic
 void
 create_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
+    if (_raw_targets.empty() && !_properties->is_custom) {
+        throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
+    }
+
+    _properties->validate();
+}
+
+void create_index_statement::validate_while_executing(service::storage_proxy& proxy) const {
     auto& db = proxy.get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
@@ -103,10 +111,6 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
         targets.emplace_back(raw_target->prepare(*schema));
-    }
-
-    if (targets.empty() && !_properties->is_custom) {
-        throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
     }
 
     if (targets.size() > 1) {
@@ -175,8 +179,6 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
             throw exceptions::invalid_request_exception("Index already exists");
         }
     }
-
-    _properties->validate();
 }
 
 void create_index_statement::validate_for_local_index(const schema& schema) const {
@@ -275,6 +277,8 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
 
 future<::shared_ptr<cql_transport::event::schema_change>>
 create_index_statement::announce_migration(query_processor& qp) const {
+    validate_while_executing(qp.proxy());
+
     database& db = qp.db();
     auto schema = db.find_schema(keyspace(), column_family());
     std::vector<::shared_ptr<index_target>> targets;
