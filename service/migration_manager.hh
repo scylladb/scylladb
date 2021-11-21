@@ -125,6 +125,7 @@ public:
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
 
     future<> announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm);
+    std::vector<mutation> prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm);
 
     future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
 
