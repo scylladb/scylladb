@@ -19,11 +19,35 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "service/raft/schema_raft_state_machine.hh"
+#include <seastar/core/coroutine.hh>
+#include "service/migration_manager.hh"
+#include "message/messaging_service.hh"
+#include "canonical_mutation.hh"
+#include "schema_mutations.hh"
+#include "frozen_schema.hh"
+#include "serialization_visitors.hh"
+#include "serializer.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/uuid.dist.hh"
+#include "serializer_impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
+#include "idl/uuid.dist.impl.hh"
+
 
 namespace service {
 
+static logging::logger slogger("schema_raft_sm");
+
 future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> command) {
-    return make_ready_future<>();
+    slogger.trace("apply() is called");
+    for (auto&& c : command) {
+        auto is = ser::as_input_stream(c);
+        std::vector<canonical_mutation> mutations =
+                            ser::deserialize(is, boost::type<std::vector<canonical_mutation>>());
+
+        slogger.trace("merging schema mutations");
+        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(gms::inet_address{}), std::move(mutations));
+    }
 }
 
 future<raft::snapshot_id> schema_raft_state_machine::take_snapshot() {
