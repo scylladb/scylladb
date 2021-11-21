@@ -434,5 +434,5 @@ inet_address_vector_replica_set db::batchlog_manager::endpoint_filter(const sstr
     return result;
 }
 
-
-distributed<db::batchlog_manager> db::_the_batchlog_manager;
+static distributed<db::batchlog_manager> _the_global_batchlog_manager;
+distributed<db::batchlog_manager>* db::_the_batchlog_manager = &_the_global_batchlog_manager;

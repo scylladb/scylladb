@@ -554,7 +554,6 @@ public:
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
-            distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
             sharded<cql3::cql_config> cql_config;
             cql_config.start(cql3::cql_config::default_tag{}).get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
@@ -642,8 +641,14 @@ public:
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
+            distributed<db::batchlog_manager> bm;
             bm.start(std::ref(qp), bmcfg).get();
-            auto stop_bm = defer([&bm] { bm.stop().get(); });
+            // FIXME: until we deglobalize the storage_proxy
+            db::set_the_batchlog_manager(&bm);
+            auto stop_bm = defer([&bm] {
+                bm.stop().get();
+                db::set_the_batchlog_manager(nullptr);
+            });
 
             distributed_loader::init_system_keyspace(db, ss, *cfg).get();
 

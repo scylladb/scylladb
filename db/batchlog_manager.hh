@@ -126,14 +126,24 @@ private:
     future<> batchlog_replay_loop();
 };
 
-extern distributed<batchlog_manager> _the_batchlog_manager;
+extern distributed<batchlog_manager>* _the_batchlog_manager;
 
-inline distributed<batchlog_manager>& get_batchlog_manager() {
-    return _the_batchlog_manager;
+// DEPRECATED, DON'T USE!
+// Pass references to services through constructor/function parameters. Don't use globals.
+inline void set_the_batchlog_manager(distributed<batchlog_manager>* bm) {
+    _the_batchlog_manager = bm;
 }
 
+// DEPRECATED, DON'T USE!
+// Pass references to services through constructor/function parameters. Don't use globals.
+inline distributed<batchlog_manager>& get_batchlog_manager() {
+    return *_the_batchlog_manager;
+}
+
+// DEPRECATED, DON'T USE!
+// Pass references to services through constructor/function parameters. Don't use globals.
 inline batchlog_manager& get_local_batchlog_manager() {
-    return _the_batchlog_manager.local();
+    return _the_batchlog_manager->local();
 }
 
 }

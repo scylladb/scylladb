@@ -482,6 +482,7 @@ int main(int ac, char** av) {
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
     sharded<cql3::query_processor> qp;
+    sharded<db::batchlog_manager> bm;
     sharded<semaphore> sst_dir_semaphore;
     sharded<service::raft_group_registry> raft_gr;
     sharded<service::memory_limiter> service_memory_limiter;
@@ -513,7 +514,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &bm, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier] {
@@ -933,8 +934,10 @@ int main(int ac, char** av) {
             bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
             bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
 
-            db::get_batchlog_manager().start(std::ref(qp), bm_cfg).get();
-            // #293 - do not stop anything
+            bm.start(std::ref(qp), bm_cfg).get();
+            // FIXME: until we deglobalize the storage_proxy
+            db::set_the_batchlog_manager(&bm);
+
             sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(qp);
@@ -1225,11 +1228,13 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("starting batchlog manager");
-            db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
+            bm.invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();
             }).get();
-            auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [] {
-                db::get_batchlog_manager().invoke_on_all(&db::batchlog_manager::stop).get();
+            auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
+                bm.stop().get();
+                // FIXME: until we deglobalize the storage_proxy
+                db::set_the_batchlog_manager(nullptr);
             });
 
             supervisor::notify("starting load meter");
