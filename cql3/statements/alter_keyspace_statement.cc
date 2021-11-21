@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -65,8 +66,6 @@ future<> cql3::statements::alter_keyspace_statement::check_access(service::stora
 }
 
 void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
-    try {
-        proxy.get_db().local().find_keyspace(_name); // throws on failure
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {
@@ -88,24 +87,43 @@ void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy
                                                                 DatabaseDescriptor.getEndpointSnitch(),
                                                                 attrs.getReplicationOptions());
 #endif
+}
 
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
+    try {
+        service::storage_proxy& proxy = qp.proxy();
+        auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
+        const auto& tm = *proxy.get_token_metadata_ptr();
 
+        auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm));
+
+        using namespace cql_transport;
+        auto ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::KEYSPACE,
+                keyspace());
+
+        return make_ready_future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>(std::make_pair(std::move(ret), std::move(m)));
     } catch (no_such_keyspace& e) {
-        std::throw_with_nested(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+        return make_exception_future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
     }
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(query_processor& qp) const {
-    service::storage_proxy& proxy = qp.proxy();
-    auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
-    const auto& tm = *proxy.get_token_metadata_ptr();
-    return qp.get_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm)).then([this] {
+    try {
+        service::storage_proxy& proxy = qp.proxy();
+        auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
+        const auto& tm = *proxy.get_token_metadata_ptr();
+        co_await qp.get_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm));
         using namespace cql_transport;
-        return ::make_shared<event::schema_change>(
+        co_return ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
                 event::schema_change::target_type::KEYSPACE,
                 keyspace());
-    });
+    } catch (no_such_keyspace& e) {
+        co_return coroutine::make_exception(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+    }
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
