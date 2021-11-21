@@ -824,6 +824,7 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
         for (auto& ep : diff) {
             new_pending_ranges.emplace(r, ep);
         }
+        seastar::thread::maybe_yield();
     }
     metadata.clear_gently().get();
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges_size);
