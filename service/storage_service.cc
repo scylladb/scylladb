@@ -2699,6 +2699,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = erm->get_natural_endpoints(end_token);
         current_replica_endpoints.emplace(r, std::move(eps));
+        seastar::thread::maybe_yield();
     }
 
     auto temp = get_token_metadata_ptr()->clone_after_all_left().get0();
@@ -2743,6 +2744,9 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         for (auto& ep : new_replica_endpoints) {
             changed_ranges.emplace(r, ep);
         }
+        // Replication strategy doesn't necessarily yield in calculate_natural_endpoints.
+        // E.g. everywhere_replication_strategy
+        seastar::thread::maybe_yield();
     }
     temp.clear_gently().get();
 
@@ -2793,6 +2797,7 @@ void storage_service::unbootstrap() {
     leave_ring();
 }
 
+// Runs inside seastar::async context
 void storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
