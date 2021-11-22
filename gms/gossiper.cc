@@ -2574,9 +2574,12 @@ void gossiper::maybe_enable_features() {
     auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
     container().invoke_on_all([&features] (gossiper& g) {
-        for (auto&& name : features) {
-            g._feature_service.enable(name);
-        }
+        // gms::feature::enable should be run within seastar::async context
+        return seastar::async([&features, &g] {
+            for (auto&& name : features) {
+                g._feature_service.enable(name);
+            }
+        });
     }).get();
 }
 
