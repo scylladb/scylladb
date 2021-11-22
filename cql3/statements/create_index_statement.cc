@@ -324,6 +324,27 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
     return builder.build();
 }
 
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+create_index_statement::prepare_schema_mutations(query_processor& qp) const {
+    using namespace cql_transport;
+    auto schema = build_index_schema(qp);
+
+    ::shared_ptr<event::schema_change> ret;
+    std::vector<mutation> m;
+
+    if (schema) {
+        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(std::move(schema), false, {}, std::nullopt);
+
+        ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::TABLE,
+                keyspace(),
+                column_family());
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
+}
+
 future<::shared_ptr<cql_transport::event::schema_change>>
 create_index_statement::announce_migration(query_processor& qp) const {
     using namespace cql_transport;
