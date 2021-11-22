@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
 #include "prepared_statement.hh"
 #include "validation.hh"
@@ -275,8 +276,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
 }
 
-future<::shared_ptr<cql_transport::event::schema_change>>
-create_index_statement::announce_migration(query_processor& qp) const {
+schema_ptr create_index_statement::build_index_schema(query_processor& qp) const {
     validate_while_executing(qp.proxy());
 
     database& db = qp.db();
@@ -307,7 +307,7 @@ create_index_statement::announce_migration(query_processor& qp) const {
     auto existing_index = schema->find_index_noname(index);
     if (existing_index) {
         if (_if_not_exists) {
-            return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
+            return schema_ptr();
         } else {
             throw exceptions::invalid_request_exception(
                     format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
@@ -318,23 +318,31 @@ create_index_statement::announce_migration(query_processor& qp) const {
         // We print this error even if _if_not_exists - in this case the user
         // asked to create a not-previously-existing index, but under an
         // already-taken name. This should be an error, not a silent success.
-        return make_exception_future<::shared_ptr<cql_transport::event::schema_change>>(
-            exceptions::invalid_request_exception(format("Index {} cannot be created, because table {} already exists",
-                accepted_name, index_table_name))
-        );
+        throw exceptions::invalid_request_exception(format("Index {} cannot be created, because table {} already exists", accepted_name, index_table_name));
     }
     ++_cql_stats->secondary_index_creates;
     schema_builder builder{schema};
     builder.with_index(index);
-    return qp.get_migration_manager().announce_column_family_update(
-            builder.build(), false, {}, std::nullopt).then([this]() {
-        using namespace cql_transport;
-        return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TABLE,
-                keyspace(),
-                column_family());
-    });
+
+    return builder.build();
+}
+
+future<::shared_ptr<cql_transport::event::schema_change>>
+create_index_statement::announce_migration(query_processor& qp) const {
+    using namespace cql_transport;
+    auto schema = build_index_schema(qp);
+
+    if (!schema) {
+        co_return ::shared_ptr<event::schema_change>();
+    }
+
+    co_await qp.get_migration_manager().announce_column_family_update(std::move(schema), false, {}, std::nullopt);
+
+    co_return ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
