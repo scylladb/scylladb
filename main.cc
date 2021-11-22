@@ -827,7 +827,7 @@ int main(int ac, char** av) {
                 std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
-                std::ref(raft_gr), std::ref(lifecycle_notifier)).get();
+                std::ref(raft_gr), std::ref(lifecycle_notifier), std::ref(bm)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();

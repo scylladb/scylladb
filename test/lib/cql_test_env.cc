@@ -23,6 +23,7 @@
 #include <iterator>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
+#include "database_fwd.hh"
 #include "sstables/sstables.hh"
 #include <seastar/core/do_with.hh>
 #include "test/lib/cql_test_env.hh"
@@ -573,19 +574,6 @@ public:
             raft_gr.start(std::ref(ms), std::ref(gossiper), std::ref(qp)).get();
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
-            sharded<service::storage_service> ss;
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db),
-                std::ref(gossiper),
-                std::ref(sys_dist_ks),
-                std::ref(feature_service), sscfg, std::ref(mm),
-                std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
-                std::ref(cdc_generation_service),
-                std::ref(repair),
-                std::ref(raft_gr), std::ref(elc_notif)).get();
-            auto stop_storage_service = defer([&ss] { ss.stop().get(); });
-
             sharded<semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
             auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
@@ -656,6 +644,20 @@ public:
                 bm.stop().get();
                 db::set_the_batchlog_manager(nullptr);
             });
+
+            sharded<service::storage_service> ss;
+            service::storage_service_config sscfg;
+            sscfg.available_memory = memory::stats().total_memory();
+            ss.start(std::ref(abort_sources), std::ref(db),
+                std::ref(gossiper),
+                std::ref(sys_dist_ks),
+                std::ref(feature_service), sscfg, std::ref(mm),
+                std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
+                std::ref(cdc_generation_service),
+                std::ref(repair),
+                std::ref(raft_gr), std::ref(elc_notif),
+                std::ref(bm)).get();
+            auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             distributed_loader::init_system_keyspace(db, ss, *cfg).get();
 

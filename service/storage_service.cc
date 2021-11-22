@@ -117,7 +117,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<cdc::generation_service>& cdc_gen_service,
     sharded<repair_service>& repair,
     raft_group_registry& raft_gr,
-    endpoint_lifecycle_notifier& elc_notif)
+    endpoint_lifecycle_notifier& elc_notif,
+    sharded<db::batchlog_manager>& bm)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -131,6 +132,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _erm_factory(erm_factory)
         , _cdc_gen_service(cdc_gen_service)
         , _lifecycle_notifier(elc_notif)
+        , _batchlog_manager(bm)
         , _sys_dist_ks(sys_dist_ks)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
         , _schema_version_publisher([this] { return publish_schema_version(); }) {
@@ -1980,7 +1982,7 @@ future<> storage_service::decommission() {
             ss.stop_transport().get();
             slogger.info("DECOMMISSIONING: stopped transport");
 
-            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+            ss.get_batchlog_manager().invoke_on_all([] (auto& bm) {
                 return bm.drain();
             }).get();
             slogger.info("DECOMMISSIONING: stop batchlog_manager done");
@@ -2626,7 +2628,7 @@ future<> storage_service::do_drain() {
 
         tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
 
-        db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+        get_batchlog_manager().invoke_on_all([] (auto& bm) {
             return bm.drain();
         }).get();
 
@@ -2755,7 +2757,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
 // Runs inside seastar::async context
 void storage_service::unbootstrap() {
-    db::get_local_batchlog_manager().do_batch_log_replay().get();
+    get_batchlog_manager().local().do_batch_log_replay().get();
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
         _repair.local().decommission_with_repair(get_token_metadata_ptr()).get();
     } else {
@@ -2780,7 +2782,7 @@ void storage_service::unbootstrap() {
         // Wait for batch log to complete before streaming hints.
         slogger.debug("waiting for batch log processing.");
         // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-        db::get_local_batchlog_manager().do_batch_log_replay().get();
+        get_batchlog_manager().local().do_batch_log_replay().get();
 
         set_mode(mode::LEAVING, "streaming hints to other nodes", true);
 
