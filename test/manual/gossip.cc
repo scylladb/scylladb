@@ -23,6 +23,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/app-template.hh>
+#include <seastar/util/closeable.hh>
+
 #include "db/system_distributed_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
@@ -73,8 +75,11 @@ int main(int ac, char ** av) {
             utils::fb_utilities::set_broadcast_rpc_address(listen);
             auto cfg = std::make_unique<db::config>();
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
+
             sharded<gms::feature_service> feature_service;
             feature_service.start(gms::feature_config_from_db_config(*cfg)).get();
+            auto stop_feature_service = deferred_stop(feature_service);
+
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
             sharded<netw::messaging_service> messaging;
@@ -83,7 +88,10 @@ int main(int ac, char ** av) {
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
+
             messaging.start(listen).get();
+            auto stop_messaging = deferred_stop(messaging);
+
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
