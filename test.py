@@ -291,6 +291,8 @@ class Test:
     def print_summary(self):
         pass
 
+    def get_junit_etree(self):
+        return None
 
     def check_log(self, trim):
         """Check and trim logs and xml output for tests which have it"""
@@ -338,9 +340,23 @@ class BoostTest(UnitTest):
         boost_args += ['--color_output=false']
         boost_args += ['--']
         self.args = boost_args + self.args
+        self.casename = casename
+        self.__junit_etree = None
+
+    def get_junit_etree(self):
+        if self.__junit_etree is None:
+            self.__junit_etree = ET.parse(self.xmlout)
+            root = self.__junit_etree.getroot()
+            suites = root.findall('.//TestSuite')
+            for suite in suites:
+                skipped = suite.findall('./TestCase[@reason="disabled"]')
+                for e in skipped:
+                    suite.remove(e)
+            os.unlink(self.xmlout)
+        return self.__junit_etree
 
     def check_log(self, trim):
-        ET.parse(self.xmlout)
+        self.get_junit_etree()
         super().check_log(trim)
 
 
@@ -800,6 +816,17 @@ def write_junit_report(tmpdir, mode):
     with open(junit_filename, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
+def write_consolidated_boost_junit_xml(tmpdir, mode):
+    xml = ET.Element("TestLog")
+    for suite in TestSuite.suites.values():
+        for test in suite.tests:
+            if test.mode != mode:
+                continue
+            test_xml = test.get_junit_etree()
+            if test_xml is not None:
+                xml.extend(test_xml.getroot().findall('.//TestSuite'))
+    et = ET.ElementTree(xml)
+    et.write(f'{tmpdir}/{mode}/xml/boost.xunit.xml', encoding='unicode')
 
 def open_log(tmpdir):
     pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
@@ -839,6 +866,7 @@ async def main():
 
     for mode in options.modes:
         write_junit_report(options.tmpdir, mode)
+        write_consolidated_boost_junit_xml(options.tmpdir, mode)
 
     if 'coverage' in options.modes:
         coverage.generate_coverage_report("build/coverage", "tests")
