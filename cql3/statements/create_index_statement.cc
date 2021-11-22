@@ -90,7 +90,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
     _properties->validate();
 }
 
-void create_index_statement::validate_while_executing(service::storage_proxy& proxy) const {
+std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(service::storage_proxy& proxy) const {
     auto& db = proxy.get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
@@ -174,12 +174,12 @@ void create_index_statement::validate_while_executing(service::storage_proxy& pr
     }
 
     if (db.existing_index_names(keyspace()).contains(_index_name)) {
-        if (_if_not_exists) {
-            return;
-        } else {
+        if (!_if_not_exists) {
             throw exceptions::invalid_request_exception("Index already exists");
         }
     }
+
+    return targets;
 }
 
 void create_index_statement::validate_for_local_index(const schema& schema) const {
@@ -277,14 +277,11 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
 }
 
 schema_ptr create_index_statement::build_index_schema(query_processor& qp) const {
-    validate_while_executing(qp.proxy());
+    auto targets = validate_while_executing(qp.proxy());
 
     database& db = qp.db();
     auto schema = db.find_schema(keyspace(), column_family());
-    std::vector<::shared_ptr<index_target>> targets;
-    for (auto& raw_target : _raw_targets) {
-        targets.emplace_back(raw_target->prepare(*schema));
-    }
+
     sstring accepted_name = _index_name;
     if (accepted_name.empty()) {
         std::optional<sstring> index_name_root;
