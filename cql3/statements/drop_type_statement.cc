@@ -37,6 +37,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
@@ -146,6 +147,36 @@ void drop_type_statement::validate_while_executing(service::storage_proxy& proxy
 const sstring& drop_type_statement::keyspace() const
 {
     return _name.get_keyspace();
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
+    validate_while_executing(qp.proxy());
+
+    database& db = qp.db();
+
+    // Keyspace exists or we wouldn't have validated otherwise
+    auto&& ks = db.find_keyspace(keyspace());
+
+    const auto& all_types = ks.metadata()->user_types().get_all_types();
+    auto to_drop = all_types.find(_name.get_user_type_name());
+
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    // Can happen with if_exists
+    if (to_drop != all_types.end()) {
+        m = co_await qp.get_migration_manager().prepare_type_drop_announcement(to_drop->second);
+
+        using namespace cql_transport;
+        ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::DROPPED,
+                event::schema_change::target_type::TYPE,
+                keyspace(),
+                _name.get_string_type_name());
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(query_processor& qp) const
