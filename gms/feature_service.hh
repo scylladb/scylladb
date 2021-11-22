@@ -167,6 +167,8 @@ public:
     bool cluster_supports_user_defined_aggregates() const {
         return bool(_uda);
     }
+
+    static std::set<sstring> to_feature_set(sstring features_string);
 };
 
 } // namespace gms

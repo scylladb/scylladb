@@ -25,6 +25,8 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
 
 namespace gms {
 
@@ -251,6 +253,13 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::CDC_OPTIONS>(bool(_cdc_feature));
     f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(bool(_per_table_partitioners_feature));
     return f;
+}
+
+std::set<sstring> feature_service::to_feature_set(sstring features_string) {
+    std::set<sstring> features;
+    boost::split(features, features_string, boost::is_any_of(","));
+    features.erase("");
+    return features;
 }
 
 void feature_service::enable(const std::set<std::string_view>& list) {
