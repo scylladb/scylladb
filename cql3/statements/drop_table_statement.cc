@@ -39,11 +39,13 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -71,6 +73,29 @@ future<> drop_table_statement::check_access(service::storage_proxy& proxy, const
 void drop_table_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
     // validated in announce_migration()
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_table_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    try {
+        m = co_await qp.get_migration_manager().prepare_column_family_drop_announcement(keyspace(), column_family());
+
+        using namespace cql_transport;
+        ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::DROPPED,
+                event::schema_change::target_type::TABLE,
+                this->keyspace(),
+                this->column_family());
+    } catch (const exceptions::configuration_exception& e) {
+        if (!_if_exists) {
+            co_return coroutine::exception(std::current_exception());
+        }
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_table_statement::announce_migration(query_processor& qp) const
