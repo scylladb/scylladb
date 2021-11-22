@@ -836,16 +836,18 @@ public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift
 }
 #endif
 
-future<> migration_manager::announce_keyspace_drop(const sstring& ks_name)
-{
+std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name) {
     auto& db = get_local_storage_proxy().get_db().local();
     if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
-    return announce(std::move(mutations));
+    return db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
+}
+
+future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
+    return announce(prepare_keyspace_drop_announcement(ks_name));
 }
 
 future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
