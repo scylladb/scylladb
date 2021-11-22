@@ -935,8 +935,6 @@ int main(int ac, char** av) {
             bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
 
             bm.start(std::ref(qp), bm_cfg).get();
-            // FIXME: until we deglobalize the storage_proxy
-            db::set_the_batchlog_manager(&bm);
 
             sstables::init_metrics().get();
 
@@ -1233,8 +1231,6 @@ int main(int ac, char** av) {
             }).get();
             auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
                 bm.stop().get();
-                // FIXME: until we deglobalize the storage_proxy
-                db::set_the_batchlog_manager(nullptr);
             });
 
             supervisor::notify("starting load meter");

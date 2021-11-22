@@ -337,6 +337,3 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         });
     });
 }
-
-static distributed<db::batchlog_manager> _the_global_batchlog_manager;
-distributed<db::batchlog_manager>* db::_the_batchlog_manager = &_the_global_batchlog_manager;

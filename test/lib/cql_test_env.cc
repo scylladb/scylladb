@@ -638,11 +638,8 @@ public:
             bmcfg.write_request_timeout = 2s;
             distributed<db::batchlog_manager> bm;
             bm.start(std::ref(qp), bmcfg).get();
-            // FIXME: until we deglobalize the storage_proxy
-            db::set_the_batchlog_manager(&bm);
             auto stop_bm = defer([&bm] {
                 bm.stop().get();
-                db::set_the_batchlog_manager(nullptr);
             });
 
             sharded<service::storage_service> ss;
