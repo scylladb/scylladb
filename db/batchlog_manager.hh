@@ -97,8 +97,6 @@ private:
     unsigned _cpu = 0;
     seastar::abort_source _stop;
 
-    std::default_random_engine _e1{std::random_device{}()};
-
     future<> replay_all_failed_batches();
 public:
     // Takes a QP, not a distributes. Because this object is supposed
@@ -120,8 +118,6 @@ public:
     mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t);
     mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t, db_clock::time_point);
     db_clock::duration get_batch_log_timeout() const;
-
-    inet_address_vector_replica_set endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
 private:
     future<> batchlog_replay_loop();
 };

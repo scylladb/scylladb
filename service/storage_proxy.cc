@@ -2456,7 +2456,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                             auto& topology = _tmptr->get_topology();
                             auto& local_endpoints = topology.get_datacenter_racks().at(get_local_dc());
                             auto local_rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(local_addr);
-                            auto chosen_endpoints = db::get_batchlog_manager().local().endpoint_filter(local_rack, local_endpoints);
+                            auto chosen_endpoints = _p.gossiper().endpoint_filter(local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
