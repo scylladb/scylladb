@@ -49,12 +49,13 @@ private:
     public:
         partition_index_cache* _parent;
         key_type _key;
-        std::variant<shared_promise<>, partition_index_page> _page;
+        std::variant<lw_shared_ptr<shared_promise<>>, partition_index_page> _page;
         size_t _size_in_allocator = 0;
     public:
         entry(partition_index_cache* parent, key_type key)
                 : _parent(parent)
                 , _key(key)
+                , _page(make_lw_shared<shared_promise<>>())
         { }
 
         void set_page(partition_index_page&& page) noexcept {
@@ -76,7 +77,7 @@ private:
         // Always returns the same value for a given state of _page.
         size_t size_in_allocator() const { return _size_in_allocator; }
 
-        shared_promise<>& promise() { return std::get<shared_promise<>>(_page); }
+        lw_shared_ptr<shared_promise<>> promise() { return std::get<lw_shared_ptr<shared_promise<>>>(_page); }
         bool ready() const { return std::holds_alternative<partition_index_page>(_page); }
         partition_index_page& page() { return std::get<partition_index_page>(_page); }
         const partition_index_page& page() const { return std::get<partition_index_page>(_page); }
@@ -207,9 +208,7 @@ public:
                 return make_ready_future<entry_ptr>(std::move(ptr));
             } else {
                 ++_shard_stats.blocks;
-                return _as(_region, [ptr] () mutable {
-                    return ptr.get_entry().promise().get_shared_future();
-                }).then([ptr] () mutable {
+                return ptr.get_entry().promise()->get_shared_future().then([ptr] () mutable {
                     return std::move(ptr);
                 });
             }
@@ -238,12 +237,12 @@ public:
             entry& e = ptr.get_entry();
             try {
                 partition_index_page&& page = f.get0();
-                e.promise().set_value();
+                e.promise()->set_value();
                 e.set_page(std::move(page));
                 _shard_stats.used_bytes += e.size_in_allocator();
                 ++_shard_stats.populations;
             } catch (...) {
-                e.promise().set_exception(std::current_exception());
+                e.promise()->set_exception(std::current_exception());
                 with_allocator(_region.allocator(), [&] {
                     _cache.erase(key);
                 });
