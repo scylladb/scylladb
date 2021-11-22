@@ -3492,6 +3492,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cache_tracker tracker;
 
         compaction_manager cm;
+        auto stop_compaction_manager = deferred_stop(cm);
         cm.enable();
 
         auto s = schema_builder(some_keyspace, some_column_family)
@@ -3539,6 +3540,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
 
         // check compaction manager does not receive background compaction submissions
         cf->start();
+        auto stop_cf = deferred_stop(*cf);
         cf->trigger_compaction();
         cf->get_compaction_manager().submit(cf.get());
         BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0 && ss.completed_tasks == 0);
@@ -3555,9 +3557,6 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         // test compaction successfully finished
         BOOST_REQUIRE(ss.errors == 0);
         BOOST_REQUIRE(ss.completed_tasks == 1);
-
-        cf->stop().wait();
-        cm.stop().wait();
     });
 }
 
