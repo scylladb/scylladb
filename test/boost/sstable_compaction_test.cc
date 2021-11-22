@@ -584,6 +584,7 @@ static bool sstable_overlaps(const lw_shared_ptr<column_family>& cf, int64_t gen
 }
 
 SEASTAR_TEST_CASE(leveled_01) {
+  BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
@@ -627,6 +628,7 @@ SEASTAR_TEST_CASE(leveled_01) {
 }
 
 SEASTAR_TEST_CASE(leveled_02) {
+  BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
@@ -680,6 +682,7 @@ SEASTAR_TEST_CASE(leveled_02) {
 }
 
 SEASTAR_TEST_CASE(leveled_03) {
+  BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
@@ -737,6 +740,7 @@ SEASTAR_TEST_CASE(leveled_03) {
 }
 
 SEASTAR_TEST_CASE(leveled_04) {
+  BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with([] (test_env& env) {
     column_family_for_tests cf(env.manager());
 
