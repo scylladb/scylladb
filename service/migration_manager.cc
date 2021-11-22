@@ -850,16 +850,14 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
     return announce(prepare_keyspace_drop_announcement(ks_name));
 }
 
-future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
-                                                        const sstring& cf_name,
-                                                        drop_views drop_views)
-{
+future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,
+                    const sstring& cf_name, drop_views drop_views) {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
         auto& schema = old_cfm.schema();
         if (schema->is_view()) {
-            throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
+            co_return coroutine::make_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View"));
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
 
@@ -871,8 +869,8 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
             auto explicit_view_names = views
                                     | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
                                     | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
-            throw exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
-                        schema->ks_name(), ::join(", ", explicit_view_names)));
+            co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
+                        schema->ks_name(), ::join(", ", explicit_view_names))));
         }
         mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
 
@@ -896,10 +894,16 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         co_await seastar::async([&] {
             get_notifier().before_drop_column_family(*schema, mutations, ts);
         });
-        co_return co_await include_keyspace_and_announce(*keyspace, std::move(mutations));
+        co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const no_such_column_family& e) {
-        throw exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name));
+        co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name)));
     }
+}
+
+future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
+                                                        const sstring& cf_name,
+                                                        drop_views drop_views) {
+    co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
 }
 
 future<> migration_manager::announce_type_drop(user_type dropped_type)

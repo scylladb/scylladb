@@ -166,6 +166,7 @@ public:
     class drop_views_tag;
     using drop_views = bool_class<drop_views_tag>;
     future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
+    future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
 
     future<> announce_type_drop(user_type dropped_type);
 
