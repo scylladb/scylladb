@@ -906,14 +906,17 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
     co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
 }
 
-future<> migration_manager::announce_type_drop(user_type dropped_type)
-{
+future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
     mlogger.info("Drop User Type: {}", dropped_type->get_name_as_string());
     auto mutations =
             db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
-    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
+    return include_keyspace(*keyspace.metadata(), std::move(mutations));
+}
+
+future<> migration_manager::announce_type_drop(user_type dropped_type) {
+    co_return co_await announce(co_await prepare_type_drop_announcement(dropped_type));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(view_ptr view) {

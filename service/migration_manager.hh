@@ -169,6 +169,7 @@ public:
     future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
 
     future<> announce_type_drop(user_type dropped_type);
+    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type);
 
     future<> announce_new_view(view_ptr view);
     future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
