@@ -73,7 +73,7 @@ struct batchlog_manager_config {
     std::chrono::milliseconds delay;
 };
 
-class batchlog_manager {
+class batchlog_manager : public peering_sharded_service<batchlog_manager> {
 private:
     static constexpr uint32_t replay_interval = 60 * 1000; // milliseconds
     static constexpr uint32_t page_size = 128; // same as HHOM, for now, w/out using any heuristics. TODO: set based on avg batch size.
