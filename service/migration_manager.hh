@@ -178,6 +178,7 @@ public:
     future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view);
 
     future<> announce_view_drop(const sstring& ks_name, const sstring& cf_name);
+    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name);
 
     /**
      * actively announce a new version to active hosts via rpc
