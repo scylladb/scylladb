@@ -70,8 +70,11 @@ future<> drop_type_statement::check_access(service::storage_proxy& proxy, const 
     return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::DROP);
 }
 
-void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
-{
+void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
+    // validation is done at execution time
+}
+
+void drop_type_statement::validate_while_executing(service::storage_proxy& proxy) const {
     try {
         auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types().get_all_types();
@@ -139,6 +142,7 @@ void drop_type_statement::validate(service::storage_proxy& proxy, const service:
     }
 }
 
+
 const sstring& drop_type_statement::keyspace() const
 {
     return _name.get_keyspace();
@@ -146,6 +150,8 @@ const sstring& drop_type_statement::keyspace() const
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(query_processor& qp) const
 {
+    validate_while_executing(qp.proxy());
+
     database& db = qp.db();
 
     // Keyspace exists or we wouldn't have validated otherwise
