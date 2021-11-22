@@ -115,8 +115,6 @@ public:
     size_t get_total_batches_replayed() const {
         return _total_batches_replayed;
     }
-    mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t);
-    mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t, db_clock::time_point);
     db_clock::duration get_batch_log_timeout() const;
 private:
     future<> batchlog_replay_loop();

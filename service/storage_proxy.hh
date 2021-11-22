@@ -629,6 +629,8 @@ public:
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
+    mutation get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+
     future<> stop();
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;

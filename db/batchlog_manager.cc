@@ -170,31 +170,6 @@ future<size_t> db::batchlog_manager::count_all_batches() const {
     });
 }
 
-mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version) {
-    return get_batch_log_mutation_for(mutations, id, version, db_clock::now());
-}
-
-mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
-    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-    auto key = partition_key::from_singular(*schema, id);
-    auto timestamp = api::new_timestamp();
-    auto data = [this, &mutations] {
-        std::vector<canonical_mutation> fm(mutations.begin(), mutations.end());
-        bytes_ostream out;
-        for (auto& m : fm) {
-            ser::serialize(out, m);
-        }
-        return to_bytes(out.linearize());
-    }();
-
-    mutation m(schema, key);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("data"), data_value(std::move(data)), timestamp);
-
-    return m;
-}
-
 db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     // enough time for the actual write + BM removal mutation
     return _write_request_timeout * 2;
