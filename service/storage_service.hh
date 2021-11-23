@@ -88,6 +88,7 @@ class generation_service;
 
 namespace db {
 class system_distributed_keyspace;
+class batchlog_manager;
 }
 
 namespace netw {
@@ -201,7 +202,8 @@ public:
         sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
         raft_group_registry& raft_gr,
-        endpoint_lifecycle_notifier& elc_notif);
+        endpoint_lifecycle_notifier& elc_notif,
+        sharded<db::batchlog_manager>& bm);
 
     // Needed by distributed<>
     future<> stop();
@@ -250,6 +252,11 @@ private:
             return make_ready_future<mutable_token_metadata_ptr>(make_token_metadata_ptr(std::move(tm)));
         });
     }
+
+    sharded<db::batchlog_manager>& get_batchlog_manager() noexcept {
+        return _batchlog_manager;
+    }
+
 public:
 
     locator::effective_replication_map_factory& get_erm_factory() noexcept {
@@ -305,6 +312,7 @@ private:
     /* Used for tracking drain progress */
 
     endpoint_lifecycle_notifier& _lifecycle_notifier;
+    sharded<db::batchlog_manager>& _batchlog_manager;
 
     std::unordered_set<token> _bootstrap_tokens;
 

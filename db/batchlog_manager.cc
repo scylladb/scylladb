@@ -94,27 +94,22 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manag
 }
 
 future<> db::batchlog_manager::do_batch_log_replay() {
-    // Use with_semaphore is much simpler, but nested invoke_on can
-    // cause deadlock.
-    return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
-        bm._gate.enter();
-        return bm._sem.wait().then([&bm] {
-            return bm._cpu++ % smp::count;
-        });
-    }).then([] (auto dest) {
+    return container().invoke_on(0, [] (auto& bm) -> future<> {
+        auto gate_holder = bm._gate.hold();
+        auto sem_units = co_await get_units(bm._sem, 1);
+
+        auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
-        return get_batchlog_manager().invoke_on(dest, [] (auto& bm) {
-            return with_gate(bm._gate, [&bm] {
-                return bm.replay_all_failed_batches();
+        if (dest == 0) {
+            co_await bm.replay_all_failed_batches();
+        } else {
+            co_await bm.container().invoke_on(dest, [] (auto& bm) {
+                return with_gate(bm._gate, [&bm] {
+                    return bm.replay_all_failed_batches();
+                });
             });
-        }).then([dest] {
-            blogger.debug("Batchlog replay on shard {}: done", dest);
-        });
-    }).finally([] {
-        return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
-            bm._sem.signal();
-            bm._gate.leave();
-        });
+        }
+        blogger.debug("Batchlog replay on shard {}: done", dest);
     });
 }
 
@@ -173,31 +168,6 @@ future<size_t> db::batchlog_manager::count_all_batches() const {
     return _qp.execute_internal(query).then([](::shared_ptr<cql3::untyped_result_set> rs) {
        return size_t(rs->one().get_as<int64_t>("count"));
     });
-}
-
-mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version) {
-    return get_batch_log_mutation_for(mutations, id, version, db_clock::now());
-}
-
-mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
-    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-    auto key = partition_key::from_singular(*schema, id);
-    auto timestamp = api::new_timestamp();
-    auto data = [this, &mutations] {
-        std::vector<canonical_mutation> fm(mutations.begin(), mutations.end());
-        bytes_ostream out;
-        for (auto& m : fm) {
-            ser::serialize(out, m);
-        }
-        return to_bytes(out.linearize());
-    }();
-
-    mutation m(schema, key);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("data"), data_value(std::move(data)), timestamp);
-
-    return m;
 }
 
 db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
@@ -367,72 +337,3 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         });
     });
 }
-
-inet_address_vector_replica_set db::batchlog_manager::endpoint_filter(const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
-    // special case for single-node data centers
-    if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
-        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
-    }
-
-    // strip out dead endpoints and localhost
-    std::unordered_multimap<sstring, gms::inet_address> validated;
-
-    auto is_valid = [](gms::inet_address input) {
-        return input != utils::fb_utilities::get_broadcast_address()
-            && gms::get_local_gossiper().is_alive(input)
-            ;
-    };
-
-    for (auto& e : endpoints) {
-        for (auto& a : e.second) {
-            if (is_valid(a)) {
-                validated.emplace(e.first, a);
-            }
-        }
-    }
-
-    typedef inet_address_vector_replica_set return_type;
-
-    if (validated.size() <= 2) {
-        return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
-    }
-
-    if (validated.size() - validated.count(local_rack) >= 2) {
-        // we have enough endpoints in other racks
-        validated.erase(local_rack);
-    }
-
-    if (validated.bucket_count() == 1) {
-        // we have only 1 `other` rack
-        auto res = validated | boost::adaptors::map_values;
-        if (validated.size() > 2) {
-            return boost::copy_range<return_type>(
-                    boost::copy_range<std::vector<gms::inet_address>>(res)
-                            | boost::adaptors::sliced(0, 2));
-        }
-        return boost::copy_range<return_type>(res);
-    }
-
-    // randomize which racks we pick from if more than 2 remaining
-
-    std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
-
-    if (validated.bucket_count() > 2) {
-        std::shuffle(racks.begin(), racks.end(), _e1);
-        racks.resize(2);
-    }
-
-    inet_address_vector_replica_set result;
-
-    // grab a random member of up to two racks
-    for (auto& rack : racks) {
-        auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
-        std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
-        result.emplace_back(cpy[rdist(_e1)]);
-    }
-
-    return result;
-}
-
-
-distributed<db::batchlog_manager> db::_the_batchlog_manager;

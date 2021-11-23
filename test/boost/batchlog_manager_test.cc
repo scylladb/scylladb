@@ -47,7 +47,7 @@ static atomic_cell make_atomic_cell(data_type dt, bytes value) {
 SEASTAR_TEST_CASE(test_execute_batch) {
     return do_with_cql_env([] (auto& e) {
         auto& qp = e.local_qp();
-        auto& bp =  db::get_batchlog_manager().local();
+        auto& bp =  e.batchlog_manager().local();
 
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&qp, &e, &bp] () mutable {
             auto& db = e.local_db();
@@ -63,7 +63,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             using namespace std::chrono_literals;
 
             auto version = netw::messaging_service::current_version;
-            auto bm = bp.get_batch_log_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
+            auto bm = qp.proxy().get_batchlog_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
 
             return qp.proxy().mutate_locally(bm, tracing::trace_state_ptr(), db::commitlog::force_sync::no).then([&bp] () mutable {
                 return bp.count_all_batches().then([](auto n) {

@@ -23,6 +23,7 @@
 #include <iterator>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
+#include "database_fwd.hh"
 #include "sstables/sstables.hh"
 #include <seastar/core/do_with.hh>
 #include "test/lib/cql_test_env.hh"
@@ -134,6 +135,7 @@ private:
     sharded<service::migration_notifier>& _mnotifier;
     sharded<qos::service_level_controller>& _sl_controller;
     sharded<service::migration_manager>& _mm;
+    sharded<db::batchlog_manager>& _batchlog_manager;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -181,7 +183,8 @@ public:
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<service::migration_notifier>& mnotifier,
             sharded<service::migration_manager>& mm,
-            sharded<qos::service_level_controller> &sl_controller)
+            sharded<qos::service_level_controller> &sl_controller,
+            sharded<db::batchlog_manager>& batchlog_manager)
             : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -190,6 +193,7 @@ public:
             , _mnotifier(mnotifier)
             , _sl_controller(sl_controller)
             , _mm(mm)
+            , _batchlog_manager(batchlog_manager)
     {
         adjust_rlimit();
     }
@@ -389,6 +393,10 @@ public:
         return _mm;
     }
 
+    virtual sharded<db::batchlog_manager>& batchlog_manager() override {
+        return _batchlog_manager;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();
@@ -554,7 +562,6 @@ public:
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager> mm;
-            distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
             sharded<cql3::cql_config> cql_config;
             cql_config.start(cql3::cql_config::default_tag{}).get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
@@ -566,19 +573,6 @@ public:
             sharded<service::raft_group_registry> raft_gr;
             raft_gr.start(std::ref(ms), std::ref(gossiper), std::ref(qp)).get();
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
-
-            sharded<service::storage_service> ss;
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db),
-                std::ref(gossiper),
-                std::ref(sys_dist_ks),
-                std::ref(feature_service), sscfg, std::ref(mm),
-                std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
-                std::ref(cdc_generation_service),
-                std::ref(repair),
-                std::ref(raft_gr), std::ref(elc_notif)).get();
-            auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -642,8 +636,25 @@ public:
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
+            distributed<db::batchlog_manager> bm;
             bm.start(std::ref(qp), bmcfg).get();
-            auto stop_bm = defer([&bm] { bm.stop().get(); });
+            auto stop_bm = defer([&bm] {
+                bm.stop().get();
+            });
+
+            sharded<service::storage_service> ss;
+            service::storage_service_config sscfg;
+            sscfg.available_memory = memory::stats().total_memory();
+            ss.start(std::ref(abort_sources), std::ref(db),
+                std::ref(gossiper),
+                std::ref(sys_dist_ks),
+                std::ref(feature_service), sscfg, std::ref(mm),
+                std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
+                std::ref(cdc_generation_service),
+                std::ref(repair),
+                std::ref(raft_gr), std::ref(elc_notif),
+                std::ref(bm)).get();
+            auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             distributed_loader::init_system_keyspace(db, ss, *cfg).get();
 
@@ -770,7 +781,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

@@ -40,6 +40,10 @@
 
 class database;
 
+namespace db {
+class batchlog_manager;
+}
+
 namespace db::view {
 class view_builder;
 }
@@ -161,6 +165,8 @@ public:
     virtual service::migration_notifier& local_mnotifier() = 0;
 
     virtual sharded<service::migration_manager>& migration_manager() = 0;
+
+    virtual sharded<db::batchlog_manager>& batchlog_manager() = 0;
 
     virtual future<> refresh_client_state() = 0;
 };

@@ -107,6 +107,14 @@
 #include "service/paxos/paxos_state.hh"
 #include "gms/feature_service.hh"
 #include "db/virtual_table.hh"
+#include "canonical_mutation.hh"
+#include "schema_mutations.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 namespace bi = boost::intrusive;
 
@@ -2456,7 +2464,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                             auto& topology = _tmptr->get_topology();
                             auto& local_endpoints = topology.get_datacenter_racks().at(get_local_dc());
                             auto local_rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(local_addr);
-                            auto chosen_endpoints = db::get_batchlog_manager().local().endpoint_filter(local_rack, local_endpoints);
+                            auto chosen_endpoints = _p.gossiper().endpoint_filter(local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
@@ -2480,7 +2488,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             });
         }
         future<> sync_write_to_batchlog() {
-            auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, netw::messaging_service::current_version);
+            auto m = _p.get_batchlog_mutation_for(_mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
         };
@@ -2533,6 +2541,27 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     return mk_ctxt(std::move(mutations), nullptr).then([this] (lw_shared_ptr<context> ctxt) {
         return ctxt->run().finally([ctxt]{});
     }).then_wrapped(std::move(cleanup));
+}
+
+mutation storage_proxy::get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
+    auto schema = local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+    auto key = partition_key::from_singular(*schema, id);
+    auto timestamp = api::new_timestamp();
+    auto data = [this, &mutations] {
+        std::vector<canonical_mutation> fm(mutations.begin(), mutations.end());
+        bytes_ostream out;
+        for (auto& m : fm) {
+            ser::serialize(out, m);
+        }
+        return to_bytes(out.linearize());
+    }();
+
+    mutation m(schema, key);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("data"), data_value(std::move(data)), timestamp);
+
+    return m;
 }
 
 template<typename Range>

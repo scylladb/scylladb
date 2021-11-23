@@ -73,7 +73,7 @@ struct batchlog_manager_config {
     std::chrono::milliseconds delay;
 };
 
-class batchlog_manager {
+class batchlog_manager : public peering_sharded_service<batchlog_manager> {
 private:
     static constexpr uint32_t replay_interval = 60 * 1000; // milliseconds
     static constexpr uint32_t page_size = 128; // same as HHOM, for now, w/out using any heuristics. TODO: set based on avg batch size.
@@ -97,8 +97,6 @@ private:
     unsigned _cpu = 0;
     seastar::abort_source _stop;
 
-    std::default_random_engine _e1{std::random_device{}()};
-
     future<> replay_all_failed_batches();
 public:
     // Takes a QP, not a distributes. Because this object is supposed
@@ -117,23 +115,9 @@ public:
     size_t get_total_batches_replayed() const {
         return _total_batches_replayed;
     }
-    mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t);
-    mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t, db_clock::time_point);
     db_clock::duration get_batch_log_timeout() const;
-
-    inet_address_vector_replica_set endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
 private:
     future<> batchlog_replay_loop();
 };
-
-extern distributed<batchlog_manager> _the_batchlog_manager;
-
-inline distributed<batchlog_manager>& get_batchlog_manager() {
-    return _the_batchlog_manager;
-}
-
-inline batchlog_manager& get_local_batchlog_manager() {
-    return _the_batchlog_manager.local();
-}
 
 }
