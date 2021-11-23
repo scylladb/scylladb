@@ -489,6 +489,61 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
     }).get();
 }
 
+// Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
+    do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
+        using namespace std::chrono_literals;
+
+        auto& db = env.db();
+
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
+
+        unsigned i = 0;
+
+        // Keep indent the same to reduce white-space noise
+        for (const auto partition_row_limit : {1ul, 4ul, 8ul, query::partition_max_rows}) {
+        for (const auto page_size : {1, 4, 8, 19}) {
+        for (const auto stateful : {stateful_query::no, stateful_query::yes}) {
+            testlog.debug("[scan #{}]: partition_row_limit={}, page_size={}, stateful={}", i++, partition_row_limit, page_size, stateful);
+
+            const auto slice = partition_slice_builder(*s, s->full_slice())
+                .reversed()
+                .with_partition_row_limit(partition_row_limit)
+                .build();
+
+            // First read all partition-by-partition (not paged).
+            auto expected_results = read_all_partitions_one_by_one(env.db(), s, pkeys, slice);
+
+            auto [mutation_results, _np1] = read_partitions_with_generic_paged_scan<mutation_result_builder>(db, s, page_size, std::numeric_limits<uint64_t>::max(), stateful,
+                    query::full_partition_range, slice);
+
+            check_results_are_equal(expected_results, mutation_results);
+
+            auto [data_results, _np2] = read_partitions_with_generic_paged_scan<data_result_builder>(db, s, page_size, std::numeric_limits<uint64_t>::max(), stateful,
+                    query::full_partition_range, slice);
+
+            std::vector<query::result_set_row> expected_rows;
+            for (const auto& mut : expected_results) {
+                auto rs = query::result_set(mut);
+                // mut re-sorts rows into forward order, so we have to reverse them again here
+                std::copy(rs.rows().rbegin(), rs.rows().rend(), std::back_inserter(expected_rows));
+            }
+            auto expected_data_results = query::result_set(s, std::move(expected_rows));
+
+            BOOST_REQUIRE_EQUAL(data_results, expected_data_results);
+
+            tests::require_equal(aggregate_querier_cache_stat(db, &query::querier_cache::stats::drops), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(db, &query::querier_cache::stats::time_based_evictions), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(db, &query::querier_cache::stats::resource_based_evictions), 0u);
+
+        } } }
+
+        require_eventually_empty_caches(env.db());
+
+        return make_ready_future<>();
+    }).get();
+}
+
 namespace {
 
 class buffer_ostream {
