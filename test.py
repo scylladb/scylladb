@@ -515,9 +515,14 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             log.flush();
             test.time_start = time.time()
             test.time_end = 0
+
+            path = test.path
+            args = test.args
+            if options.cpus:
+                path = 'taskset'
+                args = [ '-c', options.cpus, test.path, *test.args ]
             process = await asyncio.create_subprocess_exec(
-                test.path,
-                *test.args,
+                path, *args,
                 stderr=log,
                 stdout=log,
                 env=dict(os.environ,
@@ -576,12 +581,6 @@ def setup_signal_handlers(loop, signaled):
 
 def parse_cmd_line():
     """ Print usage and process command line options. """
-    sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-    testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
-    cpus_per_test_job = 1
-    default_num_jobs_mem = ((sysmem - 4e9) // testmem)
-    default_num_jobs_cpu = multiprocessing.cpu_count() // cpus_per_test_job
-    default_num_jobs = min(default_num_jobs_mem, default_num_jobs_cpu)
 
     parser = argparse.ArgumentParser(description="Scylla test runner")
     parser.add_argument(
@@ -610,7 +609,7 @@ def parse_cmd_line():
                         help="timeout value for test execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
-    parser.add_argument('--jobs', '-j', action="store", default=default_num_jobs, type=int,
+    parser.add_argument('--jobs', '-j', action="store", type=int,
                         help="Number of jobs to use for running the tests")
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
@@ -622,7 +621,21 @@ def parse_cmd_line():
                         help="Skip tests which match the provided pattern")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
+    parser.add_argument('--cpus', action="store",
+                        help="Run the tests on those CPUs only (in taskset acceptible format). Consider using --jobs too")
     args = parser.parse_args()
+
+    if not args.jobs:
+        if not args.cpus:
+            nr_cpus = multiprocessing.cpu_count()
+        else:
+            nr_cpus = int(subprocess.check_output(['taskset', '-c', args.cpus, 'python', '-c', 'import os; print(len(os.sched_getaffinity(0)))']))
+
+        cpus_per_test_job = 1
+        sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
+        default_num_jobs_mem = ((sysmem - 4e9) // testmem)
+        args.jobs = min(default_num_jobs_mem, nr_cpus // cpus_per_test_job)
 
     if not output_is_a_tty:
         args.verbose = True
