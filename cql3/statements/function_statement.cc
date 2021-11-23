@@ -94,16 +94,16 @@ void create_function_statement_base::validate(service::storage_proxy& proxy, con
     // validation happens during execution
 }
 
-void create_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
+shared_ptr<functions::function> create_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
     create_arg_types(proxy);
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
-        create(proxy, old.get());
-        return;
+        return create(proxy, old.get());
     }
     if (!_if_not_exists) {
         throw exceptions::invalid_request_exception(format("The function '{}' already exists", old));
     }
+    return nullptr;
 }
 
 drop_function_statement_base::drop_function_statement_base(functions::function_name name,
@@ -114,28 +114,31 @@ void drop_function_statement_base::validate(service::storage_proxy& proxy, const
     // validation happens during execution
 }
 
-void drop_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
+shared_ptr<functions::function> drop_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
     create_arg_types(proxy);
+    shared_ptr<functions::function> func;
     if (_args_present) {
-        _func = functions::functions::find(_name, _arg_types);
-        if (!_func && !_if_exists) {
+        func = functions::functions::find(_name, _arg_types);
+        if (!func && !_if_exists) {
             throw exceptions::invalid_request_exception(format("User function {}({}) doesn't exist", _name, _arg_types));
         }
     } else {
         auto funcs = functions::functions::find(_name);
-        if (funcs.empty()) {
+        if (!funcs.empty()) {
+            auto b = funcs.begin();
+            auto i = b;
+            if (++i != funcs.end()) {
+                throw exceptions::invalid_request_exception(format("There are multiple functions named {}", _name));
+            }
+            func = b->second;
+        } else {
             if (!_if_exists) {
                 throw exceptions::invalid_request_exception(format("No function named {} found", _name));
             }
-            return;
         }
-        auto b = funcs.begin();
-        auto i = b;
-        if (++i != funcs.end()) {
-            throw exceptions::invalid_request_exception(format("There are multiple functions named {}", _name));
-        }
-        _func = b->second;
     }
+
+    return func;
 }
 }
 }

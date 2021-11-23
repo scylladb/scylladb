@@ -33,7 +33,7 @@ namespace cql3 {
 
 namespace statements {
 
-void create_function_statement::create(service::storage_proxy& proxy, functions::function* old) const {
+shared_ptr<functions::function> create_function_statement::create(service::storage_proxy& proxy, functions::function* old) const {
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
@@ -54,19 +54,19 @@ void create_function_statement::create(service::storage_proxy& proxy, functions:
             .cfg = cfg,
         };
 
-        _func = ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+        return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
             std::move(return_type), _called_on_null_input, std::move(ctx));
     } else if (_language == "xwasm") {
        wasm::context ctx{db.wasm_engine(), _name.name};
        try {
             wasm::compile(ctx, arg_names, _body);
-            _func = ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+            return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
                 std::move(return_type), _called_on_null_input, std::move(ctx));
        } catch (const wasm::exception& we) {
            throw exceptions::invalid_request_exception(we.what());
        }
     }
-    return;
+    return nullptr;
 }
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(database& db, cql_stats& stats) {
@@ -75,12 +75,12 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(database&
 
 future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(
         query_processor& qp) const {
-    validate_while_executing(qp.proxy());
-    if (!_func) {
+    auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp.proxy()));
+    if (!func) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }
-    return qp.get_migration_manager().announce_new_function(_func).then([this] {
-        return create_schema_change(*_func, true);
+    return qp.get_migration_manager().announce_new_function(func).then([this, func] {
+        return create_schema_change(*func, true);
     });
 }
 

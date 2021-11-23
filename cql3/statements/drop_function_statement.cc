@@ -36,19 +36,19 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(database& d
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement::announce_migration(
         query_processor& qp) const {
-    validate_while_executing(qp.proxy());
-    if (!_func) {
+    auto func = validate_while_executing(qp.proxy());
+    if (!func) {
         return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
     }
-    auto user_func = dynamic_pointer_cast<functions::user_function>(_func);
+    auto user_func = dynamic_pointer_cast<functions::user_function>(func);
     if (!user_func) {
-        throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", _func));
+        throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", func));
     }
     if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name()); bool(aggregate)) {
-        throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", _func, *aggregate));
+        throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
     }
-    return qp.get_migration_manager().announce_function_drop(user_func).then([this] {
-        return create_schema_change(*_func, false);
+    return qp.get_migration_manager().announce_function_drop(user_func).then([this, func] {
+        return create_schema_change(*func, false);
     });
 }
 
