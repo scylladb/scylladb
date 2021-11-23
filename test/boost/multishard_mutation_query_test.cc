@@ -406,6 +406,52 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
 }
 
 // Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
+    do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
+        using namespace std::chrono_literals;
+
+        env.db().invoke_on_all([] (database& db) {
+            db.set_querier_cache_entry_ttl(2s);
+        }).get();
+
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
+
+        unsigned i = 0;
+
+        // Keep indent the same to reduce white-space noise
+        for (const auto partition_row_limit : {1ul, 4ul, 8ul, query::partition_max_rows}) {
+        for (const auto page_size : {1, 4, 8, 19}) {
+        for (const auto stateful : {stateful_query::no, stateful_query::yes}) {
+            testlog.debug("[scan #{}]: partition_row_limit={}, page_size={}, stateful={}", i++, partition_row_limit, page_size, stateful);
+
+            const auto slice = partition_slice_builder(*s, s->full_slice())
+                .reversed()
+                .with_partition_row_limit(partition_row_limit)
+                .build();
+
+            // First read all partition-by-partition (not paged).
+            auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
+
+            // Then do a paged range-query, with reader caching
+            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
+                check_cache_population(env.db(), 1);
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
+            }).first;
+
+            check_results_are_equal(results1, results2);
+
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0u);
+        } } }
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
