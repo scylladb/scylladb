@@ -34,7 +34,6 @@
 #include "canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "db/config.hh"
-#include "db/system_keyspace.hh"
 #include "db/view/view_update_backlog.hh"
 #include "dht/i_partitioner.hh"
 #include "range.hh"
