@@ -1656,10 +1656,18 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
     testlog.info(__PRETTY_FUNCTION__);
 
     for_each_mutation([&] (const mutation& m) mutable {
-        const auto query_time = gc_clock::now();
-
         std::vector<mutation> mutations = { m };
         auto ms = populate(m.schema(), mutations, gc_clock::now());
+
+        // Query time must be fetched after populate. If compaction is executed
+        // during populate it may be executed with timestamp later than query_time.
+        // This would cause the compaction below and compaction during flush to
+        // be executed at different time points producing different
+        // results. The result would be sporadic test failures depending on relative
+        // timing of those operations. If no other mutations happen after populate,
+        // and query_time is later than the compaction time during population, we're
+        // guaranteed to have the same results.
+        const auto query_time = gc_clock::now();
 
         mutation m_compacted(m);
         m_compacted.partition().compact_for_compaction(*m_compacted.schema(), always_gc, query_time);
