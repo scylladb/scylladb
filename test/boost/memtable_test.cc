@@ -19,10 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #include <boost/test/unit_test.hpp>
 #include "service/priority_manager.hh"
 #include "database.hh"
+#include "db/config.hh"
 #include "utils/UUID_gen.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -31,6 +31,7 @@
 
 #include <seastar/core/thread.hh>
 #include "memtable.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -660,3 +661,45 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
     BOOST_CHECK_EQUAL(stats.min_timestamp, -10);
     BOOST_CHECK(stats.min_ttl == md2_ttl);
 }
+
+
+SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
+    auto db_config = make_shared<db::config>();
+    db_config->enable_cache.set(false);
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        // Create table and insert some data
+        char const* ks_name = "keyspace_name";
+        char const* table_name = "table_name";
+        env.execute_cql(format("CREATE KEYSPACE {} WITH REPLICATION = {{'class' : 'SimpleStrategy', 'replication_factor' : 1}};", ks_name)).get();
+        env.execute_cql(format("CREATE TABLE {}.{} (pk int, ck int, id int, PRIMARY KEY(pk, ck));", ks_name, table_name)).get();
+
+        database& db = env.local_db();
+        table& t = db.find_column_family(ks_name, table_name);
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        schema_ptr s = t.schema();
+
+        // Build expected mutation with partition key: 1, clustering_key: 2 and value of id column: 3
+        dht::decorated_key pk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(1)));
+        clustering_key ck = clustering_key::from_single_value(*s, serialized(2));
+
+        mutation m1 = mutation(s, pk);
+        m1.set_clustered_cell(ck, to_bytes("id"), data_value(3), api::new_timestamp());
+
+        mutation m2 = mutation(s, pk);
+        m2.partition().apply_delete(*s, clustering_key_prefix::from_singular(*s, 2), tombstone{api::new_timestamp(), gc_clock::now()});
+
+        t.apply(m1);
+        t.apply(m2);
+
+        // Flush to make sure all the modifications make it to disk
+        t.flush().get();
+
+        // Treat the table as mutation_source and assert we get the expected mutation and end of stream
+        mutation_source ms = t.as_mutation_source();
+        assert_that(ms.make_reader(s, semaphore.make_permit()))
+            .produces(m2)
+            .produces_end_of_stream();
+    }, db_config);
+}
+
+
