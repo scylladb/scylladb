@@ -89,16 +89,27 @@ void drop_index_statement::validate(service::storage_proxy& proxy, const service
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(query_processor& qp) const
-{
+schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) const {
     auto cfm = lookup_indexed_table(qp.proxy());
     if (!cfm) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
+        return nullptr;
     }
     ++_cql_stats->secondary_index_drops;
     auto builder = schema_builder(cfm);
     builder.without_index(_index_name);
-    return qp.get_migration_manager().announce_column_family_update(builder.build(), false, {}, std::nullopt).then([cfm] {
+
+    return builder.build();
+}
+
+future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(query_processor& qp) const
+{
+    auto cfm = make_drop_idex_schema(qp);
+
+    if (!cfm) {
+        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
+    }
+
+    return qp.get_migration_manager().announce_column_family_update(cfm, false, {}, std::nullopt).then([cfm] {
         // Dropping an index is akin to updating the CF
         // Note that we shouldn't call columnFamily() at this point because the index has been dropped and the call to lookupIndexedTable()
         // in that method would now throw.
