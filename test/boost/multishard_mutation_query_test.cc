@@ -99,15 +99,16 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     }).get();
 }
 
-static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
+        const query::partition_slice& slice) {
     const auto& sharder = s->get_sharder();
     std::vector<mutation> results;
     results.reserve(pkeys.size());
 
     for (const auto& pkey : pkeys) {
-        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
-            return async([s = gs.get(), &pkey, &db] () mutable {
-                const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(),
+        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (database& db) {
+            return async([s = gs.get(), &pkey, &slice, &db] () mutable {
+                const auto cmd = query::read_command(s->id(), s->version(), slice,
                         query::max_result_size(query::result_memory_limiter::unlimited_result_size));
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
@@ -120,6 +121,10 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     }
 
     return results;
+}
+
+static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+    return read_all_partitions_one_by_one(db, s, pkeys, s->full_slice());
 }
 
 using stateful_query = bool_class<class stateful>;
