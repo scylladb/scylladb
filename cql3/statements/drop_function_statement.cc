@@ -36,6 +36,7 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(database& d
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement::announce_migration(
         query_processor& qp) const {
+    validate_while_executing(qp.proxy());
     if (!_func) {
         return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
     }

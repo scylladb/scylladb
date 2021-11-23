@@ -91,6 +91,10 @@ create_function_statement_base::create_function_statement_base(functions::functi
     : function_statement(std::move(name), std::move(raw_arg_types)), _or_replace(or_replace), _if_not_exists(if_not_exists) {}
 
 void create_function_statement_base::validate(service::storage_proxy& proxy, const service::client_state& state) const {
+    // validation happens during execution
+}
+
+void create_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
     create_arg_types(proxy);
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
@@ -107,6 +111,10 @@ drop_function_statement_base::drop_function_statement_base(functions::function_n
     : function_statement(std::move(name), std::move(arg_types)), _args_present(args_present), _if_exists(if_exists) {}
 
 void drop_function_statement_base::validate(service::storage_proxy& proxy, const service::client_state& state) const {
+    // validation happens during execution
+}
+
+void drop_function_statement_base::validate_while_executing(service::storage_proxy& proxy) const {
     create_arg_types(proxy);
     if (_args_present) {
         _func = functions::functions::find(_name, _arg_types);
