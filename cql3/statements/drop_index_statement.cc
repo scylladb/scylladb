@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_index_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -99,6 +100,25 @@ schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) cons
     builder.without_index(_index_name);
 
     return builder.build();
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_index_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+    auto cfm = make_drop_idex_schema(qp);
+
+    if (cfm) {
+        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(cfm, false, {}, std::nullopt);
+
+        using namespace cql_transport;
+        ret = ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
+                                                 event::schema_change::target_type::TABLE,
+                                                 cfm->ks_name(),
+                                                 cfm->cf_name());
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(query_processor& qp) const
