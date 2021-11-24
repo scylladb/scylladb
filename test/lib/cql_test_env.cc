@@ -663,7 +663,7 @@ public:
                 std::ref(bm)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            distributed_loader::init_system_keyspace(db, ss, *cfg).get();
+            distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
 
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
