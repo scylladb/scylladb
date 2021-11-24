@@ -1250,7 +1250,7 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("starting cf cache hit rate calculator");
-            cf_cache_hitrate_calculator.start(std::ref(db)).get();
+            cf_cache_hitrate_calculator.start(std::ref(db), std::ref(gossiper)).get();
             auto stop_cache_hitrate_calculator = defer_verbose_shutdown("cf cache hit rate calculator",
                     [&cf_cache_hitrate_calculator] {
                         return cf_cache_hitrate_calculator.stop().get();

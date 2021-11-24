@@ -140,7 +140,8 @@ future<> load_broadcaster::stop_broadcasting() {
 
 
 // cache_hitrate_calculator implementation
-cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& db) : _db(db),
+cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& db, gms::gossiper& g)
+        : _db(db), _gossiper(g),
         _timer(std::bind(std::mem_fn(&cache_hitrate_calculator::recalculate_timer), this))
 {}
 
@@ -212,9 +213,8 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
             });
         });
     }).then([this] {
-        auto& g = gms::get_local_gossiper();
         _slen = _gstate.size();
-        return g.add_local_application_state(gms::application_state::CACHE_HITRATES, gms::versioned_value::cache_hitrates(_gstate)).then([this] {
+        return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES, gms::versioned_value::cache_hitrates(_gstate)).then([this] {
             // if max difference during this round is big schedule next recalculate earlier
             if (_diff < 0.01) {
                 return std::chrono::milliseconds(2000);
