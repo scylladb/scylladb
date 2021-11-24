@@ -160,7 +160,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     , _max_request_size(config.max_request_size)
     , _max_concurrent_requests(db_cfg.max_concurrent_requests_per_shard)
     , _memory_available(ml.get_semaphore())
-    , _notifier(std::make_unique<event_notifier>())
+    , _notifier(std::make_unique<event_notifier>(*this))
     , _auth_service(auth_service)
     , _sl_controller(sl_controller)
     , _gossiper(g)

@@ -293,6 +293,7 @@ private:
 class cql_server::event_notifier : public service::migration_listener,
                                    public service::endpoint_lifecycle_subscriber
 {
+    const cql_server& _server;
     std::set<cql_server::connection*> _topology_change_listeners;
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
@@ -304,6 +305,7 @@ class cql_server::event_notifier : public service::migration_listener,
 
     void send_join_cluster(const gms::inet_address& endpoint);
 public:
+    explicit event_notifier(const cql_server& s) noexcept : _server(s) {}
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 
