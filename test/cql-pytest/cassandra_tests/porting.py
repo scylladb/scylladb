@@ -71,6 +71,15 @@ def create_function(cql, keyspace, arg):
     finally:
         cql.execute("DROP FUNCTION " + function_name)
 
+@contextmanager
+def create_materialized_view(cql, keyspace, arg):
+    mv_name = keyspace + "." + unique_name()
+    cql.execute("CREATE MATERIALIZED VIEW " + mv_name + " " + arg)
+    try:
+        yield mv_name
+    finally:
+        cql.execute("DROP MATERIALIZED VIEW " + mv_name)
+
 # utility function to substitute table name in command.
 # For easy conversion of Java code, support %s as used in Java. Also support
 # it *multiple* times (always interpolating the same table name). In Java,
@@ -252,3 +261,9 @@ def wait_for_index(cql, table, index):
             return True
         time.sleep(0.1)
     return False
+
+# user_type("a", 1, "b", 2) creates a named tuple with component names "a", "b"
+# and values 1, 2. The return of this function can be used to bind to a UDT.
+# The number of arguments is assumed to be even.
+def user_type(*args):
+    return collections.namedtuple('user_type', args[::2])(*args[1::2])
