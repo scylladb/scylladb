@@ -83,7 +83,7 @@ future<> alter_table_statement::check_access(service::storage_proxy& proxy, cons
 
 void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    // validated in announce_migration()
+    // validated in prepare_schema_mutations()
 }
 
 static data_type validate_alter(const schema& schema, const column_definition& def, const cql3_type& validator)
@@ -427,22 +427,6 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp) const {
             column_family());
 
   co_return std::make_pair(std::move(ret), std::move(m));
-}
-
-future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
-    auto& mm = qp.get_migration_manager();
-
-    auto [cfm, view_updates] = prepare_schema_update(db);
-    co_await mm.announce_column_family_update(cfm.build(), false, std::move(view_updates), std::nullopt);
-
-    using namespace cql_transport;
-    co_return ::make_shared<event::schema_change>(
-            event::schema_change::change_type::UPDATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

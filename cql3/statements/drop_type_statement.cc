@@ -179,34 +179,6 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(query_processor& qp) const
-{
-    validate_while_executing(qp.proxy());
-
-    database& db = qp.db();
-
-    // Keyspace exists or we wouldn't have validated otherwise
-    auto&& ks = db.find_keyspace(keyspace());
-
-    const auto& all_types = ks.metadata()->user_types().get_all_types();
-    auto to_drop = all_types.find(_name.get_user_type_name());
-
-    // Can happen with if_exists
-    if (to_drop == all_types.end()) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
-    }
-
-    return qp.get_migration_manager().announce_type_drop(to_drop->second).then([this] {
-        using namespace cql_transport;
-
-        return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::DROPPED,
-                event::schema_change::target_type::TYPE,
-                keyspace(),
-                _name.get_string_type_name());
-    });
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 drop_type_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_type_statement>(*this));

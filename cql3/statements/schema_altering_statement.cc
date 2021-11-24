@@ -92,12 +92,6 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
     }
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-schema_altering_statement::prepare_schema_mutations(query_processor& qp) const {
-    assert(false);
-    co_return std::make_pair(::shared_ptr<cql_transport::event::schema_change>(), std::vector<mutation>());
-}
-
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(query_processor& qp, service::query_state& state, const query_options& options) const {
     auto& mm = qp.get_migration_manager();

@@ -345,24 +345,6 @@ create_index_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<::shared_ptr<cql_transport::event::schema_change>>
-create_index_statement::announce_migration(query_processor& qp) const {
-    using namespace cql_transport;
-    auto schema = build_index_schema(qp);
-
-    if (!schema) {
-        co_return ::shared_ptr<event::schema_change>();
-    }
-
-    co_await qp.get_migration_manager().announce_column_family_update(std::move(schema), false, {}, std::nullopt);
-
-    co_return ::make_shared<event::schema_change>(
-            event::schema_change::change_type::UPDATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 create_index_statement::prepare(database& db, cql_stats& stats) {
     _cql_stats = &stats;

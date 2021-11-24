@@ -76,7 +76,7 @@ future<> alter_view_statement::check_access(service::storage_proxy& proxy, const
 
 void alter_view_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
-    // validated in announce_migration()
+    // validated in prepare_schema_mutations()
 }
 
 view_ptr alter_view_statement::prepare_view(database& db) const {
@@ -123,18 +123,6 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
             column_family());
 
     co_return std::make_pair(std::move(ret), std::move(m));
-}
-
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const {
-    co_await qp.get_migration_manager().announce_view_update(prepare_view(qp.db()));
-
-    using namespace cql_transport;
-
-    co_return ::make_shared<event::schema_change>(
-            event::schema_change::change_type::UPDATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

@@ -134,26 +134,6 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-
-future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(query_processor& qp) const {
-    auto p = qp.proxy().shared_from_this();
-    const auto& tm = *p->get_token_metadata_ptr();
-    try {
-       co_await qp.get_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name, tm));
-
-        using namespace cql_transport;
-        co_return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::KEYSPACE,
-                keyspace());
-    } catch (const exceptions::already_exists_exception& e) {
-        if (_if_not_exists) {
-            co_return ::shared_ptr<cql_transport::event::schema_change>();
-        }
-        co_return coroutine::exception(std::current_exception());
-    }
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::create_keyspace_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));

@@ -164,36 +164,6 @@ alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(query_processor& qp) const
-{
-    try {
-        struct visitor : public base_visitor {
-            service::migration_manager& mm;
-            future<> operator()(view_ptr view) override {
-                return mm.announce_view_update(std::move(view));
-            }
-            future<> operator()(user_type type) override {
-                return mm.announce_type_update(std::move(type));
-            }
-            future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) override {
-                return mm.announce_column_family_update(std::move(cfm), from_thrift, std::move(view_updates), ts_opt);
-            }
-            visitor(service::migration_manager& mm_) : mm(mm_) {}
-        } v(qp.get_migration_manager());
-
-        co_await do_announce_migration(qp.db(), qp.get_migration_manager(), v);
-
-        using namespace cql_transport;
-        co_return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TYPE,
-                keyspace(),
-                _name.get_string_type_name());
-    } catch (no_such_keyspace& e) {
-        co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
-    }
-}
-
 alter_type_statement::add_or_alter::add_or_alter(const ut_name& name, bool is_add, shared_ptr<column_identifier> field_name, shared_ptr<cql3_type::raw> field_type)
         : alter_type_statement(name)
         , _is_add(is_add)

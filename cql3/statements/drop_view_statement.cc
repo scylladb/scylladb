@@ -100,28 +100,6 @@ drop_view_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(query_processor& qp) const
-{
-    return make_ready_future<>().then([this, &mm = qp.get_migration_manager()] {
-        return mm.announce_view_drop(keyspace(), column_family());
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            using namespace cql_transport;
-
-            return ::make_shared<event::schema_change>(event::schema_change::change_type::DROPPED,
-                                                     event::schema_change::target_type::TABLE,
-                                                     this->keyspace(),
-                                                     this->column_family());
-        } catch (const exceptions::configuration_exception& e) {
-            if (_if_exists) {
-                return ::shared_ptr<cql_transport::event::schema_change>();
-            }
-            throw e;
-        }
-    });
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 drop_view_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_view_statement>(*this));

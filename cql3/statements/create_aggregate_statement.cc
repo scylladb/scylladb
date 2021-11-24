@@ -82,17 +82,6 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp) const 
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_aggregate_statement::announce_migration(
-        query_processor& qp) const {
-    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(validate_while_executing(qp.proxy()));
-    if (!aggregate) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
-    }
-    return qp.get_migration_manager().announce_new_aggregate(aggregate).then([this, aggregate] {
-        return create_schema_change(*aggregate, true);
-    });
-}
-
 create_aggregate_statement::create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
             sstring sfunc, shared_ptr<cql3_type::raw> stype, sstring ffunc, expr::expression ival, bool or_replace, bool if_not_exists)
         : create_function_statement_base(std::move(name), std::move(arg_types), or_replace, if_not_exists)

@@ -54,21 +54,6 @@ drop_aggregate_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_aggregate_statement::announce_migration(
-        query_processor& qp) const {
-    auto func = validate_while_executing(qp.proxy());
-    if (!func) {
-        return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
-    }
-    auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(func);
-    if (!user_aggr) {
-        throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
-    }
-    return qp.get_migration_manager().announce_aggregate_drop(user_aggr).then([this, func] {
-        return create_schema_change(*func, false);
-    });
-}
-
 drop_aggregate_statement::drop_aggregate_statement(functions::function_name name,
         std::vector<shared_ptr<cql3_type::raw>> arg_types, bool args_present, bool if_exists)
     : drop_function_statement_base(std::move(name), std::move(arg_types), args_present, if_exists) {}

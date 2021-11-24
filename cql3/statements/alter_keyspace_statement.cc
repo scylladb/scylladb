@@ -110,22 +110,6 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(query_processor& qp) const {
-    try {
-        service::storage_proxy& proxy = qp.proxy();
-        auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
-        const auto& tm = *proxy.get_token_metadata_ptr();
-        co_await qp.get_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm));
-        using namespace cql_transport;
-        co_return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::KEYSPACE,
-                keyspace());
-    } catch (no_such_keyspace& e) {
-        co_return coroutine::make_exception(exceptions::invalid_request_exception("Unknown keyspace " + _name));
-    }
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::alter_keyspace_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));

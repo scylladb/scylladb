@@ -89,17 +89,6 @@ create_function_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(
-        query_processor& qp) const {
-    auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp.proxy()));
-    if (!func) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
-    }
-    return qp.get_migration_manager().announce_new_function(func).then([this, func] {
-        return create_schema_change(*func, true);
-    });
-}
-
 create_function_statement::create_function_statement(functions::function_name name, sstring language, sstring body,
         std::vector<shared_ptr<column_identifier>> arg_names, std::vector<shared_ptr<cql3_type::raw>> arg_types,
         shared_ptr<cql3_type::raw> return_type, bool called_on_null_input, bool or_replace, bool if_not_exists)

@@ -58,24 +58,6 @@ drop_function_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement::announce_migration(
-        query_processor& qp) const {
-    auto func = validate_while_executing(qp.proxy());
-    if (!func) {
-        return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
-    }
-    auto user_func = dynamic_pointer_cast<functions::user_function>(func);
-    if (!user_func) {
-        throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", func));
-    }
-    if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name()); bool(aggregate)) {
-        throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
-    }
-    return qp.get_migration_manager().announce_function_drop(user_func).then([this, func] {
-        return create_schema_change(*func, false);
-    });
-}
-
 drop_function_statement::drop_function_statement(functions::function_name name,
         std::vector<shared_ptr<cql3_type::raw>> arg_types, bool args_present, bool if_exists)
     : drop_function_statement_base(std::move(name), std::move(arg_types), args_present, if_exists) {}

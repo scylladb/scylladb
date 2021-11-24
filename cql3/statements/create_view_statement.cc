@@ -371,25 +371,6 @@ create_view_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(query_processor& qp) const {
-    auto definition = prepare_view(qp.db());
-    try {
-        co_await qp.get_migration_manager().announce_new_view(definition);
-
-        using namespace cql_transport;
-        co_return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::TABLE,
-                keyspace(),
-                column_family());
-    } catch (const exceptions::already_exists_exception& e) {
-        if (_if_not_exists) {
-            co_return ::shared_ptr<cql_transport::event::schema_change>();
-        }
-        co_return coroutine::exception(std::current_exception());
-    }
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 create_view_statement::prepare(database& db, cql_stats& stats) {
     if (!_prepare_ctx.get_variable_specifications().empty()) {

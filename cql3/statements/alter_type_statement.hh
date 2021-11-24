@@ -71,7 +71,6 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 

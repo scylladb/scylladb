@@ -121,26 +121,6 @@ drop_index_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(query_processor& qp) const
-{
-    auto cfm = make_drop_idex_schema(qp);
-
-    if (!cfm) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
-    }
-
-    return qp.get_migration_manager().announce_column_family_update(cfm, false, {}, std::nullopt).then([cfm] {
-        // Dropping an index is akin to updating the CF
-        // Note that we shouldn't call columnFamily() at this point because the index has been dropped and the call to lookupIndexedTable()
-        // in that method would now throw.
-        using namespace cql_transport;
-        return ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
-                                                 event::schema_change::target_type::TABLE,
-                                                 cfm->ks_name(),
-                                                 cfm->cf_name());
-    });
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 drop_index_statement::prepare(database& db, cql_stats& stats) {
     _cql_stats = &stats;

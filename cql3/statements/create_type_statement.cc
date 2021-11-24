@@ -173,31 +173,6 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(query_processor& qp) const
-{
-    using namespace cql_transport;
-    try {
-        auto t = make_type(qp);
-
-        if (t) {
-            co_await qp.get_migration_manager().announce_new_type(*t);
-
-            co_return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::CREATED,
-                    event::schema_change::target_type::TYPE,
-                    keyspace(),
-                    _name.get_string_type_name());
-        } else {
-            if (!_if_not_exists) {
-                co_return coroutine::make_exception(exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_string())));
-            }
-            co_return ::shared_ptr<event::schema_change>();
-        }
-    } catch (no_such_keyspace& e) {
-        co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot add type in unknown keyspace {}", keyspace())));
-    }
-}
-
 std::unique_ptr<cql3::statements::prepared_statement>
 create_type_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_type_statement>(*this));
