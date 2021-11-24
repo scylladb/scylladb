@@ -107,17 +107,14 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
     auto& mm = qp.get_migration_manager();
     ::shared_ptr<cql_transport::event::schema_change> ce;
 
-    if (has_prepare_schema_mutations()) {
-        auto [ret, m] = co_await prepare_schema_mutations(qp);
+    auto [ret, m] = co_await prepare_schema_mutations(qp);
 
-        if (!m.empty()) {
-            co_await mm.announce(std::move(m));
-        }
-
-        ce = std::move(ret);
-    } else {
-        ce = co_await announce_migration(qp);
+    if (!m.empty()) {
+        co_await mm.announce(std::move(m));
     }
+
+    ce = std::move(ret);
+
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
     if (!ce) {
