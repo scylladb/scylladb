@@ -767,11 +767,15 @@ future<> migration_manager::announce_type_update(user_type updated_type) {
     return do_announce_new_type(updated_type);
 }
 
-future<> migration_manager::announce_new_function(shared_ptr<cql3::functions::user_function> func) {
+future<std::vector<mutation>> migration_manager::prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
     auto mutations = db::schema_tables::make_create_function_mutations(func, api::new_timestamp());
-    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
+    return include_keyspace(*keyspace.metadata(), std::move(mutations));
+}
+
+future<> migration_manager::announce_new_function(shared_ptr<cql3::functions::user_function> func) {
+    co_return co_await announce(co_await prepare_new_function_announcement(std::move(func)));
 }
 
 future<> migration_manager::announce_function_drop(

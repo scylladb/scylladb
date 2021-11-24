@@ -150,6 +150,7 @@ public:
     future<> announce_new_type(user_type new_type);
 
     future<> announce_new_function(shared_ptr<cql3::functions::user_function> func);
+    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func);
 
     future<> announce_new_aggregate(shared_ptr<cql3::functions::user_aggregate> aggregate);
 
