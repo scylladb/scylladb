@@ -743,28 +743,14 @@ future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcemen
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<> migration_manager::do_announce_new_type(user_type new_type) {
-    co_return co_await announce(co_await do_prepare_new_type_announcement(std::move(new_type)));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_new_type_announcement(user_type new_type) {
     mlogger.info("Prepare Create new User Type: {}", new_type->get_name_as_string());
     return do_prepare_new_type_announcement(std::move(new_type));
 }
 
-future<> migration_manager::announce_new_type(user_type new_type) {
-    mlogger.info("Create new User Type: {}", new_type->get_name_as_string());
-    return do_announce_new_type(new_type);
-}
-
 future<std::vector<mutation>> migration_manager::prepare_update_type_announcement(user_type updated_type) {
     mlogger.info("Prepare Update User Type: {}", updated_type->get_name_as_string());
     return do_prepare_new_type_announcement(updated_type);
-}
-
-future<> migration_manager::announce_type_update(user_type updated_type) {
-    mlogger.info("Update User Type: {}", updated_type->get_name_as_string());
-    return do_announce_new_type(updated_type);
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func) {
@@ -774,19 +760,11 @@ future<std::vector<mutation>> migration_manager::prepare_new_function_announceme
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<> migration_manager::announce_new_function(shared_ptr<cql3::functions::user_function> func) {
-    co_return co_await announce(co_await prepare_new_function_announcement(std::move(func)));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(func->name().keyspace);
     auto mutations = db::schema_tables::make_drop_function_mutations(func, api::new_timestamp());
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
-}
-
-future<> migration_manager::announce_function_drop(shared_ptr<cql3::functions::user_function> func) {
-    co_return co_await announce(co_await prepare_function_drop_announcement(std::move(func)));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate) {
@@ -796,19 +774,11 @@ future<std::vector<mutation>> migration_manager::prepare_new_aggregate_announcem
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<> migration_manager::announce_new_aggregate(shared_ptr<cql3::functions::user_aggregate> aggregate) {
-    co_return co_await announce(co_await prepare_new_aggregate_announcement(std::move(aggregate)));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
     auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
-}
-
-future<> migration_manager::announce_aggregate_drop(shared_ptr<cql3::functions::user_aggregate> aggregate) {
-    co_return co_await announce(co_await prepare_aggregate_drop_announcement(std::move(aggregate)));
 }
 
 #if 0
@@ -929,10 +899,6 @@ future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-future<> migration_manager::announce_type_drop(user_type dropped_type) {
-    co_return co_await announce(co_await prepare_type_drop_announcement(dropped_type));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(view_ptr view) {
 #if 0
     view.metadata.validate();
@@ -978,10 +944,6 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
     }
 }
 
-future<> migration_manager::announce_view_update(view_ptr view) {
-    co_return co_await announce(co_await prepare_view_update_announcement(std::move(view)));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name) {
     auto& db = get_local_storage_proxy().get_db().local();
     try {
@@ -1000,11 +962,6 @@ future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(
         throw exceptions::configuration_exception(format("Cannot drop non existing materialized view '{}' in keyspace '{}'.",
                                                          cf_name, ks_name));
     }
-}
-
-future<> migration_manager::announce_view_drop(const sstring& ks_name,
-                                               const sstring& cf_name) {
-    co_return co_await announce(co_await prepare_view_drop_announcement(ks_name, cf_name));
 }
 
 #if 0
