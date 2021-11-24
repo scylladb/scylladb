@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_function_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
@@ -71,6 +72,21 @@ shared_ptr<functions::function> create_function_statement::create(service::stora
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+create_function_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp.proxy()));
+
+    if (func) {
+        m = co_await qp.get_migration_manager().prepare_new_function_announcement(func);
+        ret = create_schema_change(*func, true);
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(
