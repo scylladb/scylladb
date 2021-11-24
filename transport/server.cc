@@ -152,7 +152,8 @@ event::event_type parse_event_type(const sstring& value)
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg, qos::service_level_controller& sl_controller)
+        service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
+        qos::service_level_controller& sl_controller, gms::gossiper& g)
     : server("CQLServer", clogger)
     , _query_processor(qp)
     , _config(config)
@@ -162,6 +163,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     , _notifier(std::make_unique<event_notifier>())
     , _auth_service(auth_service)
     , _sl_controller(sl_controller)
+    , _gossiper(g)
 {
     namespace sm = seastar::metrics;
 

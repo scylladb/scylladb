@@ -66,6 +66,10 @@ namespace qos {
     class service_level_controller;
 } // namespace qos
 
+namespace gms {
+    class gossiper;
+}
+
 namespace cql_transport {
 
 class request_reader;
@@ -168,12 +172,14 @@ private:
     transport_stats _stats = {};
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
+    gms::gossiper& _gossiper;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
             cql_server_config config,
             const db::config& db_cfg,
-            qos::service_level_controller& sl_controller);
+            qos::service_level_controller& sl_controller,
+            gms::gossiper& g);
 public:
     using response = cql_transport::response;
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;

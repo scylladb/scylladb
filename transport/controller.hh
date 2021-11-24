@@ -52,7 +52,7 @@ class controller : public protocol_server {
     sharded<auth::service>& _auth_service;
     sharded<service::migration_notifier>& _mnotifier;
     sharded<service::endpoint_lifecycle_notifier>& _lifecycle_notifier;
-    gms::gossiper& _gossiper;
+    sharded<gms::gossiper>& _gossiper;
     sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _mem_limiter;
     sharded<qos::service_level_controller>& _sl_controller;
@@ -66,7 +66,7 @@ class controller : public protocol_server {
     future<> unsubscribe_server(sharded<cql_server>& server);
 
 public:
-    controller(sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&,
+    controller(sharded<auth::service>&, sharded<service::migration_notifier>&, sharded<gms::gossiper>&,
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
             const db::config& cfg);

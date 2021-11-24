@@ -34,7 +34,7 @@ namespace cql_transport {
 static logging::logger logger("cql_server_controller");
 
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
-        gms::gossiper& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
+        sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
         const db::config& cfg)
     : _ops_sem(1)
@@ -155,7 +155,7 @@ future<> controller::do_start_server() {
             }
         }
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller)).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper)).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
@@ -235,7 +235,7 @@ future<> controller::unsubscribe_server(sharded<cql_server>& server) {
 }
 
 future<> controller::set_cql_ready(bool ready) {
-    return _gossiper.add_local_application_state(gms::application_state::RPC_READY, gms::versioned_value::cql_ready(ready));
+    return _gossiper.local().add_local_application_state(gms::application_state::RPC_READY, gms::versioned_value::cql_ready(ready));
 }
 
 } // namespace cql_transport
