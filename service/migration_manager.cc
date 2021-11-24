@@ -732,8 +732,8 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
     }
 }
 
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt) {
-    co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, std::move(view_updates), ts_opt));
+future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::optional<api::timestamp_type> ts_opt) {
+    co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, {}, ts_opt));
 }
 
 future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {

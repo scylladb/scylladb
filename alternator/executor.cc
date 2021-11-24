@@ -727,7 +727,7 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     schema_builder builder(schema);
     builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(std::move(tags_map)));
-    return mm.announce_column_family_update(builder.build(), false, std::vector<view_ptr>(), std::nullopt);
+    return mm.announce_column_family_update(builder.build(), false, std::nullopt);
 }
 
 future<executor::request_return_type> executor::tag_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -1074,7 +1074,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     auto schema = builder.build();
 
-    return _mm.announce_column_family_update(schema, false, {}, std::nullopt).then([this] {
+    return _mm.announce_column_family_update(schema, false, std::nullopt).then([this] {
         return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
     }).then([this, table_info = std::move(request), schema] () mutable {
         rjson::value status = rjson::empty_object();
