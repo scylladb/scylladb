@@ -150,20 +150,7 @@ private:
     using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
-    static void init_messaging_service_handler(netw::messaging_service& ms, shared_ptr<service::migration_manager> mm);
-    static future<> uninit_messaging_service_handler(netw::messaging_service& ms);
-    static distributed<database>* _db;
-    static distributed<db::system_distributed_keyspace>* _sys_dist_ks;
-    static distributed<db::view::view_update_generator>* _view_update_generator;
-    static sharded<netw::messaging_service>* _messaging;
-public:
-    static netw::messaging_service& ms() { return _messaging->local(); }
-    static database& get_local_db() { return _db->local(); }
-    static distributed<database>& get_db() { return *_db; };
-    static future<> init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-            distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms,
-            sharded<service::migration_manager>& mm);
-    static future<> uninit_streaming_service();
+
 public:
     /**
      * Streaming endpoint.
@@ -173,6 +160,7 @@ public:
     inet_address peer;
     unsigned dst_cpu_id = 0;
 private:
+    stream_manager& _mgr;
     // should not be null when session is started
     shared_ptr<stream_result_future> _stream_result;
 
@@ -223,7 +211,6 @@ public:
         return _bytes_received;
     }
 public:
-    stream_session();
     /**
      * Create new streaming session with the peer.
      *
@@ -231,7 +218,7 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_);
+    stream_session(stream_manager& mgr, inet_address peer_);
     ~stream_session();
 
     UUID plan_id() const;
@@ -347,6 +334,9 @@ public:
     const session_info& get_session_info() const {
         return _session_info;
     }
+
+    stream_manager& manager() noexcept { return _mgr; }
+    const stream_manager& manager() const noexcept { return _mgr; }
 
     future<> update_progress();
 

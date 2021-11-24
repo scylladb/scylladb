@@ -80,10 +80,10 @@ public:
     std::set<inet_address> get_peers() const;
 
 public:
-    shared_ptr<stream_session> get_or_create_session(inet_address peer) {
+    shared_ptr<stream_session> get_or_create_session(stream_manager& mgr, inet_address peer) {
         auto& session = _peer_sessions[peer];
         if (!session) {
-            session = make_shared<stream_session>(peer);
+            session = make_shared<stream_session>(mgr, peer);
         }
         return session;
     }

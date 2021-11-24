@@ -395,6 +395,7 @@ sharded<qos::service_level_controller>* the_sl_controller;
 sharded<service::migration_manager>* the_migration_manager;
 sharded<service::storage_service>* the_storage_service;
 sharded<database>* the_database;
+sharded<streaming::stream_manager> *the_stream_manager;
 }
 
 int main(int ac, char** av) {
@@ -488,6 +489,7 @@ int main(int ac, char** av) {
     sharded<service::memory_limiter> service_memory_limiter;
     sharded<repair_service> repair;
     sharded<sstables_loader> sst_loader;
+    sharded<streaming::stream_manager> stream_manager;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -517,7 +519,7 @@ int main(int ac, char** av) {
         return seastar::async([cfg, ext, &db, &qp, &bm, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -827,7 +829,7 @@ int main(int ac, char** av) {
                 std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks),
                 std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(cdc_generation_service), std::ref(repair),
-                std::ref(raft_gr), std::ref(lifecycle_notifier), std::ref(bm)).get();
+                std::ref(stream_manager), std::ref(raft_gr), std::ref(lifecycle_notifier), std::ref(bm)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1038,12 +1040,20 @@ int main(int ac, char** av) {
                 stop_raft_rpc->cancel();
             }
 
+            debug::the_stream_manager = &stream_manager;
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();
-            auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
-                streaming::stream_session::uninit_streaming_service().get();
+            stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging), std::ref(mm), std::ref(gossiper)).get();
+            auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
+                // FIXME -- keep the instances alive, just call .stop on them
+                stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
             });
-            api::set_server_stream_manager(ctx).get();
+
+            stream_manager.invoke_on_all(&streaming::stream_manager::start).get();
+
+            api::set_server_stream_manager(ctx, stream_manager).get();
+            auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
+                api::unset_server_stream_manager(ctx).get();
+            });
 
             supervisor::notify("starting hinted handoff manager");
             if (!hinted_handoff_enabled.is_disabled_for_all()) {

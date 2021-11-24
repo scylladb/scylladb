@@ -37,20 +37,31 @@
  */
 
 #include <seastar/core/distributed.hh>
+#include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
 #include "log.hh"
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
 
 namespace streaming {
 
 extern logging::logger sslog;
 
-distributed<stream_manager> _the_stream_manager;
-
-
-stream_manager::stream_manager() {
+stream_manager::stream_manager(sharded<database>& db,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<netw::messaging_service>& ms,
+            sharded<service::migration_manager>& mm,
+            gms::gossiper& gossiper)
+        : _db(db)
+        , _sys_dist_ks(sys_dist_ks)
+        , _view_update_generator(view_update_generator)
+        , _ms(ms)
+        , _mm(mm)
+        , _gossiper(gossiper)
+{
     namespace sm = seastar::metrics;
 
     _metrics.add_group("streaming", {
@@ -60,6 +71,17 @@ stream_manager::stream_manager() {
         sm::make_derive("total_outgoing_bytes", [this] { return _total_outgoing_bytes; },
                         sm::description("Total number of bytes sent on this shard.")),
     });
+}
+
+future<> stream_manager::start() {
+    _gossiper.register_(shared_from_this());
+    init_messaging_service_handler();
+    return make_ready_future<>();
+}
+
+future<> stream_manager::stop() {
+    co_await _gossiper.unregister_(shared_from_this());
+    co_await uninit_messaging_service_handler();
 }
 
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {
@@ -189,13 +211,13 @@ stream_bytes stream_manager::get_progress(UUID plan_id) const {
 }
 
 future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
-    return get_stream_manager().invoke_on_all([plan_id] (auto& sm) {
+    return container().invoke_on_all([plan_id] (auto& sm) {
         sm.remove_progress(plan_id);
     });
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [plan_id, peer] (auto& sm) {
             return sm.get_progress(plan_id, peer);
         },
@@ -205,7 +227,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gm
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [plan_id] (auto& sm) {
             return sm.get_progress(plan_id);
         },
@@ -215,11 +237,13 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) co
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_address peer) const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [peer] (auto& sm) {
             stream_bytes ret;
             for (auto& sbytes : sm._stream_bytes) {
-                ret += sbytes.second[peer];
+                if (sbytes.second.contains(peer)) {
+                    ret += sbytes.second.at(peer);
+                }
             }
             return ret;
         },
@@ -229,7 +253,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_addres
 }
 
 future<stream_bytes> stream_manager::get_progress_on_all_shards() const {
-    return get_stream_manager().map_reduce0(
+    return container().map_reduce0(
         [] (auto& sm) {
             stream_bytes ret;
             for (auto& sbytes : sm._stream_bytes) {
@@ -287,7 +311,7 @@ void stream_manager::on_remove(inet_address endpoint) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
         //FIXME: discarded future.
-        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        (void)container().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
@@ -299,7 +323,7 @@ void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) 
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
         //FIXME: discarded future.
-        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        (void)container().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
@@ -311,12 +335,36 @@ void stream_manager::on_dead(inet_address endpoint, endpoint_state ep_state) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_dead", endpoint);
         //FIXME: discarded future.
-        (void)get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        (void)container().invoke_on_all([endpoint] (auto& sm) {
             sm.fail_sessions(endpoint);
         }).handle_exception([endpoint] (auto ep) {
             sslog.warn("stream_manager: Fail to close sessions peer = {} in on_dead", endpoint);
         });
     }
+}
+
+shared_ptr<stream_session> stream_manager::get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id) {
+    if (cf_id) {
+        sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
+    } else {
+        sslog.debug("[Stream #{}] GOT {} from {}", plan_id, verb, from);
+    }
+    auto sr = get_sending_stream(plan_id);
+    if (!sr) {
+        sr = get_receiving_stream(plan_id);
+    }
+    if (!sr) {
+        auto err = format("[Stream #{}] GOT {} from {}: Can not find stream_manager", plan_id, verb, from);
+        sslog.debug("{}", err.c_str());
+        throw std::runtime_error(err);
+    }
+    auto coordinator = sr->get_coordinator();
+    if (!coordinator) {
+        auto err = format("[Stream #{}] GOT {} from {}: Can not find coordinator", plan_id, verb, from);
+        sslog.debug("{}", err.c_str());
+        throw std::runtime_error(err);
+    }
+    return coordinator->get_or_create_session(*this, from);
 }
 
 } // namespace streaming

@@ -86,6 +86,10 @@ namespace cdc {
 class generation_service;
 }
 
+namespace streaming {
+class stream_manager;
+}
+
 namespace db {
 class system_distributed_keyspace;
 class batchlog_manager;
@@ -171,9 +175,9 @@ private:
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
+    sharded<streaming::stream_manager>& _stream_manager;
     sstring _operation_in_progress;
     bool _ms_stopped = false;
-    bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
     using client_shutdown_hook = noncopyable_function<void()>;
     std::vector<protocol_server*> _protocol_servers;
@@ -201,6 +205,7 @@ public:
         sharded<netw::messaging_service>& ms,
         sharded<cdc::generation_service>&,
         sharded<repair_service>& repair,
+        sharded<streaming::stream_manager>& stream_manager,
         raft_group_registry& raft_gr,
         endpoint_lifecycle_notifier& elc_notif,
         sharded<db::batchlog_manager>& bm);
@@ -351,7 +356,6 @@ public:
     }
 private:
     future<> do_stop_ms();
-    future<> do_stop_stream_manager();
     // Runs in thread context
     void shutdown_protocol_servers();
 

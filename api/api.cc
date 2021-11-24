@@ -180,9 +180,15 @@ future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_se
                 });
 }
 
-future<> set_server_stream_manager(http_context& ctx) {
+future<> set_server_stream_manager(http_context& ctx, sharded<streaming::stream_manager>& sm) {
     return register_api(ctx, "stream_manager",
-                "The stream manager API", set_stream_manager);
+                "The stream manager API", [&sm] (http_context& ctx, routes& r) {
+                    set_stream_manager(ctx, r, sm);
+                });
+}
+
+future<> unset_server_stream_manager(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_stream_manager(ctx, r); });
 }
 
 future<> set_server_cache(http_context& ctx) {

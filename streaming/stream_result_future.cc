@@ -45,10 +45,10 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstring description_,
+future<stream_state> stream_result_future::init_sending_side(stream_manager& mgr, UUID plan_id_, sstring description_,
         std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
-    auto sr = ::make_shared<stream_result_future>(plan_id_, description_, coordinator_);
-    get_local_stream_manager().register_sending(sr);
+    auto sr = ::make_shared<stream_result_future>(mgr, plan_id_, description_, coordinator_);
+    mgr.register_sending(sr);
 
     for (auto& listener : listeners_) {
         sr->add_event_listener(listener);
@@ -65,9 +65,8 @@ future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstr
     return sr->_done.get_future();
 }
 
-shared_ptr<stream_result_future> stream_result_future::init_receiving_side(UUID plan_id, sstring description, inet_address from) {
-    auto& sm = get_local_stream_manager();
-    auto sr = sm.get_receiving_stream(plan_id);
+shared_ptr<stream_result_future> stream_result_future::init_receiving_side(stream_manager& mgr, UUID plan_id, sstring description, inet_address from) {
+    auto sr = mgr.get_receiving_stream(plan_id);
     if (sr) {
         auto err = fmt::format("[Stream #{}] GOT PREPARE_MESSAGE from {}, description={},"
                           "stream_plan exists, duplicated message received?", plan_id, description, from);
@@ -76,8 +75,8 @@ shared_ptr<stream_result_future> stream_result_future::init_receiving_side(UUID 
     }
     sslog.info("[Stream #{}] Executing streaming plan for {} with peers={}, slave", plan_id, description, from);
     bool is_receiving = true;
-    sr = ::make_shared<stream_result_future>(plan_id, description, is_receiving);
-    sm.register_receiving(sr);
+    sr = ::make_shared<stream_result_future>(mgr, plan_id, description, is_receiving);
+    mgr.register_receiving(sr);
     return sr;
 }
 
@@ -115,14 +114,13 @@ void stream_result_future::maybe_complete() {
     auto plan_id = this->plan_id;
     sslog.debug("[Stream #{}] stream_result_future: has_active_sessions={}", plan_id, has_active_sessions);
     if (!has_active_sessions) {
-        auto& sm = get_local_stream_manager();
         if (sslog.is_enabled(logging::log_level::debug)) {
-            sm.show_streams();
+            _mgr.show_streams();
         }
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - _start_time).count();
         auto stats = make_lw_shared<sstring>("");
         //FIXME: discarded future.
-        (void)sm.get_progress_on_all_shards(plan_id).then([plan_id, duration, stats] (auto sbytes) {
+        (void)_mgr.get_progress_on_all_shards(plan_id).then([plan_id, duration, stats] (auto sbytes) {
             auto tx_bw = sstring("0");
             auto rx_bw = sstring("0");
             if (std::fabs(duration) > FLT_EPSILON) {
@@ -132,8 +130,8 @@ void stream_result_future::maybe_complete() {
             *stats = format("tx={:d} KiB, {} KiB/s, rx={:d} KiB, {} KiB/s", sbytes.bytes_sent / 1024, tx_bw, sbytes.bytes_received / 1024, rx_bw);
         }).handle_exception([plan_id] (auto ep) {
             sslog.warn("[Stream #{}] Fail to get progress on all shards: {}", plan_id, ep);
-        }).finally([this, plan_id, stats, &sm] () {
-            sm.remove_stream(plan_id);
+        }).finally([this, plan_id, stats] () {
+            _mgr.remove_stream(plan_id);
             auto final_state = get_current_state();
             if (final_state.has_failed_session()) {
                 sslog.warn("[Stream #{}] Streaming plan for {} failed, peers={}, {}", plan_id, description, _coordinator->get_peers(), *stats);

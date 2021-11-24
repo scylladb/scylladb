@@ -70,6 +70,7 @@
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
 #include "utils/cross-shard-barrier.hh"
+#include "streaming/stream_manager.hh"
 #include "debug.hh"
 #include "db/schema_tables.hh"
 
@@ -571,8 +572,13 @@ public:
             sharded<repair_service> repair;
             sharded<cql3::query_processor> qp;
             sharded<service::raft_group_registry> raft_gr;
+            sharded<streaming::stream_manager> stream_manager;
+
             raft_gr.start(std::ref(ms), std::ref(gossiper), std::ref(qp)).get();
             auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
+
+            stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gms::get_gossiper())).get();
+            auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -652,6 +658,7 @@ public:
                 std::ref(token_metadata), std::ref(erm_factory), std::ref(ms),
                 std::ref(cdc_generation_service),
                 std::ref(repair),
+                std::ref(stream_manager),
                 std::ref(raft_gr), std::ref(elc_notif),
                 std::ref(bm)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });

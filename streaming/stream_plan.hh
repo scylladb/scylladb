@@ -64,6 +64,7 @@ private:
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
     using token = dht::token;
+    stream_manager& _mgr;
     UUID _plan_id;
     sstring _description;
     stream_reason _reason;
@@ -78,11 +79,13 @@ public:
      *
      * @param description Stream type that describes this StreamPlan
      */
-    stream_plan(sstring description, stream_reason reason = stream_reason::unspecified)
-        : _plan_id(utils::UUID_gen::get_time_UUID())
+    stream_plan(stream_manager& mgr, sstring description, stream_reason reason = stream_reason::unspecified)
+        : _mgr(mgr)
+        , _plan_id(utils::UUID_gen::get_time_UUID())
         , _description(description)
         , _reason(reason)
-        , _coordinator(make_shared<stream_coordinator>()) {
+        , _coordinator(make_shared<stream_coordinator>())
+    {
     }
 
     /**

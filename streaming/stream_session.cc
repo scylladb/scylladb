@@ -38,7 +38,6 @@
 
 #include "log.hh"
 #include "message/messaging_service.hh"
-#include "gms/gossiper.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -71,36 +70,6 @@ namespace streaming {
 
 logging::logger sslog("stream_session");
 
-static auto get_stream_result_future(utils::UUID plan_id) {
-    auto& sm = get_local_stream_manager();
-    auto f = sm.get_sending_stream(plan_id);
-    if (!f) {
-        f = sm.get_receiving_stream(plan_id);
-    }
-    return f;
-}
-
-static auto get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::optional<utils::UUID> cf_id = {}) {
-    if (cf_id) {
-        sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
-    } else {
-        sslog.debug("[Stream #{}] GOT {} from {}", plan_id, verb, from);
-    }
-    auto sr = get_stream_result_future(plan_id);
-    if (!sr) {
-        auto err = format("[Stream #{}] GOT {} from {}: Can not find stream_manager", plan_id, verb, from);
-        sslog.debug("{}", err.c_str());
-        throw std::runtime_error(err);
-    }
-    auto coordinator = sr->get_coordinator();
-    if (!coordinator) {
-        auto err = format("[Stream #{}] GOT {} from {}: Can not find coordinator", plan_id, verb, from);
-        sslog.debug("{}", err.c_str());
-        throw std::runtime_error(err);
-    }
-    return coordinator->get_or_create_session(from);
-}
-
 static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
     static const std::unordered_set<streaming::stream_reason> operations_supported = {
         streaming::stream_reason::bootstrap,
@@ -109,49 +78,51 @@ static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason r
     return sstables::offstrategy(operations_supported.contains(reason));
 }
 
-void stream_session::init_messaging_service_handler(netw::messaging_service& ms, shared_ptr<service::migration_manager> mm) {
-    ms.register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
+void stream_manager::init_messaging_service_handler() {
+    auto& ms = _ms.local();
+
+    ms.register_prepare_message([this] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] () mutable {
-            auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
-            auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
+        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] (auto& sm) mutable {
+            auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
+            auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
             session->set_reason(reason);
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
-    ms.register_prepare_done_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
+    ms.register_prepare_done_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(dst_cpu_id, [plan_id, from] () mutable {
-            auto session = get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
+        return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
+            auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
             session->follower_start_sent();
             return make_ready_future<>();
         });
     });
-    ms.register_stream_mutation_fragments([&ms, mm] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
+    ms.register_stream_mutation_fragments([this] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
-        table& cf = get_local_db().find_column_family(cf_id);
-        if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
+        table& cf = _db.local().find_column_family(cf_id);
+        if (!_sys_dist_ks.local_is_initialized() || !_view_update_generator.local_is_initialized()) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
 
-        return mm->get_schema_for_write(schema_id, from, ms).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
-          return get_local_db().obtain_reader_permit(cf, "stream-session", db::no_timeout).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason, s] (reader_permit permit) mutable {
-            auto sink = stream_session::ms().make_sink_for_stream_mutation_fragments(source);
+        return _mm.local().get_schema_for_write(schema_id, from, _ms.local()).then([this, from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
+          return _db.local().obtain_reader_permit(cf, "stream-session", db::no_timeout).then([this, from, estimated_partitions, plan_id, schema_id, &cf, source, reason, s] (reader_permit permit) mutable {
+            auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status, permit] () mutable {
-                return source().then([plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+            auto get_next_mutation_fragment = [&sm = container(), source, plan_id, from, s, cmd_status, permit] () mutable {
+                return source().then([&sm, plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -171,7 +142,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
                         frozen_mutation_fragment& fmf = std::get<0>(*opt);
                         auto sz = fmf.representation().size();
                         auto mf = fmf.unfreeze(*s, permit);
-                        streaming::get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+                        sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                         return make_ready_future<mutation_fragment_opt>(std::move(mf));
                     } else {
                         // If the sender has sent stream_mutation_fragments_cmd it means it is
@@ -187,7 +158,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
                 make_generating_reader(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer("streaming", *_db, *_sys_dist_ks, *_view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
+                make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
                 cf.stream_in_progress()
             ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
                 int32_t status = 0;
@@ -214,18 +185,18 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
         });
       });
     });
-    ms.register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
+    ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
-            auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
+        return container().invoke_on(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] (auto& sm) mutable {
+            auto session = sm.get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
         });
     });
-    ms.register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
+    ms.register_complete_message([this] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         if (failed && *failed) {
-            return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () {
-                auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
+            return container().invoke_on(dst_cpu_id, [plan_id, from, dst_cpu_id] (auto& sm) {
+                auto session = sm.get_session(plan_id, from, "COMPLETE_MESSAGE");
                 sslog.debug("[Stream #{}] COMPLETE_MESSAGE with error flag from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
                 session->received_failed_complete_message();
                 return make_ready_future<>();
@@ -238,7 +209,8 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
     });
 }
 
-future<> stream_session::uninit_messaging_service_handler(netw::messaging_service& ms) {
+future<> stream_manager::uninit_messaging_service_handler() {
+    auto& ms = _ms.local();
     return when_all_succeed(
         ms.unregister_prepare_message(),
         ms.unregister_prepare_done_message(),
@@ -247,41 +219,14 @@ future<> stream_session::uninit_messaging_service_handler(netw::messaging_servic
         ms.unregister_complete_message()).discard_result();
 }
 
-distributed<database>* stream_session::_db;
-distributed<db::system_distributed_keyspace>* stream_session::_sys_dist_ks;
-distributed<db::view::view_update_generator>* stream_session::_view_update_generator;
-sharded<netw::messaging_service>* stream_session::_messaging;
-
-stream_session::stream_session() = default;
-
-stream_session::stream_session(inet_address peer_)
-    : peer(peer_) {
+stream_session::stream_session(stream_manager& mgr, inet_address peer_)
+    : peer(peer_)
+    , _mgr(mgr)
+{
     //this.metrics = StreamingMetrics.get(connecting);
 }
 
 stream_session::~stream_session() = default;
-
-future<> stream_session::init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm) {
-    _db = &db;
-    _sys_dist_ks = &sys_dist_ks;
-    _view_update_generator = &view_update_generator;
-    _messaging = &ms;
-    // #293 - do not stop anything
-    // engine().at_exit([] {
-    //     return get_stream_manager().stop();
-    // });
-    return get_stream_manager().start().then([&ms, &mm] {
-        gms::get_local_gossiper().register_(get_local_stream_manager().shared_from_this());
-        return ms.invoke_on_all([&mm] (netw::messaging_service& ms) { init_messaging_service_handler(ms, mm.local().shared_from_this()); });
-    });
-}
-
-future<> stream_session::uninit_streaming_service() {
-    return _messaging->invoke_on_all([] (netw::messaging_service& ms) {
-        return uninit_messaging_service_handler(ms);
-    });
-}
 
 future<> stream_session::on_initialization_complete() {
     // send prepare message
@@ -293,7 +238,7 @@ future<> stream_session::on_initialization_complete() {
     }
     auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
-    return ms().send_prepare_message(id, std::move(prepare), plan_id(), description(), get_reason()).then_wrapped([this, id] (auto&& f) {
+    return manager().ms().send_prepare_message(id, std::move(prepare), plan_id(), description(), get_reason()).then_wrapped([this, id] (auto&& f) {
         try {
             auto msg = f.get0();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply from {}", this->plan_id(), this->peer);
@@ -312,7 +257,7 @@ future<> stream_session::on_initialization_complete() {
     }).then([this, id] {
         auto plan_id = this->plan_id();
         sslog.debug("[Stream #{}] SEND PREPARE_DONE_MESSAGE to {}", plan_id, id);
-        return ms().send_prepare_done_message(id, plan_id, this->dst_cpu_id).then([this] {
+        return manager().ms().send_prepare_done_message(id, plan_id, this->dst_cpu_id).then([this] {
             sslog.debug("[Stream #{}] GOT PREPARE_DONE_MESSAGE Reply from {}", this->plan_id(), this->peer);
         }).handle_exception([id, plan_id] (auto ep) {
             sslog.warn("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
@@ -350,7 +295,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
     sslog.debug("[Stream #{}] prepare requests nr={}, summaries nr={}", plan_id, requests.size(), summaries.size());
     // prepare tasks
     set_state(stream_session_state::PREPARING);
-    auto& db = get_local_db();
+    auto& db = manager().db();
     for (auto& request : requests) {
         // always flush on stream request
         sslog.debug("[Stream #{}] prepare stream_request={}", plan_id, request);
@@ -453,7 +398,7 @@ void stream_session::send_failed_complete_message() {
     auto session = shared_from_this();
     bool failed = true;
     //FIXME: discarded future.
-    (void)this->ms().send_complete_message(id, plan_id, this->dst_cpu_id, failed).then([session, id, plan_id] {
+    (void)manager().ms().send_complete_message(id, plan_id, this->dst_cpu_id, failed).then([session, id, plan_id] {
         sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
     }).handle_exception([session, id, plan_id] (auto ep) {
         sslog.debug("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);
@@ -496,7 +441,7 @@ void stream_session::start_streaming_files() {
 std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
     // if columnfamilies are not specified, we add all cf under the keyspace
     std::vector<column_family*> stores;
-    auto& db = get_local_db();
+    auto& db = manager().db();
     if (column_families.empty()) {
         for (auto& x : db.get_column_families()) {
             column_family& cf = *(x.second);
@@ -581,7 +526,7 @@ void stream_session::start() {
         close_session(stream_session_state::COMPLETE);
         return;
     }
-    auto connecting = ms().get_preferred_ip(peer);
+    auto connecting = manager().ms().get_preferred_ip(peer);
     if (peer == connecting) {
         sslog.debug("[Stream #{}] Starting streaming to {}", plan_id(), peer);
     } else {
@@ -610,7 +555,7 @@ sstring stream_session::description() const {
 }
 
 future<> stream_session::update_progress() {
-    return get_local_stream_manager().get_progress_on_all_shards(plan_id(), peer).then([this] (auto sbytes) {
+    return manager().get_progress_on_all_shards(plan_id(), peer).then([this] (auto sbytes) {
         auto bytes_sent = sbytes.bytes_sent;
         if (bytes_sent > 0) {
             auto tx = progress_info(this->peer, "txnofile", progress_info::direction::OUT, bytes_sent, bytes_sent);

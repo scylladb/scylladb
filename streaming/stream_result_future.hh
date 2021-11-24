@@ -69,13 +69,14 @@ public:
     UUID plan_id;
     sstring description;
 private:
+    stream_manager& _mgr;
     shared_ptr<stream_coordinator> _coordinator;
     std::vector<stream_event_handler*> _event_listeners;
     promise<stream_state> _done;
     lowres_clock::time_point _start_time;
 public:
-    stream_result_future(UUID plan_id_, sstring description_, bool is_receiving)
-        : stream_result_future(plan_id_, description_, make_shared<stream_coordinator>(is_receiving)) {
+    stream_result_future(stream_manager& mgr, UUID plan_id_, sstring description_, bool is_receiving)
+        : stream_result_future(mgr, plan_id_, description_, make_shared<stream_coordinator>(is_receiving)) {
         // Note: Origin sets connections_per_host = 0 on receiving side, We set 1 to
         // refelct the fact that we actaully create one conncetion to the initiator.
     }
@@ -88,9 +89,10 @@ public:
      * @param planId Stream plan ID
      * @param description Stream description
      */
-    stream_result_future(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_)
+    stream_result_future(stream_manager& mgr, UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_)
         : plan_id(std::move(plan_id_))
         , description(std::move(description_))
+        , _mgr(mgr)
         , _coordinator(coordinator_)
         , _start_time(lowres_clock::now()) {
         // if there is no session to listen to, we immediately set result for returning
@@ -103,8 +105,8 @@ public:
     shared_ptr<stream_coordinator> get_coordinator() { return _coordinator; };
 
 public:
-    static future<stream_state> init_sending_side(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
-    static shared_ptr<stream_result_future> init_receiving_side(UUID plan_id, sstring description, inet_address from);
+    static future<stream_state> init_sending_side(stream_manager& mgr, UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
+    static shared_ptr<stream_result_future> init_receiving_side(stream_manager& mgr, UUID plan_id, sstring description, inet_address from);
 
 public:
     void add_event_listener(stream_event_handler* listener) {
@@ -126,6 +128,9 @@ public:
 
     template <typename Event>
     void fire_stream_event(Event event);
+
+    stream_manager& manager() noexcept { return _mgr; }
+    const stream_manager& manager() const noexcept { return _mgr; }
 
 private:
     void maybe_complete();

@@ -45,6 +45,8 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 
+namespace streaming { class stream_manager; }
+
 namespace dht {
 
 class boot_strapper {
@@ -53,6 +55,7 @@ class boot_strapper {
     using token_metadata_ptr = locator::token_metadata_ptr;
     using token = dht::token;
     distributed<database>& _db;
+    sharded<streaming::stream_manager>& _stream_manager;
     abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
     inet_address _address;
@@ -60,8 +63,9 @@ class boot_strapper {
     std::unordered_set<token> _tokens;
     const token_metadata_ptr _token_metadata_ptr;
 public:
-    boot_strapper(distributed<database>& db, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
+    boot_strapper(distributed<database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
         : _db(db)
+        , _stream_manager(sm)
         , _abort_source(abort_source)
         , _address(addr)
         , _tokens(tokens)

@@ -50,7 +50,7 @@ stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, dh
 
 stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, dht::token_range_vector ranges, std::vector<sstring> column_families) {
     _range_added = true;
-    auto session = _coordinator->get_or_create_session(from);
+    auto session = _coordinator->get_or_create_session(_mgr, from);
     session->add_stream_request(keyspace, std::move(ranges), std::move(column_families));
     session->set_reason(_reason);
     return *this;
@@ -62,7 +62,7 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, dht
 
 stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, dht::token_range_vector ranges, std::vector<sstring> column_families) {
     _range_added = true;
-    auto session = _coordinator->get_or_create_session(to);
+    auto session = _coordinator->get_or_create_session(_mgr, to);
     session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families));
     session->set_reason(_reason);
     return *this;
@@ -77,7 +77,7 @@ future<stream_state> stream_plan::execute() {
     if (_aborted) {
         throw std::runtime_error(format("steam_plan {} is aborted", _plan_id));
     }
-    return stream_result_future::init_sending_side(_plan_id, _description, _handlers, _coordinator);
+    return stream_result_future::init_sending_side(_mgr, _plan_id, _description, _handlers, _coordinator);
 }
 
 stream_plan& stream_plan::listeners(std::vector<stream_event_handler*> handlers) {

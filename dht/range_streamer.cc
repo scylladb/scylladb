@@ -323,7 +323,7 @@ future<> range_streamer::do_stream_async() {
                 size_t nr_ranges_per_stream_plan = nr_ranges_total / 10;
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
-                    auto sp = stream_plan(format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
+                    auto sp = stream_plan(_stream_manager.local(), format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
                     auto abort_listener = _abort_source.subscribe([&] () noexcept { sp.abort(); });
                     _abort_source.check();
                     logger.info("{} with {} for keyspace={}, streaming [{}, {}) out of {} ranges",
