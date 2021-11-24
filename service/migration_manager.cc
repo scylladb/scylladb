@@ -800,12 +800,15 @@ future<> migration_manager::announce_new_aggregate(shared_ptr<cql3::functions::u
     co_return co_await announce(co_await prepare_new_aggregate_announcement(std::move(aggregate)));
 }
 
-future<> migration_manager::announce_aggregate_drop(
-        shared_ptr<cql3::functions::user_aggregate> aggregate) {
+future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(aggregate->name().keyspace);
     auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
-    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
+    return include_keyspace(*keyspace.metadata(), std::move(mutations));
+}
+
+future<> migration_manager::announce_aggregate_drop(shared_ptr<cql3::functions::user_aggregate> aggregate) {
+    co_return co_await announce(co_await prepare_aggregate_drop_announcement(std::move(aggregate)));
 }
 
 #if 0
