@@ -2645,7 +2645,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             }
             auto keyspaces = ss._db.local().get_non_system_keyspaces();
             for (auto& keyspace_name : keyspaces) {
-                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()));
+                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()), ss._gossiper);
             }
             try {
                 co_await streamer->stream_async();
