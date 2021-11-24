@@ -230,8 +230,7 @@ void cql_server::event_notifier::on_drop_aggregate(const sstring& ks_name, const
 
 void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint)
 {
-    (void)_server;
-    if (!gms::get_local_gossiper().is_cql_ready(endpoint)) {
+    if (!_server._gossiper.is_cql_ready(endpoint)) {
         _endpoints_pending_joined_notification.insert(endpoint);
         return;
     }
