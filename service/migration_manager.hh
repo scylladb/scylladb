@@ -153,6 +153,7 @@ public:
     future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func);
 
     future<> announce_new_aggregate(shared_ptr<cql3::functions::user_aggregate> aggregate);
+    future<std::vector<mutation>> prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate);
 
     future<> announce_function_drop(shared_ptr<cql3::functions::user_function> func);
 
