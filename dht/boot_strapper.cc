@@ -52,7 +52,7 @@ static logging::logger blogger("boot_strapper");
 
 namespace dht {
 
-future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
+future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper) {
     blogger.debug("Beginning bootstrap process: sorted_tokens={}", get_token_metadata().sorted_tokens());
     sstring description;
     if (reason == streaming::stream_reason::bootstrap) {
@@ -64,7 +64,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
     }
     try {
         auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, description, reason);
-        auto nodes_to_filter = gms::get_local_gossiper().get_unreachable_members();
+        auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace && _db.local().get_replace_address()) {
             nodes_to_filter.insert(_db.local().get_replace_address().value());
         }

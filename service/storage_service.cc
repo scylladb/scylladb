@@ -696,7 +696,7 @@ void storage_service::bootstrap() {
             run_bootstrap_ops();
         } else {
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::bootstrap).get();
+            bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
         }
     }
     _db.invoke_on_all([this] (database& db) {
@@ -2204,7 +2204,7 @@ void storage_service::run_replace_ops() {
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper).get();
         }
 
 
