@@ -31,7 +31,6 @@ class drop_function_statement final : public drop_function_statement_base {
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(
             query_processor& qp) const override;
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
-    virtual bool has_prepare_schema_mutations() const override { return true; }
 
 public:
     drop_function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,

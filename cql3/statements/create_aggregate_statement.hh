@@ -40,7 +40,6 @@ class create_aggregate_statement final : public create_function_statement_base {
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(
             query_processor& qp) const override;
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
-    virtual bool has_prepare_schema_mutations() const override { return true; }
 
     virtual shared_ptr<functions::function> create(service::storage_proxy& proxy, functions::function* old) const override;
 

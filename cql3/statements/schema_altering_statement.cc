@@ -98,10 +98,6 @@ schema_altering_statement::prepare_schema_mutations(query_processor& qp) const {
     co_return std::make_pair(::shared_ptr<cql_transport::event::schema_change>(), std::vector<mutation>());
 }
 
-bool schema_altering_statement::has_prepare_schema_mutations() const {
-    return false;
-}
-
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(query_processor& qp, service::query_state& state, const query_options& options) const {
     auto& mm = qp.get_migration_manager();
