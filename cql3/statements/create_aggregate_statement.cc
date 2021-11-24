@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_aggregate_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
@@ -65,6 +66,20 @@ shared_ptr<functions::function> create_aggregate_statement::create(service::stor
 
 std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_aggregate_statement>(*this));
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+create_aggregate_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(validate_while_executing(qp.proxy()));
+    if (aggregate) {
+        m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate);
+        ret = create_schema_change(*aggregate, true);
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_aggregate_statement::announce_migration(
