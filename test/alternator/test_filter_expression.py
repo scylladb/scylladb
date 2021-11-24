@@ -22,7 +22,7 @@
 import pytest
 from botocore.exceptions import ClientError
 import random
-from util import full_query, full_scan, random_string, random_bytes, multiset
+from util import full_query, full_query_and_counts, full_scan, random_string, random_bytes, multiset
 
 # The test_table_sn_with_data fixture is the regular test_table_sn fixture
 # with a partition inserted with many items. The sort key 'c' of the items
@@ -721,6 +721,25 @@ def test_filter_expression_and_projection_expression_2(test_table):
         ProjectionExpression='p',
         ExpressionAttributeValues={':p': p, ':x': 'mouse'})
     assert(got_items == [{'p': p}])
+
+# Test that a FilterExpression and Select=COUNT may be given together. Namely,
+# test that FilterExpression may inspect attributes which will not be returned
+# by the query, because the responses are just counted.
+@pytest.mark.xfail(reason="Select not supported yet - #5058")
+def test_filter_expression_and_select_count(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    (prefilter_count, postfilter_count, pages, got_items) = full_query_and_counts(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x=:x',
+        Select='COUNT',
+        ExpressionAttributeValues={':p': p, ':x': 'mouse'})
+    # Exactly one item matches the filter on x. But because of Select=COUNT,
+    # we shouldn't get an item back - just the count.
+    assert postfilter_count == 1
+    assert prefilter_count == 2
+    assert got_items == []
 
 # It is not allowed to combine the new-style FilterExpression with the
 # old-style AttributesToGet. You must use ProjectionExpression instead

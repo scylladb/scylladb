@@ -561,6 +561,24 @@ def test_query_filter_and_attributes_to_get(test_table):
     expected_items = [{'y': 'horse'}]
     assert(got_items == expected_items)
 
+# Test that a QueryFilter and Select=COUNT may be given together. Namely,
+# test that QueryFilter may inspect attributes which will not be returned
+# by the query, because the responses are just counted.
+@pytest.mark.xfail(reason="Select not supported yet - #5058")
+def test_query_filter_and_select_count(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    (prefilter_count, postfilter_count, pages, got_items) = full_query_and_counts(test_table,
+        KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
+        QueryFilter={ 'x': { 'AttributeValueList': ['mouse'], 'ComparisonOperator': 'EQ' }},
+        Select='COUNT')
+    # Exactly one item matches the filter on x. But because of Select=COUNT,
+    # we shouldn't get an item back - just the count.
+    assert postfilter_count == 1
+    assert prefilter_count == 2
+    assert got_items == []
+
 # It is not allowed to combine the old-style QueryFilter with the
 # new-style ProjectionExpression. You must use AttributesToGet instead
 # (tested in test_query_filter_and_attributes_to_get() above).
