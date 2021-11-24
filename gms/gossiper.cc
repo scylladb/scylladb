@@ -2414,19 +2414,12 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return allowed;
 }
 
-std::set<sstring> to_feature_set(sstring features_string) {
-    std::set<sstring> features;
-    boost::split(features, features_string, boost::is_any_of(","));
-    features.erase("");
-    return features;
-}
-
 std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
     auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
     if (!app_state) {
         return {};
     }
-    return to_feature_set(app_state->value);
+    return feature_service::to_feature_set(app_state->value);
 }
 
 std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
@@ -2434,7 +2427,7 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
     std::set<sstring> common_features;
 
     for (auto& x : loaded_peer_features) {
-        auto features = to_feature_set(x.second);
+        auto features = feature_service::to_feature_set(x.second);
         if (features.empty()) {
             logger.warn("Loaded empty features for peer node {}", x.first);
         } else {
@@ -2452,7 +2445,7 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
         if (features.empty()) {
             auto it = loaded_peer_features.find(endpoint);
             if (it != loaded_peer_features.end()) {
-                logger.info("Node {} does not contain SUPPORTED_FEATURES in gossip, using features saved in system table, features={}", endpoint, to_feature_set(it->second));
+                logger.info("Node {} does not contain SUPPORTED_FEATURES in gossip, using features saved in system table, features={}", endpoint, feature_service::to_feature_set(it->second));
             } else {
                 logger.warn("Node {} does not contain SUPPORTED_FEATURES in gossip or system table", endpoint);
             }
@@ -2581,9 +2574,12 @@ void gossiper::maybe_enable_features() {
     auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
     container().invoke_on_all([&features] (gossiper& g) {
-        for (auto&& name : features) {
-            g._feature_service.enable(name);
-        }
+        // gms::feature::enable should be run within seastar::async context
+        return seastar::async([&features, &g] {
+            for (auto&& name : features) {
+                g._feature_service.enable(name);
+            }
+        });
     }).get();
 }
 
