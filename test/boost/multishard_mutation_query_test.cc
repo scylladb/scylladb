@@ -24,6 +24,7 @@
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include "serializer_impl.hh"
+#include "query-result-set.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/cql_assertions.hh"
@@ -99,15 +100,16 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     }).get();
 }
 
-static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
+        const query::partition_slice& slice) {
     const auto& sharder = s->get_sharder();
     std::vector<mutation> results;
     results.reserve(pkeys.size());
 
     for (const auto& pkey : pkeys) {
-        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
-            return async([s = gs.get(), &pkey, &db] () mutable {
-                const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(),
+        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (database& db) {
+            return async([s = gs.get(), &pkey, &slice, &db] () mutable {
+                const auto cmd = query::read_command(s->id(), s->version(), slice,
                         query::max_result_size(query::result_memory_limiter::unlimited_result_size));
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
@@ -122,13 +124,18 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     return results;
 }
 
+static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+    return read_all_partitions_one_by_one(db, s, pkeys, s->full_slice());
+}
+
 using stateful_query = bool_class<class stateful>;
 
-static std::pair<std::vector<mutation>, size_t>
-read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+template <typename ResultBuilder>
+static std::pair<typename ResultBuilder::end_result_type, size_t>
+read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
-    std::vector<mutation> results;
+    ResultBuilder res_builder(s, slice);
     auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid,
             query::is_first_page::yes, query::max_result_size(max_size), 0);
 
@@ -136,30 +143,17 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
 
     // First page is special, needs to have `is_first_page` set.
     {
-        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, db::no_timeout).get0());
-        for (auto& part : res->partitions()) {
-            auto mut = part.mut().unfreeze(s);
-            results.emplace_back(std::move(mut));
-        }
+        auto res = ResultBuilder::query(db, s, cmd, {range}, nullptr, db::no_timeout);
+        has_more = res_builder.add(*res);
         cmd.is_first_page = query::is_first_page::no;
-        has_more = !res->partitions().empty();
     }
 
     if (!has_more) {
-        return std::pair(results, 1);
+        return std::pair(std::move(res_builder).get_end_result(), 1);
     }
 
     unsigned npages = 0;
 
-    const auto last_ckey_of = [] (const mutation& mut) -> std::optional<clustering_key> {
-        if (mut.partition().clustered_rows().empty()) {
-            return std::nullopt;
-        }
-        return mut.partition().clustered_rows().rbegin()->key();
-    };
-
-    auto last_pkey = results.back().decorated_key();
-    auto last_ckey = last_ckey_of(results.back());
 
     // Rest of the pages. Loop until an empty page turns up. Not very
     // sophisticated but simple and safe.
@@ -170,50 +164,183 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
 
         ++npages;
 
-        auto pkrange = dht::partition_range(dht::partition_range::bound(last_pkey, last_ckey.has_value()), range.end());
+        const auto pkrange_begin_inclusive = res_builder.last_ckey() && res_builder.last_pkey_rows() < slice.partition_row_limit();
 
-        if (last_ckey) {
+        auto pkrange = dht::partition_range(dht::partition_range::bound(res_builder.last_pkey(), pkrange_begin_inclusive), range.end());
+
+        if (res_builder.last_ckey()) {
             auto ckranges = cmd.slice.default_row_ranges();
-            query::trim_clustering_row_ranges_to(*s, ckranges, *last_ckey);
-            cmd.slice.clear_range(*s, last_pkey.key());
+            query::trim_clustering_row_ranges_to(*s, ckranges, *res_builder.last_ckey(), slice.is_reversed());
+            cmd.slice.clear_range(*s, res_builder.last_pkey().key());
             cmd.slice.clear_ranges();
-            cmd.slice.set_range(*s, last_pkey.key(), std::move(ckranges));
+            cmd.slice.set_range(*s, res_builder.last_pkey().key(), std::move(ckranges));
         }
 
-        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, db::no_timeout).get0());
+        auto res = ResultBuilder::query(db, s, cmd, {pkrange}, nullptr, db::no_timeout);
 
         if (is_stateful) {
             tests::require(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
         }
 
-        if (!res->partitions().empty()) {
-            auto it = res->partitions().begin();
-            auto end = res->partitions().end();
-            auto first_mut = it->mut().unfreeze(s);
-
-            last_pkey = first_mut.decorated_key();
-            last_ckey = last_ckey_of(first_mut);
-
-            // The first partition of the new page may overlap with the last
-            // partition of the last page.
-            if (results.back().decorated_key().equal(*s, first_mut.decorated_key())) {
-                results.back().apply(std::move(first_mut));
-            } else {
-                results.emplace_back(std::move(first_mut));
-            }
-            ++it;
-            for (;it != end; ++it) {
-                auto mut = it->mut().unfreeze(s);
-                last_pkey = mut.decorated_key();
-                last_ckey = last_ckey_of(mut);
-                results.emplace_back(std::move(mut));
-            }
-        }
-
-        has_more = !res->partitions().empty();
+        has_more = res_builder.add(*res);
     }
 
-    return std::pair(results, npages);
+    return std::pair(std::move(res_builder).get_end_result(), npages);
+}
+
+class mutation_result_builder {
+public:
+    using end_result_type = std::vector<mutation>;
+
+private:
+    schema_ptr _s;
+    const query::partition_slice& _slice;
+    std::vector<mutation> _results;
+    std::optional<dht::decorated_key> _last_pkey;
+    std::optional<clustering_key> _last_ckey;
+    uint64_t _last_pkey_rows = 0;
+
+private:
+    std::optional<clustering_key> last_ckey_of(const mutation& mut) const {
+        if (mut.partition().clustered_rows().empty()) {
+            return std::nullopt;
+        }
+        if (_slice.is_reversed()) {
+            return mut.partition().clustered_rows().begin()->key();
+        } else {
+            return mut.partition().clustered_rows().rbegin()->key();
+        }
+    }
+
+public:
+    static foreign_ptr<lw_shared_ptr<reconcilable_result>> query(
+            distributed<database>& db,
+            schema_ptr s,
+            const query::read_command& cmd,
+            const dht::partition_range_vector& ranges,
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout) {
+        return std::get<0>(query_mutations_on_all_shards(db, std::move(s), cmd, ranges, std::move(trace_state), timeout).get());
+    }
+
+    explicit mutation_result_builder(schema_ptr s, const query::partition_slice& slice) : _s(std::move(s)), _slice(slice) { }
+
+    bool add(const reconcilable_result& res) {
+        auto it = res.partitions().begin();
+        auto end = res.partitions().end();
+        if (it == end) {
+            return false;
+        }
+
+        auto first_mut = it->mut().unfreeze(_s);
+
+        _last_pkey = first_mut.decorated_key();
+        _last_ckey = last_ckey_of(first_mut);
+
+        // The first partition of the new page may overlap with the last
+        // partition of the last page.
+        if (!_results.empty() && _results.back().decorated_key().equal(*_s, first_mut.decorated_key())) {
+            _last_pkey_rows += it->row_count();
+            _results.back().apply(std::move(first_mut));
+        } else {
+            _last_pkey_rows = it->row_count();
+            _results.emplace_back(std::move(first_mut));
+        }
+        ++it;
+        for (;it != end; ++it) {
+            auto mut = it->mut().unfreeze(_s);
+            _last_pkey = mut.decorated_key();
+            _last_pkey_rows = it->row_count();
+            _last_ckey = last_ckey_of(mut);
+            _results.emplace_back(std::move(mut));
+        }
+
+        return true;
+    }
+
+    const dht::decorated_key& last_pkey() const { return _last_pkey.value(); }
+    const clustering_key* last_ckey() const { return _last_ckey ? &*_last_ckey : nullptr; }
+    uint64_t last_pkey_rows() const { return _last_pkey_rows; }
+
+    end_result_type get_end_result() && {
+        return std::move(_results);
+    }
+};
+
+class data_result_builder {
+public:
+    using end_result_type = query::result_set;
+
+private:
+    schema_ptr _s;
+    const query::partition_slice& _slice;
+    std::vector<query::result_set_row> _rows;
+    std::optional<dht::decorated_key> _last_pkey;
+    std::optional<clustering_key> _last_ckey;
+    uint64_t _last_pkey_rows = 0;
+
+    template <typename Key>
+    Key extract_key(const query::result_set_row& row, const schema::const_iterator_range_type& key_cols) const {
+        std::vector<bytes> exploded;
+        for (const auto& cdef : key_cols) {
+            exploded.push_back(row.get_data_value(cdef.name_as_text())->serialize_nonnull());
+        }
+        return Key::from_exploded(*_s, exploded);
+    }
+
+    dht::decorated_key extract_pkey(const query::result_set_row& row) const {
+        return dht::decorate_key(*_s, extract_key<partition_key>(row, _s->partition_key_columns()));
+    }
+
+    clustering_key extract_ckey(const query::result_set_row& row) const {
+        return extract_key<clustering_key>(row, _s->clustering_key_columns());
+    }
+
+public:
+    static foreign_ptr<lw_shared_ptr<query::result>> query(
+            distributed<database>& db,
+            schema_ptr s,
+            const query::read_command& cmd,
+            const dht::partition_range_vector& ranges,
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout) {
+        return std::get<0>(query_data_on_all_shards(db, std::move(s), cmd, ranges, query::result_options::only_result(), std::move(trace_state), timeout).get());
+    }
+
+    explicit data_result_builder(schema_ptr s, const query::partition_slice& slice) : _s(std::move(s)), _slice(slice) { }
+
+    bool add(const query::result& raw_res) {
+        auto res = query::result_set::from_raw_result(_s, _slice, raw_res);
+        if (res.rows().empty()) {
+            return false;
+        }
+        for (const auto& row : res.rows()) {
+            _rows.push_back(row);
+            _last_ckey = extract_ckey(row);
+            auto last_pkey = extract_pkey(row);
+            if (_last_pkey && last_pkey.equal(*_s, *_last_pkey)) {
+                ++_last_pkey_rows;
+            } else {
+                _last_pkey = std::move(last_pkey);
+                _last_pkey_rows = 1;
+            }
+        }
+        return true;
+    }
+
+    const dht::decorated_key& last_pkey() const { return _last_pkey.value(); }
+    const clustering_key* last_ckey() const { return _last_ckey ? &*_last_ckey : nullptr; }
+    uint64_t last_pkey_rows() const { return _last_pkey_rows; }
+
+    end_result_type get_end_result() && {
+        return query::result_set(_s, std::move(_rows));
+    }
+};
+
+static std::pair<std::vector<mutation>, size_t>
+read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+        const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
+    return read_partitions_with_generic_paged_scan<mutation_result_builder>(db, std::move(s), page_size, max_size, is_stateful, range, slice, page_hook);
 }
 
 static std::pair<std::vector<mutation>, size_t>
@@ -279,6 +406,52 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
 }
 
 // Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
+    do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
+        using namespace std::chrono_literals;
+
+        env.db().invoke_on_all([] (database& db) {
+            db.set_querier_cache_entry_ttl(2s);
+        }).get();
+
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
+
+        unsigned i = 0;
+
+        // Keep indent the same to reduce white-space noise
+        for (const auto partition_row_limit : {1ul, 4ul, 8ul, query::partition_max_rows}) {
+        for (const auto page_size : {1, 4, 8, 19}) {
+        for (const auto stateful : {stateful_query::no, stateful_query::yes}) {
+            testlog.debug("[scan #{}]: partition_row_limit={}, page_size={}, stateful={}", i++, partition_row_limit, page_size, stateful);
+
+            const auto slice = partition_slice_builder(*s, s->full_slice())
+                .reversed()
+                .with_partition_row_limit(partition_row_limit)
+                .build();
+
+            // First read all partition-by-partition (not paged).
+            auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
+
+            // Then do a paged range-query, with reader caching
+            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
+                check_cache_population(env.db(), 1);
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
+            }).first;
+
+            check_results_are_equal(results1, results2);
+
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0u);
+        } } }
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
@@ -309,6 +482,61 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
+
+        require_eventually_empty_caches(env.db());
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
+    do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
+        using namespace std::chrono_literals;
+
+        auto& db = env.db();
+
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
+
+        unsigned i = 0;
+
+        // Keep indent the same to reduce white-space noise
+        for (const auto partition_row_limit : {1ul, 4ul, 8ul, query::partition_max_rows}) {
+        for (const auto page_size : {1, 4, 8, 19}) {
+        for (const auto stateful : {stateful_query::no, stateful_query::yes}) {
+            testlog.debug("[scan #{}]: partition_row_limit={}, page_size={}, stateful={}", i++, partition_row_limit, page_size, stateful);
+
+            const auto slice = partition_slice_builder(*s, s->full_slice())
+                .reversed()
+                .with_partition_row_limit(partition_row_limit)
+                .build();
+
+            // First read all partition-by-partition (not paged).
+            auto expected_results = read_all_partitions_one_by_one(env.db(), s, pkeys, slice);
+
+            auto [mutation_results, _np1] = read_partitions_with_generic_paged_scan<mutation_result_builder>(db, s, page_size, std::numeric_limits<uint64_t>::max(), stateful,
+                    query::full_partition_range, slice);
+
+            check_results_are_equal(expected_results, mutation_results);
+
+            auto [data_results, _np2] = read_partitions_with_generic_paged_scan<data_result_builder>(db, s, page_size, std::numeric_limits<uint64_t>::max(), stateful,
+                    query::full_partition_range, slice);
+
+            std::vector<query::result_set_row> expected_rows;
+            for (const auto& mut : expected_results) {
+                auto rs = query::result_set(mut);
+                // mut re-sorts rows into forward order, so we have to reverse them again here
+                std::copy(rs.rows().rbegin(), rs.rows().rend(), std::back_inserter(expected_rows));
+            }
+            auto expected_data_results = query::result_set(s, std::move(expected_rows));
+
+            BOOST_REQUIRE_EQUAL(data_results, expected_data_results);
+
+            tests::require_equal(aggregate_querier_cache_stat(db, &query::querier_cache::stats::drops), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(db, &query::querier_cache::stats::time_based_evictions), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(db, &query::querier_cache::stats::resource_based_evictions), 0u);
+
+        } } }
 
         require_eventually_empty_caches(env.db());
 

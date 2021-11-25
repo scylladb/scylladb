@@ -43,6 +43,7 @@ class partition_slice_builder {
     std::unique_ptr<query::specific_ranges> _specific_ranges;
     const schema& _schema;
     query::partition_slice::option_set _options;
+    uint64_t _partition_row_limit = query::partition_max_rows;
 public:
     partition_slice_builder(const schema& schema);
     partition_slice_builder(const schema& schema, query::partition_slice slice);
@@ -70,6 +71,8 @@ public:
         _options.toggle<OPTION>();
         return *this;
     }
+
+    partition_slice_builder& with_partition_row_limit(uint64_t limit);
 
     query::partition_slice build();
 };
