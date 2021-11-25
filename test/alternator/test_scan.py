@@ -198,7 +198,7 @@ def test_scan_with_key_equality_filtering(dynamodb, filled_test_table):
 # ALL_ATTRIBUTES, returns items with all their attributes. Other modes
 # allow returning just specific attributes or just counting the results
 # without returning items at all.
-@pytest.mark.xfail(reason="Select not supported yet")
+@pytest.mark.xfail(reason="Select not supported yet. Issue #5058")
 def test_scan_select(filled_test_table):
     test_table, items = filled_test_table
     got_items = full_scan(test_table)
@@ -237,6 +237,18 @@ def test_scan_select(filled_test_table):
     # Select with some unknown string generates a validation exception:
     with pytest.raises(ClientError, match='ValidationException'):
         full_scan(test_table, Select='UNKNOWN')
+    # If either AttributesToGet or ProjectionExpression appear, only
+    # Select=SPECIFIC_ATTRIBUTES (or nothing) is allowed - other Select
+    # settings contradict the AttributesToGet or ProjectionExpression, and
+    # therefore forbidden:
+    with pytest.raises(ClientError, match='ValidationException.*AttributesToGet'):
+        full_scan(test_table, Select='ALL_ATTRIBUTES', AttributesToGet=['x'])
+    with pytest.raises(ClientError, match='ValidationException.*AttributesToGet'):
+        full_scan(test_table, Select='COUNT', AttributesToGet=['x'])
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression'):
+        full_scan(test_table, Select='ALL_ATTRIBUTES', ProjectionExpression='x')
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression'):
+        full_scan(test_table, Select='COUNT', ProjectionExpression='x')
 
 # Test parallel scan, i.e., the Segments and TotalSegments options.
 # In the following test we check that these parameters allow splitting

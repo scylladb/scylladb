@@ -227,7 +227,7 @@ def test_query_which_key(test_table):
 # ALL_ATTRIBUTES, returns items with all their attributes. Other modes
 # allow returning just specific attributes or just counting the results
 # without returning items at all.
-@pytest.mark.xfail(reason="Select not supported yet")
+@pytest.mark.xfail(reason="Select not supported yet. Issue #5058")
 def test_query_select(test_table_sn):
     numbers = [Decimal(i) for i in range(10)]
     # Insert these numbers, in random order, into one partition:
@@ -275,6 +275,18 @@ def test_query_select(test_table_sn):
     # Select with some unknown string generates a validation exception:
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_sn.query(ConsistentRead=True, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='UNKNOWN')
+    # If either AttributesToGet or ProjectionExpression appear in the query,
+    # only Select=SPECIFIC_ATTRIBUTES (or nothing) is allowed - other Select
+    # settings contradict the AttributesToGet or ProjectionExpression, and
+    # therefore forbidden:
+    with pytest.raises(ClientError, match='ValidationException.*AttributesToGet'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='ALL_ATTRIBUTES', AttributesToGet=['x'])
+    with pytest.raises(ClientError, match='ValidationException.*AttributesToGet'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='COUNT', AttributesToGet=['x'])
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='ALL_ATTRIBUTES', ProjectionExpression='x')
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression'):
+        test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Select='COUNT', ProjectionExpression='x')
 
 # Test that the "Limit" parameter can be used to return only some of the
 # items in a single partition. The items returned are the first in the
