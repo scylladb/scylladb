@@ -978,3 +978,95 @@ def test_gsi_backfill_empty_string(dynamodb):
         # data is already in the index.
         assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index1')
         assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index2')
+
+# Test the "Select" parameter of a Query on a GSI. We have in test_query.py
+# a test 'test_query_select' for this parameter on a query of a normal (base)
+# table, but for GSI and LSI the ALL_PROJECTED_ATTRIBUTES is additionally
+# allowed, and we want to test it. Moreover, in a GSI, when only a subset of
+# the attributes were projected into the GSI, it is impossible to request
+# that Select return other attributes.
+# We split the test into two, the first just requiring proper implementation
+# of Select, and the second requiring also a proper implementation of
+# projection of just a subset of the attributes.
+@pytest.mark.xfail(reason="Select not supported yet. Issue #5058")
+def test_gsi_query_select_1(test_table_gsi_1):
+    items = [{'p': random_string(), 'c': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
+    with test_table_gsi_1.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    c = items[0]['c']
+    expected_items = [x for x in items if x['c'] == c]
+    assert_index_query(test_table_gsi_1, 'hello', expected_items,
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+    # Unlike in base tables, here Select=ALL_PROJECTED_ATTRIBUTES is
+    # allowed, and in this case (all attributes are projected into this
+    # index) returns all attributes.
+    assert_index_query(test_table_gsi_1, 'hello', expected_items,
+        Select='ALL_PROJECTED_ATTRIBUTES',
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+    # Because in this GSI all attributes are projected into the index,
+    # ALL_ATTRIBUTES is allowed as well. And so is SPECIFIC_ATTRIBUTES
+    # (with AttributesToGet / ProjectionExpression) for any attributes,
+    # and of course so is COUNT.
+    assert_index_query(test_table_gsi_1, 'hello', expected_items,
+        Select='ALL_ATTRIBUTES',
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+    expected_items = [{'y': x['y']} for x in items if x['c'] == c]
+    assert_index_query(test_table_gsi_1, 'hello', expected_items,
+        Select='SPECIFIC_ATTRIBUTES',
+        AttributesToGet=['y'],
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+    assert not 'Items' in test_table_gsi_1.query(ConsistentRead=False,
+        IndexName='hello',
+        Select='COUNT',
+        KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+
+@pytest.mark.xfail(reason="Projection and Select not supported yet. Issue #5036, #5058")
+def test_gsi_query_select_2(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [ { 'AttributeName': 'x', 'KeyType': 'HASH' } ],
+                'Projection': { 'ProjectionType': 'INCLUDE',
+                                'NonKeyAttributes': ['a'] }
+            }
+        ]) as table:
+        items = [{'p': random_string(), 'x': random_string(), 'a': random_string(), 'b': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        x = items[0]['x']
+        # Unlike in base tables, here Select=ALL_PROJECTED_ATTRIBUTES is
+        # allowed, and only the projected attributes are returned (in this
+        # case the key of both base and GSI ('p' and 'x') and 'a' - but not
+        # 'b'. Moreover, it is the default if Select isn't specified at all.
+        expected_items = [{'p': z['p'], 'x': z['x'], 'a': z['a']} for z in items if z['x'] == x]
+        assert_index_query(table, 'hello', expected_items,
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        assert_index_query(table, 'hello', expected_items,
+            Select='ALL_PROJECTED_ATTRIBUTES',
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        # Because in this GSI not all attributes are projected into the index,
+        # Select=ALL_ATTRIBUTES is *not* allowed.
+        with pytest.raises(ClientError, match='ValidationException.*ALL_ATTRIBUTES'):
+            assert_index_query(table, 'hello', expected_items,
+                Select='ALL_ATTRIBUTES',
+                KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        # SPECIFIC_ATTRIBUTES (with AttributesToGet / ProjectionExpression)
+        # is allowed for the projected attributes, but not for unprojected
+        # attributes.
+        expected_items = [{'a': z['a']} for z in items if z['x'] == x]
+        assert_index_query(table, 'hello', expected_items,
+            Select='SPECIFIC_ATTRIBUTES',
+            AttributesToGet=['a'],
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        # Select=COUNT is also allowed, and doesn't return item content
+        assert not 'Items' in table.query(ConsistentRead=False,
+            IndexName='hello',
+            Select='COUNT',
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})

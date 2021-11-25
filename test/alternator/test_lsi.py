@@ -24,7 +24,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables
+from util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, list_tables
 
 # LSIs support strongly-consistent reads, so the following functions do not
 # need to retry like we did in test_gsi.py for GSIs:
@@ -305,7 +305,8 @@ def test_lsi_get_not_projected_attribute(test_table_lsi_keys_only):
                        'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}},
         Select='SPECIFIC_ATTRIBUTES', AttributesToGet=['d'])
 
-# Check that only projected attributes can be extracted
+# Check that by default (Select=ALL_PROJECTED_ATTRIBUTES), only projected
+# attributes are extracted
 @pytest.mark.xfail(reason="LSI in alternator currently only implement full projections")
 def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
     items1 = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'd': random_string()} for i in range(10)]
@@ -320,6 +321,70 @@ def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
     assert_index_query(test_table_lsi_keys_only, 'hello', expected_items,
         KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [b1], 'ComparisonOperator': 'EQ'}})
+
+# Test the "Select" parameter of a Query on a LSI. We have in test_query.py
+# a test 'test_query_select' for this parameter on a query of a normal (base)
+# table, but for GSI and LSI the ALL_PROJECTED_ATTRIBUTES is additionally
+# allowed (and in fact is the default), and we want to test it.
+@pytest.mark.xfail(reason="Projection and Select not supported yet. Issue #5036, #5058")
+def test_lsi_query_select(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'b', 'AttributeType': 'S' },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'b', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'INCLUDE',
+                                'NonKeyAttributes': ['a'] }
+            }
+        ]) as table:
+        items = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'a': random_string(), 'x': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        p = items[0]['p']
+        b = items[0]['b']
+        # Although in LSI all attributes are available (as we'll check
+        # below) the default Select is ALL_PROJECTED_ATTRIBUTES, and
+        # returns just the projected attributes (in this case all key
+        # attributes in either base or LSI, and 'a' - but not 'x'):
+        expected_items = [{'p': z['p'], 'c': z['c'], 'b': z['b'], 'a': z['a']} for z in items if z['b'] == b]
+        assert_index_query(table, 'hello', expected_items,
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+        assert_index_query(table, 'hello', expected_items,
+            Select='ALL_PROJECTED_ATTRIBUTES',
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+        # Unlike in GSI, in LSI Select=ALL_ATTRIBUTES *is* allowed even
+        # when only a subset of the attributes being projected:
+        expected_items = [z for z in items if z['b'] == b]
+        assert_index_query(table, 'hello', expected_items,
+            Select='ALL_ATTRIBUTES',
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+        # Also in LSI, SPECIFIC_ATTRIBUTES (with AttributesToGet /
+        # ProjectionExpression) is allowed for any attribute, projected
+        # or not projected. Let's try 'a' (projected) and 'x' (not projected):
+        expected_items = [{'a': z['a'], 'x': z['x']} for z in items if z['b'] == b]
+        assert_index_query(table, 'hello', expected_items,
+            Select='SPECIFIC_ATTRIBUTES',
+            AttributesToGet=['a', 'x'],
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+        # Select=COUNT is also allowed, and as expected returns no content.
+        assert not 'Items' in table.query(ConsistentRead=False,
+            IndexName='hello',
+            Select='COUNT',
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
 
 # Check that strongly consistent reads are allowed for LSI
 def test_lsi_consistent_read(test_table_lsi_1):
