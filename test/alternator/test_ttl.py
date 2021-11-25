@@ -22,8 +22,9 @@ import time
 import re
 import math
 from botocore.exceptions import ClientError
-from util import new_test_table, random_string, full_query, unique_table_name, is_aws
+from util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform
 from contextlib import contextmanager
+from decimal import Decimal
 
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
 # expects a certain exception must happen, the new passes_or_raises()
@@ -252,6 +253,22 @@ def test_ttl_expiration(dynamodb):
         # number, so the item should never expire:
         p7 = random_string()
         table.put_item(Item={'p': p7, 'expiration': str(int(time.time())+delta)})
+        # Like p2, p8 and p9 also have an already-passed expiration time,
+        # and should expire ASAP. However, whereas p2 had a straighforward
+        # integer like 12345678 as the expiration time, p8 and p9 have
+        # slightly more elaborate numbers: p8 has 1234567e1 and p9 has
+        # 12345678.1234. Those formats should be fine, and this test verifies
+        # the TTL code's number parsing doesn't get confused (in our original
+        # implementation, it did).
+        p8 = random_string()
+        with client_no_transform(table.meta.client) as client:
+            client.put_item(TableName=table.name, Item={'p': {'S': p8}, 'expiration': {'N': str((int(time.time())-60)//10) + "e1"}})
+        # Similarly, floating point expiration time like 12345678.1 should
+        # also be fine (note that Python's time.time() returns floating point).
+        # This item should also be expired ASAP too.
+        p9 = random_string()
+        print(Decimal(str(time.time()-60)))
+        table.put_item(Item={'p': p9, 'expiration': Decimal(str(time.time()-60))})
         # We could have just done time.sleep(duration) here, but in case a
         # user is watching this long test, let's output the status every
         # minute, and it also allows us to test what happens when an item
@@ -275,6 +292,10 @@ def test_ttl_expiration(dynamodb):
                 print("p6 alive")
             if 'Item' in table.get_item(Key={'p': p7}):
                 print("p7 alive")
+            if 'Item' in table.get_item(Key={'p': p8}):
+                print("p8 alive")
+            if 'Item' in table.get_item(Key={'p': p9}):
+                print("p9 alive")
             # Always keep p5's expiration delta into the future
             table.update_item(Key={'p': p5},
                 AttributeUpdates={'expiration': {'Value': int(time.time())+delta, 'Action': 'PUT'}})
@@ -289,6 +310,8 @@ def test_ttl_expiration(dynamodb):
         assert 'Item' in table.get_item(Key={'p': p5})
         assert 'Item' in table.get_item(Key={'p': p6})
         assert 'Item' in table.get_item(Key={'p': p7})
+        assert not 'Item' in table.get_item(Key={'p': p8})
+        assert not 'Item' in table.get_item(Key={'p': p9})
 
 # test_ttl_expiration above used a table with just a hash key. Because the
 # code to *delete* items in a table which also has a range key is subtly

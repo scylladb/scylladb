@@ -182,6 +182,41 @@ expiration_service::expiration_service(database& db, service::storage_proxy& pro
     //setup_metrics();
 }
 
+// Convert the big_decimal used to represent expiration time to an integer.
+// Any fractional part is dropped. If the number is negative or invalid,
+// 0 is returned, and if it's too high, the maximum unsigned long is returned.
+static unsigned long bigdecimal_to_ul(const big_decimal& bd) {
+    // The big_decimal format has an integer mantissa of arbitrary length
+    // "unscaled_value" and then a (power of 10) exponent "scale".
+    if (bd.unscaled_value() <= 0) {
+        return 0;
+    }
+    if (bd.scale() == 0) {
+        // The fast path, when the expiration time is an integer, scale==0.
+        return static_cast<unsigned long>(bd.unscaled_value());
+    }
+    // Because the mantissa can be of arbitrary length, we work on it
+    // as a string. TODO: find a less ugly algorithm.
+    auto str = bd.unscaled_value().str();
+    if (bd.scale() > 0) {
+        int len = str.length();
+        if (len < bd.scale()) {
+            return 0;
+        }
+        str = str.substr(0, len-bd.scale());
+    } else {
+        if (bd.scale() < -20) {
+            return std::numeric_limits<unsigned long>::max();
+        }
+        for (int i = 0; i < -bd.scale(); i++) {
+            str.push_back('0');
+        }
+    }
+    // strtoul() returns ULONG_MAX if the number is too large, or 0 if not
+    // a number.
+    return strtoul(str.c_str(), nullptr, 10);
+}
+
 // The following is_expired() functions all check if an item with the given
 // expiration time has expired, according to the DynamoDB API rules.
 // The rules are:
@@ -194,12 +229,9 @@ static bool is_expired(gc_clock::time_point expiration_time, gc_clock::time_poin
     return expiration_time <= now &&
            expiration_time > now - std::chrono::years(5);
 }
+
 static bool is_expired(const big_decimal& expiration_time, gc_clock::time_point now) {
-    // Convert the big_decimal to an integer. If it doesn't fit, the
-    // conversion will result in the highest number that does fit.
-    // FIXME: what is expiration_time.scale()? Can it ever be not 1?
-    // Add a test that tries 12345e1 as a timestamp!
-    uint32_t t = static_cast<uint32_t>(expiration_time.unscaled_value());
+    unsigned long t = bigdecimal_to_ul(expiration_time);
     // We assume - and the assumption turns out to be correct - that the
     // epoch of gc_clock::time_point and the one used by the DynamoDB protocol
     // are the same (the UNIX epoch in UTC). The resolution (seconds) is also
