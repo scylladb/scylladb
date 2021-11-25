@@ -176,6 +176,9 @@ public:
 
     future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name);
 
+    // the function need to be called if a user wants to access most up-to-date schema state
+    future<> schema_read_barrier();
+
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied

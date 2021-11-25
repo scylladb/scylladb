@@ -1032,6 +1032,15 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
     }
 }
 
+future<> migration_manager::schema_read_barrier() {
+    if (_raft_gr.is_enabled()) {
+        return container().invoke_on(0, [] (migration_manager& mm) {
+            return mm._raft_gr.group0().read_barrier();
+        });
+    }
+    return make_ready_future();
+}
+
 /**
  * Announce my version passively over gossip.
  * Used to notify nodes as they arrive in the cluster.
