@@ -987,19 +987,22 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 future<> migration_manager::announce(std::vector<mutation> schema) {
     auto f = db::schema_tables::merge_schema(get_storage_proxy(), _feat, schema);
 
-    return do_with(std::move(schema), [this, live_members = _gossiper.get_live_members()](auto && schema) {
-        return parallel_for_each(live_members.begin(), live_members.end(), [this, &schema](auto& endpoint) {
+    try {
+        using namespace std::placeholders;
+        auto all_live = _gossiper.get_live_members();
+        auto live_members = all_live | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
             // only push schema to nodes with known and equal versions
-            if (endpoint != utils::fb_utilities::get_broadcast_address() &&
+            return endpoint != utils::fb_utilities::get_broadcast_address() &&
                 _messaging.knows_version(endpoint) &&
-                _messaging.get_raw_version(endpoint) ==
-                netw::messaging_service::current_version) {
-                return push_schema_mutation(endpoint, schema);
-            } else {
-                return make_ready_future<>();
-            }
+                _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
         });
-    }).then([f = std::move(f)] () mutable { return std::move(f); });
+        co_await parallel_for_each(live_members.begin(), live_members.end(),
+            std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, _1, schema));
+    } catch (...) {
+        mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
+    }
+
+    co_return co_await std::move(f);
 }
 
 /**
