@@ -886,7 +886,7 @@ int main(int ac, char** av) {
             // Iteration through column family directory for sstable loading is
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
-            distributed_loader::init_system_keyspace(db, ss, *cfg).get();
+            distributed_loader::init_system_keyspace(db, ss, gossiper, *cfg).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
@@ -1256,7 +1256,7 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("starting cf cache hit rate calculator");
-            cf_cache_hitrate_calculator.start(std::ref(db)).get();
+            cf_cache_hitrate_calculator.start(std::ref(db), std::ref(gossiper)).get();
             auto stop_cache_hitrate_calculator = defer_verbose_shutdown("cf cache hit rate calculator",
                     [&cf_cache_hitrate_calculator] {
                         return cf_cache_hitrate_calculator.stop().get();
@@ -1319,7 +1319,7 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg);
 
             ss.local().register_protocol_server(cql_server_ctl);
 

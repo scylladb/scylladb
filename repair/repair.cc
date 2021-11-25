@@ -597,6 +597,7 @@ repair_info::repair_info(repair_service& repair,
     , sys_dist_ks(repair.get_sys_dist_ks())
     , view_update_generator(repair.get_view_update_generator())
     , mm(repair.get_migration_manager())
+    , gossiper(repair.get_gossiper())
     , sharder(get_sharder_for_tables(db, keyspace_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
@@ -652,7 +653,7 @@ future<> repair_info::repair_range(const dht::token_range& range) {
     repair_neighbors neighbors = get_repair_neighbors(range);
     return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
-                    boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
+                    boost::adaptors::filtered([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }));
       for (auto& node : mandatory_neighbors) {
            auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
            if (it == live_neighbors.end()) {
@@ -1032,7 +1033,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     auto id = repair_tracker().next_repair_command();
     rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
 
-    if (!gms::get_local_gossiper().is_normal(utils::fb_utilities::get_broadcast_address())) {
+    if (!_gossiper.local().is_normal(utils::fb_utilities::get_broadcast_address())) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
     }
 

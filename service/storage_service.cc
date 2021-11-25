@@ -696,7 +696,7 @@ void storage_service::bootstrap() {
             run_bootstrap_ops();
         } else {
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::bootstrap).get();
+            bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
         }
     }
     _db.invoke_on_all([this] (database& db) {
@@ -2204,7 +2204,7 @@ void storage_service::run_replace_ops() {
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper).get();
         }
 
 
@@ -2645,7 +2645,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             }
             auto keyspaces = ss._db.local().get_non_system_keyspaces();
             for (auto& keyspace_name : keyspaces) {
-                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()));
+                co_await streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()), ss._gossiper);
             }
             try {
                 co_await streamer->stream_async();

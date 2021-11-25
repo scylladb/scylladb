@@ -51,6 +51,7 @@
 #include <memory>
 
 class database;
+namespace gms { class gossiper; }
 
 namespace dht {
 /**
@@ -122,7 +123,7 @@ public:
         _source_filters.emplace(std::move(filter));
     }
 
-    future<> add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges);
+    future<> add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges, gms::gossiper& gossiper);
     void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
     void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
 private:
@@ -139,7 +140,7 @@ private:
      * consistency.
      */
     std::unordered_map<dht::token_range, std::vector<inet_address>>
-    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges);
+    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges, gms::gossiper& gossiper);
 private:
     /**
      * @param rangesWithSources The ranges we want to fetch (key) and their potential sources (value)

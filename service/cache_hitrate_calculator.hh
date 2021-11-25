@@ -28,6 +28,8 @@
 
 using namespace seastar;
 
+namespace gms { class gossiper; }
+
 namespace service {
 
 class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hitrate_calculator>, public seastar::peering_sharded_service<cache_hitrate_calculator> {
@@ -42,6 +44,7 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     };
 
     seastar::sharded<database>& _db;
+    gms::gossiper& _gossiper;
     timer<lowres_clock> _timer;
     bool _stopped = false;
     float _diff = 0;
@@ -53,7 +56,7 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     future<lowres_clock::duration> recalculate_hitrates();
     void recalculate_timer();
 public:
-    cache_hitrate_calculator(seastar::sharded<database>& db);
+    cache_hitrate_calculator(seastar::sharded<database>& db, gms::gossiper& g);
     void run_on(size_t master, lowres_clock::duration d = std::chrono::milliseconds(2000));
 
     future<> stop();
