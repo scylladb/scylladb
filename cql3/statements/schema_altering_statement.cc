@@ -103,6 +103,8 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
     }
 
+    co_await mm.schema_read_barrier();
+
     auto [ret, m] = co_await prepare_schema_mutations(qp);
 
     if (!m.empty()) {
