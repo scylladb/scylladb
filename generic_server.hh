@@ -80,7 +80,8 @@ protected:
     uint64_t _connections_being_accepted = 0;
     uint64_t _total_connections = 0;
     future<> _stopped = _all_connections_stopped.get_future();
-    boost::intrusive::list<connection> _connections_list;
+    using connections_list_t = boost::intrusive::list<connection>;
+    connections_list_t _connections_list;
     std::vector<server_socket> _listeners;
 
 public:

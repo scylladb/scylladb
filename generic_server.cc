@@ -29,7 +29,8 @@ connection::connection(server& server, connected_socket&& fd)
 connection::~connection()
 {
     --_server._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    server::connections_list_t::iterator iter = _server._connections_list.iterator_to(*this);
+    _server._connections_list.erase(iter);
     _server.maybe_stop();
 }
 
