@@ -811,10 +811,8 @@ protected:
         log(log_level::trace, std::move(fmt), std::forward<Args>(args)...);
     }
 public:
-    bool enable_garbage_collected_sstable_writer() const {
-        // FIXME: Disable GC writer if interposer consumer is enabled until they both can work simultaneously.
-        // More details can be found at https://github.com/scylladb/scylla/issues/6472
-        return _contains_multi_fragment_runs && !use_interposer_consumer();
+    bool enable_garbage_collected_sstable_writer() const noexcept {
+        return _contains_multi_fragment_runs;
     }
 
     static future<compaction_result> run(std::unique_ptr<compaction> c);
@@ -917,6 +915,7 @@ public:
 class regular_compaction : public compaction {
     // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
     mutable compaction_read_monitor_generator _monitor_generator;
+    seastar::semaphore _replacer_lock = {1};
 public:
     regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
         : compaction(table_s, std::move(descriptor), cdata)
@@ -981,6 +980,7 @@ private:
         if (!enable_garbage_collected_sstable_writer()) {
             return;
         }
+        auto permit = seastar::get_units(_replacer_lock, 1).get0();
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
         auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (shared_sstable& sst) {
             return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
