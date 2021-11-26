@@ -153,6 +153,7 @@ schema_ptr system_keyspace::hints() {
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy_options({{ "enabled", "false" }});
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return hints;
@@ -306,6 +307,7 @@ schema_ptr system_keyspace::built_indexes() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return built_indexes;
@@ -356,6 +358,7 @@ schema_ptr system_keyspace::built_indexes() {
        builder.remove_column("scylla_cpu_sharding_algorithm");
        builder.remove_column("scylla_nr_shards");
        builder.remove_column("scylla_msb_ignore");
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -414,6 +417,7 @@ schema_ptr system_keyspace::built_indexes() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return peer_events;
@@ -437,6 +441,7 @@ schema_ptr system_keyspace::built_indexes() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return range_xfers;
@@ -463,6 +468,7 @@ schema_ptr system_keyspace::built_indexes() {
         "unfinished compactions"
         );
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return compactions_in_progress;
@@ -493,6 +499,7 @@ schema_ptr system_keyspace::built_indexes() {
         );
         builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
         builder.with_version(generate_schema_version(builder.uuid()));
+        builder.set_wait_for_sync_to_commitlog(true);
         return builder.build(schema_builder::compact_storage::no);
     }();
     return compaction_history;
@@ -522,6 +529,7 @@ schema_ptr system_keyspace::built_indexes() {
         "historic sstable read rates"
        );
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return sstable_activity;
@@ -548,6 +556,7 @@ schema_ptr system_keyspace::size_estimates() {
             );
         builder.set_gc_grace_seconds(0);
         builder.with_version(generate_schema_version(builder.uuid()));
+        builder.set_wait_for_sync_to_commitlog(true);
         return builder.build(schema_builder::compact_storage::no);
     }();
     return size_estimates;
@@ -582,6 +591,7 @@ schema_ptr system_keyspace::size_estimates() {
         // system.large_* tables once
         // https://github.com/scylladb/scylla/issues/3288 is fixed
         builder.set_caching_options(caching_options::get_disabled_caching_options());
+        builder.set_wait_for_sync_to_commitlog(true);
         return builder.build(schema_builder::compact_storage::no);
     }();
     return large_partitions;
@@ -603,6 +613,7 @@ schema_ptr system_keyspace::large_rows() {
                 .with_version(generate_schema_version(id))
                 .set_gc_grace_seconds(0)
                 .set_caching_options(caching_options::get_disabled_caching_options())
+                .set_wait_for_sync_to_commitlog(true)
                 .build();
     }();
     return large_rows;
@@ -625,6 +636,7 @@ schema_ptr system_keyspace::large_cells() {
                 .with_version(generate_schema_version(id))
                 .set_gc_grace_seconds(0)
                 .set_caching_options(caching_options::get_disabled_caching_options())
+                .set_wait_for_sync_to_commitlog(true)
                 .build();
     }();
     return large_cells;
@@ -650,6 +662,7 @@ schema_ptr system_keyspace::large_cells() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return scylla_local;
@@ -686,6 +699,7 @@ schema_ptr system_keyspace::clients() {
             );
         builder.set_gc_grace_seconds(0);
         builder.with_version(generate_schema_version(builder.uuid()));
+        builder.set_wait_for_sync_to_commitlog(true);
         return builder.build(schema_builder::compact_storage::no);
     }();
     return clients;
@@ -762,6 +776,7 @@ schema_ptr system_keyspace::v3::local() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return schema;
@@ -790,6 +805,7 @@ schema_ptr system_keyspace::v3::truncated() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -876,6 +892,7 @@ schema_ptr system_keyspace::v3::views_builds_in_progress() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build();
     }();
     return schema;
@@ -899,6 +916,7 @@ schema_ptr system_keyspace::v3::built_views() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build();
     }();
     return schema;
@@ -915,6 +933,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
                 .with_column("generation_number", int32_type)
                 .with_column("first_token", utf8_type)
                 .with_version(generate_schema_version(id))
+                .set_wait_for_sync_to_commitlog(true)
                 .build();
     }();
     return schema;
@@ -951,6 +970,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return cdc_local;
@@ -1003,6 +1023,7 @@ schema_ptr system_keyspace::legacy::batchlog() {
        builder.set_compaction_strategy_options({{"min_threshold", "2"}});
        builder.with(schema_builder::compact_storage::no);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build();
     }();
     return schema;
