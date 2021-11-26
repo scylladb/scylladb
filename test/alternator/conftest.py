@@ -25,7 +25,7 @@
 import pytest
 import boto3
 import requests
-from util import create_test_table
+from util import create_test_table, is_aws
 
 # When tests are run with HTTPS, the server often won't have its SSL
 # certificate signed by a known authority. So we will disable certificate
@@ -263,7 +263,7 @@ def filled_test_table(dynamodb):
 # skipped if running with "--aws".
 @pytest.fixture(scope="session")
 def scylla_only(dynamodb):
-    if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
+    if is_aws(dynamodb):
         pytest.skip('Scylla-only feature not supported by AWS')
 
 # The "test_table_s_forbid_rmw" fixture is the same as test_table_s, except
