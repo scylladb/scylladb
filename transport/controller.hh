@@ -26,6 +26,7 @@ namespace gms { class gossiper; }
 namespace cql3 { class query_processor; }
 namespace qos { class service_level_controller; }
 namespace db { class config; }
+struct client_data;
 
 namespace cql_transport {
 
@@ -64,6 +65,7 @@ public:
     virtual future<> start_server() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
+    virtual future<utils::chunked_vector<client_data>> get_client_data() override;
 };
 
 } // namespace cql_transport

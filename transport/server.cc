@@ -26,6 +26,7 @@
 #include "service/storage_proxy.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
 #include "utils/UUID.hh"
@@ -1965,6 +1966,15 @@ void cql_server::response::write(const cql3::prepared_metadata& m, uint8_t versi
         write_string(name->name->text());
         type_codec::encode(*this, name->type);
     }
+}
+
+future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
+    utils::chunked_vector<client_data> ret;
+    co_await for_each_gently([&ret] (const generic_server::connection& c) {
+        const connection& conn = dynamic_cast<const connection&>(c);
+        ret.emplace_back(conn.make_client_data());
+    });
+    co_return ret;
 }
 
 }

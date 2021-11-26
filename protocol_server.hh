@@ -11,6 +11,10 @@
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
 #include <vector>
+#include "connection_notifier.hh"
+#include "utils/chunked_vector.hh"
+
+struct client_data;
 
 // Abstraction for a server serving some kind of user-facing protocol.
 class protocol_server {
@@ -35,4 +39,8 @@ public:
     /// Can be called multiple times, in any state of the server.
     /// This variant is used by the REST API so failure is acceptable.
     virtual future<> request_stop_server() = 0;
+
+    virtual future<utils::chunked_vector<client_data>> get_client_data() {
+        return make_ready_future<utils::chunked_vector<client_data>>(utils::chunked_vector<client_data>());
+    }
 };
