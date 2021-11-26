@@ -661,6 +661,7 @@ schema_ptr scylla_table_schema_history() {
             "for each table schema version upon an CREATE TABLE/ALTER TABLE operations");
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
+        builder.set_wait_for_sync_to_commitlog(true);
         return builder.build(schema_builder::compact_storage::no);
     }();
     return s;

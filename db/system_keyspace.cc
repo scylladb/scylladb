@@ -356,6 +356,7 @@ schema_ptr system_keyspace::built_indexes() {
        builder.remove_column("scylla_cpu_sharding_algorithm");
        builder.remove_column("scylla_nr_shards");
        builder.remove_column("scylla_msb_ignore");
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -389,6 +390,7 @@ schema_ptr system_keyspace::built_indexes() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return peers;
@@ -762,6 +764,7 @@ schema_ptr system_keyspace::v3::local() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return schema;
@@ -790,6 +793,7 @@ schema_ptr system_keyspace::v3::truncated() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -899,6 +903,7 @@ schema_ptr system_keyspace::v3::built_views() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build();
     }();
     return schema;
@@ -915,6 +920,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
                 .with_column("generation_number", int32_type)
                 .with_column("first_token", utf8_type)
                 .with_version(generate_schema_version(id))
+                .set_wait_for_sync_to_commitlog(true)
                 .build();
     }();
     return schema;
@@ -951,6 +957,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return cdc_local;
@@ -2750,6 +2757,7 @@ future<> system_keyspace::register_view_for_building(sstring ks_name, sstring vi
 }
 
 future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
+    slogger.error("update_view_build_progress: {}, {}, {}", ks_name, view_name, token);
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
     return qctx->execute_cql(

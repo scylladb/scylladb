@@ -55,6 +55,7 @@
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
+#include "db/schema_tables.hh"
 
 namespace service {
 
@@ -204,7 +205,7 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS };
+    static constexpr const char* extra_durable_tables[] = { v3::CDC_LOCAL, db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY, PAXOS, TRUNCATED, LOCAL, PEERS, v3::BUILT_VIEWS, v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS };
 
     static bool is_extra_durable(const sstring& name);
 
