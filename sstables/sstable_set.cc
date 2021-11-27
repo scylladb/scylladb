@@ -1146,9 +1146,9 @@ flat_mutation_reader sstable_set::make_crawling_reader(
         tracing::trace_state_ptr trace_ptr,
         read_monitor_generator& monitor_generator) const {
     std::vector<flat_mutation_reader> readers;
-    for (auto ssts = _impl->all(); auto& sst : *ssts) {
+    _impl->for_each_sstable([&] (const shared_sstable& sst) mutable {
         readers.emplace_back(sst->make_crawling_reader_v1(schema, permit, pc, trace_ptr, monitor_generator(sst)));
-    }
+    });
     return make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
 }
 
