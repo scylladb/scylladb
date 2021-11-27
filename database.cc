@@ -2076,9 +2076,14 @@ future<> database::shutdown() {
     co_await close_tables(database::table_kind::user);
     co_await close_tables(database::table_kind::system);
     co_await _large_data_handler->stop();
-    for (auto& [ks_name, ks] : _keyspaces) {
-        co_await ks.shutdown();
-    }
+    // Don't shutdown the keyspaces just yet,
+    // since they are needed during shutdown.
+    // FIXME: restore when https://github.com/scylladb/scylla/issues/8995
+    // is fixed and no queries are issued after the database shuts down.
+    // (see also https://github.com/scylladb/scylla/issues/9684)
+    // for (auto& [ks_name, ks] : _keyspaces) {
+    //     co_await ks.shutdown();
+    // }
 }
 
 future<> database::stop() {
