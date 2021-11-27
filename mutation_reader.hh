@@ -191,7 +191,7 @@ class mutation_source {
     lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
     mutation_source() = default;
-    explicit operator bool() const { return bool(_fn); }
+    explicit operator bool() const { return bool(_fn) || bool(_fn_v2); }
     friend class optimized_optional<mutation_source>;
 public:
     mutation_source(flat_reader_factory_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
