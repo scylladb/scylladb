@@ -433,11 +433,23 @@ bool effective_replication_map_factory::erase_effective_replication_map(effectiv
 future<> effective_replication_map_factory::stop() noexcept {
     _stopped = true;
     if (!_effective_replication_maps.empty()) {
-        for (auto& [key, erm] : _effective_replication_maps) {
+        for (auto it = _effective_replication_maps.begin(); it != _effective_replication_maps.end(); it = _effective_replication_maps.erase(it)) {
+            auto& [key, erm] = *it;
             rslogger.debug("effective_replication_map_factory::stop found outstanding map {} [{}]", key, fmt::ptr(erm));
+            // unregister outstanding effective_replication_maps
+            // so they won't try to submit background work
+            // to gently clear their contents when they are destroyed.
+            erm->unregister();
         }
-        on_internal_error_noexcept(rslogger, "effective_replication_map_factory stopped with outstanding maps");
+
+        // FIXME: reinstate the internal error
+        // when https://github.com/scylladb/scylla/issues/8995
+        // is fixed and shutdown order ensures that no outstanding maps
+        // are expected here.
+        // (see also https://github.com/scylladb/scylla/issues/9684)
+        // on_internal_error_noexcept(rslogger, "effective_replication_map_factory stopped with outstanding maps");
     }
+
     return std::exchange(_background_work, make_ready_future<>());
 }
 

@@ -245,6 +245,10 @@ public:
     bool is_registered() const noexcept {
         return _factory != nullptr;
     }
+
+    void unregister() noexcept {
+        _factory = nullptr;
+    }
 };
 
 using effective_replication_map_ptr = lw_shared_ptr<const effective_replication_map>;
