@@ -179,6 +179,9 @@ public:
     // the function need to be called if a user wants to access most up-to-date schema state
     future<> schema_read_barrier();
 
+    // used to check if raft is enabled on the cluster
+    bool is_raft_enabled() { return _raft_gr.is_enabled(); }
+
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
