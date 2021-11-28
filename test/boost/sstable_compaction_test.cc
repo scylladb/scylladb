@@ -3118,11 +3118,16 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        auto& cdata = compaction_manager_test(*cm).register_compaction(partial_sstable_run_identifier);
+        auto cm_test = compaction_manager_test(*cm);
+        auto& cdata = cm_test.register_compaction(partial_sstable_run_identifier);
+        auto deregister_compaction = defer([&] () noexcept {
+            cm_test.deregister_compaction(cdata);
+        });
 
         cf->compact_all_sstables().get();
 
-        compaction_manager_test(*cm).deregister_compaction(cdata);
+        deregister_compaction.cancel();
+        cm_test.deregister_compaction(cdata);
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
@@ -3364,6 +3369,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         cfg.enable_incremental_backups = false;
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        auto stop_cf = deferred_stop(*cf);
         cf->mark_ready_for_writes();
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::null);

@@ -66,6 +66,22 @@ public:
         const ::io_priority_class& io;
     };
 private:
+    struct compaction_state {
+        // Used both by compaction tasks that refer to the compaction_state
+        // and by any function running under run_with_compaction_disabled().
+        seastar::gate gate;
+
+        // Prevents table from running major and minor compaction at the same time.
+        rwlock lock;
+
+        // Raised by any function running under run_with_compaction_disabled();
+        long compaction_disabled_counter = 0;
+
+        bool compaction_disabled() const noexcept {
+            return compaction_disabled_counter > 0;
+        }
+    };
+
     struct task {
         column_family* compacting_cf = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
@@ -75,8 +91,18 @@ private:
         bool compaction_running = false;
         utils::UUID output_run_identifier;
         sstables::compaction_data compaction_data;
+        compaction_state& compaction_state;
+        gate::holder gate_holder;
 
-        explicit task(column_family* cf, sstables::compaction_type type) : compacting_cf(cf), type(type) {}
+        explicit task(column_family* cf, sstables::compaction_type type, struct compaction_state& cs)
+            : compacting_cf(cf)
+            , type(type)
+            , compaction_state(cs)
+            , gate_holder(compaction_state.gate.hold())
+        {}
+
+        task(task&&) = delete;
+        task(const task&) = delete;
 
         void setup_new_compaction();
         void finish_compaction();
@@ -122,14 +148,6 @@ private:
     // reduce disk space requirement.
     semaphore _major_compaction_sem{1};
 
-    struct compaction_state {
-        // Prevents table from running major and minor compaction at the same time.
-        rwlock lock;
-        // Used to wait for termination of any function running under run_with_compaction_disabled().
-        seastar::gate with_compaction_disabled_gate;
-
-        bool compaction_disabled() const;
-    };
     std::unordered_map<table*, compaction_state> _compaction_state;
 
     semaphore _custom_job_sem{1};
@@ -258,6 +276,11 @@ public:
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(table* t, std::function<future<> ()> func);
 
+    // Adds a column family to the compaction manager.
+    // Creates a compaction_state structure that can be used for submitting
+    // compaction jobs of all types.
+    void add(column_family* cf);
+
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
     future<> remove(column_family* cf);
@@ -265,6 +288,10 @@ public:
     const stats& get_stats() const {
         return _stats;
     }
+
+    // gets the table's compaction state
+    // throws std::out_of_range exception if not found.
+    compaction_state& get_compaction_state(table* t);
 
     const std::vector<sstables::compaction_info> get_compactions() const;
 

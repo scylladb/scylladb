@@ -177,8 +177,9 @@ future<compaction_result> compact_sstables(sstables::compaction_descriptor descr
     auto& cm = cf.get_compaction_manager();
     auto& cdata = compaction_manager_test(cm).register_compaction(descriptor.run_identifier, &cf);
     return sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).then([&cdata, &cm] (sstables::compaction_result res) {
-        compaction_manager_test(cm).deregister_compaction(cdata);
         return res;
+    }).finally([&cm, &cdata] {
+        compaction_manager_test(cm).deregister_compaction(cdata);
     });
 }
 
@@ -198,4 +199,25 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, un
         }
     }
     throw sst_not_found(dir, generation);
+}
+
+sstables::compaction_data& compaction_manager_test::register_compaction(utils::UUID output_run_id, column_family* cf) {
+    auto task = make_lw_shared<compaction_manager::task>(cf, sstables::compaction_type::Compaction, _cm._compaction_state[cf]);
+    testlog.debug("compaction_manager_test: register_compaction: task {} cf={}", fmt::ptr(task.get()), fmt::ptr(cf));
+    task->compaction_running = true;
+    task->compaction_data = compaction_manager::create_compaction_data();
+    task->output_run_identifier = std::move(output_run_id);
+    _cm._tasks.push_back(task);
+    return task->compaction_data;
+}
+
+void compaction_manager_test::deregister_compaction(const sstables::compaction_data& c) {
+    auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data.compaction_uuid == c.compaction_uuid; });
+    if (it != _cm._tasks.end()) {
+        auto task = *it;
+        testlog.debug("compaction_manager_test: deregister_compaction uuid={}: task {} cf={}", c.compaction_uuid, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
+        _cm._tasks.erase(it);
+    } else {
+        testlog.debug("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);
+    }
 }
