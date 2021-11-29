@@ -373,6 +373,10 @@ if __name__ == '__main__':
             version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', version_check)
             args.no_version_check = not version_check
             if version_check:
+                cfg = sysconfig_parser(sysconfdir_p() / 'scylla-housekeeping')
+                repo_files = cfg.get('REPO_FILES')
+                for f in glob.glob(repo_files):
+                    os.chmod(f, 0o644)
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: True\n')
                 os.chmod('/etc/scylla.d/housekeeping.cfg', 0o644)
