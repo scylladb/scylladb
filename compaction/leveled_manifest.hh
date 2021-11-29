@@ -288,6 +288,12 @@ public:
             if (sstables_prev_level.empty()) {
                 continue;
             }
+
+            // stop pushing data to higher levels once L is 10x (fan out) larger than L-1.
+            if (get_total_bytes(sstables) >= (get_total_bytes(sstables_prev_level) * leveled_fan_out)) {
+                continue;
+            }
+
             auto descriptor = get_descriptor_for_level(i-1, last_compacted_keys, compaction_counter);
             if (!descriptor.sstables.empty()) {
                 return descriptor;
