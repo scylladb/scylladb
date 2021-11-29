@@ -32,6 +32,7 @@
 #include "utils/fb_utilities.hh"
 #include "utils/UUID_gen.hh"
 #include <cmath>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
@@ -775,15 +776,6 @@ void compaction_manager::submit_offstrategy(table* t) {
     });
 }
 
-inline bool compaction_manager::check_for_cleanup(table* t) {
-    for (auto& task : _tasks) {
-        if (task->compacting_table == t && task->type == sstables::compaction_type::Cleanup) {
-            return true;
-        }
-    }
-    return false;
-}
-
 future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_type_options options, get_candidates_func get_func, can_purge_tombstones can_purge) {
     auto task = make_lw_shared<compaction_manager::task>(t, options.type(), get_compaction_state(t));
     _tasks.push_back(task);
@@ -943,7 +935,12 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
 }
 
 future<> compaction_manager::perform_cleanup(database& db, table* t) {
-    if (check_for_cleanup(t)) {
+    auto check_for_cleanup = [this, t] {
+        return boost::algorithm::any_of(_tasks, [t] (auto& task) {
+            return task->compacting_table == t && task->type == sstables::compaction_type::Cleanup;
+        });
+    };
+    if (check_for_cleanup()) {
         return make_exception_future<>(std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
             t->schema()->ks_name(), t->schema()->cf_name())));
     }

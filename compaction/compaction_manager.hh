@@ -188,9 +188,6 @@ private:
     // Return true if compaction manager and task weren't asked to stop.
     inline bool can_proceed(const lw_shared_ptr<task>& task);
 
-    // Check if table is being cleaned up.
-    inline bool check_for_cleanup(table* t);
-
     inline future<> put_task_to_sleep(lw_shared_ptr<task>& task);
 
     // Compaction manager stop itself if it finds an storage I/O error which results in
