@@ -149,53 +149,50 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_md_large) {
 // This assert makes sure we don't miss writable vertions
 static_assert(writable_sstable_versions.size() == 2);
 
+// `keys` may contain repetitions.
+// The generated position ranges are non-empty. The start of each range in the vector is greater than the end of the previous range.
+//
 // TODO: could probably be placed in random_utils/random_schema after some tuning
-static std::vector<query::clustering_range> random_ranges(const std::vector<clustering_key> keys, const schema& s, std::mt19937& engine) {
-    std::vector<clustering_key_prefix> ckp_sample;
+static std::vector<position_range> random_ranges(const std::vector<clustering_key>& keys, const schema& s, std::mt19937& engine) {
+    std::vector<position_in_partition> positions;
+    if (tests::random::get_bool(engine)) {
+        positions.push_back(position_in_partition::before_all_clustered_rows());
+    }
+
     for (auto& k: keys) {
         auto exploded = k.explode(s);
-        auto key_size = tests::random::get_int<size_t>(1, exploded.size(), engine);
-        ckp_sample.push_back(clustering_key_prefix::from_exploded(s,
-            std::vector<bytes>{exploded.begin(), exploded.begin() + key_size}));
+        auto tag = tests::random::get_int<size_t>(1, 3);
+        auto prefix_size = tag == 2 ? exploded.size() : tests::random::get_int<size_t>(1, exploded.size(), engine);
+        auto ckp = clustering_key_prefix::from_exploded(s, std::vector<bytes>{exploded.begin(), exploded.begin() + prefix_size});
+        switch (tag) {
+            case 1:
+                positions.emplace_back(position_in_partition::before_clustering_row_tag_t{}, std::move(ckp));
+                break;
+            case 2:
+                positions.emplace_back(position_in_partition::clustering_row_tag_t{}, std::move(ckp));
+                break;
+            default:
+                positions.emplace_back(position_in_partition::after_clustering_row_tag_t{}, std::move(ckp));
+                break;
+        }
     }
 
-    auto subset_size = tests::random::get_int<size_t>(0, ckp_sample.size(), engine);
-    ckp_sample = tests::random::random_subset<clustering_key_prefix>(std::move(ckp_sample), subset_size, engine);
-    std::sort(ckp_sample.begin(), ckp_sample.end(), clustering_key_prefix::less_compare(s));
+    auto subset_size = tests::random::get_int<size_t>(0, positions.size(), engine);
+    positions = tests::random::random_subset<position_in_partition>(std::move(positions), subset_size, engine);
+    std::sort(positions.begin(), positions.end(), position_in_partition::less_compare(s));
+    positions.erase(std::unique(positions.begin(), positions.end(), position_in_partition::equal_compare(s)), positions.end());
 
-    std::vector<query::clustering_range> ranges;
-
-    // (-inf, ...
-    if (!ckp_sample.empty() && tests::random::get_bool(engine)) {
-        ranges.emplace_back(
-                std::nullopt,
-                query::clustering_range::bound{ckp_sample.front(), tests::random::get_bool(engine)});
-        std::swap(ckp_sample.front(), ckp_sample.back());
-        ckp_sample.pop_back();
+    if (tests::random::get_bool(engine)) {
+        positions.push_back(position_in_partition::after_all_clustered_rows());
     }
 
-    // ..., +inf)
-    std::optional<query::clustering_range> last_range;
-    if (!ckp_sample.empty() && tests::random::get_bool(engine)) {
-        last_range.emplace(
-                query::clustering_range::bound{ckp_sample.back(), tests::random::get_bool(engine)},
-                std::nullopt);
-        ckp_sample.pop_back();
-    }
-
-    for (unsigned i = 0; i + 1 < ckp_sample.size(); i += 2) {
-        ranges.emplace_back(
-                query::clustering_range::bound{ckp_sample[i], tests::random::get_bool(engine)},
-                query::clustering_range::bound{ckp_sample[i+1], tests::random::get_bool(engine)});
-    }
-
-    if (last_range) {
-        ranges.push_back(std::move(*last_range));
+    std::vector<position_range> ranges;
+    for (unsigned i = 0; i + 1 < positions.size(); i += 2) {
+        ranges.emplace_back(std::move(positions[i]), std::move(positions[i+1]));
     }
 
     if (ranges.empty()) {
-        // no keys sampled, return (-inf, +inf)
-        ranges.push_back(query::clustering_range::make_open_ended_both_sides());
+        ranges.emplace_back(position_in_partition::before_all_clustered_rows(), position_in_partition::after_all_clustered_rows());
     }
 
     return ranges;
@@ -209,22 +206,51 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
 
     auto random_spec = tests::make_random_schema_specification(get_name());
     auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+    auto query_schema = random_schema.schema();
     testlog.debug("Random schema:\n{}", random_schema.cql());
 
     auto muts = tests::generate_random_mutations(random_schema).get();
 
     // FIXME: workaround for #9352. The index pages for reversed source would sometimes be different
     // from the forward source, causing one source to hit the bug from #9352 but not the other.
-    muts.erase(std::remove_if(muts.begin(), muts.end(), [] (auto& m) { return m.decorated_key().token() == dht::token::from_int64(0); }));
+    muts.erase(std::remove_if(muts.begin(), muts.end(), [] (auto& m) { return m.decorated_key().token() == dht::token::from_int64(0); }), muts.end());
 
     std::vector<mutation> reversed_muts;
     for (auto& m : muts) {
         reversed_muts.push_back(reverse(m));
     }
 
-    sstables::test_env::do_with([
-            s = random_schema.schema(), muts = std::move(muts), reversed_muts = std::move(reversed_muts),
-            version = writable_sstable_versions[1]] (sstables::test_env& env) {
+    std::vector<clustering_key> keys;
+    for (const auto& m: muts) {
+        for (auto& r: m.partition().clustered_rows()) {
+            keys.push_back(r.key());
+        }
+    }
+
+    std::mt19937 engine{tests::random::get_int<uint32_t>()};
+    auto fwd_ranges = random_ranges(keys, *query_schema, engine);
+
+    std::vector<query::clustering_range> ranges;
+    for (auto& r: fwd_ranges) {
+        assert(position_in_partition::less_compare(*query_schema)(r.start(), r.end()));
+        auto cr_opt = position_range_to_clustering_range(r, *query_schema);
+        if (!cr_opt) {
+            continue;
+        }
+        ranges.push_back(std::move(*cr_opt));
+    }
+
+    auto slice = partition_slice_builder(*query_schema)
+        .with_ranges(ranges)
+        .build();
+
+    auto rev_slice = native_reverse_slice_to_legacy_reverse_slice(*query_schema, slice);
+    rev_slice.options.set(query::partition_slice::option::reversed);
+
+    auto rev_full_slice = native_reverse_slice_to_legacy_reverse_slice(*query_schema, query_schema->full_slice());
+    rev_full_slice.options.set(query::partition_slice::option::reversed);
+
+    sstables::test_env::do_with([&, version = writable_sstable_versions[1]] (sstables::test_env& env) {
 
         std::vector<tmpdir> dirs;
         sstable_writer_config cfg = env.manager().configure_writer();
@@ -233,44 +259,49 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
             cfg.promoted_index_block_size = index_block_size;
 
             dirs.emplace_back();
-            auto source = make_sstable_mutation_source(env, s, dirs.back().path().string(), muts, cfg, version);
+            auto source = make_sstable_mutation_source(env, query_schema, dirs.back().path().string(), muts, cfg, version);
 
             dirs.emplace_back();
-            auto rev_source = make_sstable_mutation_source(env, s->make_reversed(), dirs.back().path().string(), reversed_muts, cfg, version);
+            auto rev_source = make_sstable_mutation_source(env, query_schema->make_reversed(), dirs.back().path().string(), reversed_muts, cfg, version);
 
             tests::reader_concurrency_semaphore_wrapper semaphore;
-
-            std::mt19937 engine{tests::random::get_int<uint32_t>()};
-
-            std::vector<clustering_key> keys;
-            for (const auto& m: muts) {
-                for (auto& r: m.partition().clustered_rows()) {
-                    keys.push_back(r.key());
-                }
-            }
-
-            auto slice = partition_slice_builder(*s)
-                .with_ranges(random_ranges(keys, *s, engine))
-                .build();
 
             testlog.trace("Slice: {}", slice);
 
             for (const auto& m: muts) {
                 auto prange = dht::partition_range::make_singular(m.decorated_key());
 
-                auto r1 = source.make_reader(s, semaphore.make_permit(), prange,
-                        slice, default_priority_class(), nullptr,
-                        streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                {
+                    auto r1 = source.make_reader(query_schema, semaphore.make_permit(), prange,
+                            slice, default_priority_class(), nullptr,
+                            streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                    auto close_r1 = deferred_action([&r1] { r1.close().get(); });
+
+                    auto r2 = rev_source.make_reader(query_schema, semaphore.make_permit(), prange,
+                            rev_slice, default_priority_class(), nullptr,
+                            streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                    close_r1.cancel();
+
+                    compare_readers(*query_schema, std::move(r1), std::move(r2));
+                }
+
+                auto r1 = source.make_reader(query_schema, semaphore.make_permit(), prange,
+                        query_schema->full_slice(), default_priority_class(), nullptr,
+                        streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
                 auto close_r1 = deferred_action([&r1] { r1.close().get(); });
 
-                auto rev_slice = native_reverse_slice_to_legacy_reverse_slice(*s, slice);
-                rev_slice.options.set(query::partition_slice::option::reversed);
-                auto r2 = rev_source.make_reader(s, semaphore.make_permit(), prange,
-                        rev_slice, default_priority_class(), nullptr,
-                        streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                auto r2 = rev_source.make_reader(query_schema, semaphore.make_permit(), prange,
+                        rev_full_slice, default_priority_class(), nullptr,
+                        streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
                 close_r1.cancel();
 
-                compare_readers(*s, std::move(r1), std::move(r2));
+                // We don't use `compare_readers` because in forwarding mode the readers
+                // may return different, however equivalent (and both correct), fragment streams.
+                // See #9472.
+                auto m1 = forwardable_reader_to_mutation(std::move(r1), fwd_ranges);
+                auto m2 = forwardable_reader_to_mutation(std::move(r2), fwd_ranges);
+
+                assert_that(m1).is_equal_to(m2, slice.row_ranges(*m.schema(), m.key()));
             }
         }
     }).get();

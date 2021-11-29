@@ -945,12 +945,13 @@ sstring random_schema::cql() const {
     sstring primary_key;
     auto partition_column_names = column_names(_schema, column_kind::partition_key);
     auto clustering_key_names = column_names(_schema, column_kind::clustering_key);
-    if (clustering_key_names.empty()) {
-        primary_key = format("{} ({})", boost::algorithm::join(partition_column_names, ", "), boost::algorithm::join(clustering_key_names, ", "));
+    if (!clustering_key_names.empty()) {
+        primary_key = format("({}), {}", boost::algorithm::join(partition_column_names, ", "), boost::algorithm::join(clustering_key_names, ", "));
     } else {
         primary_key = format("{}", boost::algorithm::join(partition_column_names, ", "));
     }
 
+    // FIXME include the clustering column orderings
     return format(
             "{}\nCREATE TABLE {}.{} (\n\t{}\n\tPRIMARY KEY ({}))",
             udts_str,
