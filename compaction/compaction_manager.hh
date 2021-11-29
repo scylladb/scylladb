@@ -308,8 +308,8 @@ public:
     // Stops ongoing compaction of a given type.
     void stop_compaction(sstring type);
 
-    // Stops ongoing compaction of a given table.
-    future<> stop_ongoing_compactions(sstring reason, column_family* cf);
+    // Stops ongoing compaction of a given table and/or compaction_type.
+    future<> stop_ongoing_compactions(sstring reason, column_family* cf, std::optional<sstables::compaction_type> type_opt = {});
 
     double backlog() {
         return _backlog_manager.backlog();
