@@ -292,7 +292,7 @@ public:
     // throws std::out_of_range exception if not found.
     compaction_state& get_compaction_state(table* t);
 
-    const std::vector<sstables::compaction_info> get_compactions() const;
+    const std::vector<sstables::compaction_info> get_compactions(table* cf = nullptr) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(const column_family* cf) const {
