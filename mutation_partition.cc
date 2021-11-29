@@ -311,12 +311,15 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     assert(p._schema_version == _schema_version);
 #endif
     _tombstone.apply(p._tombstone);
+    app_stats.has_any_tombstones |= bool(_tombstone);
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
     _static_row_continuous |= p._static_row_continuous;
 
     if (_row_tombstones.apply_monotonically(s, std::move(p._row_tombstones), preemptible) == stop_iteration::no) {
+        app_stats.has_any_tombstones |= !_row_tombstones.empty();
         return stop_iteration::no;
     }
+    app_stats.has_any_tombstones |= !_row_tombstones.empty();
 
     rows_entry::tri_compare cmp(s);
     auto del = current_deleter<rows_entry>();
@@ -353,6 +356,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 }
             }
             if (insert) {
+                app_stats.has_any_tombstones |= bool(p_i->row().deleted_at());
                 rows_type::key_grabber pi_kg(p_i);
                 _rows.insert_before(i, std::move(pi_kg));
             }
@@ -373,6 +377,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 memory::on_alloc_point();
                 i->apply_monotonically(s, std::move(src_e));
             }
+            app_stats.has_any_tombstones |= bool(p_i->row().deleted_at());
             ++app_stats.row_hits;
             p_i = p._rows.erase_and_dispose(p_i, del);
         }

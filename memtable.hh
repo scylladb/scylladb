@@ -227,6 +227,8 @@ public:
     mutation_cleaner& cleaner() {
         return _cleaner;
     }
+    bool has_any_tombstones() const;
+
 public:
     memtable_list* get_memtable_list() {
         return _memtable_list;

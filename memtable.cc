@@ -843,6 +843,10 @@ bool memtable::is_flushed() const {
     return bool(_underlying);
 }
 
+bool memtable::has_any_tombstones() const {
+    return _table_stats.memtable_app_stats.has_any_tombstones;
+}
+
 void memtable_entry::upgrade_schema(const schema_ptr& s, mutation_cleaner& cleaner) {
     if (_schema != s) {
         partition().upgrade(_schema, s, cleaner, no_cache_tracker);
