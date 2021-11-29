@@ -797,33 +797,32 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     _tasks.push_back(task);
     cmlog.debug("{} task {} cf={}: started", options.type(), fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
 
-    std::unique_ptr<std::vector<sstables::shared_sstable>> sstables;
-    lw_shared_ptr<compacting_sstable_registration> compacting;
+    std::vector<sstables::shared_sstable> sstables;
+    std::optional<compacting_sstable_registration> compacting;
 
     // since we might potentially have ongoing compactions, and we
     // must ensure that all sstables created before we run are included
     // in the re-write, we need to barrier out any previously running
     // compaction.
     co_await run_with_compaction_disabled(cf, [&] () mutable -> future<> {
-        sstables = std::make_unique<std::vector<sstables::shared_sstable>>(co_await get_func());
-        compacting = make_lw_shared<compacting_sstable_registration>(this, *sstables);
+        sstables = co_await get_func();
+        compacting = compacting_sstable_registration(this, sstables);
     });
     // sort sstables by size in descending order, such that the smallest files will be rewritten first
     // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
     // chance to succeed when the biggest files are reached.
-    std::sort(sstables->begin(), sstables->end(), [](sstables::shared_sstable& a, sstables::shared_sstable& b) {
+    std::sort(sstables.begin(), sstables.end(), [](sstables::shared_sstable& a, sstables::shared_sstable& b) {
         return a->data_size() > b->data_size();
     });
 
-    auto sstables_ptr = sstables.get();
-    _stats.pending_tasks += sstables->size();
+    _stats.pending_tasks += sstables.size();
 
-    task->compaction_done = do_until([this, sstables_ptr, task] { return sstables_ptr->empty() || !can_proceed(task); },
-             [this, task, options, sstables_ptr, compacting, can_purge] () mutable {
-        auto sst = sstables_ptr->back();
-        sstables_ptr->pop_back();
+    task->compaction_done = do_until([this, &sstables, task] { return sstables.empty() || !can_proceed(task); },
+             [this, task, options, &sstables, &compacting, can_purge] () mutable {
+        auto sst = sstables.back();
+        sstables.pop_back();
 
-        return repeat([this, task, options, sst = std::move(sst), compacting, can_purge] () mutable {
+        return repeat([this, task, options, sst = std::move(sst), &compacting, can_purge] () mutable {
             column_family& cf = *task->compacting_cf;
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
@@ -832,13 +831,13 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
-            descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+            descriptor.release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting->release_compacting(exhausted_sstables);
             };
 
-            return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
+            return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &cf, descriptor = std::move(descriptor)] () mutable {
               // Take write lock for cf to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
-              return with_lock(_compaction_state[&cf].lock.for_write(), [this, task, &cf, descriptor = std::move(descriptor), compacting] () mutable {
+              return with_lock(_compaction_state[&cf].lock.for_write(), [this, task, &cf, descriptor = std::move(descriptor)] () mutable {
                 _stats.pending_tasks--;
                 _stats.active_tasks++;
                 task->setup_new_compaction();
@@ -850,7 +849,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                     });
                 });
               });
-            }).then_wrapped([this, task, compacting] (future<> f) mutable {
+            }).then_wrapped([this, task] (future<> f) mutable {
                 task->finish_compaction();
                 _stats.active_tasks--;
                 if (!can_proceed(task)) {
@@ -868,8 +867,8 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
         });
-    }).finally([this, task, sstables = std::move(sstables), type = options.type()] {
-        _stats.pending_tasks -= sstables->size();
+    }).finally([this, task, type = options.type(), &sstables] {
+        _stats.pending_tasks -= sstables.size();
         _tasks.remove(task);
         cmlog.debug("{} task {} cf={}: done", type, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
     });
