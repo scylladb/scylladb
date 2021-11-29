@@ -21,7 +21,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "db/system_keyspace.hh"
 
 class database;
@@ -35,7 +35,7 @@ struct token_range {
     bytes end;
 };
 
-class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
+class size_estimates_mutation_reader final : public flat_mutation_reader_v2::impl {
     database& _db;
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
@@ -43,7 +43,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
     std::optional<ks_range> _keyspaces;
     ks_range::const_iterator _current_partition;
     streamed_mutation::forwarding _fwd;
-    flat_mutation_reader_opt _partition_reader;
+    flat_mutation_reader_v2_opt _partition_reader;
 public:
     size_estimates_mutation_reader(database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
@@ -63,7 +63,7 @@ private:
 struct virtual_reader {
     database& db;
 
-    flat_mutation_reader operator()(schema_ptr schema,
+    flat_mutation_reader_v2 operator()(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -71,7 +71,7 @@ struct virtual_reader {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return make_flat_mutation_reader<size_estimates_mutation_reader>(db, std::move(schema), std::move(permit), range, slice, fwd);
+        return make_flat_mutation_reader_v2<size_estimates_mutation_reader>(db, std::move(schema), std::move(permit), range, slice, fwd);
     }
 
     virtual_reader(database& db_) noexcept : db(db_) {}
