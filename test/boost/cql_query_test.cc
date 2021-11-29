@@ -4763,7 +4763,7 @@ static future<> test_clustering_filtering_3_with_compaction_strategy(const std::
         cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
         e.db().invoke_on_all([] (database& db) {
             auto& table = db.find_column_family("ks", "cf");
-            table.disable_auto_compaction();
+            return table.disable_auto_compaction();
         }).get();
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
         e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();

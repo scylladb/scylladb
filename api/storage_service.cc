@@ -153,7 +153,7 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, serv
                     if (enabled) {
                         cf.enable_auto_compaction();
                     } else {
-                        cf.disable_auto_compaction();
+                        return cf.disable_auto_compaction();
                     }
                     return make_ready_future<>();
                 });

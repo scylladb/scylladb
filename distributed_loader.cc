@@ -503,8 +503,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 
         db.invoke_on_all([&global_table, generation] (database& db) {
             global_table->update_sstables_known_generation(generation);
-            global_table->disable_auto_compaction();
-            return make_ready_future<>();
+            return global_table->disable_auto_compaction();
         }).get();
 
         reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {

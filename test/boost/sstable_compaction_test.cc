@@ -3522,7 +3522,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         // auto compaction is enabled by default
         BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
         // disable auto compaction by user
-        cf->disable_auto_compaction();
+        cf->disable_auto_compaction().get();
         // check it is disabled
         BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
 
