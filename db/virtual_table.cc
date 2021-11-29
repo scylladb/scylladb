@@ -89,12 +89,12 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
             };
 
             return execute(mutation_sink).then([this, mt, s, units, &range, &slice, &pc, &trace_state, &fwd, &fwd_mr] () {
-                auto rd = mt->as_data_source().make_reader(s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
+                auto rd = mt->as_data_source().make_reader_v2(s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {
-                    rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
+                    rd = upgrade_to_v2(make_filtering_reader(downgrade_to_v1(std::move(rd)), [this] (const dht::decorated_key& dk) -> bool {
                         return this_shard_owns(dk);
-                    });
+                    }));
                 }
 
                 return rd;
@@ -102,7 +102,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
         };
 
         // populate keeps the memtable alive.
-        return make_flat_mutation_reader<chained_delegating_reader>(s, std::move(populate), units->units.permit());
+        return make_flat_mutation_reader_v2<chained_delegating_reader>(s, std::move(populate), units->units.permit());
     });
 }
 
