@@ -490,9 +490,13 @@ commitlog_total_space_in_mb: -1
 # prometheus_port: 9180
 #
 # prometheus address
-# By default, Scylla binds all interfaces to the prometheus API
-# It is possible to restrict the listening address to a specific one
-prometheus_address: localhost
+# Leaving this blank will set it to the same value as listen_address.
+# This means that by default, Scylla listens to the prometheus API on the same
+# listening address (and therefore network interface) used to listen for
+# internal communication. If the monitoring node is not in this internal
+# network, you can override prometheus_address explicitly - e.g., setting
+# it to 0.0.0.0 to listen on all interfaces.
+# prometheus_address: 1.2.3.4
 
 # Distribution of data among cores (shards) within a node
 #

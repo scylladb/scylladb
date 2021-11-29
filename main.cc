@@ -642,7 +642,7 @@ int main(int ac, char** av) {
                     prometheus_server.stop().get();
                 });
 
-                auto ip = utils::resolve(cfg->prometheus_address, family, preferred).get0();
+                auto ip = utils::resolve(cfg->prometheus_address || cfg->listen_address, family, preferred).get0();
 
                 //FIXME discarded future
                 prometheus::config pctx;
