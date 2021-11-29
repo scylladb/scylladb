@@ -2531,7 +2531,8 @@ static void install_virtual_readers(database& db) {
 
 static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
     return (s.get() == system_keyspace::batchlog().get()) || (s.get() == system_keyspace::paxos().get())
-            || s == system_keyspace::v3::scylla_views_builds_in_progress();
+            || s == system_keyspace::v3::scylla_views_builds_in_progress()
+            || s == system_keyspace::raft();
 }
 
 future<> system_keyspace_make(distributed<database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, db::config& cfg) {
