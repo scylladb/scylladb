@@ -124,14 +124,6 @@ int compaction_weight_registration::weight() const {
     return _weight;
 }
 
-static inline uint64_t get_total_size(const std::vector<sstables::shared_sstable>& sstables) {
-    uint64_t total_size = 0;
-    for (auto& sst : sstables) {
-        total_size += sst->data_size();
-    }
-    return total_size;
-}
-
 // Calculate weight of compaction job.
 static inline int calculate_weight(uint64_t total_size) {
     // At the moment, '4' is being used as log base for determining the weight
@@ -154,7 +146,7 @@ static inline int calculate_weight(const sstables::compaction_descriptor& descri
     if (descriptor.sstables.empty() || descriptor.has_only_fully_expired) {
         return 0;
     }
-    return calculate_weight(get_total_size(descriptor.sstables));
+    return calculate_weight(boost::accumulate(descriptor.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0)));
 }
 
 unsigned compaction_manager::current_compaction_fan_in_threshold() const {
