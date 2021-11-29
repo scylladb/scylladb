@@ -351,7 +351,7 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                     sm::make_derive(
                             "unprivileged_entries_evictions_on_size",
                             [] { return prepared_statements_cache::shard_stats().unprivileged_entries_evictions_on_size; },
-                            sm::description("Counts a number of evictions of prepared statements from the prepared statements cache after they have been used only once. If this counter gets incremented this is a red flag.")),
+                            sm::description("Counts a number of evictions of prepared statements from the prepared statements cache after they have been used only once. An increasing counter suggests the user may be preparing a different statement for each request instead of reusing the same prepared statement with parameters.")),
 
                     sm::make_gauge(
                             "prepared_cache_size",
@@ -437,7 +437,7 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                     sm::make_derive(
                             "authorized_prepared_statements_unprivileged_entries_evictions_on_size",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_unprivileged_entries_evictions_on_size; },
-                            sm::description("Counts a number of evictions of prepared statements from the authorized prepared statements cache after they have been used only once. If this counter gets incremented this is a red flag.")),
+                            sm::description("Counts a number of evictions of prepared statements from the authorized prepared statements cache after they have been used only once. An increasing counter suggests the user may be preparing a different statement for each request instead of reusing the same prepared statement with parameters.")),
 
                     sm::make_gauge(
                             "authorized_prepared_statements_cache_size",
