@@ -305,7 +305,7 @@ public:
     }
 
     // Stops ongoing compaction of a given type.
-    void stop_compaction(sstring type);
+    future<> stop_compaction(sstring type);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
     future<> stop_ongoing_compactions(sstring reason, column_family* cf = nullptr, std::optional<sstables::compaction_type> type_opt = {});
