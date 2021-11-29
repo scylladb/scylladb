@@ -344,11 +344,24 @@ class BoostTest(UnitTest):
         self.__junit_etree = None
 
     def get_junit_etree(self):
+        def adjust_suite_name(name):
+            # Normalize "path/to/file.cc" to "path.to.file" to conform to
+            # Jenkins expectations that the suite name is a class name. ".cc"
+            # doesn't add any infomation. Add the mode, otherwise failures
+            # in different modes are indistinguishable. The "test/" prefix adds
+            # no information, so remove it.
+            import re
+            name = re.sub(r'^test/', '', name)
+            name = re.sub(r'\.cc$', '', name)
+            name = re.sub(r'/', '.', name)
+            name = f'{name}.{self.mode}'
+            return name
         if self.__junit_etree is None:
             self.__junit_etree = ET.parse(self.xmlout)
             root = self.__junit_etree.getroot()
             suites = root.findall('.//TestSuite')
             for suite in suites:
+                suite.attrib['name'] = adjust_suite_name(suite.attrib['name'])
                 skipped = suite.findall('./TestCase[@reason="disabled"]')
                 for e in skipped:
                     suite.remove(e)
