@@ -89,7 +89,7 @@ private:
         bool stopping = false;
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
-        utils::UUID output_run_identifier;
+        std::optional<utils::UUID> output_run_identifier;
         sstables::compaction_data compaction_data;
         compaction_state& compaction_state;
         gate::holder gate_holder;
@@ -106,6 +106,13 @@ private:
 
         void setup_new_compaction();
         void finish_compaction();
+
+        bool generating_output_run() const noexcept {
+            return compaction_running && output_run_identifier;
+        }
+        const utils::UUID& output_run_id() const noexcept {
+            return *output_run_identifier;
+        }
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
