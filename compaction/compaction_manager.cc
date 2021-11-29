@@ -956,42 +956,41 @@ future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
         return make_exception_future<>(std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
             cf->schema()->ks_name(), cf->schema()->cf_name())));
     }
-  // FIXME: indentation
-  auto sorted_owned_ranges = db.get_keyspace_local_ranges(cf->schema()->ks_name());
-  auto get_sstables = [this, &db, cf, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
-    return seastar::async([this, &db, cf, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
-        auto schema = cf->schema();
-        auto sstables = std::vector<sstables::shared_sstable>{};
-        const auto candidates = get_candidates(*cf);
-        std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
-            seastar::thread::maybe_yield();
-            return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
-        });
-        return sstables;
-    });
-  };
 
-  return rewrite_sstables(cf, sstables::compaction_type_options::make_cleanup(std::move(sorted_owned_ranges)), std::move(get_sstables));
+    auto sorted_owned_ranges = db.get_keyspace_local_ranges(cf->schema()->ks_name());
+    auto get_sstables = [this, &db, cf, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
+        return seastar::async([this, &db, cf, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
+            auto schema = cf->schema();
+            auto sstables = std::vector<sstables::shared_sstable>{};
+            const auto candidates = get_candidates(*cf);
+            std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
+                seastar::thread::maybe_yield();
+                return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
+            });
+            return sstables;
+        });
+    };
+
+    return rewrite_sstables(cf, sstables::compaction_type_options::make_cleanup(std::move(sorted_owned_ranges)), std::move(get_sstables));
 }
 
 // Submit a column family to be upgraded and wait for its termination.
 future<> compaction_manager::perform_sstable_upgrade(database& db, column_family* cf, bool exclude_current_version) {
     auto get_sstables = [this, &db, cf, exclude_current_version] {
-            // FIXME: indentation
-            std::vector<sstables::shared_sstable> tables;
+        std::vector<sstables::shared_sstable> tables;
 
-            auto last_version = cf->get_sstables_manager().get_highest_supported_format();
+        auto last_version = cf->get_sstables_manager().get_highest_supported_format();
 
-            for (auto& sst : get_candidates(*cf)) {
-                // if we are a "normal" upgrade, we only care about
-                // tables with older versions, but potentially
-                // we are to actually rewrite everything. (-a)
-                if (!exclude_current_version || sst->get_version() < last_version) {
-                    tables.emplace_back(sst);
-                }
+        for (auto& sst : get_candidates(*cf)) {
+            // if we are a "normal" upgrade, we only care about
+            // tables with older versions, but potentially
+            // we are to actually rewrite everything. (-a)
+            if (!exclude_current_version || sst->get_version() < last_version) {
+                tables.emplace_back(sst);
             }
+        }
 
-            return make_ready_future<std::vector<sstables::shared_sstable>>(tables);
+        return make_ready_future<std::vector<sstables::shared_sstable>>(tables);
     };
 
     // doing a "cleanup" is about as compacting as we need
@@ -1008,10 +1007,9 @@ future<> compaction_manager::perform_sstable_scrub(column_family* cf, sstables::
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
         return perform_sstable_scrub_validate_mode(cf);
     }
-        // FIXME: indentation
-        return rewrite_sstables(cf, sstables::compaction_type_options::make_scrub(scrub_mode), [this, cf] {
-            return make_ready_future<std::vector<sstables::shared_sstable>>(get_candidates(*cf));
-        }, can_purge_tombstones::no);
+    return rewrite_sstables(cf, sstables::compaction_type_options::make_scrub(scrub_mode), [this, cf] {
+        return make_ready_future<std::vector<sstables::shared_sstable>>(get_candidates(*cf));
+    }, can_purge_tombstones::no);
 }
 
 void compaction_manager::add(column_family* cf) {
