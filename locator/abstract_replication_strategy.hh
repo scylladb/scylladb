@@ -138,7 +138,7 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
 
 private:
-    future<std::unordered_multimap<inet_address, dht::token_range>> get_address_ranges(const token_metadata& tm, inet_address endpoint) const;
+    future<dht::token_range_vector> get_address_ranges(const token_metadata& tm, inet_address endpoint) const;
 };
 
 // Holds the full replication_map resulting from applying the

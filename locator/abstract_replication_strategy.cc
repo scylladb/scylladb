@@ -228,9 +228,9 @@ effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     });
 }
 
-future<std::unordered_multimap<inet_address, dht::token_range>>
+future<dht::token_range_vector>
 abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
-    std::unordered_multimap<inet_address, dht::token_range> ret;
+    dht::token_range_vector ret;
     for (auto& t : tm.sorted_tokens()) {
         auto eps = co_await calculate_natural_endpoints(t, tm);
         bool found = false;
@@ -241,7 +241,7 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
             dht::token_range_vector r = tm.get_primary_ranges_for(t);
             rslogger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
             for (auto&& rng : r) {
-                ret.emplace(ep, rng);
+                ret.push_back(rng);
             }
             found = true;
             break;
@@ -287,13 +287,10 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
 
 future<dht::token_range_vector>
 abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const {
-    dht::token_range_vector ret;
     token_metadata temp;
     temp = co_await tmptr->clone_only_token_map();
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
-    for (auto& x : co_await get_address_ranges(temp, pending_address)) {
-            ret.push_back(x.second);
-    }
+    auto ret = co_await get_address_ranges(temp, pending_address);
     co_await temp.clear_gently();
     co_return ret;
 }
@@ -459,7 +456,7 @@ future<> effective_replication_map::calculate_pending_ranges_for_bootstrap(
         co_await all_left_metadata.update_normal_tokens(tokens, endpoint);
         auto all_left_address_ranges = co_await _rs->get_address_ranges(all_left_metadata, endpoint);
         for (auto& x : all_left_address_ranges) {
-            new_pending_ranges.emplace(x.second, endpoint);
+            new_pending_ranges.emplace(x, endpoint);
         }
         all_left_metadata.remove_endpoint(endpoint);
     }
