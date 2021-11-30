@@ -240,6 +240,10 @@ public:
         return *this;
     }
 
+    // If the intention is to persist the property that changes are synced
+    // on each write, it's needed to call this function both when creating a schema
+    // for the first time, as well as add the table in question to extra_durable_tables
+    // (from db/system_keyspace.hh).
     schema_builder& set_wait_for_sync_to_commitlog(bool sync) {
         _raw._wait_for_sync = sync;
         return *this;
