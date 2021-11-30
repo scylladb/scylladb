@@ -1151,9 +1151,9 @@ def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstrea
     # StartingSequenceNumber:
     response = dynamodbstreams.describe_stream(StreamArn=arn)
     shards = response['StreamDescription']['Shards']
-    while 'LastEvaluatedShardId' in response:
+    while 'LastEvaluatedShardId' in response['StreamDescription']:
         response = dynamodbstreams.describe_stream(StreamArn=arn,
-            ExclusiveStartShardId=response['LastEvaluatedShardId'])
+            ExclusiveStartShardId=response['StreamDescription']['LastEvaluatedShardId'])
         shards.extend(response['StreamDescription']['Shards'])
     iterators = []
     for shard in shards:
@@ -1174,6 +1174,7 @@ def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstrea
                 assert response['Records'][1]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
                 return
         time.sleep(0.5)
+
     pytest.fail("timed out")
 
 # Above we tested some specific operations in small tests aimed to reproduce
