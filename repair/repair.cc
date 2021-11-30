@@ -1775,7 +1775,12 @@ future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, 
         source_dc = get_local_dc();
     }
     auto reason = streaming::stream_reason::rebuild;
-    return do_rebuild_replace_with_repair(std::move(tmptr), std::move(op), std::move(source_dc), reason);
+    co_await do_rebuild_replace_with_repair(std::move(tmptr), std::move(op), std::move(source_dc), reason);
+    co_await get_db().invoke_on_all([](database& db) {
+        for (auto& t : db.get_non_system_column_families()) {
+            t->trigger_offstrategy_compaction();
+        }
+    });
 }
 
 future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
