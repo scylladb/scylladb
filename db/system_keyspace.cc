@@ -184,7 +184,7 @@ schema_ptr system_keyspace::batchlog() {
     return batchlog;
 }
 
-/*static*/ schema_ptr system_keyspace::paxos() {
+schema_ptr system_keyspace::paxos() {
     static thread_local auto paxos = [] {
         // FIXME: switch to the new schema_builder interface (with_column(...), etc)
         schema_builder builder(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
@@ -311,7 +311,7 @@ schema_ptr system_keyspace::built_indexes() {
     return built_indexes;
 }
 
-/*static*/ schema_ptr system_keyspace::local() {
+schema_ptr system_keyspace::local() {
     static thread_local auto local = [] {
         schema_builder builder(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
         // partition key
@@ -362,7 +362,7 @@ schema_ptr system_keyspace::built_indexes() {
     return local;
 }
 
-/*static*/ schema_ptr system_keyspace::peers() {
+schema_ptr system_keyspace::peers() {
     static thread_local auto peers = [] {
         schema_builder builder(generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
@@ -396,7 +396,7 @@ schema_ptr system_keyspace::built_indexes() {
     return peers;
 }
 
-/*static*/ schema_ptr system_keyspace::peer_events() {
+schema_ptr system_keyspace::peer_events() {
     static thread_local auto peer_events = [] {
         schema_builder builder(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
         // partition key
@@ -421,7 +421,7 @@ schema_ptr system_keyspace::built_indexes() {
     return peer_events;
 }
 
-/*static*/ schema_ptr system_keyspace::range_xfers() {
+schema_ptr system_keyspace::range_xfers() {
     static thread_local auto range_xfers = [] {
         schema_builder builder(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
         // partition key
@@ -444,7 +444,7 @@ schema_ptr system_keyspace::built_indexes() {
     return range_xfers;
 }
 
-/*static*/ schema_ptr system_keyspace::compactions_in_progress() {
+schema_ptr system_keyspace::compactions_in_progress() {
     static thread_local auto compactions_in_progress = [] {
         schema_builder builder(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
         // partition key
@@ -470,7 +470,7 @@ schema_ptr system_keyspace::built_indexes() {
     return compactions_in_progress;
 }
 
-/*static*/ schema_ptr system_keyspace::compaction_history() {
+schema_ptr system_keyspace::compaction_history() {
     static thread_local auto compaction_history = [] {
         schema_builder builder(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
         // partition key
@@ -500,7 +500,7 @@ schema_ptr system_keyspace::built_indexes() {
     return compaction_history;
 }
 
-/*static*/ schema_ptr system_keyspace::sstable_activity() {
+schema_ptr system_keyspace::sstable_activity() {
     static thread_local auto sstable_activity = [] {
         schema_builder builder(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
         // partition key
@@ -555,7 +555,7 @@ schema_ptr system_keyspace::size_estimates() {
     return size_estimates;
 }
 
-/*static*/ schema_ptr system_keyspace::large_partitions() {
+schema_ptr system_keyspace::large_partitions() {
     static thread_local auto large_partitions = [] {
         schema_builder builder(generate_legacy_id(NAME, LARGE_PARTITIONS), NAME, LARGE_PARTITIONS,
         // partition key
@@ -632,7 +632,7 @@ schema_ptr system_keyspace::large_cells() {
     return large_cells;
 }
 
-/*static*/ schema_ptr system_keyspace::scylla_local() {
+schema_ptr system_keyspace::scylla_local() {
     static thread_local auto scylla_local = [] {
         schema_builder builder(generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
         // partition key
@@ -926,7 +926,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
     return schema;
 }
 
-/*static*/ schema_ptr system_keyspace::v3::cdc_local() {
+schema_ptr system_keyspace::v3::cdc_local() {
     static thread_local auto cdc_local = [] {
         schema_builder builder(generate_legacy_id(NAME, CDC_LOCAL), NAME, CDC_LOCAL,
         // partition key
