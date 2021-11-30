@@ -1994,5 +1994,17 @@ bool contains_bind_marker(const expression& e) {
     const bind_variable* search_res = find_in_expression<bind_variable>(e, [](const bind_variable&) { return true; });
     return search_res != nullptr;
 }
+
+size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f) {
+    size_t ret = 0;
+    recurse_until(e, [&] (const expression& e) {
+        if (auto op = as_if<binary_operator>(&e)) {
+            ret += f(*op) ? 1 : 0;
+        }
+        return false;
+    });
+    return ret;
+}
+
 } // namespace expr
 } // namespace cql3

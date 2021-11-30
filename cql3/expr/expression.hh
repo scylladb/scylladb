@@ -491,17 +491,7 @@ const binary_operator* find_binop(const expression& e, Fn predicate_fun) {
 }
 
 /// Counts binary_operator atoms b for which f(b) is true.
-inline
-size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f) {
-    size_t ret = 0;
-    recurse_until(e, [&] (const expression& e) {
-        if (auto op = as_if<binary_operator>(&e)) {
-            ret += f(*op) ? 1 : 0;
-        }
-        return false;
-    });
-    return ret;
-}
+size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f);
 
 inline const binary_operator* find(const expression& e, oper_t op) {
     return find_binop(e, [&] (const binary_operator& o) { return o.op == op; });
