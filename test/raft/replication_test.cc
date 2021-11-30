@@ -127,6 +127,17 @@ RAFT_TEST_CASE(simple_3_short_leader, (test_case{
                             {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12}}}));
 
+RAFT_TEST_CASE(follower_add_entries_01, (test_case{
+        .nodes = 3,
+        .total_values=6,
+        .updates = {
+            entries{1},
+            entries{1,1},
+            entries{2},
+            entries{2,2}
+        },
+    }));
+
 // A follower and a leader have no common entries
 // 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
 RAFT_TEST_CASE(follower_not_matching, (test_case{

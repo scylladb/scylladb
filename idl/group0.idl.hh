@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-present ScyllaDB
+ * Copyright 2021-present ScyllaDB
  */
 
 /*
@@ -19,17 +19,15 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "service/raft/raft_gossip_failure_detector.hh"
-#include "gms/gossiper.hh"
-
 namespace service {
 
-raft_gossip_failure_detector::raft_gossip_failure_detector(gms::gossiper& gs, raft_address_map<>& address_map)
-    : _gossip(gs), _address_map(address_map)
-{}
+struct group0_info {
+    raft::group_id group0_id;
+    raft::server_address addr;
+};
 
-bool raft_gossip_failure_detector::is_alive(raft::server_id server) {
-    return _gossip.is_alive(_address_map.get_inet_address(server));
-}
+struct group0_peer_exchange {
+    std::variant<std::monostate, service::group0_info, std::vector<raft::server_address>> info;
+};
 
-} // end of namespace service
+} // namespace raft

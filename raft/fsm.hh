@@ -368,6 +368,12 @@ public:
     term_t log_last_term() const {
         return _log.last_term();
     }
+    index_t commit_idx() const {
+        return _commit_idx;
+    }
+    std::optional<term_t> log_term_for(index_t idx) const {
+        return _log.term_for(idx);
+    }
     index_t log_last_snapshot_idx() const {
         return _log.get_snapshot().idx;
     }

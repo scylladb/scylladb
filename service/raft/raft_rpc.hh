@@ -24,9 +24,19 @@
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
-#include "service/raft/raft_group_registry.hh"
+#include "service/raft/raft_address_map.hh"
 
 namespace service {
+
+inline gms::inet_address
+raft_addr_to_inet_addr(const raft::server_address& addr) {
+    return ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{});
+}
+
+inline bytes
+inet_addr_to_raft_addr(gms::inet_address addr) {
+    return ser::serialize_to_buffer<bytes>(addr);
+}
 
 // Scylla-specific implementation of raft RPC module.
 //
@@ -36,15 +46,15 @@ class raft_rpc : public raft::rpc {
     raft::group_id _group_id;
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
-    raft_group_registry& _raft_gr;
+    raft_address_map<>& _address_map;
     seastar::gate _shutdown_gate;
 
-    raft_group_registry::ticker_type::time_point timeout() {
-        return raft_group_registry::ticker_type::clock::now() + raft_group_registry::tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
+    raft_ticker_type::time_point timeout() {
+        return raft_ticker_type::clock::now() + raft_tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
     }
 
 public:
-    explicit raft_rpc(netw::messaging_service& ms, raft_group_registry& raft_gr, raft::group_id gid, raft::server_id srv_id);
+    explicit raft_rpc(netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;
@@ -55,6 +65,10 @@ public:
     void send_read_quorum(raft::server_id id, const raft::read_quorum& check_quorum) override;
     void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& check_quorum_reply) override;
     future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) override;
+    future<raft::add_entry_reply> send_add_entry(raft::server_id id, const raft::command& cmd) override;
+    future<raft::add_entry_reply> send_modify_config(raft::server_id id,
+        const std::vector<raft::server_address>& add,
+        const std::vector<raft::server_id>& del) override;
 
     void add_server(raft::server_id id, raft::server_info info) override;
     void remove_server(raft::server_id id) override;
@@ -71,6 +85,10 @@ public:
     future<raft::read_barrier_reply> execute_read_barrier(raft::server_id);
 
     future<raft::snapshot_reply> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
+    future<raft::add_entry_reply> execute_add_entry(raft::server_id from, raft::command cmd);
+    future<raft::add_entry_reply> execute_modify_config(raft::server_id from,
+        std::vector<raft::server_address> add,
+        std::vector<raft::server_id> del);
 };
 
 } // end of namespace service

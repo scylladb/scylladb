@@ -64,6 +64,7 @@
 #include "idl/messaging_service.dist.hh"
 #include "idl/paxos.dist.hh"
 #include "idl/raft.dist.hh"
+#include "idl/group0.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/consistency_level.dist.impl.hh"
@@ -87,6 +88,7 @@
 #include "idl/messaging_service.dist.impl.hh"
 #include "idl/paxos.dist.impl.hh"
 #include "idl/raft.dist.impl.hh"
+#include "idl/group0.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -441,6 +443,10 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_ECHO:
     case messaging_verb::GOSSIP_GET_ENDPOINT_STATES:
     case messaging_verb::GET_SCHEMA_VERSION:
+    // Raft peer exchange is mainly running at boot, but still
+    // should not be blocked by any data requests.
+    case messaging_verb::GROUP0_PEER_EXCHANGE:
+    case messaging_verb::GROUP0_MODIFY_CONFIG:
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
@@ -491,6 +497,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_READ_QUORUM:
     case messaging_verb::RAFT_READ_QUORUM_REPLY:
     case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
+    case messaging_verb::RAFT_ADD_ENTRY:
+    case messaging_verb::RAFT_MODIFY_CONFIG:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -1410,6 +1418,50 @@ future<> messaging_service::unregister_raft_execute_read_barrier_on_leader(){
 }
 future<raft::read_barrier_reply> messaging_service::send_raft_execute_read_barrier_on_leader(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id){
    return send_message_timeout<future<raft::read_barrier_reply>>(this, messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id));
+}
+
+void messaging_service::register_raft_add_entry(std::function<future<raft::add_entry_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, raft::command)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_ADD_ENTRY, std::move(func));
+}
+future<> messaging_service::unregister_raft_add_entry() {
+   return unregister_handler(netw::messaging_verb::RAFT_ADD_ENTRY);
+}
+future<raft::add_entry_reply> messaging_service::send_raft_add_entry(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const raft::command& cmd) {
+   return send_message_timeout<raft::add_entry_reply>(this, messaging_verb::RAFT_ADD_ENTRY, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id), cmd);
+}
+
+void messaging_service::register_raft_modify_config(std::function<future<raft::add_entry_reply>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_MODIFY_CONFIG, std::move(func));
+}
+
+future<> messaging_service::unregister_raft_modify_config() {
+   return unregister_handler(netw::messaging_verb::RAFT_MODIFY_CONFIG);
+}
+
+future<raft::add_entry_reply> messaging_service::send_raft_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del) {
+   return send_message_timeout<raft::add_entry_reply>(this, messaging_verb::RAFT_MODIFY_CONFIG, std::move(id), timeout, std::move(gid), std::move(from_id), std::move(dst_id), add, del);
+}
+
+void messaging_service::register_group0_peer_exchange(std::function<future<service::group0_peer_exchange>(const rpc::client_info&, rpc::opt_time_point, std::vector<raft::server_address>)>&& func) {
+   register_handler(this, netw::messaging_verb::GROUP0_PEER_EXCHANGE, std::move(func));
+}
+future<> messaging_service::unregister_group0_peer_exchange() {
+   return unregister_handler(netw::messaging_verb::GROUP0_PEER_EXCHANGE);
+}
+future<service::group0_peer_exchange> messaging_service::send_group0_peer_exchange(msg_addr id, clock_type::time_point timeout, const std::vector<raft::server_address>& peers) {
+   return send_message_timeout<service::group0_peer_exchange>(this, messaging_verb::GROUP0_PEER_EXCHANGE, std::move(id), timeout, peers);
+}
+
+void messaging_service::register_group0_modify_config(std::function<future<>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func) {
+   register_handler(this, netw::messaging_verb::GROUP0_MODIFY_CONFIG, std::move(func));
+}
+
+future<> messaging_service::unregister_group0_modify_config() {
+   return unregister_handler(netw::messaging_verb::GROUP0_MODIFY_CONFIG);
+}
+
+future<> messaging_service::send_group0_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del) {
+   return send_message_timeout<void>(this, messaging_verb::GROUP0_MODIFY_CONFIG, std::move(id), timeout, std::move(gid), add, del);
 }
 
 void init_messaging_service(sharded<messaging_service>& ms,

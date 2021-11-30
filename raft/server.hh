@@ -48,6 +48,11 @@ public:
         size_t max_log_size = 5000;
         // If set to true will enable prevoting stage during election
         bool enable_prevoting = true;
+        // If set to true, forward configuration and entries from
+        // follower to the leader autmatically. This guarantees
+        // add_entry()/modify_config() never throws not_a_leader,
+        // but makes timed_out_error more likely.
+        bool enable_forwarding = true;
     };
 
     virtual ~server() {}
@@ -55,7 +60,6 @@ public:
     // Returned future is resolved depending on wait_type parameter:
     //  'committed' - when the entry is committed
     //  'applied'   - when the entry is applied (happens after it is committed)
-    // The function has to be called on a leader, throws not_a_leader exception otherwise.
     // May fail because of an internal error or because leader changed and an entry was either
     // replaced by the new leader or the server lost track of it. The former will result in
     // dropped_entry exception the later in commit_status_unknown.
@@ -63,6 +67,10 @@ public:
 
     // Set a new cluster configuration. If the configuration is
     // identical to the previous one does nothing.
+    //
+    // Does not preempt before adding entry to this server's
+    // in-memory log.
+    //
     // Provided node_info is passed to rpc::add_server() for each
     // new server and rpc::remove_server() is called for each
     // departing server.
@@ -80,6 +88,21 @@ public:
     // uncertainty, thus commit_status_unknown exception may be
     // returned even in case of a successful config change.
     virtual future<> set_configuration(server_address_set c_new) = 0;
+
+    // A simplified wrapper around set_configuration() which adds
+    // and deletes servers. Unlike set_configuration(),
+    // works on a follower as well as on a leader (forwards the
+    // request to the current leader). If the added servers are
+    // already part of the configuration, or deleted are not
+    // present, does nothing. The implementation forwards the
+    // list of added or removed servers to the leader, where they
+    // are transformed to a new configuration, which is then
+    // applied to the leader's log without preemption, bypassing
+    // the log limiter semaphore.
+    // This makes it possible to retry this command without
+    // adverse effects to the configuration.
+    virtual future<> modify_config(std::vector<server_address> add,
+        std::vector<server_id> del) = 0;
 
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
@@ -117,6 +140,8 @@ public:
     virtual void elapse_election() = 0;
     virtual bool is_leader() = 0;
     virtual void tick() = 0;
+    // Server id of this server
+    virtual raft::server_id id() const = 0;
 };
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

@@ -266,9 +266,12 @@ future<call_result_t<M>> call(
                     } catch (const raft::commit_status_unknown&) {
                     } catch (const raft::not_a_leader&) {
                     } catch (const raft::stopped_error&) {
+                    } catch (const timed_out_error&) {
                     }
                 });
             return make_ready_future<call_result_t<M>>(timed_out_error{});
+        } catch (seastar::timed_out_error& e) {
+            return make_ready_future<call_result_t<M>>(e);
         }
     });
 }
@@ -304,6 +307,22 @@ class rpc : public raft::rpc {
         reply_id_t reply_id;
     };
 
+    struct add_entry_message {
+        raft::command cmd;
+        reply_id_t reply_id;
+    };
+
+    struct add_entry_reply_message {
+        raft::add_entry_reply reply;
+        reply_id_t reply_id;
+    };
+
+    struct modify_config_message {
+        std::vector<raft::server_address> add;
+        std::vector<raft::server_id> del;
+        reply_id_t reply_id;
+    };
+
 public:
     using message_t = std::variant<
         snapshot_message,
@@ -316,7 +335,11 @@ public:
         raft::read_quorum,
         raft::read_quorum_reply,
         execute_barrier_on_leader,
-        execute_barrier_on_leader_reply>;
+        execute_barrier_on_leader_reply,
+        add_entry_message,
+        add_entry_reply_message,
+        modify_config_message
+        >;
 
     using send_message_t = std::function<void(raft::server_id dst, message_t)>;
 
@@ -335,7 +358,12 @@ private:
     // When (if) a reply returns, we take the ID from the reply (which is the same
     // as the ID in the corresponding request), take the promise under that ID
     // and push the reply through that promise.
-    std::unordered_map<reply_id_t, std::variant<promise<raft::snapshot_reply>, promise<raft::read_barrier_reply>>> _reply_promises;
+    using reply_promise = std::variant<
+        promise<raft::snapshot_reply>,
+        promise<raft::read_barrier_reply>,
+        promise<raft::add_entry_reply>
+    >;
+    std::unordered_map<reply_id_t, reply_promise> _reply_promises;
     reply_id_t _counter = 0;
 
     // Used to ensure that when `abort()` returns there are
@@ -344,6 +372,8 @@ private:
 
     size_t _snapshot_applications = 0;
     size_t _read_barrier_executions = 0;
+    size_t _add_entry_executions = 0;
+    size_t _modify_config_executions = 0;
 
 public:
     rpc(raft::server_id id, snapshots_t<State>& snaps, send_message_t send)
@@ -443,6 +473,64 @@ public:
             if (it != _reply_promises.end()) {
                 std::get<promise<raft::read_barrier_reply>>(it->second).set_value(std::move(m.reply));
             }
+        },
+        [&] (add_entry_message m) {
+            static const size_t max_concurrent_add_entry_executions = 100; // TODO: configurable
+            if (_add_entry_executions >= max_concurrent_add_entry_executions) {
+                tlogger.warn(
+                    "{}: cannot execute add_entry for {} due to too many concurrent requests, dropping it",
+                    _id, src);
+                // Should we send some message back instead?
+                return;
+            }
+
+            ++_add_entry_executions;
+            (void)[] (rpc& self, raft::server_id src, add_entry_message m, gate::holder holder) -> future<> {
+                try {
+                    auto reply = co_await self._client->execute_add_entry(src, std::move(m.cmd));
+
+                    self._send(src, add_entry_reply_message{
+                        .reply = std::move(reply),
+                        .reply_id = m.reply_id
+                    });
+                } catch (...) {
+                    tlogger.warn("{}: exception when executing add_entry for {}: {}", self._id, src, std::current_exception());
+                }
+
+                --self._add_entry_executions;
+            }(*this, src, std::move(m), _gate.hold());
+        },
+        [this] (add_entry_reply_message m) {
+            auto it = _reply_promises.find(m.reply_id);
+            if (it != _reply_promises.end()) {
+                std::get<promise<raft::add_entry_reply>>(it->second).set_value(std::move(m.reply));
+            }
+        },
+        [&] (modify_config_message m) {
+            static const size_t max_concurrent_modify_config_executions = 100; // TODO: configurable
+            if (_modify_config_executions >= max_concurrent_modify_config_executions) {
+                tlogger.warn(
+                    "{}: cannot execute modify_config for {} due to too many concurrent requests, dropping it",
+                    _id, src);
+                // Should we send some message back instead?
+                return;
+            }
+
+            ++_modify_config_executions;
+            (void)[] (rpc& self, raft::server_id src, modify_config_message m, gate::holder holder) -> future<> {
+                try {
+                    auto reply = co_await self._client->execute_modify_config(src, std::move(m.add), std::move(m.del));
+
+                    self._send(src, add_entry_reply_message{
+                        .reply = std::move(reply),
+                        .reply_id = m.reply_id
+                    });
+                } catch (...) {
+                    tlogger.warn("{}: exception when executing modify_config for {}: {}", self._id, src, std::current_exception());
+                }
+
+                --self._modify_config_executions;
+            }(*this, src, std::move(m), _gate.hold());
         }
         ), std::move(payload));
     }
@@ -492,6 +580,55 @@ public:
         });
     }
 
+    virtual future<raft::add_entry_reply> send_add_entry(raft::server_id dst, const raft::command& cmd) override {
+        auto id = _counter++;
+        promise<raft::add_entry_reply> p;
+        auto f = p.get_future();
+        _reply_promises.emplace(id, std::move(p));
+        auto guard = defer([this, id] { _reply_promises.erase(id); });
+
+        _send(dst, add_entry_message{
+            .cmd = cmd,
+            .reply_id = id
+        });
+        co_return co_await with_gate(_gate,
+                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::add_entry_reply> {
+            static const raft::logical_clock::duration send_add_entry_timeout = 20_t;
+
+            try {
+                co_return co_await _timer.with_timeout(_timer.now() + send_add_entry_timeout, std::move(f));
+            } catch (logical_timer::timed_out<raft::add_entry_reply>& e) {
+                (void) e.get_future().discard_result().handle_exception_type([] (const broken_promise&) { });
+                throw timed_out_error{};
+            }
+        });
+    }
+    virtual future<raft::add_entry_reply> send_modify_config(raft::server_id dst,
+        const std::vector<raft::server_address>& add,
+        const std::vector<raft::server_id>& del) override {
+        auto id = _counter++;
+        promise<raft::add_entry_reply> p;
+        auto f = p.get_future();
+        _reply_promises.emplace(id, std::move(p));
+        auto guard = defer([this, id] { _reply_promises.erase(id); });
+
+        _send(dst, modify_config_message{
+            .add = add,
+            .del = del,
+            .reply_id = id
+        });
+        co_return co_await with_gate(_gate,
+                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::add_entry_reply> {
+            static const raft::logical_clock::duration send_modify_config_timeout = 200_t;
+
+            try {
+                co_return co_await _timer.with_timeout(_timer.now() + send_modify_config_timeout, std::move(f));
+            } catch (logical_timer::timed_out<raft::add_entry_reply>& e) {
+                (void) e.get_future().discard_result().handle_exception_type([] (const broken_promise&) { });
+                throw timed_out_error{};
+            }
+        });
+    }
     virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id dst) override {
         auto id = _counter++;
         promise<raft::read_barrier_reply> p;
@@ -2023,7 +2160,13 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             }}
         }, 200'000);
 
-        auto leader_id = co_await env.new_server(true);
+        auto seed = tests::random::get_int<int32_t>();
+        std::mt19937 random_engine{seed};
+        raft::server::configuration srv_cfg{
+            .enable_forwarding = false, //std::bernoulli_distribution{0.5}(random_engine)
+        };
+
+        auto leader_id = co_await env.new_server(true, srv_cfg);
 
         // Wait for the server to elect itself as a leader.
         assert(co_await wait_for_leader<AppendReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
@@ -2031,7 +2174,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         size_t no_all_servers = 10;
         std::vector<raft::server_id> all_servers{leader_id};
         for (size_t i = 1; i < no_all_servers; ++i) {
-            all_servers.push_back(co_await env.new_server(false));
+            all_servers.push_back(co_await env.new_server(false, srv_cfg));
         }
 
         size_t no_init_servers = 5;
@@ -2071,7 +2214,6 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
         auto reconfig_thread = some(threads_without_nemesis);
 
-        auto seed = tests::random::get_int<int32_t>();
 
         raft_call<AppendReg>::state_type db_call_state {
             .env = env,

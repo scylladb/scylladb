@@ -168,6 +168,17 @@ struct configuration {
         return diff;
     }
 
+    // True if the current or previous configuration contains
+    // this server.
+    bool contains(server_id id) const {
+        auto it = current.find(server_address{.id=id});
+        if (it != current.end()) {
+            return true;
+        }
+        return previous.find(server_address{.id=id}) != previous.end();
+    }
+
+    // Same as contains() but true only if the member can vote.
     bool can_vote(server_id id) const {
         bool can_vote = false;
         auto it = current.find(server_address{.id=id});
@@ -225,7 +236,7 @@ struct dropped_entry : public error {
 };
 
 struct commit_status_unknown : public error {
-    commit_status_unknown() : error("Commit staus of the entry is unknown") {}
+    commit_status_unknown() : error("Commit status of the entry is unknown") {}
 };
 
 struct stopped_error : public error {
@@ -245,6 +256,11 @@ struct timeout_error : public error {
     using error::error;
 };
 
+struct state_machine_error: public error {
+    state_machine_error(std::experimental::source_location l = std::experimental::source_location::current())
+        : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
+};
+
 struct no_other_voting_member : public error {
     no_other_voting_member() : error("Cannot stepdown because there is no other voting member") {}
 };
@@ -253,9 +269,12 @@ struct no_other_voting_member : public error {
 // perhaps with a different server.
 inline bool is_transient_error(const std::exception& e) {
     return dynamic_cast<const not_a_leader*>(&e) ||
-           dynamic_cast<const commit_status_unknown*>(&e) ||
            dynamic_cast<const dropped_entry*>(&e) ||
-           dynamic_cast<const conf_change_in_progress*>(&e) ||
+           dynamic_cast<const conf_change_in_progress*>(&e);
+}
+
+inline bool is_uncertainty(const std::exception& e) {
+    return dynamic_cast<const commit_status_unknown*>(&e) ||
            dynamic_cast<const stopped_error*>(&e);
 }
 
@@ -371,6 +390,20 @@ struct read_quorum_reply {
     // Copy of the id from a read_quorum request
     read_id id;
 };
+
+struct entry_id {
+    // Added entry term
+    term_t term;
+    // Added entry log index
+    index_t idx;
+};
+
+// Response to add_entry or modify_config RPC.
+// Carries either entry id (the entry is not committed yet),
+// not_a_leader (the entry is not added to Raft log), or, for
+// modify_config, commit_status_unknown (commit status is
+// unknown).
+using add_entry_reply = std::variant<entry_id, not_a_leader, commit_status_unknown>;
 
 // std::monostate {} if the leader cannot execute the barrier because
 // it did not commit any entries yet
@@ -495,6 +528,19 @@ public:
     // Forward a read barrier request to the leader.
     virtual future<read_barrier_reply> execute_read_barrier_on_leader(server_id id) = 0;
 
+    // Two-way RPC for adding an entry on the leader
+    // @param id the leader
+    // @param cmd raft::command to be added to the leader's log
+    // @retval either term and index of the committed entry or
+    // not_a_leader exception.
+    virtual future<add_entry_reply> send_add_entry(server_id id, const command& cmd) = 0;
+
+    // Send a configuration change request to the leader. Block until the
+    // leader replies.
+    virtual future<add_entry_reply> send_modify_config(server_id id,
+        const std::vector<server_address>& add,
+        const std::vector<server_id>& del) = 0;
+
     // When a new server is learn this function is called with the
     // info about the server.
     virtual void add_server(server_id id, server_info info) = 0;
@@ -540,6 +586,16 @@ public:
 
     // Try to execute read barrier, future resolves when the barrier is completed or error happens
     virtual future<read_barrier_reply> execute_read_barrier(server_id from) = 0;
+
+    // An endpoint on the leader to add an entry to the raft log,
+    // as requested by a remote follower.
+    virtual future<add_entry_reply> execute_add_entry(server_id from, command cmd) = 0;
+
+    // An endpoint on the leader to change configuration,
+    // as requested by a remote follower.
+    virtual future<add_entry_reply> execute_modify_config(server_id from,
+        std::vector<server_address> add,
+        std::vector<server_id> del) = 0;
 
     // Update RPC implementation with this client as
     // the receiver of RPC input.

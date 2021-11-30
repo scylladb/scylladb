@@ -129,6 +129,9 @@ raft::server_address_set address_set(std::vector<node_id> nodes) noexcept;
 //  - Configuration change
 struct entries {
     size_t n;
+    // If provided, use this server to add entries.
+    std::optional<size_t> server;
+    entries(size_t n_arg, std::optional<size_t> server_arg = {}) :n(n_arg), server(server_arg) {}
 };
 struct new_leader {
     size_t id;
@@ -340,7 +343,7 @@ public:
     void cancel_ticker(size_t id);
     void set_ticker_callback(size_t id) noexcept;
     void init_tick_delays(size_t n);
-    future<> add_entries(size_t n);
+    future<> add_entries(size_t n, std::optional<size_t> server = std::nullopt);
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
     future<> wait_log(::wait_log followers);
@@ -429,12 +432,12 @@ public:
             _conf(std::move(conf)), _snapshots(snapshots),
             _persisted_snapshots(persisted_snapshots) {}
     persistence() {}
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override { return seastar::sleep(1us); }
-    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
+    future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override { return seastar::sleep(1us); }
+    future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
+    future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
         (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id][snap.id]);
         tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id][snap.id].hasher.finalize_uint64());
         return make_ready_future<>();
@@ -442,16 +445,16 @@ public:
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
         return make_ready_future<raft::snapshot_descriptor>(_conf.snapshot);
     }
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override { return seastar::sleep(1us); };
-    virtual future<raft::log_entries> load_log() override {
+    future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override { return seastar::sleep(1us); };
+    future<raft::log_entries> load_log() override {
         raft::log_entries log;
         for (auto&& e : _conf.log) {
             log.emplace_back(make_lw_shared(std::move(e)));
         }
         return make_ready_future<raft::log_entries>(std::move(log));
     }
-    virtual future<> truncate_log(raft::index_t idx) override { return make_ready_future<>(); }
-    virtual future<> abort() override { return make_ready_future<>(); }
+    future<> truncate_log(raft::index_t idx) override { return make_ready_future<>(); }
+    future<> abort() override { return make_ready_future<>(); }
 };
 
 template <typename Clock>
@@ -567,7 +570,9 @@ public:
         return tests::random::get_int<size_t>(0, _rpc_config.extra_delay_max) * 1us;
     }
 
-    virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
+    future<raft::snapshot_reply> send_snapshot(raft::server_id id,
+        const raft::install_snapshot& snap, seastar::abort_source& as) override {
+
         if (!_net.count(id)) {
             throw std::runtime_error("trying to send a message to an unknown node");
         }
@@ -583,7 +588,7 @@ public:
         co_return co_await _net[id]->_client->apply_snapshot(_id, std::move(s));
     }
 
-    virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
+    future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override {
         if (!_net.count(id)) {
             return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
         }
@@ -606,7 +611,7 @@ public:
         }
         return make_ready_future<>();
     }
-    virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+    void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override {
         if (!_net.count(id)) {
             return;
         }
@@ -628,7 +633,7 @@ public:
             }
         }
     }
-    virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+    void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) override {
         if (!_net.count(id)) {
             return;
         }
@@ -648,7 +653,7 @@ public:
             _net[id]->_client->request_vote(rpc::_id, std::move(vote_request));
         }
     }
-    virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+    void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) override {
         if (!_net.count(id)) {
             return;
         }
@@ -667,7 +672,7 @@ public:
             _net[id]->_client->request_vote_reply(rpc::_id, vote_reply);
         }
     }
-    virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
+    void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) override {
         if (!_net.count(id)) {
             return;
         }
@@ -676,11 +681,11 @@ public:
         }
         _net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
     }
-    virtual future<> abort() {
+    future<> abort() override {
         tlogger.debug("[{}] rpc aborting", _id);
         return _gate.close();
     }
-    virtual void send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
+    void send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) override {
         if (!_net.count(id)) {
             return;
         }
@@ -691,7 +696,7 @@ public:
             _net[id]->_client->read_quorum_request(_id, read_quorum);
         }
     }
-    virtual void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& reply) {
+    void send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& reply) override {
         if (!_net.count(id)) {
             return;
         }
@@ -702,7 +707,7 @@ public:
             _net[id]->_client->read_quorum_reply(_id, std::move(reply));
         }
     }
-    virtual future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) {
+    future<raft::read_barrier_reply> execute_read_barrier_on_leader(raft::server_id id) override {
         if (!_net.count(id)) {
             return make_exception_future<raft::read_barrier_reply>(std::runtime_error("trying to send a message to an unknown node"));
         }
@@ -711,11 +716,30 @@ public:
         }
         return _net[id]->_client->execute_read_barrier(_id);
     }
-    virtual void add_server(raft::server_id id, bytes node_info) {
+    void check_known_and_connected(raft::server_id id) {
+        if (!_net.count(id)) {
+            throw std::runtime_error("trying to send a message to an unknown node");
+        }
+        if (!(*_connected)(id, _id)) {
+            throw std::runtime_error("cannot send since nodes are disconnected");
+        }
+    }
+    future<raft::add_entry_reply> send_add_entry(raft::server_id id, const raft::command& cmd) override {
+        check_known_and_connected(id);
+        return _net[id]->_client->execute_add_entry(_id, cmd);
+    }
+    future<raft::add_entry_reply> send_modify_config(raft::server_id id,
+        const std::vector<raft::server_address>& add,
+        const std::vector<raft::server_id>& del) override {
+        check_known_and_connected(id);
+        return _net[id]->_client->execute_modify_config(_id, add, del);
+    }
+
+    void add_server(raft::server_id id, bytes node_info) override {
         _known_peers.insert(raft::server_address{id});
         ++_servers_added;
     }
-    virtual void remove_server(raft::server_id id) {
+    void remove_server(raft::server_id id) override {
         _known_peers.erase(raft::server_address{id});
         ++_servers_removed;
     }
@@ -866,20 +890,16 @@ void raft_cluster<Clock>::connect_all() {
 
 // Add consecutive integer entries to a leader
 template <typename Clock>
-future<> raft_cluster<Clock>::add_entries(size_t n) {
+future<> raft_cluster<Clock>::add_entries(size_t n, std::optional<size_t> server) {
     size_t end = _next_val + n;
     while (_next_val != end) {
         try {
-            co_await _servers[_leader].server->add_entry(create_command(_next_val), raft::wait_type::committed);
+            auto& at = _servers[server ? *server : _leader].server;
+            co_await at->add_entry(create_command(_next_val), raft::wait_type::committed);
             _next_val++;
-        } catch (raft::not_a_leader& e) {
-            // leader stepped down, update with new leader if present
-            if (e.leader != raft::server_id{}) {
-                _leader = to_int_id(e.leader.id);
-            }
         } catch (raft::commit_status_unknown& e) {
         } catch (raft::dropped_entry& e) {
-            // retry if an entry is dropped because the leader have changed after it was submitetd
+            // retry if an entry is dropped because the leader have changed after it was submitted
         }
     }
 }
@@ -1363,7 +1383,7 @@ struct run_test {
         for (auto update: test.updates) {
             co_await std::visit(make_visitor(
             [&rafts] (entries update) -> future<> {
-                co_await rafts.add_entries(update.n);
+                co_await rafts.add_entries(update.n, update.server);
             },
             [&rafts] (new_leader update) -> future<> {
                 co_await rafts.elect_new_leader(update.id);

@@ -41,6 +41,7 @@
 #include "cache_temperature.hh"
 #include "service/paxos/prepare_response.hh"
 #include "raft/raft.hh"
+#include "service/raft/messaging.hh"
 
 #include <list>
 #include <vector>
@@ -156,7 +157,11 @@ enum class messaging_verb : int32_t {
     RAFT_READ_QUORUM = 52,
     RAFT_READ_QUORUM_REPLY = 53,
     RAFT_EXECUTE_READ_BARRIER_ON_LEADER = 54,
-    LAST = 55,
+    RAFT_ADD_ENTRY = 55,
+    RAFT_MODIFY_CONFIG = 56,
+    GROUP0_PEER_EXCHANGE = 57,
+    GROUP0_MODIFY_CONFIG = 58,
+    LAST = 59,
 };
 
 } // namespace netw
@@ -590,6 +595,22 @@ public:
     void register_raft_execute_read_barrier_on_leader(std::function<future<raft::read_barrier_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id)>&& func);
     future<> unregister_raft_execute_read_barrier_on_leader();
     future<raft::read_barrier_reply> send_raft_execute_read_barrier_on_leader(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id);
+
+    void register_raft_add_entry(std::function<future<raft::add_entry_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::command cmd)>&& func);
+    future<> unregister_raft_add_entry();
+    future<raft::add_entry_reply> send_raft_add_entry(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::command& cmd);
+
+    void register_raft_modify_config(std::function<future<raft::add_entry_reply>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func);
+    future<> unregister_raft_modify_config();
+    future<raft::add_entry_reply> send_raft_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del);
+
+    void register_group0_peer_exchange(std::function<future<service::group0_peer_exchange> (const rpc::client_info&, rpc::opt_time_point, std::vector<raft::server_address>)>&& func);
+    future<> unregister_group0_peer_exchange();
+    future<service::group0_peer_exchange> send_group0_peer_exchange(msg_addr id, clock_type::time_point timeout, const std::vector<raft::server_address>& peers);
+
+    void register_group0_modify_config(std::function<future<>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func);
+    future<> unregister_group0_modify_config();
+    future<> send_group0_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
