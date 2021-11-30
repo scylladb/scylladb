@@ -130,14 +130,15 @@ public:
     // Note: must be called with initialized, non-empty token_metadata.
     future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;
 
-    future<std::unordered_multimap<inet_address, dht::token_range>> get_address_ranges(const token_metadata& tm, inet_address endpoint) const;
-
     // Caller must ensure that token_metadata will not change throughout the call.
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
 
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address) const;
 
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
+
+private:
+    future<std::unordered_multimap<inet_address, dht::token_range>> get_address_ranges(const token_metadata& tm, inet_address endpoint) const;
 };
 
 // Holds the full replication_map resulting from applying the
