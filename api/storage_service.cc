@@ -604,15 +604,21 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 return make_exception_future<json::json_return_type>(
                         std::runtime_error("Can not perform cleanup operation when topology changes"));
             }
-            return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
-                std::vector<column_family*> column_families_vec;
-                auto& cm = db.get_compaction_manager();
-                for (auto cf : column_families) {
-                    column_families_vec.push_back(&db.find_column_family(keyspace, cf));
-                }
-                return parallel_for_each(column_families_vec, [&cm, &db] (column_family* cf) {
-                    return cm.perform_cleanup(db, cf);
+            return ctx.db.invoke_on_all([keyspace, column_families] (database& db) -> future<> {
+                auto table_ids = boost::copy_range<std::vector<utils::UUID>>(column_families | boost::adaptors::transformed([&] (auto& table_name) {
+                    return db.find_uuid(keyspace, table_name);
+                }));
+                // cleanup smaller tables first, to increase chances of success if low on space.
+                std::ranges::sort(table_ids, std::less<>(), [&] (const utils::UUID& id) {
+                    return db.find_column_family(id).get_stats().live_disk_space_used;
                 });
+                auto& cm = db.get_compaction_manager();
+                // as a table can be dropped during loop below, let's find it before issuing the cleanup request.
+                for (auto& id : table_ids) {
+                    table& t = db.find_column_family(id);
+                    co_await cm.perform_cleanup(db, &t);
+                }
+                co_return;
             }).then([]{
                 return make_ready_future<json::json_return_type>(0);
             });
