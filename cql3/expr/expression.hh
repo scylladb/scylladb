@@ -494,48 +494,14 @@ const binary_operator* find_binop(const expression& e, Fn predicate_fun) {
 template<typename Fn>
 requires std::regular_invocable<Fn, const binary_operator&>
 size_t count_if(const expression& e, Fn f) {
-    return expr::visit(overloaded_functor{
-            [&] (const binary_operator& op) -> size_t { return f(op) ? 1 : 0; },
-            [&] (const conjunction& conj) {
-                return std::accumulate(conj.children.cbegin(), conj.children.cend(), size_t{0},
-                                       [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
-            },
-            [] (const constant&) -> size_t { return 0; },
-            [] (const column_value&) -> size_t { return 0; },
-            [] (const token&) -> size_t { return 0; },
-            [] (const unresolved_identifier&) -> size_t { return 0; },
-            [] (const column_mutation_attribute&) -> size_t { return 0; },
-            [&] (const function_call& fc) -> size_t {
-                return std::accumulate(fc.args.cbegin(), fc.args.cend(), size_t{0},
-                                       [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
-            },
-            [&] (const cast& c) -> size_t {
-                return count_if(c.arg, f); },
-            [&] (const field_selection& fs) -> size_t {
-                return count_if(fs.structure, f);
-            },
-            [&] (const null&) -> size_t {
-                return 0;
-            },
-            [&] (const bind_variable&) -> size_t {
-                return 0;
-            },
-            [&] (const untyped_constant&) -> size_t {
-                return 0;
-            },
-            [&] (const tuple_constructor& t) -> size_t {
-                return std::accumulate(t.elements.cbegin(), t.elements.cend(), size_t{0},
-                                       [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
-            },
-            [&] (const collection_constructor& c) -> size_t {
-                return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
-                                       [&] (size_t acc, const expression& e) { return acc + count_if(e, f); });
-            },
-            [&] (const usertype_constructor& c) -> size_t {
-                return std::accumulate(c.elements.cbegin(), c.elements.cend(), size_t{0},
-                                       [&] (size_t acc, const usertype_constructor::elements_map_type::value_type& e) { return acc + count_if(e.second, f); });
-            },
-        }, e);
+    size_t ret = 0;
+    recurse_until(e, [&] (const expression& e) {
+        if (auto op = as_if<binary_operator>(&e)) {
+            ret += f(*op) ? 1 : 0;
+        }
+        return false;
+    });
+    return ret;
 }
 
 inline const binary_operator* find(const expression& e, oper_t op) {
