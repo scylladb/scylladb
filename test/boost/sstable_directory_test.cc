@@ -490,7 +490,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
 
         e.db().invoke_on_all([] (database& db) {
             auto& cf = db.find_column_family("ks", "cf");
-            cf.disable_auto_compaction();
+            return cf.disable_auto_compaction();
         }).get();
 
         unsigned num_sstables = 10 * smp::count;
@@ -539,7 +539,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
 
         e.db().invoke_on_all([] (database& db) {
             auto& cf = db.find_column_family("ks", "cf");
-            cf.disable_auto_compaction();
+            return cf.disable_auto_compaction();
         }).get();
 
         unsigned num_sstables = 10 * smp::count;
@@ -588,7 +588,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
 
         e.db().invoke_on_all([] (database& db) {
             auto& cf = db.find_column_family("ks", "cf");
-            cf.disable_auto_compaction();
+            return cf.disable_auto_compaction();
         }).get();
 
         unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * smp::count;

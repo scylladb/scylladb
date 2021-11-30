@@ -947,7 +947,7 @@ public:
     void drop_hit_rate(gms::inet_address addr);
 
     void enable_auto_compaction();
-    void disable_auto_compaction();
+    future<> disable_auto_compaction();
     bool is_auto_compaction_disabled_by_user() const {
       return _compaction_disabled_by_user;
     }

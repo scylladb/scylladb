@@ -556,22 +556,22 @@ future<> compaction_manager::stop_tasks(std::vector<lw_shared_ptr<task>> tasks, 
     });
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason) {
-    auto ongoing_compactions = get_compactions().size();
-
-    // Wait for each task handler to stop. Copy list because task remove itself
-    // from the list when done.
-    auto tasks = boost::copy_range<std::vector<lw_shared_ptr<task>>>(_tasks);
-    cmlog.info("Stopping {} tasks for {} ongoing compactions due to {}", tasks.size(), ongoing_compactions, reason);
-    return stop_tasks(std::move(tasks), std::move(reason));
-}
-
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, column_family* cf) {
-    auto ongoing_compactions = get_compactions().size();
-    auto tasks = boost::copy_range<std::vector<lw_shared_ptr<task>>>(_tasks | boost::adaptors::filtered([cf] (auto& task) {
-        return task->compacting_cf == cf;
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, column_family* cf, std::optional<sstables::compaction_type> type_opt) {
+    auto ongoing_compactions = get_compactions(cf).size();
+    auto tasks = boost::copy_range<std::vector<lw_shared_ptr<task>>>(_tasks | boost::adaptors::filtered([cf, type_opt] (auto& task) {
+        return (!cf || task->compacting_cf == cf) && (!type_opt || task->type == *type_opt);
     }));
-    cmlog.info("Stopping {} tasks for {} ongoing compactions for table {}.{} due to {}", tasks.size(), ongoing_compactions, cf->schema()->ks_name(), cf->schema()->cf_name(), reason);
+    logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
+    if (cmlog.is_enabled(level)) {
+        std::string scope = "";
+        if (cf) {
+            scope = fmt::format(" for table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
+        }
+        if (type_opt) {
+            scope += fmt::format(" {} type={}", scope.size() ? "and" : "for", *type_opt);
+        }
+        cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
+    }
     return stop_tasks(std::move(tasks), std::move(reason));
 }
 
@@ -1055,7 +1055,7 @@ future<> compaction_manager::remove(column_family* cf) {
 #endif
 }
 
-const std::vector<sstables::compaction_info> compaction_manager::get_compactions() const {
+const std::vector<sstables::compaction_info> compaction_manager::get_compactions(table* cf) const {
     auto to_info = [] (const lw_shared_ptr<task>& t) {
         sstables::compaction_info ret;
         ret.compaction_uuid = t->compaction_data.compaction_uuid;
@@ -1067,22 +1067,19 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
         return ret;
     };
     using ret = std::vector<sstables::compaction_info>;
-    return boost::copy_range<ret>(_tasks | boost::adaptors::filtered(std::mem_fn(&task::compaction_running)) | boost::adaptors::transformed(to_info));
+    return boost::copy_range<ret>(_tasks | boost::adaptors::filtered([cf] (const lw_shared_ptr<task>& t) {
+                return (!cf || t->compacting_cf == cf) && t->compaction_running;
+            }) | boost::adaptors::transformed(to_info));
 }
 
-void compaction_manager::stop_compaction(sstring type) {
+future<> compaction_manager::stop_compaction(sstring type) {
     sstables::compaction_type target_type;
     try {
         target_type = sstables::to_compaction_type(type);
     } catch (...) {
         throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
     }
-    // FIXME: switch to task_stop(), and wait for their termination, so API user can know when compactions actually stopped.
-    for (auto& task : _tasks) {
-        if (task->compaction_running && target_type == task->type) {
-            task->compaction_data.stop("user request");
-        }
-    }
+    return stop_ongoing_compactions("user request", nullptr, target_type);
 }
 
 void compaction_manager::propagate_replacement(column_family* cf,
