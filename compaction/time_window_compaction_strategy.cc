@@ -164,15 +164,20 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         }
     }
 
+    auto is_disjoint = [&schema, mode, max_sstables] (const std::vector<shared_sstable>& ssts) {
+        size_t tolerance = (mode == reshape_mode::relaxed) ? max_sstables : 0;
+        return sstable_set_overlapping_count(schema, ssts) <= tolerance;
+    };
+
     clogger.debug("time_window_compaction_strategy::get_reshaping_job: offstrategy_threshold={} max_sstables={} multi_window={} disjoint={} single_window={} disjoint={}",
             offstrategy_threshold, max_sstables,
             multi_window.size(), !multi_window.empty() && sstable_set_overlapping_count(schema, multi_window) == 0,
             single_window.size(), !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0);
 
-    auto need_trimming = [max_sstables, schema] (const std::vector<shared_sstable>& ssts) {
+    auto need_trimming = [max_sstables, schema, &is_disjoint] (const std::vector<shared_sstable>& ssts) {
         // All sstables can be compacted at once if they're disjoint, given that partitioned set
         // will incrementally open sstables which translates into bounded memory usage.
-        return ssts.size() > max_sstables && sstable_set_overlapping_count(schema, ssts) != 0;
+        return ssts.size() > max_sstables && !is_disjoint(ssts);
     };
 
     if (!multi_window.empty()) {
@@ -192,7 +197,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     }
 
     // For things that don't span multiple windows, we compact windows that are individually too big
-    auto all_disjoint = !single_window.empty() && !sstable_set_overlapping_count(schema, single_window);
+    auto all_disjoint = !single_window.empty() && is_disjoint(single_window);
     auto all_buckets = get_buckets(single_window, _options);
     single_window.clear();
     for (auto& pair : all_buckets.first) {
