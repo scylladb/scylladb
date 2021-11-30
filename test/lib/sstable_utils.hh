@@ -118,6 +118,8 @@ public:
                         return stop_iteration::no;
                     });
                 });
+            }).finally([&ir] () {
+                return ir->close();
             });
         }).then([l] {
             return std::move(*l);
