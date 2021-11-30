@@ -457,6 +457,8 @@ extern std::ostream& operator<<(std::ostream&, const column_value&);
 
 extern std::ostream& operator<<(std::ostream&, const expression&);
 
+extern bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun);
+
 // Looks into the expression and finds the given expression variant
 // for which the predicate function returns true.
 // If nothing is found returns nullptr.
@@ -467,76 +469,87 @@ template<ExpressionElement ExprElem, class Fn>
 requires std::invocable<Fn, const ExprElem&>
       && std::same_as<std::invoke_result_t<Fn, const ExprElem&>, bool>
 const ExprElem* find_in_expression(const expression& e, Fn predicate_fun) {
+  const ExprElem* ret = nullptr;
+  recurse_until(e, [&] (const expression& e) {
     if (auto expr_elem = as_if<ExprElem>(&e)) {
         if (predicate_fun(*expr_elem)) {
-            return expr_elem;
+            ret = expr_elem;
+            return true;
         }
     }
+    return false;
+  });
+  return ret;
+}
 
+inline bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun) {
+    if (auto res = predicate_fun(e)) {
+        return res;
+    }
     return expr::visit(overloaded_functor{
-            [&] (const binary_operator& op) -> const ExprElem* {
-                if (auto found = find_in_expression<ExprElem>(op.lhs, predicate_fun)) {
+            [&] (const binary_operator& op) {
+                if (auto found = recurse_until(op.lhs, predicate_fun)) {
                     return found;
                 }
-                return find_in_expression<ExprElem>(op.rhs, predicate_fun);
+                return recurse_until(op.rhs, predicate_fun);
             },
-            [&] (const conjunction& conj) -> const ExprElem* {
+            [&] (const conjunction& conj) {
                 for (auto& child : conj.children) {
-                    if (auto found = find_in_expression<ExprElem>(child, predicate_fun)) {
+                    if (auto found = recurse_until(child, predicate_fun)) {
                         return found;
                     }
                 }
-                return nullptr;
+                return false;
             },
-            [&] (const column_value& cv) -> const ExprElem* {
+            [&] (const column_value& cv) {
                 if (cv.sub.has_value()) {
-                    return find_in_expression<ExprElem>(*cv.sub, predicate_fun);
+                    return recurse_until(*cv.sub, predicate_fun);
                 }
-                return nullptr;
+                return false;
             },
-            [&] (const column_mutation_attribute& a) -> const ExprElem* {
-                return find_in_expression<ExprElem>(a.column, predicate_fun);
+            [&] (const column_mutation_attribute& a) {
+                return recurse_until(a.column, predicate_fun);
             },
-            [&] (const function_call& fc) -> const ExprElem* {
+            [&] (const function_call& fc) {
                 for (auto& arg : fc.args) {
-                    if (auto found = find_in_expression<ExprElem>(arg, predicate_fun)) {
+                    if (auto found = recurse_until(arg, predicate_fun)) {
                         return found;
                     }
                 }
-                return nullptr;
+                return false;
             },
-            [&] (const cast& c) -> const ExprElem* {
-                return find_in_expression<ExprElem>(c.arg, predicate_fun);
+            [&] (const cast& c) {
+                return recurse_until(c.arg, predicate_fun);
             },
-            [&] (const field_selection& fs) -> const ExprElem* {
-                return find_in_expression<ExprElem>(fs.structure, predicate_fun);
+            [&] (const field_selection& fs) {
+                return recurse_until(fs.structure, predicate_fun);
             },
-            [&] (const tuple_constructor& t) -> const ExprElem* {
+            [&] (const tuple_constructor& t) {
                 for (auto& e : t.elements) {
-                    if (auto found = find_in_expression<ExprElem>(e, predicate_fun)) {
+                    if (auto found = recurse_until(e, predicate_fun)) {
                         return found;
                     }
                 }
-                return nullptr;
+                return false;
             },
-            [&] (const collection_constructor& c) -> const ExprElem* {
+            [&] (const collection_constructor& c) {
                 for (auto& e : c.elements) {
-                    if (auto found = find_in_expression<ExprElem>(e, predicate_fun)) {
+                    if (auto found = recurse_until(e, predicate_fun)) {
                         return found;
                     }
                 }
-                return nullptr;
+                return false;
             },
-            [&] (const usertype_constructor& c) -> const ExprElem* {
+            [&] (const usertype_constructor& c) {
                 for (auto& [k, v] : c.elements) {
-                    if (auto found = find_in_expression<ExprElem>(v, predicate_fun)) {
+                    if (auto found = recurse_until(v, predicate_fun)) {
                         return found;
                     }
                 }
-                return nullptr;
+                return false;
             },
-            [](LeafExpression auto const&) -> const ExprElem* {
-                return nullptr;
+            [](LeafExpression auto const&) {
+                return false;
             }
         }, e);
 }
