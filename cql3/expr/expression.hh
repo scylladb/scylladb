@@ -469,17 +469,17 @@ template<ExpressionElement ExprElem, class Fn>
 requires std::invocable<Fn, const ExprElem&>
       && std::same_as<std::invoke_result_t<Fn, const ExprElem&>, bool>
 const ExprElem* find_in_expression(const expression& e, Fn predicate_fun) {
-  const ExprElem* ret = nullptr;
-  recurse_until(e, [&] (const expression& e) {
-    if (auto expr_elem = as_if<ExprElem>(&e)) {
-        if (predicate_fun(*expr_elem)) {
-            ret = expr_elem;
-            return true;
+    const ExprElem* ret = nullptr;
+    recurse_until(e, [&] (const expression& e) {
+        if (auto expr_elem = as_if<ExprElem>(&e)) {
+            if (predicate_fun(*expr_elem)) {
+                ret = expr_elem;
+                return true;
+            }
         }
-    }
-    return false;
-  });
-  return ret;
+        return false;
+    });
+    return ret;
 }
 
 /// If there is a binary_operator atom b for which f(b) is true, returns it.  Otherwise returns null.
