@@ -43,9 +43,6 @@
 
 #include "cql3/expr/expression.hh"
 #include "cql3/relation.hh"
-#include "cql3/term.hh"
-#include "cql3/tuples.hh"
-
 #include "cql3/restrictions/multi_column_restriction.hh"
 
 #include <ranges>
@@ -159,8 +156,8 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
-        return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, t);
+        auto e = to_expression(col_specs, get_value(), db, schema->ks_name(), ctx);
+        return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, std::move(e));
     }
 
     virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
@@ -171,18 +168,18 @@ protected:
             return cs->column_specification;
         });
         if (_in_marker) {
-            auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
-            auto as_abstract_marker = static_pointer_cast<abstract_marker>(t);
-            return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, as_abstract_marker);
+            auto e = to_expression(col_specs, get_value(), db, schema->ks_name(), ctx);
+            auto bound_value_marker = expr::as<expr::bind_variable>(e);
+            return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, std::move(bound_value_marker));
         } else {
             std::vector<expr::expression> raws(_in_values.size());
             std::copy(_in_values.begin(), _in_values.end(), raws.begin());
-            auto ts = to_terms(col_specs, raws, db, schema->ks_name(), ctx);
+            auto es = to_expressions(col_specs, raws, db, schema->ks_name(), ctx);
             // Convert a single-item IN restriction to an EQ restriction
-            if (ts.size() == 1) {
-                return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, std::move(ts[0]));
+            if (es.size() == 1) {
+                return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, std::move(es[0]));
             }
-            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema, rs, ts);
+            return ::make_shared<restrictions::multi_column_restriction::IN_with_values>(schema, rs, std::move(es));
         }
     }
 
@@ -194,8 +191,8 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, get_value(), db, schema->ks_name(), ctx);
-        return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t, _mode);
+        auto e = to_expression(col_specs, get_value(), db, schema->ks_name(), ctx);
+        return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, std::move(e), _mode);
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
@@ -215,12 +212,12 @@ protected:
         return create_multi_column_relation(std::move(new_entities), _relation_type, _values_or_marker, _in_values, _in_marker);
     }
 
-    virtual shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                     const expr::expression& raw, database& db, const sstring& keyspace,
-                                     prepare_context& ctx) const override {
-        auto t = prepare_term_multi_column(raw, db, keyspace, receivers);
-        t->fill_prepare_context(ctx);
-        return t;
+    virtual expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
+                                           const expr::expression& raw, database& db, const sstring& keyspace,
+                                           prepare_context& ctx) const override {
+        auto e = prepare_expression_multi_column(raw, db, keyspace, receivers);
+        expr::fill_prepare_context(e, ctx);
+        return e;
     }
 
     std::vector<const column_definition*> receivers(database& db, const schema& schema) {
@@ -245,11 +242,16 @@ protected:
         return names;
     }
 
+    template <typename T>
+    static sstring tuple_to_string(const std::vector<T>& items) {
+        return format("({})", join(", ", items));
+    }
+
     virtual sstring to_string() const override {
-        sstring str = tuples::tuple_to_string(_entities);
+        sstring str = tuple_to_string(_entities);
         if (is_IN()) {
             str += " IN ";
-            str += !_in_marker ? "?" : tuples::tuple_to_string(_in_values);
+            str += !_in_marker ? "?" : tuple_to_string(_in_values);
             return str;
         }
         return format("{} {} {}", str, _relation_type, *_values_or_marker);

@@ -41,7 +41,6 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/single_column_relation.hh"
 #include "cql3/statements/request_validations.hh"
-#include "cql3/tuples.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
@@ -452,7 +451,7 @@ statement_restrictions::statement_restrictions(database& db,
     const expr::allow_local_index allow_local(
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
             && _partition_key_restrictions->is_all_eq());
-    _has_multi_column = find_atom(_clustering_columns_restrictions->expression, expr::is_multi_column);
+    _has_multi_column = find_binop(_clustering_columns_restrictions->expression, expr::is_multi_column);
     _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local)
             && !type.is_delete();
     _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local)
@@ -499,7 +498,7 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
-    } else if (find_atom(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
+    } else if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
@@ -689,7 +688,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
         return;
     }
 
-    if (find_atom(_clustering_columns_restrictions->expression, expr::is_on_collection)
+    if (find_binop(_clustering_columns_restrictions->expression, expr::is_on_collection)
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
@@ -764,7 +763,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     std::vector<std::vector<managed_bytes>> column_values(schema.partition_key_size());
     size_t product_size = 1;
     for (const auto& e : expressions) {
-        if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
+        if (const auto arbitrary_binop = find_binop(e, [] (const binary_operator&) { return true; })) {
             if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
                 const value_set vals = possible_lhs_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
@@ -1428,7 +1427,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     if (_clustering_prefix_restrictions.empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+    if (find_binop(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
             using namespace expr;
@@ -1617,7 +1616,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
             oper_t::EQ,
             // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
             // handy mechanism for doing that in query_options.
-            ::make_shared<constants::value>(raw_value::make_unset_value(), token_column->type));
+            expr::constant::make_unset_value(token_column->type));
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
@@ -1647,11 +1646,11 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
 
 void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema) {
     for (const auto& e : _clustering_prefix_restrictions) {
-        if (find_atom(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+        if (find_binop(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
-        const auto any_binop = find_atom(e, [] (auto&&) { return true; });
+        const auto any_binop = find_binop(e, [] (auto&&) { return true; });
         if (!any_binop) {
             break;
         }
@@ -1689,8 +1688,8 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     }
     // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
     // overwritten.
-    const_cast<::shared_ptr<term>&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
-            ::make_shared<constants::value>(raw_value::make_value(*token_bytes), token_column.type);
+    const_cast<expr::expression&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
+            expr::constant(raw_value::make_value(*token_bytes), token_column.type);
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
@@ -1733,8 +1732,8 @@ sstring statement_restrictions::to_string() const {
 }
 
 static bool has_eq_null(const query_options& options, const expression& expr) {
-    return find_atom(expr, [&] (const binary_operator& binop) {
-        return binop.op == oper_t::EQ && !evaluate_to_raw_view(binop.rhs, options);
+    return find_binop(expr, [&] (const binary_operator& binop) {
+        return binop.op == oper_t::EQ && evaluate(binop.rhs, options).is_null();
     });
 }
 
@@ -1742,6 +1741,5 @@ bool statement_restrictions::range_or_slice_eq_null(const query_options& options
     return boost::algorithm::any_of(_partition_range_restrictions, std::bind_front(has_eq_null, options))
             || boost::algorithm::any_of(_clustering_prefix_restrictions, std::bind_front(has_eq_null, options));
 }
-
 } // namespace restrictions
 } // namespace cql3

@@ -43,10 +43,6 @@
 #include "cql3/cql3_type.hh"
 
 namespace cql3 {
-
-thread_local const ::shared_ptr<constants::value> constants::UNSET_VALUE = ::make_shared<constants::value>(cql3::raw_value::make_unset_value(), empty_type);
-thread_local const ::shared_ptr<terminal> constants::NULL_VALUE = ::make_shared<constants::null_value>();
-
 void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     if (column.type->is_multi_cell()) {
         collection_mutation_description coll_m;
@@ -57,13 +53,4 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
         m.set_cell(prefix, column, params.make_dead_cell());
     }
 }
-
-expr::expression constants::marker::to_expression() {
-    return expr::bind_variable {
-        .shape = expr::bind_variable::shape_type::scalar,
-        .bind_index = _bind_index,
-        .value_type = _receiver->type
-    };
-}
-
 }

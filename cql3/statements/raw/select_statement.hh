@@ -133,8 +133,8 @@ private:
         bool for_view = false,
         bool allow_filtering = false);
 
-    /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
-    ::shared_ptr<term> prepare_limit(database& db, prepare_context& ctx, const std::optional<expr::expression>& limit);
+    /** Returns an expression for the limit or nullopt if no limit is set */
+    std::optional<expr::expression> prepare_limit(database& db, prepare_context& ctx, const std::optional<expr::expression>& limit);
 
     static void verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions);
 

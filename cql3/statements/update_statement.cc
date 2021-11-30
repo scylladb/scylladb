@@ -140,7 +140,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             assert(_column_operations.empty());
-            constants::setter(*s->regular_begin(), make_shared<constants::value>(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
+            constants::setter(*s->regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {
@@ -180,8 +180,9 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
 }
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
-    sstring json_string = utf8_type->to_string(to_bytes(expr::evaluate_to_raw_view(_term, options)));
-    return json_helpers::parse(std::move(json_string), s->all_columns(), options.get_cql_serialization_format());
+    expr::constant c = expr::evaluate(_value, options);
+    sstring json_string = utf8_type->to_string(to_bytes(c.view()));
+    return json_helpers::parse(std::move(json_string), s->all_columns(), cql_serialization_format::internal());
 }
 
 void
@@ -212,29 +213,26 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
         return;
     }
 
-    cql_serialization_format sf = params._options.get_cql_serialization_format();
+
+    expr::constant val(raw_value::make_value(*value), column.type);
     visit(*column.type, make_visitor(
     [&] (const list_type_impl& ltype) {
-        auto val = ::make_shared<lists::value>(lists::value::from_serialized(raw_value_view::make_value(*value), ltype, sf));
-        lists::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
+        lists::setter::execute(m, prefix, params, column, val);
     },
     [&] (const set_type_impl& stype) {
-        auto val = ::make_shared<sets::value>(sets::value::from_serialized(raw_value_view::make_value(*value), stype, sf));
-        sets::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
+        sets::setter::execute(m, prefix, params, column, val);
     },
     [&] (const map_type_impl& mtype) {
-        auto val = ::make_shared<maps::value>(maps::value::from_serialized(raw_value_view::make_value(*value), mtype, sf));
-        maps::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
+        maps::setter::execute(m, prefix, params, column, val);
     },
     [&] (const user_type_impl& utype) {
-        auto val = ::make_shared<user_types::value>(user_types::value::from_serialized(raw_value_view::make_value(*value), utype));
-        user_types::setter::execute(m, prefix, params, column, expr::evaluate(val, query_options::DEFAULT));
+        user_types::setter::execute(m, prefix, params, column, val);
     },
     [&] (const abstract_type& type) {
         if (type.is_collection()) {
             throw std::runtime_error(format("insert_prepared_json_statement::execute_set_value: unhandled collection type {}", type.name()));
         }
-        constants::setter::execute(m, prefix, params, column, raw_value_view::make_value(*value));
+        constants::setter::execute(m, prefix, params, column, val.view());
     }
     ));
 }
@@ -365,8 +363,8 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
     (void)_if_not_exists;
     assert(expr::is<cql3::expr::untyped_constant>(_json_value) || expr::is<cql3::expr::bind_variable>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
-    auto prepared_json_value = prepare_term(_json_value, db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
-    prepared_json_value->fill_prepare_context(ctx);
+    auto prepared_json_value = prepare_expression(_json_value, db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
+    expr::fill_prepare_context(prepared_json_value, ctx);
     auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(ctx.bound_variables_size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, ctx, *stmt);
     return stmt;

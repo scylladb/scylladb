@@ -41,7 +41,6 @@
 #include "restrictions/token_restriction.hh"
 #include "token_relation.hh"
 #include "column_identifier.hh"
-#include "term.hh"
 #include "to_string.hh"
 
 std::vector<const column_definition*> cql3::token_relation::get_column_definitions(const schema& s) {
@@ -83,11 +82,11 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         database& db, schema_ptr schema,
         prepare_context& ctx) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
+    auto e = to_expression(to_receivers(*schema, column_defs), _value, db,
             schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
-    r->expression = binary_operator{token{}, oper_t::EQ, std::move(term)};
+    r->expression = binary_operator{token{}, oper_t::EQ, std::move(e)};
     return r;
 }
 
@@ -105,11 +104,11 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
         statements::bound bound,
         bool inclusive) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
+    auto e = to_expression(to_receivers(*schema, column_defs), _value, db,
             schema->ks_name(), ctx);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
     using namespace expr;
-    r->expression = binary_operator{token{}, pick_operator(bound, inclusive), std::move(term)};
+    r->expression = binary_operator{token{}, pick_operator(bound, inclusive), std::move(e)};
     return r;
 }
 
@@ -130,13 +129,13 @@ sstring cql3::token_relation::to_string() const {
     return format("token({}) {} {}", join(", ", _entities), get_operator(), _value);
 }
 
-::shared_ptr<cql3::term> cql3::token_relation::to_term(
+cql3::expr::expression cql3::token_relation::to_expression(
         const std::vector<lw_shared_ptr<column_specification>>& receivers,
         const expr::expression& raw, database& db, const sstring& keyspace,
         prepare_context& ctx) const {
-    auto term = expr::prepare_term(raw, db, keyspace, receivers.front());
-    term->fill_prepare_context(ctx);
-    return term;
+    auto e = expr::prepare_expression(raw, db, keyspace, receivers.front());
+    expr::fill_prepare_context(e, ctx);
+    return e;
 }
 
 ::shared_ptr<cql3::relation> cql3::token_relation::maybe_rename_identifier(const cql3::column_identifier::raw& from, cql3::column_identifier::raw to) {

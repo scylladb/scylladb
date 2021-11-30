@@ -86,8 +86,8 @@ protected:
     ::shared_ptr<restrictions::statement_restrictions> _restrictions;
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
-    ::shared_ptr<term> _limit;
-    ::shared_ptr<term> _per_partition_limit;
+    std::optional<expr::expression> _limit;
+    std::optional<expr::expression> _per_partition_limit;
 
     template<typename T>
     using compare_fn = raw::select_statement::compare_fn<T>;
@@ -118,8 +118,8 @@ public:
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
             bool is_reversed,
             ordering_comparator_type ordering_comparator,
-            ::shared_ptr<term> limit,
-            ::shared_ptr<term> per_partition_limit,
+            std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit,
             cql_stats& stats,
             std::unique_ptr<cql3::attributes> attrs);
 
@@ -158,7 +158,7 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
-    uint64_t do_get_limit(const query_options& options, ::shared_ptr<term> limit, uint64_t default_limit) const;
+    uint64_t do_get_limit(const query_options& options, const std::optional<expr::expression>& limit, uint64_t default_limit) const;
     uint64_t get_limit(const query_options& options) const {
         return do_get_limit(options, _limit, query::max_rows);
     }
@@ -181,8 +181,8 @@ public:
                      ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                      bool is_reversed,
                      ordering_comparator_type ordering_comparator,
-                     ::shared_ptr<term> limit,
-                     ::shared_ptr<term> per_partition_limit,
+                     std::optional<expr::expression> limit,
+                     std::optional<expr::expression> per_partition_limit,
                      cql_stats &stats,
                      std::unique_ptr<cql3::attributes> attrs);
 };
@@ -205,8 +205,8 @@ public:
                                                                     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                                     bool is_reversed,
                                                                     ordering_comparator_type ordering_comparator,
-                                                                    ::shared_ptr<term> limit,
-                                                                     ::shared_ptr<term> per_partition_limit,
+                                                                    std::optional<expr::expression> limit,
+                                                                    std::optional<expr::expression> per_partition_limit,
                                                                     cql_stats &stats,
                                                                     std::unique_ptr<cql3::attributes> attrs);
 
@@ -218,8 +218,8 @@ public:
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
-                                   ::shared_ptr<term> limit,
-                                   ::shared_ptr<term> per_partition_limit,
+                                   std::optional<expr::expression> limit,
+                                   std::optional<expr::expression> per_partition_limit,
                                    cql_stats &stats,
                                    const secondary_index::index& index,
                                    ::shared_ptr<restrictions::restrictions> used_index_restrictions,

@@ -57,69 +57,11 @@ public:
     static lw_shared_ptr<column_specification> index_spec_of(const column_specification&);
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification&);
     static lw_shared_ptr<column_specification> uuid_index_spec_of(const column_specification&);
-
-    class value : public terminal, collection_terminal {
-    public:
-        utils::chunked_vector<managed_bytes_opt> _elements;
-    public:
-        explicit value(utils::chunked_vector<managed_bytes_opt> elements, data_type my_type)
-            : terminal(std::move(my_type)), _elements(std::move(elements)) {
-        }
-        static value from_serialized(const raw_value_view& v, const list_type_impl& type, cql_serialization_format sf);
-        virtual cql3::raw_value get(const query_options& options) override;
-        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
-        bool equals(const list_type_impl& lt, const value& v);
-        const utils::chunked_vector<managed_bytes_opt>& get_elements() const;
-        virtual sstring to_string() const override;
-        friend class lists;
-    };
-    /**
-     * Basically similar to a Value, but with some non-pure function (that need
-     * to be evaluated at execution time) in it.
-     *
-     * Note: this would also work for a list with bind markers, but we don't support
-     * that because 1) it's not excessively useful and 2) we wouldn't have a good
-     * column name to return in the ColumnSpecification for those markers (not a
-     * blocker per-se but we don't bother due to 1)).
-     */
-    class delayed_value : public non_terminal {
-        std::vector<shared_ptr<term>> _elements;
-        data_type _my_type;
-    public:
-        explicit delayed_value(std::vector<shared_ptr<term>> elements, data_type my_type)
-                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
-        }
-        virtual bool contains_bind_marker() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
-        virtual shared_ptr<terminal> bind(const query_options& options) override;
-
-        // Binds the value, but skips all nulls inside the list
-        virtual shared_ptr<terminal> bind_ignore_null(const query_options& options);
-        const std::vector<shared_ptr<term>>& get_elements() const {
-            return _elements;
-        }
-
-        virtual expr::expression to_expression() override;
-    };
-
-    /**
-     * A marker for List values and IN relations
-     */
-    class marker : public abstract_marker {
-    public:
-        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
-            : abstract_marker{bind_index, std::move(receiver)}
-        { }
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override;
-
-        virtual expr::expression to_expression() override;
-    };
-
 public:
     class setter : public operation {
     public:
-        setter(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        setter(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const expr::constant& value);
@@ -127,20 +69,20 @@ public:
 
     class setter_by_index : public operation {
     protected:
-        shared_ptr<term> _idx;
+        expr::expression _idx;
     public:
-        setter_by_index(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
-            : operation(column, std::move(t)), _idx(std::move(idx)) {
+        setter_by_index(const column_definition& column, expr::expression idx, expr::expression e)
+            : operation(column, std::move(e)), _idx(std::move(idx)) {
         }
         virtual bool requires_read() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
+        virtual void fill_prepare_context(prepare_context& ctx) override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class setter_by_uuid : public setter_by_index {
     public:
-        setter_by_uuid(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
-            : setter_by_index(column, std::move(idx), std::move(t)) {
+        setter_by_uuid(const column_definition& column, expr::expression idx, expr::expression e)
+            : setter_by_index(column, std::move(idx), std::move(e)) {
         }
         virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
@@ -166,8 +108,8 @@ public:
 
     class discarder : public operation {
     public:
-        discarder(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        discarder(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
         virtual bool requires_read() const override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
@@ -175,7 +117,7 @@ public:
 
     class discarder_by_index : public operation {
     public:
-        discarder_by_index(const column_definition& column, shared_ptr<term> idx)
+        discarder_by_index(const column_definition& column, expr::expression idx)
                 : operation(column, std::move(idx)) {
         }
         virtual bool requires_read() const override;

@@ -42,167 +42,9 @@ lists::uuid_index_spec_of(const column_specification& column) {
             ::make_shared<column_identifier>(format("uuid_idx({})", *column.name), true), uuid_type);
 }
 
-
-lists::value
-lists::value::from_serialized(const raw_value_view& val, const list_type_impl& type, cql_serialization_format sf) {
-    try {
-        utils::chunked_vector<managed_bytes_opt> elements;
-        if (sf.collection_format_unchanged()) {
-            utils::chunked_vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
-                return partially_deserialize_listlike(v, sf);
-            });
-            elements.reserve(tmp.size());
-            for (auto&& element : tmp) {
-                elements.emplace_back(std::move(element));
-            }
-        } else [[unlikely]] {
-            auto l = val.deserialize<list_type_impl::native_type>(type, sf);
-            elements.reserve(l.size());
-            for (auto&& element : l) {
-                // elements can be null in lists that represent a set of IN values
-                elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
-            }
-        }
-        return value(std::move(elements), type.shared_from_this());
-    } catch (marshal_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-    }
-}
-
-cql3::raw_value
-lists::value::get(const query_options& options) {
-    return cql3::raw_value::make_value(get_with_protocol_version(cql_serialization_format::internal()));
-}
-
-managed_bytes
-lists::value::get_with_protocol_version(cql_serialization_format sf) {
-    // Can't use boost::indirect_iterator, because optional is not an iterator
-    auto deref = [] (managed_bytes_opt& x) { return *x; };
-    return collection_type_impl::pack_fragmented(
-            boost::make_transform_iterator(_elements.begin(), deref),
-            boost::make_transform_iterator( _elements.end(), deref),
-            _elements.size(), sf);
-}
-
-bool
-lists::value::equals(const list_type_impl& lt, const value& v) {
-    if (_elements.size() != v._elements.size()) {
-        return false;
-    }
-    return std::equal(_elements.begin(), _elements.end(),
-            v._elements.begin(),
-            [t = lt.get_elements_type()] (const managed_bytes_opt& e1, const managed_bytes_opt& e2) { return t->equal(*e1, *e2); });
-}
-
-sstring
-lists::value::to_string() const {
-    std::ostringstream os;
-    os << "[";
-    bool is_first = true;
-    for (auto&& e : _elements) {
-        if (!is_first) {
-            os << ", ";
-        }
-        is_first = false;
-        os << to_hex(e);
-    }
-    os << "]";
-    return os.str();
-}
-
-bool
-lists::delayed_value::contains_bind_marker() const {
-    // False since we don't support them in collection
-    return false;
-}
-
-void
-lists::delayed_value::fill_prepare_context(prepare_context& ctx) const {
-}
-
-shared_ptr<terminal>
-lists::delayed_value::bind(const query_options& options) {
-    utils::chunked_vector<managed_bytes_opt> buffers;
-    buffers.reserve(_elements.size());
-    for (auto&& t : _elements) {
-        auto bo = expr::evaluate_to_raw_view(t, options);
-
-        if (bo.is_null()) {
-            throw exceptions::invalid_request_exception("null is not supported inside collections");
-        }
-        if (bo.is_unset_value()) {
-            return constants::UNSET_VALUE;
-        }
-
-        buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
-    }
-    return ::make_shared<value>(buffers, _my_type);
-}
-
-shared_ptr<terminal>
-lists::delayed_value::bind_ignore_null(const query_options& options) {
-    utils::chunked_vector<managed_bytes_opt> buffers;
-    buffers.reserve(_elements.size());
-    for (auto&& t : _elements) {
-        auto bo = expr::evaluate_to_raw_view(t, options);
-
-        if (bo.is_null()) {
-            continue;
-        }
-        if (bo.is_unset_value()) {
-            return constants::UNSET_VALUE;
-        }
-
-        buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
-    }
-    return ::make_shared<value>(buffers, _my_type);
-}
-
-expr::expression lists::delayed_value::to_expression() {
-    std::vector<expr::expression> new_elements;
-    new_elements.reserve(_elements.size());
-
-    for (shared_ptr<term>& e : _elements) {
-        new_elements.emplace_back(expr::to_expression(e));
-    }
-
-    return expr::collection_constructor {
-        .style = expr::collection_constructor::style_type::list,
-        .elements = std::move(new_elements),
-        .type = _my_type
-    };
-}
-
-::shared_ptr<terminal>
-lists::marker::bind(const query_options& options) {
-    const auto& value = options.get_value_at(_bind_index);
-    auto& ltype = dynamic_cast<const list_type_impl&>(_receiver->type->without_reversed());
-    if (value.is_null()) {
-        return nullptr;
-    } else if (value.is_unset_value()) {
-        return constants::UNSET_VALUE;
-    } else {
-        try {
-            value.validate(ltype, options.get_cql_serialization_format());
-            return make_shared<lists::value>(value::from_serialized(value, ltype, options.get_cql_serialization_format()));
-        } catch (marshal_exception& e) {
-            throw exceptions::invalid_request_exception(
-                    format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
-        }
-    }
-}
-
-expr::expression lists::marker::to_expression() {
-    return expr::bind_variable {
-        .shape = expr::bind_variable::shape_type::scalar,
-        .bind_index = _bind_index,
-        .value_type = _receiver->type
-    };
-}
-
 void
 lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    auto value = expr::evaluate(_t, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     execute(m, prefix, params, column, std::move(value));
 }
 
@@ -227,9 +69,9 @@ lists::setter_by_index::requires_read() const {
 }
 
 void
-lists::setter_by_index::fill_prepare_context(prepare_context& ctx) const {
+lists::setter_by_index::fill_prepare_context(prepare_context& ctx) {
     operation::fill_prepare_context(ctx);
-    _idx->fill_prepare_context(ctx);
+    expr::fill_prepare_context(_idx, ctx);
 }
 
 void
@@ -237,19 +79,19 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto index = expr::evaluate_to_raw_view(_idx, params._options);
+    auto index = expr::evaluate(_idx, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
     if (index.is_unset_value()) {
         throw exceptions::invalid_request_exception("Invalid unset value for list index");
     }
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
 
-    auto idx = index.deserialize<int32_t>(*int32_type);
+    auto idx = index.view().deserialize<int32_t>(*int32_type);
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
@@ -266,11 +108,11 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     collection_mutation_description mut;
     mut.cells.reserve(1);
-    if (!value) {
+    if (value.is_null()) {
         mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
     } else {
         mut.cells.emplace_back(std::move(eidx),
-                params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
+                params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -286,11 +128,15 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto index = expr::evaluate_to_raw_view(_idx, params._options);
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto index = expr::evaluate(_idx, params._options);
+    auto value = expr::evaluate(*_e, params._options);
 
-    if (!index) {
+    if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
+    }
+
+    if (index.is_unset_value()) {
+        throw exceptions::invalid_request_exception("Invalid unset value for list index");
     }
 
     auto ltype = static_cast<const list_type_impl*>(column.type.get());
@@ -298,10 +144,12 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     collection_mutation_description mut;
     mut.cells.reserve(1);
 
-    if (!value) {
-        mut.cells.emplace_back(to_bytes(index), params.make_dead_cell());
+    if (value.is_null()) {
+        mut.cells.emplace_back(std::move(index.value).to_bytes(), params.make_dead_cell());
     } else {
-        mut.cells.emplace_back(to_bytes(index), params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
+        mut.cells.emplace_back(
+                    std::move(index.value).to_bytes(),
+                    params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -309,7 +157,7 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 
 void
 lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(_t, params._options);
+    const expr::constant value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -355,7 +203,7 @@ lists::do_append(const expr::constant& list_value,
         if (list_value.is_null()) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
-            m.set_cell(prefix, column, params.make_cell(*column.type, list_value.value.to_view()));
+            m.set_cell(prefix, column, params.make_cell(*column.type, list_value.view()));
         }
     }
 }
@@ -363,7 +211,7 @@ lists::do_append(const expr::constant& list_value,
 void
 lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
-    expr::constant lvalue = expr::evaluate(_t, params._options);
+    expr::constant lvalue = expr::evaluate(*_e, params._options);
     if (lvalue.is_null_or_unset()) {
         return;
     }
@@ -419,7 +267,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
 
     auto&& existing_list = params.get_prefetched_list(m.key(), prefix, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
-    expr::constant lvalue = expr::evaluate(_t, params._options);
+    expr::constant lvalue = expr::evaluate(*_e, params._options);
 
     if (!existing_list) {
         return;
@@ -468,7 +316,7 @@ lists::discarder_by_index::requires_read() const {
 void
 lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
-    expr::constant index = expr::evaluate(_t, params._options);
+    expr::constant index = expr::evaluate(*_e, params._options);
     if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
@@ -477,7 +325,7 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     }
 
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
-    int32_t idx = index.value.to_view().deserialize<int32_t>(*int32_type);
+    int32_t idx = index.view().deserialize<int32_t>(*int32_type);
 
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");

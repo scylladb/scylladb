@@ -48,7 +48,9 @@ std::unique_ptr<attributes> attributes::none() {
     return std::unique_ptr<attributes>{new attributes{{}, {}, {}}};
 }
 
-attributes::attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live, ::shared_ptr<term>&& timeout)
+attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
+                       std::optional<cql3::expr::expression>&& time_to_live,
+                       std::optional<cql3::expr::expression>&& timeout)
     : _timestamp{std::move(timestamp)}
     , _time_to_live{std::move(time_to_live)}
     , _timeout{std::move(timeout)}
@@ -67,11 +69,11 @@ bool attributes::is_timeout_set() const {
 }
 
 int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
-    if (!_timestamp) {
+    if (!_timestamp.has_value()) {
         return now;
     }
 
-    auto tval = expr::evaluate_to_raw_view(_timestamp, options);
+    expr::constant tval = expr::evaluate(*_timestamp, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of timestamp");
     }
@@ -79,17 +81,17 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
         return now;
     }
     try {
-        return tval.validate_and_deserialize<int64_t>(*long_type, options.get_cql_serialization_format());
+        return tval.view().validate_and_deserialize<int64_t>(*long_type, cql_serialization_format::internal());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid timestamp value");
     }
 }
 
 int32_t attributes::get_time_to_live(const query_options& options) {
-    if (!_time_to_live)
+    if (!_time_to_live.has_value())
         return 0;
 
-    auto tval = expr::evaluate_to_raw_view(_time_to_live, options);
+    expr::constant tval = expr::evaluate(*_time_to_live, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of TTL");
     }
@@ -99,7 +101,7 @@ int32_t attributes::get_time_to_live(const query_options& options) {
 
     int32_t ttl;
     try {
-        ttl = tval.validate_and_deserialize<int32_t>(*int32_type, options.get_cql_serialization_format());
+        ttl = tval.view().validate_and_deserialize<int32_t>(*int32_type, cql_serialization_format::internal());
     }
     catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid TTL value");
@@ -119,11 +121,11 @@ int32_t attributes::get_time_to_live(const query_options& options) {
 
 
 db::timeout_clock::duration attributes::get_timeout(const query_options& options) const {
-    auto timeout = expr::evaluate_to_raw_view(_timeout, options);
+    expr::constant timeout = expr::evaluate(*_timeout, options);
     if (timeout.is_null() || timeout.is_unset_value()) {
         throw exceptions::invalid_request_exception("Timeout value cannot be unset/null");
     }
-    cql_duration duration = timeout.deserialize<cql_duration>(*duration_type);
+    cql_duration duration = timeout.view().deserialize<cql_duration>(*duration_type);
     if (duration.months || duration.days) {
         throw exceptions::invalid_request_exception("Timeout values cannot be expressed in days/months");
     }
@@ -136,22 +138,33 @@ db::timeout_clock::duration attributes::get_timeout(const query_options& options
     return std::chrono::duration_cast<db::timeout_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
 }
 
-void attributes::fill_prepare_context(prepare_context& ctx) const {
-    if (_timestamp) {
-        _timestamp->fill_prepare_context(ctx);
+void attributes::fill_prepare_context(prepare_context& ctx) {
+    if (_timestamp.has_value()) {
+        expr::fill_prepare_context(*_timestamp, ctx);
     }
-    if (_time_to_live) {
-        _time_to_live->fill_prepare_context(ctx);
+    if (_time_to_live.has_value()) {
+        expr::fill_prepare_context(*_time_to_live, ctx);
     }
-    if (_timeout) {
-        _timeout->fill_prepare_context(ctx);
+    if (_timeout.has_value()) {
+        expr::fill_prepare_context(*_timeout, ctx);
     }
 }
 
 std::unique_ptr<attributes> attributes::raw::prepare(database& db, const sstring& ks_name, const sstring& cf_name) const {
-    auto ts = !timestamp ? ::shared_ptr<term>{} : prepare_term(*timestamp, db, ks_name, timestamp_receiver(ks_name, cf_name));
-    auto ttl = !time_to_live ? ::shared_ptr<term>{} : prepare_term(*time_to_live, db, ks_name, time_to_live_receiver(ks_name, cf_name));
-    auto to = !timeout ? ::shared_ptr<term>{} : prepare_term(*timeout, db, ks_name, timeout_receiver(ks_name, cf_name));
+    std::optional<expr::expression> ts, ttl, to;
+
+    if (timestamp.has_value()) {
+        ts = prepare_expression(*timestamp, db, ks_name, timestamp_receiver(ks_name, cf_name));
+    }
+
+    if (time_to_live.has_value()) {
+        ttl = prepare_expression(*time_to_live, db, ks_name, time_to_live_receiver(ks_name, cf_name));
+    }
+
+    if (timeout.has_value()) {
+        to = prepare_expression(*timeout, db, ks_name, timeout_receiver(ks_name, cf_name));
+    }
+
     return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to)}};
 }
 

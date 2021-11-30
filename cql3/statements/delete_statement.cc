@@ -42,7 +42,6 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptors.hpp>
 
-#include "cql3/tuples.hh"
 #include "database.hh"
 #include "delete_statement.hh"
 #include "raw/delete_statement.hh"

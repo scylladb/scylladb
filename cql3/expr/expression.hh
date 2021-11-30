@@ -52,7 +52,7 @@ namespace query {
 } // namespace query
 
 namespace cql3 {
-struct term;
+struct prepare_context;
 
 class column_identifier_raw;
 class query_options;
@@ -129,6 +129,26 @@ concept invocable_on_expression
         && std::invocable<Func, usertype_constructor>
         ;
 
+template <typename Func>
+concept invocable_on_expression_ref
+        = std::invocable<Func, conjunction&>
+        && std::invocable<Func, binary_operator&>
+        && std::invocable<Func, column_value&>
+        && std::invocable<Func, token&>
+        && std::invocable<Func, unresolved_identifier&>
+        && std::invocable<Func, column_mutation_attribute&>
+        && std::invocable<Func, function_call&>
+        && std::invocable<Func, cast&>
+        && std::invocable<Func, field_selection&>
+        && std::invocable<Func, null&>
+        && std::invocable<Func, bind_variable&>
+        && std::invocable<Func, untyped_constant&>
+        && std::invocable<Func, constant&>
+        && std::invocable<Func, tuple_constructor&>
+        && std::invocable<Func, collection_constructor&>
+        && std::invocable<Func, usertype_constructor&>
+        ;
+
 /// A CQL expression -- union of all possible expression types.  bool means a Boolean constant.
 class expression final {
     // 'impl' holds a variant of all expression types, but since 
@@ -146,6 +166,7 @@ public:
     expression& operator=(expression&&) noexcept = default;
 
     friend auto visit(invocable_on_expression auto&& visitor, const expression& e);
+    friend auto visit(invocable_on_expression_ref auto&& visitor, expression& e);
 
     template <ExpressionElement E>
     friend bool is(const expression& e);
@@ -161,7 +182,6 @@ public:
 template <typename E>
 concept LeafExpression
         = std::same_as<bool, E>
-        || std::same_as<column_value, E> 
         || std::same_as<token, E> 
         || std::same_as<unresolved_identifier, E> 
         || std::same_as<null, E> 
@@ -170,14 +190,14 @@ concept LeafExpression
         || std::same_as<constant, E>
         ;
 
-/// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
+/// A column, optionally subscripted by a value (eg, c1 or c2['abc']).
 struct column_value {
     const column_definition* col;
-    ::shared_ptr<term> sub; ///< If present, this LHS is col[sub], otherwise just col.
+    std::optional<expression> sub; ///< If present, this LHS is col[sub], otherwise just col.
     /// For easy creation of vector<column_value> from vector<column_definition*>.
     column_value(const column_definition* col) : col(col) {}
     /// The compiler doesn't auto-generate this due to the other constructor's existence.
-    column_value(const column_definition* col, ::shared_ptr<term> sub) : col(col), sub(sub) {}
+    column_value(const column_definition* col, expr::expression sub) : col(col), sub(std::move(sub)) {}
 };
 
 /// Represents token function on LHS of an operator relation.  No need to list column definitions
@@ -196,10 +216,10 @@ enum class comparison_order : char {
 struct binary_operator {
     expression lhs;
     oper_t op;
-    ::shared_ptr<term> rhs;
+    expression rhs;
     comparison_order order;
 
-    binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order = comparison_order::cql);
+    binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order = comparison_order::cql);
 };
 
 /// A conjunction of restrictions.
@@ -241,7 +261,21 @@ struct function_call {
     // The query should be executed on a shard that has the pk partition,
     // but it changes with each uuid() call.
     // uuid() call result is cached and sent to the proper shard.
-    std::optional<uint8_t> lwt_cache_id;
+    //
+    // Cache id is kept in shared_ptr because of how prepare_context works.
+    // During fill_prepare_context all function cache ids are collected
+    // inside prepare_context.
+    // Later when some condition occurs we might decide to clear
+    // cache ids of all function calls found in prepare_context.
+    // However by this time these function calls could have been
+    // copied multiple times. Prepare_context keeps a shared_ptr
+    // to function_call ids, and then clearing the shared id
+    // clears it in all possible copies.
+    // This logic was introduced back when everything was shared_ptr<term>,
+    // now a better solution might exist.
+    //
+    // This field can be nullptr, it means that there is no cache id set.
+    ::shared_ptr<std::optional<uint8_t>> lwt_cache_id;
 };
 
 struct cast {
@@ -263,10 +297,9 @@ struct bind_variable {
     shape_type shape;
     int32_t bind_index;
 
-    // Type of the bound value.
-    // Before preparing can be nullptr.
-    // After preparing always holds a valid type.
-    data_type value_type;
+    // Describes where this bound value will be assigned.
+    // Contains value type and other useful information.
+    ::lw_shared_ptr<column_specification> receiver;
 };
 
 // A constant which does not yet have a date type. It is partially typed
@@ -295,6 +328,8 @@ struct constant {
     bool is_unset_value() const;
     bool is_null_or_unset() const;
     bool has_empty_value_bytes() const;
+
+    cql3::raw_value_view view() const;
 };
 
 // Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
@@ -347,6 +382,10 @@ inline expression::expression()
 }
 
 auto visit(invocable_on_expression auto&& visitor, const expression& e) {
+    return std::visit(visitor, e._v->v);
+}
+
+auto visit(invocable_on_expression_ref auto&& visitor, expression& e) {
     return std::visit(visitor, e._v->v);
 }
 
@@ -418,73 +457,96 @@ extern std::ostream& operator<<(std::ostream&, const column_value&);
 
 extern std::ostream& operator<<(std::ostream&, const expression&);
 
-/// If there is a binary_operator atom b for which f(b) is true, returns it.  Otherwise returns null.
-template<typename Fn>
-requires std::regular_invocable<Fn, const binary_operator&>
-const binary_operator* find_atom(const expression& e, Fn f) {
+// Looks into the expression and finds the given expression variant
+// for which the predicate function returns true.
+// If nothing is found returns nullptr.
+// For example:
+// find_in_expression<binary_operator>(e, [](const binary_operator&) {return true;})
+// Will return the first binary operator found in the expression
+template<ExpressionElement ExprElem, class Fn>
+requires std::invocable<Fn, const ExprElem&>
+      && std::same_as<std::invoke_result_t<Fn, const ExprElem&>, bool>
+const ExprElem* find_in_expression(const expression& e, Fn predicate_fun) {
+    if (auto expr_elem = as_if<ExprElem>(&e)) {
+        if (predicate_fun(*expr_elem)) {
+            return expr_elem;
+        }
+    }
+
     return expr::visit(overloaded_functor{
-            [&] (const binary_operator& op) { return f(op) ? &op : nullptr; },
-            [] (const constant&) -> const binary_operator* { return nullptr; },
-            [&] (const conjunction& conj) -> const binary_operator* {
+            [&] (const binary_operator& op) -> const ExprElem* {
+                if (auto found = find_in_expression<ExprElem>(op.lhs, predicate_fun)) {
+                    return found;
+                }
+                return find_in_expression<ExprElem>(op.rhs, predicate_fun);
+            },
+            [&] (const conjunction& conj) -> const ExprElem* {
                 for (auto& child : conj.children) {
-                    if (auto found = find_atom(child, f)) {
+                    if (auto found = find_in_expression<ExprElem>(child, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [] (const column_value&) -> const binary_operator* { return nullptr; },
-            [] (const token&) -> const binary_operator* { return nullptr; },
-            [] (const unresolved_identifier&) -> const binary_operator* { return nullptr; },
-            [] (const column_mutation_attribute&) -> const binary_operator* { return nullptr; },
-            [&] (const function_call& fc) -> const binary_operator* {
+            [&] (const column_value& cv) -> const ExprElem* {
+                if (cv.sub.has_value()) {
+                    return find_in_expression<ExprElem>(*cv.sub, predicate_fun);
+                }
+                return nullptr;
+            },
+            [&] (const column_mutation_attribute& a) -> const ExprElem* {
+                return find_in_expression<ExprElem>(a.column, predicate_fun);
+            },
+            [&] (const function_call& fc) -> const ExprElem* {
                 for (auto& arg : fc.args) {
-                    if (auto found = find_atom(arg, f)) {
+                    if (auto found = find_in_expression<ExprElem>(arg, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const cast& c) -> const binary_operator* {
-                return find_atom(c.arg, f);
+            [&] (const cast& c) -> const ExprElem* {
+                return find_in_expression<ExprElem>(c.arg, predicate_fun);
             },
-            [&] (const field_selection& fs) -> const binary_operator* {
-                return find_atom(fs.structure, f);
+            [&] (const field_selection& fs) -> const ExprElem* {
+                return find_in_expression<ExprElem>(fs.structure, predicate_fun);
             },
-            [&] (const null&) -> const binary_operator* {
-                return nullptr;
-            },
-            [&] (const bind_variable&) -> const binary_operator* {
-                return nullptr;
-            },
-            [&] (const untyped_constant&) -> const binary_operator* {
-                return nullptr;
-            },
-            [&] (const tuple_constructor& t) -> const binary_operator* {
+            [&] (const tuple_constructor& t) -> const ExprElem* {
                 for (auto& e : t.elements) {
-                    if (auto found = find_atom(e, f)) {
+                    if (auto found = find_in_expression<ExprElem>(e, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const collection_constructor& c) -> const binary_operator* {
+            [&] (const collection_constructor& c) -> const ExprElem* {
                 for (auto& e : c.elements) {
-                    if (auto found = find_atom(e, f)) {
+                    if (auto found = find_in_expression<ExprElem>(e, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
-            [&] (const usertype_constructor& c) -> const binary_operator* {
+            [&] (const usertype_constructor& c) -> const ExprElem* {
                 for (auto& [k, v] : c.elements) {
-                    if (auto found = find_atom(v, f)) {
+                    if (auto found = find_in_expression<ExprElem>(v, predicate_fun)) {
                         return found;
                     }
                 }
                 return nullptr;
             },
+            [](LeafExpression auto const&) -> const ExprElem* {
+                return nullptr;
+            }
         }, e);
+}
+
+/// If there is a binary_operator atom b for which f(b) is true, returns it.  Otherwise returns null.
+template<class Fn>
+requires std::invocable<Fn, const binary_operator&>
+      && std::same_as<std::invoke_result_t<Fn, const binary_operator&>, bool>
+const binary_operator* find_binop(const expression& e, Fn predicate_fun) {
+    return find_in_expression<binary_operator>(e, predicate_fun);
 }
 
 /// Counts binary_operator atoms b for which f(b) is true.
@@ -536,7 +598,7 @@ size_t count_if(const expression& e, Fn f) {
 }
 
 inline const binary_operator* find(const expression& e, oper_t op) {
-    return find_atom(e, [&] (const binary_operator& o) { return o.op == op; });
+    return find_binop(e, [&] (const binary_operator& o) { return o.op == op; });
 }
 
 inline bool needs_filtering(oper_t op) {
@@ -545,7 +607,7 @@ inline bool needs_filtering(oper_t op) {
 }
 
 inline auto find_needs_filtering(const expression& e) {
-    return find_atom(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
+    return find_binop(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
 }
 
 inline bool is_slice(oper_t op) {
@@ -553,7 +615,7 @@ inline bool is_slice(oper_t op) {
 }
 
 inline bool has_slice(const expression& e) {
-    return find_atom(e, [] (const binary_operator& bo) { return is_slice(bo.op); });
+    return find_binop(e, [] (const binary_operator& bo) { return is_slice(bo.op); });
 }
 
 inline bool is_compare(oper_t op) {
@@ -575,11 +637,11 @@ inline bool is_multi_column(const binary_operator& op) {
 }
 
 inline bool has_token(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
+    return find_binop(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
+    return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
 }
 
 inline bool is_clustering_order(const binary_operator& op) {
@@ -587,7 +649,7 @@ inline bool is_clustering_order(const binary_operator& op) {
 }
 
 inline auto find_clustering_order(const expression& e) {
-    return find_atom(e, is_clustering_order);
+    return find_binop(e, is_clustering_order);
 }
 
 /// True iff binary_operator involves a collection.
@@ -603,14 +665,11 @@ extern expression replace_token(const expression&, const column_definition*);
 
 // Recursively copies e and returns it. Calls replace_candidate() on all nodes. If it returns nullopt,
 // continue with the copying. If it returns an expression, that expression replaces the current node.
-//
-// Note only binary_operator's LHS is searched. The RHS is not an expression, but a term, so it is left
-// unmodified.
 extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
-extern ::shared_ptr<term> prepare_term(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
-extern ::shared_ptr<term> prepare_term_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
+extern expression prepare_expression(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+extern expression prepare_expression_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
 
 
 /**
@@ -646,21 +705,9 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
 
 std::optional<bool> get_bool_value(const constant&);
 
-// Takes a prepared expression and calculates its value.
-// Later term will be replaced with expression.
-constant evaluate(const ::shared_ptr<term>&, const query_options&);
-constant evaluate(term*, const query_options&);
-constant evaluate(term&, const query_options&);
-
 // Similar to evaluate(), but ignores any NULL values in the final list value.
 // In an IN restriction nulls can be ignored, because nothing equals NULL.
-constant evaluate_IN_list(const ::shared_ptr<term>&, const query_options&);
-constant evaluate_IN_list(term*, const query_options&);
-constant evaluate_IN_list(term&, const query_options&);
-
-// Calls evaluate() on the term and then converts the constant to raw_value_view
-cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>&, const query_options&);
-cql3::raw_value_view evaluate_to_raw_view(term&, const query_options&);
+constant evaluate_IN_list(const expression&, const query_options&);
 
 // Takes a prepared expression and calculates its value.
 // Evaluates bound values, calls functions and returns just the bytes and type.
@@ -684,7 +731,16 @@ std::vector<managed_bytes_opt> get_elements(const constant&);
 // It is useful with IN restrictions like (a, b) IN [(1, 2), (3, 4)].
 utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_elements(const constant&);
 
-expression to_expression(const ::shared_ptr<term>&);
+// Retrieves information needed in prepare_context.
+// Collects the column specification for the bind variables in this expression.
+// Sets lwt_cache_id field in function_calls.
+void fill_prepare_context(expression&, cql3::prepare_context&);
+
+// Checks whether there is a bind_variable inside this expression
+// It's important to note, that even when there are no bind markers,
+// there can be other things that prevent immediate evaluation of an expression.
+// For example an expression can contain calls to nonpure functions.
+bool contains_bind_marker(const expression& e);
 } // namespace expr
 
 } // namespace cql3

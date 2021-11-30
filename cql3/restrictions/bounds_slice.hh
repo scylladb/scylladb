@@ -42,7 +42,6 @@
 #pragma once
 
 #include "cql3/restrictions/restriction.hh"
-#include "cql3/term.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
@@ -52,34 +51,25 @@ namespace cql3 {
 
 namespace restrictions {
 
-class term_slice final {
+class bounds_slice final {
 private:
     struct bound {
         bool inclusive;
-        ::shared_ptr<term> t;
+        std::optional<expr::expression> value;
     };
     bound _bounds[2];
 private:
-    term_slice(::shared_ptr<term> start, bool include_start, ::shared_ptr<term> end, bool include_end)
+    bounds_slice(std::optional<expr::expression> start, bool include_start,
+                 std::optional<expr::expression> end, bool include_end)
         : _bounds{{include_start, std::move(start)}, {include_end, std::move(end)}}
     { }
 public:
-    static term_slice new_instance(statements::bound bound, bool include, ::shared_ptr<term> term) {
+    static bounds_slice new_instance(statements::bound bound, bool include, std::optional<expr::expression> value) {
         if (is_start(bound)) {
-            return term_slice(std::move(term), include, {}, false);
+            return bounds_slice(std::move(value), include, std::nullopt, false);
         } else {
-            return term_slice({}, false, std::move(term), include);
+            return bounds_slice(std::nullopt, false, std::move(value), include);
         }
-    }
-
-    /**
-     * Returns the boundary value.
-     *
-     * @param bound the boundary type
-     * @return the boundary value
-     */
-    ::shared_ptr<term> bound(statements::bound b) const {
-        return _bounds[get_idx(b)].t;
     }
 
     /**
@@ -89,7 +79,7 @@ public:
      * @return <code>true</code> if this slice has a boundary for the specified type, <code>false</code> otherwise.
      */
     bool has_bound(statements::bound b) const {
-        return bool(_bounds[get_idx(b)].t);
+        return _bounds[get_idx(b)].value.has_value();
     }
 
     /**
@@ -100,7 +90,7 @@ public:
      * <code>false</code> otherwise.
      */
     bool is_inclusive(statements::bound b) const {
-        return !_bounds[get_idx(b)].t || _bounds[get_idx(b)].inclusive;
+        return !_bounds[get_idx(b)].value.has_value() || _bounds[get_idx(b)].inclusive;
     }
 
     /**
@@ -108,7 +98,7 @@ public:
      *
      * @param other the slice to merge with
      */
-    void merge(const term_slice& other) {
+    void merge(const bounds_slice& other) {
         if (has_bound(statements::bound::START)) {
             assert(!other.has_bound(statements::bound::START));
             _bounds[get_idx(statements::bound::END)] = other._bounds[get_idx(statements::bound::END)];
@@ -134,15 +124,15 @@ public:
     }
 
     sstring to_string() const {
-        static auto print_term = [] (::shared_ptr<term> t) -> sstring {
-            return t ? t->to_string() : "null";
+        static auto print_value = [] (const std::optional<expr::expression>& v) -> sstring {
+            return v.has_value() ? expr::to_string(*v) : "none";
         };
         return format("({} {}, {} {})",
-            _bounds[0].inclusive ? ">=" : ">", print_term(_bounds[0].t),
-            _bounds[1].inclusive ? "<=" : "<", print_term(_bounds[1].t));
+            _bounds[0].inclusive ? ">=" : ">", print_value(_bounds[0].value),
+            _bounds[1].inclusive ? "<=" : "<", print_value(_bounds[1].value));
     }
 
-    friend std::ostream& operator<<(std::ostream& out, const term_slice& slice) {
+    friend std::ostream& operator<<(std::ostream& out, const bounds_slice& slice) {
         return out << slice.to_string();
     }
 

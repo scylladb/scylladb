@@ -349,7 +349,7 @@ set(scylla_sources
     cql3/constants.cc
     cql3/cql3_type.cc
     cql3/expr/expression.cc
-    cql3/expr/term_expr.cc
+    cql3/expr/prepare_expr.cc
     cql3/functions/aggregate_fcts.cc
     cql3/functions/castas_fcts.cc
     cql3/functions/error_injection_fcts.cc
@@ -428,7 +428,6 @@ set(scylla_sources
     cql3/statements/update_statement.cc
     cql3/statements/use_statement.cc
     cql3/token_relation.cc
-    cql3/tuples.cc
     cql3/type_json.cc
     cql3/untyped_result_set.cc
     cql3/update_parameters.cc

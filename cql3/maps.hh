@@ -42,7 +42,6 @@
 #pragma once
 
 #include "cql3/abstract_marker.hh"
-#include "cql3/term.hh"
 #include "operation.hh"
 #include "update_parameters.hh"
 #include "constants.hh"
@@ -59,48 +58,10 @@ public:
     static lw_shared_ptr<column_specification> key_spec_of(const column_specification& column);
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
-    class value : public terminal, collection_terminal {
-    public:
-        std::map<managed_bytes, managed_bytes, serialized_compare> map;
-
-        value(std::map<managed_bytes, managed_bytes, serialized_compare> map, data_type my_type)
-            : terminal(std::move(my_type)), map(std::move(map)) {
-        }
-        static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
-        virtual cql3::raw_value get(const query_options& options) override;
-        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
-        bool equals(const map_type_impl& mt, const value& v);
-        virtual sstring to_string() const override;
-    };
-
-    // See Lists.DelayedValue
-    class delayed_value : public non_terminal {
-        std::unordered_map<shared_ptr<term>, shared_ptr<term>> _elements;
-        data_type _my_type;
-    public:
-        delayed_value(std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements, data_type my_type)
-                : _elements(std::move(elements)), _my_type(std::move(my_type)) {
-        }
-        virtual bool contains_bind_marker() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
-        virtual shared_ptr<terminal> bind(const query_options& options) override;
-
-        virtual expr::expression to_expression() override;
-    };
-
-    class marker : public abstract_marker {
-    public:
-        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
-            : abstract_marker{bind_index, std::move(receiver)}
-        { }
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override;
-        virtual expr::expression to_expression() override;
-    };
-
     class setter : public operation {
     public:
-        setter(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        setter(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
@@ -108,19 +69,19 @@ public:
     };
 
     class setter_by_key : public operation {
-        const shared_ptr<term> _k;
+        expr::expression _k;
     public:
-        setter_by_key(const column_definition& column, shared_ptr<term> k, shared_ptr<term> t)
-            : operation(column, std::move(t)), _k(std::move(k)) {
+        setter_by_key(const column_definition& column, expr::expression k, expr::expression e)
+            : operation(column, std::move(e)), _k(std::move(k)) {
         }
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
+        virtual void fill_prepare_context(prepare_context& ctx) override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class putter : public operation {
     public:
-        putter(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) {
+        putter(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
@@ -130,7 +91,7 @@ public:
 
     class discarder_by_key : public operation {
     public:
-        discarder_by_key(const column_definition& column, shared_ptr<term> k)
+        discarder_by_key(const column_definition& column, expr::expression k)
                 : operation(column, std::move(k)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;

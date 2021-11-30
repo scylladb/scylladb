@@ -101,31 +101,29 @@ static bytes from_json_object_aux(const map_type_impl& t, const rjson::value& va
     if (!value.IsObject()) {
         throw marshal_exception("map_type must be represented as JSON Object");
     }
-    std::vector<bytes> raw_map;
-    raw_map.reserve(value.MemberCount());
+    std::map<bytes, bytes, serialized_compare> raw_map(t.get_keys_type()->as_less_comparator());
     for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
+        bytes value = from_json_object(*t.get_values_type(), it->value, sf);
         if (!t.get_keys_type()->is_compatible_with(*utf8_type)) {
             // Keys in maps can only be strings in JSON, but they can also be a string representation
             // of another JSON type, which needs to be reparsed. Example - map<frozen<list<int>>, int>
             // will be represented like this: { "[1, 3, 6]": 3, "[]": 0, "[1, 2]": 2 }
             rjson::value map_key = rjson::parse(rjson::to_string_view(it->name));
-            raw_map.emplace_back(from_json_object(*t.get_keys_type(), map_key, sf));
+            raw_map.emplace(from_json_object(*t.get_keys_type(), map_key, sf), std::move(value));
         } else {
-            raw_map.emplace_back(from_json_object(*t.get_keys_type(), it->name, sf));
+            raw_map.emplace(from_json_object(*t.get_keys_type(), it->name, sf), std::move(value));
         }
-        raw_map.emplace_back(from_json_object(*t.get_values_type(), it->value, sf));
     }
-    return collection_type_impl::pack(raw_map.begin(), raw_map.end(), raw_map.size() / 2, sf);
+    return map_type_impl::serialize_to_bytes(raw_map);
 }
 
 static bytes from_json_object_aux(const set_type_impl& t, const rjson::value& value, cql_serialization_format sf) {
     if (!value.IsArray()) {
         throw marshal_exception("set_type must be represented as JSON Array");
     }
-    std::vector<bytes> raw_set;
-    raw_set.reserve(value.Size());
+    std::set<bytes, serialized_compare> raw_set(t.get_elements_type()->as_less_comparator());
     for (const rjson::value& v : value.GetArray()) {
-        raw_set.emplace_back(from_json_object(*t.get_elements_type(), v, sf));
+        raw_set.emplace(from_json_object(*t.get_elements_type(), v, sf));
     }
     return collection_type_impl::pack(raw_set.begin(), raw_set.end(), raw_set.size(), sf);
 }

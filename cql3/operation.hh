@@ -44,7 +44,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include "exceptions/exceptions.hh"
 #include "database_fwd.hh"
-#include "term.hh"
 #include "update_parameters.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/expression.hh"
@@ -77,14 +76,14 @@ public:
     const column_definition& column;
 
 protected:
-    // Term involved in the operation. In theory this should not be here since some operation
-    // may require none of more than one term, but most need 1 so it simplify things a bit.
-    const ::shared_ptr<term> _t;
+    // Value involved in the operation. In theory this should not be here since some operation
+    // may require none of more than one expression, but most need 1 so it simplify things a bit.
+    std::optional<expr::expression> _e;
 
 public:
-    operation(const column_definition& column_, ::shared_ptr<term> t)
+    operation(const column_definition& column_, std::optional<expr::expression> e)
         : column{column_}
-        , _t{t}
+        , _e(std::move(e))
     { }
 
     virtual ~operation() {}
@@ -107,9 +106,9 @@ public:
      * @param meta the list of column specification where to collect the
      * bind variables of this term in.
      */
-    virtual void fill_prepare_context(prepare_context& ctx) const {
-        if (_t) {
-            _t->fill_prepare_context(ctx);
+    virtual void fill_prepare_context(prepare_context& ctx) {
+        if (_e.has_value()) {
+            expr::fill_prepare_context(*_e, ctx);
         }
     }
 
@@ -140,7 +139,7 @@ public:
          * Operation.
          *
          * @param receiver the "column" this operation applies to. Note that
-         * contrarly to the method of same name in Term.Raw, the receiver should always
+         * contrarly to the method of same name in raw expression, the receiver should always
          * be a true column.
          * @return the prepared update operation.
          */

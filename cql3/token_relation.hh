@@ -47,7 +47,6 @@
 
 #include "relation.hh"
 #include "column_identifier.hh"
-#include "term.hh"
 #include "restrictions/restriction.hh"
 #include "expr/expression.hh"
 
@@ -123,11 +122,11 @@ public:
     sstring to_string() const override;
 
 protected:
-    ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                       const expr::expression& raw,
-                                       database& db,
-                                       const sstring& keyspace,
-                                       prepare_context& ctx) const override;
+    expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
+                                   const expr::expression& raw,
+                                   database& db,
+                                   const sstring& keyspace,
+                                   prepare_context& ctx) const override;
 };
 
 }

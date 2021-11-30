@@ -35,7 +35,6 @@
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/statements/request_validations.hh"
-#include "cql3/tuples.hh"
 #include "cql3/selection/selection.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/list.hh"
@@ -49,7 +48,7 @@
 #include "cql3/maps.hh"
 #include "cql3/user_types.hh"
 #include "cql3/functions/scalar_function.hh"
-#include "cql3/functions/function_call.hh"
+#include "cql3/prepare_context.hh"
 
 namespace cql3 {
 namespace expr {
@@ -69,7 +68,7 @@ expression::operator=(const expression& o) {
     return *this;
 }
 
-binary_operator::binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order)
+binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order)
             : lhs(std::move(lhs))
             , op(op)
             , rhs(std::move(rhs))
@@ -93,7 +92,7 @@ children_t explode_conjunction(expression e) {
 using cql3::selection::selection;
 
 /// Serialized values for all types of cells, plus selection (to find a column's index) and options (for
-/// subscript term's value).
+/// subscript expression's value).
 struct row_data_from_partition_slice {
     const std::vector<bytes>& partition_key;
     const std::vector<bytes>& clustering_key;
@@ -103,7 +102,7 @@ struct row_data_from_partition_slice {
 
 /// Everything needed to compute column values during restriction evaluation.
 struct column_value_eval_bag {
-    const query_options& options; // For evaluating subscript terms.
+    const query_options& options; // For evaluating subscript expressions.
     row_data_from_partition_slice row_data;
 };
 
@@ -119,9 +118,9 @@ managed_bytes_opt get_value(const column_value& col, const column_value_eval_bag
         }
         const auto deserialized = cdef->type->deserialize(managed_bytes_view(*data.other_columns[data.sel.index_of(*cdef)]));
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
-        const auto key = evaluate_to_raw_view(col.sub, options);
+        const auto key = evaluate(*col.sub, options);
         auto&& key_type = col_type->name_comparator();
-        const auto found = key.with_linearized([&] (bytes_view key_bv) {
+        const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
             using entry = std::pair<data_value, data_value>;
             return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
                 return key_type->compare(element.first.serialize_nonnull(), key_bv) == 0;
@@ -166,13 +165,13 @@ bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_v
     return get_value_comparator(lhs)->equal(managed_bytes_view(*value), managed_bytes_view(*rhs));
 }
 
-/// Convenience overload for term.
-bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
-    return equal(to_managed_bytes_opt(evaluate_to_raw_view(rhs, bag.options)), lhs, bag);
+/// Convenience overload for expression.
+bool equal(const expression& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
+    return equal(evaluate(rhs, bag.options).value.to_managed_bytes_opt(), lhs, bag);
 }
 
 /// True iff columns' values equal t.
-bool equal(term& t, const tuple_constructor& columns_tuple, const column_value_eval_bag& bag) {
+bool equal(const expression& t, const tuple_constructor& columns_tuple, const column_value_eval_bag& bag) {
     const constant tup = evaluate(t, bag.options);
     if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
@@ -211,7 +210,7 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const column_value& col, oper_t op, term& rhs, const column_value_eval_bag& bag) {
+bool limits(const column_value& col, oper_t op, const expression& rhs, const column_value_eval_bag& bag) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
@@ -219,17 +218,17 @@ bool limits(const column_value& col, oper_t op, term& rhs, const column_value_ev
     if (!lhs) {
         return false;
     }
-    const auto b = to_managed_bytes_opt(evaluate_to_raw_view(rhs, bag.options));
+    const auto b = evaluate(rhs, bag.options).value.to_managed_bytes_opt();
     return b ? limits(*lhs, op, *b, *get_value_comparator(col)) : false;
 }
 
 /// True iff the column values are limited by t in the manner prescribed by op.
-bool limits(const tuple_constructor& columns_tuple, const oper_t op, term& t,
+bool limits(const tuple_constructor& columns_tuple, const oper_t op, const expression& e,
             const column_value_eval_bag& bag) {
     if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    const constant tup = evaluate(t, bag.options);
+    const constant tup = evaluate(e, bag.options);
     if (!tup.type->is_tuple()) {
         throw exceptions::invalid_request_exception(
                 "multi-column comparison has right-hand side that isn't a tuple");
@@ -396,13 +395,13 @@ bool like(const column_value& cv, const raw_value_view& pattern, const column_va
 }
 
 /// True iff the column value is in the set defined by rhs.
-bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& bag) {
+bool is_one_of(const column_value& col, const expression& rhs, const column_value_eval_bag& bag) {
     const constant in_list = evaluate_IN_list(rhs, bag.options);
     statements::request_validations::check_false(
             in_list.is_null(), "Invalid null value for column {}", col.col->name_as_text());
 
     if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error("unexpected term type in is_one_of(single column)");
+        throw std::logic_error("unexpected expression type in is_one_of(single column)");
     }
     return boost::algorithm::any_of(get_list_elements(in_list), [&] (const managed_bytes_opt& b) {
         return equal(b, col, bag);
@@ -410,10 +409,10 @@ bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& 
 }
 
 /// True iff the tuple of column values is in the set defined by rhs.
-bool is_one_of(const tuple_constructor& tuple, term& rhs, const column_value_eval_bag& bag) {
+bool is_one_of(const tuple_constructor& tuple, const expression& rhs, const column_value_eval_bag& bag) {
     constant in_list = evaluate_IN_list(rhs, bag.options);
     if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error("unexpected term type in is_one_of(multi-column)");
+        throw std::logic_error("unexpected expression type in is_one_of(multi-column)");
     }
     return boost::algorithm::any_of(get_list_of_tuples_elements(in_list), [&] (const std::vector<managed_bytes_opt>& el) {
         return boost::equal(tuple.elements, el, [&] (const expression& c, const managed_bytes_opt& b) {
@@ -457,30 +456,33 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
     return expr::visit(overloaded_functor{
             [&] (const column_value& col) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(*opr.rhs, col, bag);
+                    return equal(opr.rhs, col, bag);
                 } else if (opr.op == oper_t::NEQ) {
-                    return !equal(*opr.rhs, col, bag);
+                    return !equal(opr.rhs, col, bag);
                 } else if (is_slice(opr.op)) {
-                    return limits(col, opr.op, *opr.rhs, bag);
+                    return limits(col, opr.op, opr.rhs, bag);
                 } else if (opr.op == oper_t::CONTAINS) {
-                    return contains(col, evaluate_to_raw_view(opr.rhs, bag.options), bag);
+                    constant val = evaluate(opr.rhs, bag.options);
+                    return contains(col, val.view(), bag);
                 } else if (opr.op == oper_t::CONTAINS_KEY) {
-                    return contains_key(col, evaluate_to_raw_view(opr.rhs, bag.options), bag);
+                    constant val = evaluate(opr.rhs, bag.options);
+                    return contains_key(col, val.view(), bag);
                 } else if (opr.op == oper_t::LIKE) {
-                    return like(col, evaluate_to_raw_view(opr.rhs, bag.options), bag);
+                    constant val = evaluate(opr.rhs, bag.options);
+                    return like(col, val.view(), bag);
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(col, *opr.rhs, bag);
+                    return is_one_of(col, opr.rhs, bag);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
             [&] (const tuple_constructor& cvs) {
                 if (opr.op == oper_t::EQ) {
-                    return equal(*opr.rhs, cvs, bag);
+                    return equal(opr.rhs, cvs, bag);
                 } else if (is_slice(opr.op)) {
-                    return limits(cvs, opr.op, *opr.rhs, bag);
+                    return limits(cvs, opr.op, opr.rhs, bag);
                 } else if (opr.op == oper_t::IN) {
-                    return is_one_of(cvs, *opr.rhs, bag);
+                    return is_one_of(cvs, opr.rhs, bag);
                 } else {
                     throw exceptions::unsupported_operation_exception(
                             format("Unhandled multi-column binary_operator: {}", opr));
@@ -606,26 +608,26 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
-        const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator,
+        const expression& e, const query_options& options, const serialized_compare& comparator,
         sstring_view column_name) {
-    const constant in_list = evaluate_IN_list(t, options);
+    const constant in_list = evaluate_IN_list(e, options);
     if (in_list.is_unset_value()) {
         throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
     }
     statements::request_validations::check_false(in_list.is_null(), "Invalid null value for column {}", column_name);
     if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error(format("get_IN_values(single-column) on invalid term {}", *t));
+        throw std::logic_error(format("get_IN_values(single-column) on invalid expression {}", e));
     }
     utils::chunked_vector<managed_bytes> list_elems = get_list_elements(in_list);
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
 
 /// Returns possible values for k-th column from t, which must be RHS of IN.
-value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
+value_list get_IN_values(const expression& e, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-        const constant in_list = evaluate_IN_list(t, options);
+        const constant in_list = evaluate_IN_list(e, options);
     if (!in_list.type->without_reversed().is_list()) {
-        throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
+        throw std::logic_error(format("get_IN_values(multi-column) on invalid expression {}", e));
     }
     const auto split_values = get_list_of_tuples_elements(in_list); // Need lvalue from which to make std::view.
     const auto result_range = split_values
@@ -703,7 +705,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return unbounded_value_set;
                             }
                             if (is_compare(oper.op)) {
-                                managed_bytes_opt val = to_managed_bytes_opt(evaluate_to_raw_view(oper.rhs, options));
+                                managed_bytes_opt val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -726,7 +728,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             const auto column_index_on_lhs = std::distance(tuple.elements.begin(), found);
                             if (is_compare(oper.op)) {
                                 // RHS must be a tuple due to upstream checks.
-                                managed_bytes_opt val = get_tuple_elements(evaluate(*oper.rhs, options)).at(column_index_on_lhs);
+                                managed_bytes_opt val = get_tuple_elements(evaluate(oper.rhs, options)).at(column_index_on_lhs);
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -748,7 +750,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             if (cdef) {
                                 return unbounded_value_set;
                             }
-                            const auto val = to_managed_bytes_opt(evaluate_to_raw_view(oper.rhs, options));
+                            const auto val = evaluate(oper.rhs, options).value.to_managed_bytes_opt();
                             if (!val) {
                                 return empty_value_set; // All NULL comparisons fail; no token values match.
                             }
@@ -954,10 +956,10 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
     expr::visit(overloaded_functor{
-            [&] (const constant& v) { os << v.value.to_view(); },
+            [&] (const constant& v) { os << v.view(); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
-                os << "(" << opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
+                os << "(" << opr.lhs << ") " << opr.op << ' ' << opr.rhs;
             },
             [&] (const token& t) { os << "TOKEN"; },
             [&] (const column_value& col) {
@@ -1110,7 +1112,7 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const binary_operator& oper) -> expression {
-                    return binary_operator(recurse(oper.lhs), oper.op, oper.rhs);
+                    return binary_operator(recurse(oper.lhs), oper.op, recurse(oper.rhs));
                 },
                 [&] (const column_mutation_attribute& cma) -> expression {
                     return column_mutation_attribute{cma.kind, recurse(cma.column)};
@@ -1152,6 +1154,12 @@ expression search_and_replace(const expression& e,
                 },
                 [&] (const field_selection& fs) -> expression {
                     return field_selection{recurse(fs.structure), fs.field};
+                },
+                [&] (const column_value& cv) -> expression {
+                    if (cv.sub.has_value()) {
+                        return column_value(cv.col, recurse(*cv.sub));
+                    }
+                    return cv;
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -1282,6 +1290,10 @@ bool constant::is_null_or_unset() const {
     return is_null() || is_unset_value();
 }
 
+cql3::raw_value_view constant::view() const {
+    return value.to_view();
+}
+
 std::optional<bool> get_bool_value(const constant& constant_val) {
     if (constant_val.type->get_kind() != abstract_type::kind::boolean) {
         return std::nullopt;
@@ -1295,41 +1307,7 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
         return std::nullopt;
     }
 
-    return constant_val.value.to_view().deserialize<bool>(*boolean_type);
-}
-
-constant evaluate(term* term_ptr, const query_options& options) {
-    if (term_ptr == nullptr) {
-        return constant::make_null();
-    }
-
-    return evaluate(term_ptr->to_expression(), options);
-}
-
-constant evaluate(const ::shared_ptr<term>& term_ptr, const query_options& options) {
-    return evaluate(term_ptr.get(), options);
-}
-
-constant evaluate(term& term_ref, const query_options& options) {
-    return evaluate(&term_ref, options);
-}
-
-constant evaluate_IN_list(const ::shared_ptr<term>& term_ptr, const query_options& options) {
-    return evaluate_IN_list(term_ptr.get(), options);
-}
-
-constant evaluate_IN_list(term& term_ref, const query_options& options) {
-    return evaluate_IN_list(&term_ref, options);
-}
-
-cql3::raw_value_view evaluate_to_raw_view(const ::shared_ptr<term>& term_ptr, const query_options& options) {
-    constant value = evaluate(term_ptr, options);
-    return cql3::raw_value_view::make_temporary(std::move(value.value));
-}
-
-cql3::raw_value_view evaluate_to_raw_view(term& term_ref, const query_options& options) {
-    constant value = evaluate(term_ref, options);
-    return cql3::raw_value_view::make_temporary(std::move(value.value));
+    return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
 constant evaluate(const expression& e, const query_options& options) {
@@ -1372,45 +1350,6 @@ constant evaluate(const expression& e, const query_options& options) {
         [&](const usertype_constructor& user_val) { return evaluate(user_val, options); },
         [&](const function_call& fun_call) { return evaluate(fun_call, options); }
     }, e);
-}
-
-// Serializes a map using the internal cql serialization format
-// Takes a range of pair<managed_bytes, managed_bytes>
-template <std::ranges::range Range>
-requires std::convertible_to<std::ranges::range_value_t<Range>, std::pair<const managed_bytes, managed_bytes>>
-static managed_bytes serialize_map(const Range& map_range) {
-    size_t serialized_len = 4;
-    size_t map_size = 0;
-    for (const std::pair<const managed_bytes, managed_bytes>& elem : map_range) {
-        serialized_len += 4 + elem.first.size() + 4 + elem.second.size();
-        map_size += 1;
-    }
-
-    if (map_size > std::numeric_limits<int32_t>::max()) {
-        throw exceptions::invalid_request_exception(
-            fmt::format("Map size too large: {} > {}", map_size, std::numeric_limits<int32_t>::max()));
-    }
-
-    managed_bytes result(managed_bytes::initialized_later(), serialized_len);
-    managed_bytes_mutable_view out(result);
-
-    write_collection_size(out, map_size, cql_serialization_format::internal());
-    for (const std::pair<const managed_bytes, managed_bytes>& elem : map_range) {
-        if (elem.first.size() > std::numeric_limits<int32_t>::max()) {
-            throw exceptions::invalid_request_exception(
-                fmt::format("Map key size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
-        }
-
-        if (elem.second.size() > std::numeric_limits<int32_t>::max()) {
-            throw exceptions::invalid_request_exception(
-                fmt::format("Map value size too large: {} bytes > {}", map_size, std::numeric_limits<int32_t>::max()));
-        }
-
-        write_collection_value(out, cql_serialization_format::internal(), elem.first);
-        write_collection_value(out, cql_serialization_format::internal(), elem.second);
-    }
-
-    return result;
 }
 
 // Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
@@ -1481,7 +1420,7 @@ static managed_bytes reserialize_value(View value_bytes,
             values_map.emplace(std::move(element));
         }
 
-       return serialize_map(values_map);
+       return map_type_impl::serialize_to_managed_bytes(values_map);
     }
 
     if (type.is_tuple() || type.is_user_type()) {
@@ -1503,28 +1442,27 @@ static managed_bytes reserialize_value(View value_bytes,
 }
 
 constant evaluate(const bind_variable& bind_var, const query_options& options) {
-    if (bind_var.value_type.get() == nullptr) {
+    if (bind_var.receiver.get() == nullptr) {
         on_internal_error(expr_logger,
-            "evaluate(bind_variable) called with nullptr type, should be prepared first");
+            "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
     }
 
     cql3::raw_value_view value = options.get_value_at(bind_var.bind_index);
 
     if (value.is_null()) {
-        return constant::make_null(bind_var.value_type);
+        return constant::make_null(bind_var.receiver->type);
     }
 
     if (value.is_unset_value()) {
-        return constant::make_unset_value(bind_var.value_type);
+        return constant::make_unset_value(bind_var.receiver->type);
     }
 
-    const abstract_type& value_type = bind_var.value_type->without_reversed();
+    const abstract_type& value_type = bind_var.receiver->type->without_reversed();
     try {
         value.validate(value_type, options.get_cql_serialization_format());
     } catch (const marshal_exception& e) {
-        throw exceptions::invalid_request_exception(
-                format("Exception while binding value of type {}: {}",
-                       bind_var.value_type->name(), e.what()));
+        throw exceptions::invalid_request_exception(format("Exception while binding column {:s}: {:s}",
+                                                           bind_var.receiver->name->to_cql_string(), e.what()));
     }
 
     if (value_type.bound_value_needs_to_be_reserialized(options.get_cql_serialization_format())) {
@@ -1532,10 +1470,10 @@ constant evaluate(const bind_variable& bind_var, const query_options& options) {
             return reserialize_value(value_bytes, value_type, options.get_cql_serialization_format());
         });
 
-        return constant(raw_value::make_value(std::move(new_value)), bind_var.value_type);
+        return constant(raw_value::make_value(std::move(new_value)), bind_var.receiver->type);
     }
 
-    return constant(raw_value::make_value(value), bind_var.value_type);
+    return constant(raw_value::make_value(value), bind_var.receiver->type);
 }
 
 constant evaluate(const tuple_constructor& tuple, const query_options& options) {
@@ -1629,6 +1567,16 @@ static constant evaluate_set(const collection_constructor& collection, const que
             return constant::make_unset_value(collection.type);
         }
 
+        if (evaluated_element.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            // TODO: Behaviour copied from sets::delayed_value::bind(), but this seems incorrect
+            // The original reasoning is:
+            // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
+            // but CQL uses int32_t to encode length of a set value length
+            throw exceptions::invalid_request_exception(format("Set value is too long. Set values are limited to {:d} bytes but {:d} bytes value provided",
+                                                std::numeric_limits<uint16_t>::max(),
+                                                evaluated_element.view().size_bytes()));
+        }
+
         evaluated_elements.emplace(std::move(evaluated_element).value.to_managed_bytes());
     }
 
@@ -1657,14 +1605,14 @@ static constant evaluate_map(const collection_constructor& collection, const que
                 return constant::make_unset_value(collection.type);
             }
 
-            if (key.value.to_view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            if (key.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
                 // TODO: Behaviour copied from maps::delayed_value::bind(), but this seems incorrect
                 // The original reasoning is:
                 // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
                 // but CQL uses int32_t to encode length of a map key
                 throw exceptions::invalid_request_exception(format("Map key is too long. Map keys are limited to {:d} bytes but {:d} bytes keys provided",
                                                    std::numeric_limits<uint16_t>::max(),
-                                                   key.value.to_view().size_bytes()));
+                                                   key.view().size_bytes()));
             }
 
             evaluated_elements.emplace(std::move(key.value).to_managed_bytes(),
@@ -1681,7 +1629,8 @@ static constant evaluate_map(const collection_constructor& collection, const que
         }
     }
 
-    return constant(raw_value::make_value(serialize_map(evaluated_elements)), collection.type);
+    managed_bytes serialized_map = map_type_impl::serialize_to_managed_bytes(evaluated_elements);
+    return constant(raw_value::make_value(std::move(serialized_map)), collection.type);
 }
 
 constant evaluate(const collection_constructor& collection, const query_options& options) {
@@ -1765,8 +1714,10 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
         arguments.emplace_back(to_bytes_opt(std::move(arg_val.value)));
     }
 
-    if (fun_call.lwt_cache_id.has_value()) {
-        computed_function_values::mapped_type* cached_value = options.find_cached_pk_function_call(*fun_call.lwt_cache_id);
+    bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
+    if (has_cache_id) {
+        computed_function_values::mapped_type* cached_value =
+            options.find_cached_pk_function_call(**fun_call.lwt_cache_id);
         if (cached_value != nullptr) {
             return constant(raw_value::make_value(*cached_value), scalar_fun->return_type());
         }
@@ -1774,8 +1725,8 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
 
     bytes_opt result = scalar_fun->execute(cql_serialization_format::internal(), arguments);
 
-    if (fun_call.lwt_cache_id.has_value()) {
-        options.cache_pk_function_call(*fun_call.lwt_cache_id, result);
+    if (has_cache_id) {
+        options.cache_pk_function_call(**fun_call.lwt_cache_id, result);
     }
 
     if (!result.has_value()) {
@@ -1794,13 +1745,7 @@ constant evaluate(const function_call& fun_call, const query_options& options) {
     return constant(raw_value::make_value(std::move(*result)), scalar_fun->return_type());
 }
 
-constant evaluate_IN_list(term* term_ptr, const query_options& options) {
-    if (term_ptr == nullptr) {
-        return constant::make_null();
-    }
-
-    expression e = term_ptr->to_expression();
-
+constant evaluate_IN_list(const expression& e, const query_options& options) {
     if (auto collection = expr::as_if<collection_constructor>(&e)) {
         if (collection->style == collection_constructor::style_type::list) {
             return evaluate_list(*collection, options, true);
@@ -1831,7 +1776,7 @@ static void ensure_can_get_value_elements(const constant& val,
 utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::list, "expr::get_list_elements");
 
-    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
     });
 }
@@ -1839,7 +1784,7 @@ utils::chunked_vector<managed_bytes> get_list_elements(const constant& val) {
 utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::set, "expr::get_set_elements");
 
-    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_listlike(value_bytes, cql_serialization_format::internal());
     });
 }
@@ -1847,7 +1792,7 @@ utils::chunked_vector<managed_bytes> get_set_elements(const constant& val) {
 std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::map, "expr::get_map_elements");
 
-    return val.value.to_view().with_value([](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([](const FragmentedView auto& value_bytes) {
         return partially_deserialize_map(value_bytes, cql_serialization_format::internal());
     });
 }
@@ -1855,7 +1800,7 @@ std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cons
 std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::tuple, "expr::get_tuple_elements");
 
-    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([&](const FragmentedView auto& value_bytes) {
         const tuple_type_impl& ttype = static_cast<const tuple_type_impl&>(val.type->without_reversed());
         return ttype.split_fragmented(value_bytes);
     });
@@ -1864,7 +1809,7 @@ std::vector<managed_bytes_opt> get_tuple_elements(const constant& val) {
 std::vector<managed_bytes_opt> get_user_type_elements(const constant& val) {
     ensure_can_get_value_elements(val, abstract_type::kind::user, "expr::get_user_type_elements");
 
-    return val.value.to_view().with_value([&](const FragmentedView auto& value_bytes) {
+    return val.view().with_value([&](const FragmentedView auto& value_bytes) {
         const user_type_impl& utype = static_cast<const user_type_impl&>(val.type->without_reversed());
         return utype.split_fragmented(value_bytes);
     });
@@ -1912,12 +1857,70 @@ utils::chunked_vector<std::vector<managed_bytes_opt>> get_list_of_tuples_element
     return tuples_list;
 }
 
-expression to_expression(const ::shared_ptr<term>& term_ptr) {
-    if (term_ptr.get() == nullptr) {
-        return constant::make_null();
-    }
+void fill_prepare_context(expression& e, prepare_context& ctx) {
+    expr::visit(overloaded_functor {
+        [&](bind_variable& bind_var) {
+            ctx.add_variable_specification(bind_var.bind_index, bind_var.receiver);
+        },
+        [&](collection_constructor& c) {
+            for (expr::expression& element : c.elements) {
+                fill_prepare_context(element, ctx);
+            }
+        },
+        [&](tuple_constructor& t) {
+            for (expr::expression& element : t.elements) {
+                fill_prepare_context(element, ctx);
+            }
+        },
+        [&](usertype_constructor& u) {
+            for (auto& [field_name, field_val] : u.elements) {
+                fill_prepare_context(field_val, ctx);
+            }
+        },
+        [&](function_call& f) {
+            const shared_ptr<functions::function>& func = std::get<shared_ptr<functions::function>>(f.func);
+            if (ctx.is_processing_pk_restrictions() && !func->is_pure()) {
+                ctx.add_pk_function_call(f);
+            }
 
-    return term_ptr->to_expression();
+            for (expr::expression& argument : f.args) {
+                fill_prepare_context(argument, ctx);
+            }
+        },
+        [&](binary_operator& binop) {
+            fill_prepare_context(binop.lhs, ctx);
+            fill_prepare_context(binop.rhs, ctx);
+        },
+        [&](conjunction& c) {
+            for (expression& child : c.children) {
+                fill_prepare_context(child, ctx);
+            }
+        },
+        [](token&) {},
+        [](unresolved_identifier&) {},
+        [&](column_mutation_attribute& a) {
+            fill_prepare_context(a.column, ctx);
+        },
+        [&](cast& c) {
+            fill_prepare_context(c.arg, ctx);
+        },
+        [&](field_selection& fs) {
+            fill_prepare_context(fs.structure, ctx);
+        },
+        [&](column_value& cv) {
+            if (cv.sub.has_value()) {
+                fill_prepare_context(*cv.sub, ctx);
+            }
+        },
+        [](untyped_constant&) {},
+        [](null&) {},
+        [](constant&) {},
+    }, e);
+}
+
+bool contains_bind_marker(const expression& e) {
+    const bind_variable* search_res = find_in_expression<bind_variable>(e, [](const bind_variable&) { return true; });
+    return search_res != nullptr;
 }
 } // namespace expr
 } // namespace cql3

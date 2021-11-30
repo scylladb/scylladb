@@ -49,110 +49,8 @@
 #include "types/user.hh"
 
 namespace cql3 {
-
-user_types::value::value(std::vector<managed_bytes_opt> elements, data_type my_type)
-        : terminal(std::move(my_type)), _elements(std::move(elements)) {
-}
-
-user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
-    return v.with_value([&] (const FragmentedView auto& val) {
-        std::vector<managed_bytes_opt> elements = type.split_fragmented(val);
-        if (elements.size() > type.size()) {
-            throw exceptions::invalid_request_exception(
-                    format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
-        }
-
-        return value(std::move(elements), type.shared_from_this());
-    });
-}
-
-cql3::raw_value user_types::value::get(const query_options&) {
-    return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
-}
-
-sstring user_types::value::to_string() const {
-    return format("({})", join(", ", _elements));
-}
-
-user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)
-        : _type(std::move(type)), _values(std::move(values)) {
-}
-bool user_types::delayed_value::contains_bind_marker() const {
-    return boost::algorithm::any_of(_values, std::mem_fn(&term::contains_bind_marker));
-}
-
-void user_types::delayed_value::fill_prepare_context(prepare_context& ctx) const {
-    for (auto&& v : _values) {
-        v->fill_prepare_context(ctx);
-    }
-}
-
-std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const query_options& options) {
-    auto sf = options.get_cql_serialization_format();
-
-    // user_types::literal::prepare makes sure that every field gets a corresponding value.
-    // For missing fields the values become nullopts.
-    assert(_type->size() == _values.size());
-
-    std::vector<managed_bytes_opt> buffers;
-    for (size_t i = 0; i < _type->size(); ++i) {
-        const auto& value = expr::evaluate_to_raw_view(_values[i], options);
-        if (!_type->is_multi_cell() && value.is_unset_value()) {
-            throw exceptions::invalid_request_exception(format("Invalid unset value for field '{}' of user defined type {}",
-                        _type->field_name_as_string(i), _type->get_name_as_string()));
-        }
-
-        buffers.push_back(to_managed_bytes_opt(value));
-
-        // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
-        // version is in use since we're going to store directly that serialized value.
-        if (!sf.collection_format_unchanged() && _type->field_type(i)->is_collection() && buffers.back()) {
-            auto&& ctype = static_pointer_cast<const collection_type_impl>(_type->field_type(i));
-            buffers.back() = ctype->reserialize(sf, cql_serialization_format::latest(), managed_bytes_view(*buffers.back()));
-        }
-    }
-    return buffers;
-}
-
-shared_ptr<terminal> user_types::delayed_value::bind(const query_options& options) {
-    return ::make_shared<user_types::value>(bind_internal(options), _type);
-}
-
-expr::expression user_types::delayed_value::to_expression() {
-    expr::usertype_constructor::elements_map_type new_elements;
-    for (size_t i = 0; i < _values.size(); i++) {
-        column_identifier field_name(_type->field_names().at(i), _type->string_field_names().at(i));
-        expr::expression field_value(expr::to_expression(_values[i]));
-        new_elements.emplace(std::move(field_name), std::move(field_value));
-    }
-
-    return expr::usertype_constructor {
-        .elements = std::move(new_elements),
-        .type = _type
-    };
-}
-
-shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
-    auto value = options.get_value_at(_bind_index);
-    if (value.is_null()) {
-        return nullptr;
-    }
-    if (value.is_unset_value()) {
-        return constants::UNSET_VALUE;
-    }
-    return make_shared<user_types::value>(value::from_serialized(value, static_cast<const user_type_impl&>(*_receiver->type)));
-}
-
-expr::expression user_types::marker::to_expression() {
-    return expr::bind_variable {
-        .shape = expr::bind_variable::shape_type::scalar,
-        .bind_index = _bind_index,
-        .value_type = _receiver->type
-    };
-}
-
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    const expr::constant value = expr::evaluate(_t, params._options);
+    const expr::constant value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, value);
 }
 
@@ -200,7 +98,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         m.set_cell(row_key, column, mut.serialize(type));
     } else {
         if (!ut_value.is_null()) {
-            m.set_cell(row_key, column, params.make_cell(type, ut_value.value.to_view()));
+            m.set_cell(row_key, column, params.make_cell(type, ut_value.view()));
         } else {
             m.set_cell(row_key, column, params.make_dead_cell());
         }
@@ -210,7 +108,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
-    auto value = expr::evaluate_to_raw_view(_t, params._options);
+    auto value = expr::evaluate(*_e, params._options);
     if (value.is_unset_value()) {
         return;
     }
@@ -218,8 +116,8 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
     auto& type = static_cast<const user_type_impl&>(*column.type);
 
     collection_mutation_description mut;
-    mut.cells.emplace_back(serialize_field_index(_field_idx), value
-                ? params.make_cell(*type.type(_field_idx), value, atomic_cell::collection_member::yes)
+    mut.cells.emplace_back(serialize_field_index(_field_idx), !value.is_null()
+                ? params.make_cell(*type.type(_field_idx), value.view(), atomic_cell::collection_member::yes)
                 : params.make_dead_cell());
 
     m.set_cell(row_key, column, mut.serialize(type));

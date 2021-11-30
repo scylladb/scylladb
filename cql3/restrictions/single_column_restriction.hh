@@ -44,8 +44,7 @@
 #include <optional>
 
 #include "cql3/restrictions/restriction.hh"
-#include "cql3/restrictions/term_slice.hh"
-#include "cql3/term.hh"
+#include "cql3/restrictions/bounds_slice.hh"
 #include "cql3/abstract_marker.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "schema_fwd.hh"

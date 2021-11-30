@@ -41,8 +41,8 @@
 
 #pragma once
 
-#include "cql3/term.hh"
 #include "cql3/expr/expression.hh"
+#include "db/timeout_clock.hh"
 
 namespace cql3 {
 
@@ -55,13 +55,15 @@ class prepare_context;
  */
 class attributes final {
 private:
-    const ::shared_ptr<term> _timestamp;
-    const ::shared_ptr<term> _time_to_live;
-    const ::shared_ptr<term> _timeout;
+    std::optional<cql3::expr::expression> _timestamp;
+    std::optional<cql3::expr::expression> _time_to_live;
+    std::optional<cql3::expr::expression> _timeout;
 public:
     static std::unique_ptr<attributes> none();
 private:
-    attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live, ::shared_ptr<term>&& timeout);
+    attributes(std::optional<cql3::expr::expression>&& timestamp,
+               std::optional<cql3::expr::expression>&& time_to_live,
+               std::optional<cql3::expr::expression>&& timeout);
 public:
     bool is_timestamp_set() const;
 
@@ -75,7 +77,7 @@ public:
 
     db::timeout_clock::duration get_timeout(const query_options& options) const;
 
-    void fill_prepare_context(prepare_context& ctx) const;
+    void fill_prepare_context(prepare_context& ctx);
 
     class raw final {
     public:

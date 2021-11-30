@@ -46,7 +46,6 @@
 #include "prepare_context.hh"
 #include "restrictions/restriction.hh"
 #include "statements/bound.hh"
-#include "term.hh"
 #include "expr/expression.hh"
 
 namespace cql3 {
@@ -240,41 +239,42 @@ public:
 protected:
 
     /**
-     * Converts the specified <code>Raw</code> into a <code>Term</code>.
+     * Converts the specified <code>Raw</code> into an <code>Expression</code>.
      * @param receivers the columns to which the values must be associated at
-     * @param raw the raw term to convert
+     * @param raw the raw expression to convert
      * @param keyspace the keyspace name
      * @param boundNames the variables specification where to collect the bind variables
      *
-     * @return the <code>Term</code> corresponding to the specified <code>Raw</code>
-     * @throws InvalidRequestException if the <code>Raw</code> term is not valid
+     * @return the <code>Expression</code> corresponding to the specified <code>Raw</code>
+     * @throws InvalidRequestException if the <code>Raw</code> expression is not valid
      */
-    virtual ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                       const expr::expression& raw,
-                                       database& db,
-                                       const sstring& keyspace,
-                                       prepare_context& ctx) const = 0;
+    virtual expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
+                                           const expr::expression& raw,
+                                           database& db,
+                                           const sstring& keyspace,
+                                           prepare_context& ctx) const = 0;
 
     /**
-     * Converts the specified <code>Raw</code> terms into a <code>Term</code>s.
+     * Converts the specified <code>Raw</code> expressions into <code>expressions</code>s.
      * @param receivers the columns to which the values must be associated at
-     * @param raws the raw terms to convert
+     * @param raws the raw expressions to convert
      * @param keyspace the keyspace name
      * @param boundNames the variables specification where to collect the bind variables
      *
-     * @return the <code>Term</code>s corresponding to the specified <code>Raw</code> terms
-     * @throws InvalidRequestException if the <code>Raw</code> terms are not valid
+     * @return the <code>Expression</code>s corresponding to the specified <code>Raw</code> expressions
+     * @throws InvalidRequestException if the <code>Raw</code> expressions are not valid
      */
-    std::vector<::shared_ptr<term>> to_terms(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                             const std::vector<expr::expression>& raws,
-                                             database& db,
-                                             const sstring& keyspace,
-                                             prepare_context& ctx) const {
-        std::vector<::shared_ptr<term>> terms;
+    std::vector<expr::expression> to_expressions(const std::vector<lw_shared_ptr<column_specification>>& receivers,
+                                                 const std::vector<expr::expression>& raws,
+                                                 database& db,
+                                                 const sstring& keyspace,
+                                                 prepare_context& ctx) const {
+        std::vector<expr::expression> expressions;
+        expressions.reserve(raws.size());
         for (const auto& r : raws) {
-            terms.emplace_back(to_term(receivers, r, db, keyspace, ctx));
+            expressions.emplace_back(to_expression(receivers, r, db, keyspace, ctx));
         }
-        return terms;
+        return expressions;
     }
 
     /**

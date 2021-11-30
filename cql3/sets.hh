@@ -58,46 +58,10 @@ class sets {
 public:
     static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
-    class value : public terminal, collection_terminal {
-    public:
-        std::set<managed_bytes, serialized_compare> _elements;
-    public:
-        value(std::set<managed_bytes, serialized_compare> elements, data_type my_type)
-                : terminal(std::move(my_type)), _elements(std::move(elements)) {
-        }
-        static value from_serialized(const raw_value_view& v, const set_type_impl& type, cql_serialization_format sf);
-        virtual cql3::raw_value get(const query_options& options) override;
-        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
-        bool equals(const set_type_impl& st, const value& v);
-        virtual sstring to_string() const override;
-    };
-
-    // See Lists.DelayedValue
-    class delayed_value : public non_terminal {
-        std::vector<shared_ptr<term>> _elements;
-        data_type _my_type;
-    public:
-        delayed_value(std::vector<shared_ptr<term>> elements, data_type my_type)
-            : _elements(std::move(elements)), _my_type(std::move(my_type)) {
-        }
-        virtual bool contains_bind_marker() const override;
-        virtual void fill_prepare_context(prepare_context& ctx) const override;
-        virtual shared_ptr<terminal> bind(const query_options& options) override;
-
-        virtual expr::expression to_expression() override;
-    };
-
-    class marker : public abstract_marker {
-    public:
-        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver);
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override;
-        virtual expr::expression to_expression() override;
-    };
-
     class setter : public operation {
     public:
-        setter(const column_definition& column, shared_ptr<term> t)
-                : operation(column, std::move(t)) {
+        setter(const column_definition& column, expr::expression e)
+                : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const expr::constant& value);
@@ -105,8 +69,8 @@ public:
 
     class adder : public operation {
     public:
-        adder(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) {
+        adder(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
@@ -116,16 +80,16 @@ public:
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
     class discarder : public operation {
     public:
-        discarder(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) {
+        discarder(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 
     class element_discarder : public operation {
     public:
-        element_discarder(const column_definition& column, shared_ptr<term> t)
-            : operation(column, std::move(t)) { }
+        element_discarder(const column_definition& column, expr::expression e)
+            : operation(column, std::move(e)) { }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 };
