@@ -212,7 +212,6 @@ private:
     future<> rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     future<> stop_ongoing_compactions(sstring reason);
-    future<> stop_ongoing_compactions(sstring reason, column_family* cf);
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 public:
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
@@ -308,6 +307,9 @@ public:
 
     // Stops ongoing compaction of a given type.
     void stop_compaction(sstring type);
+
+    // Stops ongoing compaction of a given table.
+    future<> stop_ongoing_compactions(sstring reason, column_family* cf);
 
     double backlog() {
         return _backlog_manager.backlog();
