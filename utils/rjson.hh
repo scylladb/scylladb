@@ -43,6 +43,12 @@
 #include <stdexcept>
 #include "utils/base64.hh"
 
+#include <seastar/core/future.hh>
+
+namespace seastar {
+    template<typename> class output_stream;
+}
+
 namespace rjson {
 class error : public std::exception {
     std::string _msg;
@@ -144,6 +150,19 @@ inline rjson::value empty_string() {
 // Convert the JSON value to a string with JSON syntax, the opposite of parse().
 // The representation is dense - without any redundant indentation.
 std::string print(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
+
+// Writes the JSON value to the output_stream, similar to print() -> string, but
+// directly. Note this has potentially more data copy overhead and should be 
+// reserved for larger values where not creating huge linear strings is useful.
+// (Because data will first be written to N buffers before actually committed to stream, 
+//  where N = <n bytes text>/k (k dependent on buffer/write block behaviour of stream),
+//  and also copy at least 2n bytes (assuming underlying stream is buffered).
+//  This may or may not be more data copying/overhead than creating a string directly
+//  and printing it, but again, it will guarantee fragmented buffer behaviour).
+// Note: input value must remain valid for the call, but is _not_ required to be valid
+// until future resolves - i.e. the full json -> text conversion is done _before_ 
+// pushing fully to stream. I.e. it is valid to do `return print(rjson::value("... something..."), os);`
+seastar::future<> print(const rjson::value& value, seastar::output_stream<char>&, size_t max_nested_level = default_max_nested_level);
 
 // Returns a string_view to the string held in a JSON value (which is
 // assumed to hold a string, i.e., v.IsString() == true). This is a view
