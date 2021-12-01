@@ -606,6 +606,7 @@ gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
 
 void messaging_service::init_local_preferred_ip_cache(const std::unordered_map<gms::inet_address, gms::inet_address>& ips_cache) {
     _preferred_ip_cache = ips_cache;
+    _preferred_to_endpoint.clear();
     //
     // Reset the connections to the endpoints that have entries in
     // _preferred_ip_cache so that they reopen with the preferred IPs we've
@@ -613,11 +614,18 @@ void messaging_service::init_local_preferred_ip_cache(const std::unordered_map<g
     //
     for (auto& p : _preferred_ip_cache) {
         this->remove_rpc_client(msg_addr(p.first));
+        _preferred_to_endpoint[p.second] = p.first;
     }
 }
 
 void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
     _preferred_ip_cache[ep] = ip;
+    _preferred_to_endpoint[ip] = ep;
+}
+
+gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_address& ip) const {
+    auto i = _preferred_to_endpoint.find(ip);
+    return i != _preferred_to_endpoint.end() ? i->second : ip;
 }
 
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
