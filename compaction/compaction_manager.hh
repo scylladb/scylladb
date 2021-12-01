@@ -150,14 +150,11 @@ private:
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
-    // Purpose is to serialize major compaction across all tables, so to
-    // reduce disk space requirement.
-    semaphore _major_compaction_sem{1};
-
     std::unordered_map<table*, compaction_state> _compaction_state;
 
-    semaphore _custom_job_sem{1};
-    seastar::named_semaphore _rewrite_sstables_sem = {1, named_semaphore_exception_factory{"rewrite sstables"}};
+    // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
+    // If the operation must be serialized with regular, then the per-table write lock must be taken.
+    seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
 
     std::function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.

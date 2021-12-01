@@ -275,7 +275,7 @@ future<> compaction_manager::perform_major_compaction(table* t) {
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
-    task->compaction_done = with_semaphore(_major_compaction_sem, 1, [this, task, t] {
+    task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, t] {
         return with_lock(task->compaction_state.lock.for_write(), [this, task, t] {
             _stats.active_tasks++;
             if (!can_proceed(task)) {
@@ -330,7 +330,7 @@ future<> compaction_manager::run_custom_job(table* t, sstables::compaction_type 
 
     auto job_ptr = std::make_unique<noncopyable_function<future<>(sstables::compaction_data&)>>(std::move(job));
 
-    task->compaction_done = with_semaphore(_custom_job_sem, 1, [this, task, &job = *job_ptr] () mutable {
+    task->compaction_done = with_semaphore(_maintenance_ops_sem, 1, [this, task, &job = *job_ptr] () mutable {
         // take read lock for table, so major compaction and resharding can't proceed in parallel.
         return with_lock(task->compaction_state.lock.for_read(), [this, task, &job] () mutable {
             _stats.active_tasks++;
@@ -738,7 +738,7 @@ void compaction_manager::submit_offstrategy(table* t) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
-        return with_semaphore(_custom_job_sem, 1, [this, task, t] () mutable {
+        return with_semaphore(_maintenance_ops_sem, 1, [this, task, t] () mutable {
             return with_lock(task->compaction_state.lock.for_read(), [this, task, t] () mutable {
                 _stats.pending_tasks--;
                 if (!can_proceed(task)) {
@@ -819,7 +819,7 @@ future<> compaction_manager::rewrite_sstables(table* t, sstables::compaction_typ
                 compacting->release_compacting(exhausted_sstables);
             };
 
-            return with_semaphore(_rewrite_sstables_sem, 1, [this, task, &t, descriptor = std::move(descriptor)] () mutable {
+            return with_semaphore(_maintenance_ops_sem, 1, [this, task, &t, descriptor = std::move(descriptor)] () mutable {
               // Take write lock for table to serialize cleanup/upgrade sstables/scrub with major compaction/reshape/reshard.
               return with_lock(_compaction_state[&t].lock.for_write(), [this, task, &t, descriptor = std::move(descriptor)] () mutable {
                 _stats.pending_tasks--;
