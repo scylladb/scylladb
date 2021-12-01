@@ -364,27 +364,65 @@ public:
     }
 };
 
+// Precomputed information needed to perform a scan on partition ranges
+struct scan_ranges_context {
+    schema_ptr s;
+    bytes column_name;
+    std::optional<std::string> member;
+
+    ::shared_ptr<cql3::selection::selection> selection;
+    std::unique_ptr<service::query_state> query_state_ptr;
+    std::unique_ptr<cql3::query_options> query_options;
+    ::lw_shared_ptr<query::read_command> command;
+
+    scan_ranges_context(schema_ptr s, service::storage_proxy& proxy, bytes column_name, std::optional<std::string> member)
+        : s(s)
+        , column_name(column_name)
+        , member(member)
+    {
+        // FIXME: don't read the entire items - read only parts of it.
+        // We must read the key columns (to be able to delete) and also
+        // the requested attribute. If the requested attribute is a map's
+        // member we may be forced to read the entire map - but it would
+        // be good if we can read only the single item of the map - it
+        // should be possible (and a must for issue #7751!).
+        lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+        auto regular_columns = boost::copy_range<query::column_id_vector>(
+            s->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+        selection = cql3::selection::selection::wildcard(s);
+        query::partition_slice::option_set opts = selection->get_query_options();
+        opts.set<query::partition_slice::option::allow_short_read>();
+        std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
+        auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
+        command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
+        executor::client_state client_state{executor::client_state::internal_tag()};
+        tracing::trace_state_ptr trace_state;
+        // FIXME: is empty_service_permit() the right thing?
+        // view builder has _permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout))
+        query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, empty_service_permit());
+        // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
+        // DCs or only once for each range? If the latter, we need to change the CLs in the
+        // scanner and deleter.
+        db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
+        query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
+        query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
+    }
+};
+
 // Scan data in a list of token ranges in one table, looking for expired
 // items and deleting them.
 // Because of issue #9167, partition_ranges must have a single partition
 // for this code to work correctly.
-// FIXME: The long list of parameters below is ugly. This function should
-// calculate what it needs, or we can have an object with many of these
-// values pre-calculated in one function and then used in this one.
 static future<> scan_table_ranges(
         service::storage_proxy& proxy,
-        schema_ptr s,
+        const scan_ranges_context& scan_ctx,
         dht::partition_range_vector&& partition_ranges,
-        const bytes& column_name,
-        const std::optional<std::string>& member,
-        shared_ptr<cql3::selection::selection> selection,
-        service::query_state& query_state,
-        cql3::query_options& query_options,
-        lw_shared_ptr<query::read_command> command,
         abort_source& abort_source)
 {
+    const schema_ptr& s = scan_ctx.s;
     assert (partition_ranges.size() == 1); // otherwise issue #9167 will cause incorrect results.
-    auto p = service::pager::query_pagers::pager(s, selection, query_state, query_options, command, std::move(partition_ranges), nullptr);
+    auto p = service::pager::query_pagers::pager(s, scan_ctx.selection, *scan_ctx.query_state_ptr,
+            *scan_ctx.query_options, scan_ctx.command, std::move(partition_ranges), nullptr);
     while (!p->is_exhausted()) {
         if (abort_source.abort_requested()) {
             co_return;
@@ -403,7 +441,7 @@ static future<> scan_table_ranges(
         std::vector<unsigned> ck_columns;
         for (unsigned i = 0; i < meta.size(); i++) {
             const cql3::column_specification& col = *meta[i];
-            if (col.name->name() == column_name) {
+            if (col.name->name() == scan_ctx.column_name) {
                 expiration_column = i;
                 break;
             }
@@ -438,7 +476,7 @@ static future<> scan_table_ranges(
             bool expired = false;
             // FIXME: don't recalculate "now" all the time
             auto now = gc_clock::now();
-            if (member) {
+            if (scan_ctx.member) {
                 // In this case, the expiration-time attribute we're
                 // looking for is a member in a map, saved serialized
                 // into bytes using Alternator's serialization (basically
@@ -448,7 +486,7 @@ static future<> scan_table_ranges(
                 // the key?
                 for (const auto& entry : value_cast<map_type_impl::native_type>(v)) {
                     std::string attr_name = value_cast<sstring>(entry.first);
-                    if (value_cast<sstring>(entry.first) == *member) {
+                    if (value_cast<sstring>(entry.first) == *scan_ctx.member) {
                         bytes value = value_cast<bytes>(entry.second);
                         rjson::value json = deserialize_item(value);
                         expired = is_expired(json, now);
@@ -469,7 +507,7 @@ static future<> scan_table_ranges(
                 // FIXME: maybe don't recalculate new_timestamp() all the time
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 auto ts = api::new_timestamp();
-                co_await expire_item(proxy, query_state, row, pk_columns, ck_columns, s, ts);
+                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, pk_columns, ck_columns, s, ts);
             }
         }
         // FIXME: once in a while, persist p->state(), so on reboot
@@ -551,32 +589,7 @@ static future<bool> scan_table(
     // FIXME: need to pace the scan, not do it all at once.
     // FIXME: consider if we should ask the scan without caching?
     // can we use cache but not fill it?
-    // FIXME: don't read the entire items - read only parts of it.
-    // We must read the key columns (to be able to delete) and also
-    // the requested attribute. If the requested attribute is a map's
-    // member we may be forced to read the entire map - but it would
-    // be good if we can read only the single item of the map - it
-    // should be possible (and a must for issue #7751!).
-    lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
-    auto regular_columns = boost::copy_range<query::column_id_vector>(
-    s->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
-    auto selection = cql3::selection::selection::wildcard(s);
-    query::partition_slice::option_set opts = selection->get_query_options();
-    opts.set<query::partition_slice::option::allow_short_read>();
-    std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
-    auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
-    executor::client_state client_state{executor::client_state::internal_tag()};
-    tracing::trace_state_ptr trace_state;
-    // FIXME: is empty_service_permit() the right thing?
-    // view builder has _permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout))
-    auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, empty_service_permit());
-    // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
-    // DCs or only once for each range? If the latter, we need to change the CLs in the
-    // scanner and deleter.
-    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
-    auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
-    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
+    scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
     token_ranges_owned_by_this_shard my_ranges(db, s);
     while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
         // Note that because of issue #9167 we need to run a separate
@@ -587,7 +600,7 @@ static future<bool> scan_table(
         // we fail the entire scan (and rescan from the beginning). Need to
         // reconsider this. Saving the scan position might be a good enough
         // solution for this problem.
-        co_await scan_table_ranges(proxy, s, std::move(partition_ranges), column_name, member, selection, *query_state_ptr, *query_options, command, abort_source);
+        co_await scan_table_ranges(proxy, scan_ctx, std::move(partition_ranges), abort_source);
     }
     co_return true;
 }
