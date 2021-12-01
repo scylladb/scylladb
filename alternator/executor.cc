@@ -84,6 +84,31 @@ std::string make_jsonable::to_json() const {
     return rjson::print(_value);
 }
 
+json::json_return_type make_streamed(rjson::value&& value) {
+    // CMH. json::json_return_type uses std::function, not noncopyable_function. 
+    // Need to make a copyable version of value. Gah.
+    auto rs = make_shared<rjson::value>(std::move(value));
+    std::function<future<>(output_stream<char>&&)> func = [rs](output_stream<char>&& os) mutable -> future<> {
+        // move objects to coroutine frame.
+        auto los = std::move(os);
+        auto lrs = std::move(rs);
+        try {
+            co_await rjson::print(*lrs, los);
+            co_await los.flush();
+            co_await los.close();
+        } catch (...) {
+            // at this point, we cannot really do anything. HTTP headers and return code are
+            // already written, and quite potentially a portion of the content data.
+            // just log + rethrow. It is probably better the HTTP server closes connection
+            // abruptly or something...
+            elogger.error("Unhandled exception in data streaming: {}", std::current_exception());
+            throw;
+        }
+        co_return;
+    };
+    return func;
+}
+
 json_string::json_string(std::string&& value)
     : _value(std::move(value))
 {}
