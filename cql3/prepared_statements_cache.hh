@@ -84,6 +84,7 @@ class prepared_statements_cache {
 public:
     struct stats {
         uint64_t prepared_cache_evictions = 0;
+        uint64_t unprivileged_entries_evictions_on_size = 0;
     };
 
     static stats& shard_stats() {
@@ -98,11 +99,21 @@ public:
         static void inc_evictions() noexcept {
             ++shard_stats().prepared_cache_evictions;
         }
+        static void inc_unprivileged_on_cache_size_eviction() noexcept {
+            ++shard_stats().unprivileged_entries_evictions_on_size;
+        }
     };
 
 private:
     using cache_key_type = typename prepared_cache_key_type::cache_key_type;
-    using cache_type = utils::loading_cache<cache_key_type, prepared_cache_entry, utils::loading_cache_reload_enabled::no, prepared_cache_entry_size, utils::tuple_hash, std::equal_to<cache_key_type>, prepared_cache_stats_updater>;
+    // Keep the entry in the "unprivileged" cache section till 2 hits because
+    // every prepared statement is accessed at least twice in the cache:
+    //  1) During PREPARE
+    //  2) During EXECUTE
+    //
+    // Therefore a typical "pollution" (when a cache entry is used only once) would involve
+    // 2 cache hits.
+    using cache_type = utils::loading_cache<cache_key_type, prepared_cache_entry, 2, utils::loading_cache_reload_enabled::no, prepared_cache_entry_size, utils::tuple_hash, std::equal_to<cache_key_type>, prepared_cache_stats_updater, prepared_cache_stats_updater>;
     using cache_value_ptr = typename cache_type::value_ptr;
     using checked_weak_ptr = typename statements::prepared_statement::checked_weak_ptr;
 
@@ -126,6 +137,12 @@ public:
         return _cache.get_ptr(key.key(), [load = std::forward<LoadFunc>(load)] (const cache_key_type&) { return load(); }).then([] (cache_value_ptr v_ptr) {
             return make_ready_future<value_type>((*v_ptr)->checked_weak_from_this());
         });
+    }
+
+    // "Touch" the corresponding cache entry in order to bump up its reference count.
+    void touch(const key_type& key) {
+        // loading_cache::find() returns a value_ptr object which contructor does the "thouching".
+        _cache.find(key.key());
     }
 
     value_type find(const key_type& key) {

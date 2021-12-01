@@ -185,6 +185,16 @@ public:
             auto vp = _authorized_prepared_cache.find(*user, key);
             if (vp) {
                 try {
+                    // Touch the corresponding prepared_statements_cache entry to make sure its last_read timestamp
+                    // corresponds to the last time its value has been read.
+                    //
+                    // If we don't do this it may turn out that the most recently used prepared statement doesn't have
+                    // the newest last_read timestamp and can get evicted before the not-so-recently-read statement if
+                    // we need to create space in the prepared statements cache for a new entry.
+                    //
+                    // And this is going to trigger an eviction of the corresponding entry from the authorized_prepared_cache
+                    // breaking the LRU paradigm of these caches.
+                    _prepared_cache.touch(key);
                     return vp->get()->checked_weak_from_this();
                 } catch (seastar::checked_ptr_is_null_exception&) {
                     // If the prepared statement got invalidated - remove the corresponding authorized_prepared_statements_cache entry as well.
