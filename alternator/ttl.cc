@@ -249,13 +249,17 @@ static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point
 static future<> expire_item(service::storage_proxy& proxy,
                             const service::query_state& qs,
                             const std::vector<bytes_opt>& row,
-                            const std::vector<unsigned>& pk_columns,
-                            const std::vector<unsigned>& ck_columns,
                             schema_ptr schema,
                             api::timestamp_type ts) {
     // Prepare the row key to delete
+    // NOTICE: the order of columns is guaranteed by the fact that selection::wildcard
+    // is used, which indicates that columns appear in the order defined by
+    // schema::all_columns_in_select_order() - partition key columns goes first,
+    // immediately followed by clustering key columns
     std::vector<bytes> exploded_pk;
-    for (unsigned c : pk_columns) {
+    const unsigned pk_size = schema->partition_key_size();
+    const unsigned ck_size = schema->clustering_key_size();
+    for (unsigned c = 0; c < pk_size; ++c) {
         const auto& row_c = row[c];
         if (!row_c) {
             // This shouldn't happen - all key columns must have values.
@@ -271,11 +275,11 @@ static future<> expire_item(service::storage_proxy& proxy,
     // on a partition, not on a clustering row - otherwise it will look like
     // an open-ended range tombstone, which will crash on KA/LA sstable format.
     // See issue #6035
-    if (ck_columns.empty()) {
+    if (ck_size == 0) {
         m.partition().apply(tombstone(ts, gc_clock::now()));
     } else {
         std::vector<bytes> exploded_ck;
-        for (unsigned c : ck_columns) {
+        for (unsigned c = pk_size; c < pk_size + ck_size; ++c) {
             const auto& row_c = row[c];
             if (!row_c) {
                 // This shouldn't happen - all key columns must have values.
@@ -437,8 +441,6 @@ static future<> scan_table_ranges(
         auto rows = rs->rows();
         auto meta = rs->get_metadata().get_names();
         std::optional<unsigned> expiration_column;
-        std::vector<unsigned> pk_columns;
-        std::vector<unsigned> ck_columns;
         for (unsigned i = 0; i < meta.size(); i++) {
             const cql3::column_specification& col = *meta[i];
             if (col.name->name() == scan_ctx.column_name) {
@@ -448,24 +450,6 @@ static future<> scan_table_ranges(
         }
         if (!expiration_column) {
             continue;
-        }
-        // Find the key columns, which we will need for extracting the key
-        // the item to delete.
-        // FIXME: Maybe this can be simplified because the columns are sorted,
-        // we just know that the first columns are always the key columns?
-        for (const column_definition& cdef : s->partition_key_columns()) {
-            for (unsigned i = 0; i < meta.size(); i++) {
-                if (meta[i]->name->name() == cdef.name()) {
-                    pk_columns.push_back(i);
-                }
-            }
-        }
-        for (const column_definition& cdef : s->clustering_key_columns()) {
-            for (unsigned i = 0; i < meta.size(); i++) {
-                if (meta[i]->name->name() == cdef.name()) {
-                    ck_columns.push_back(i);
-                }
-            }
         }
         for (const auto& row : rows) {
             const bytes_opt& cell = row[*expiration_column];
@@ -507,7 +491,7 @@ static future<> scan_table_ranges(
                 // FIXME: maybe don't recalculate new_timestamp() all the time
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 auto ts = api::new_timestamp();
-                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, pk_columns, ck_columns, s, ts);
+                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
             }
         }
         // FIXME: once in a while, persist p->state(), so on reboot
