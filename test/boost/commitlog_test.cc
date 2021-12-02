@@ -44,7 +44,9 @@
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_replayer.hh"
+#include "db/commitlog/commitlog_extensions.hh"
 #include "db/commitlog/rp_set.hh"
+#include "db/extensions.hh"
 #include "log.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/exception_utils.hh"
@@ -946,4 +948,114 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
         co_await log.shutdown();
         co_await log.clear();
     }
+}
+
+static future<> do_test_exception_in_allocate_ex(bool do_file_delete, bool reuse = true) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.reuse_segments = reuse;
+    cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    class myfail : public std::exception {
+    public:
+        using std::exception::exception;
+    };
+
+    struct myext: public db::commitlog_file_extension {
+    public:
+        bool fail = false;
+        bool thrown = false;
+        bool do_file_delete;
+
+        myext(bool dd)
+            : do_file_delete(dd)
+        {}
+
+        seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
+            if (fail && !thrown) {
+                thrown = true;
+                if (do_file_delete) {
+                    co_await f.close();
+                    co_await seastar::remove_file(filename);
+                }
+                throw myfail{};
+            }
+            co_return f;
+        }
+        seastar::future<> before_delete(const seastar::sstring&) override {
+            co_return;
+        }
+    };
+
+    auto ep = std::make_unique<myext>(do_file_delete);
+    auto& mx = *ep;
+
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("hufflepuff", std::move(ep));
+
+    cfg.extensions = &myexts;
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    // uncomment for verbosity
+    // logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = utils::UUID_gen::get_time_UUID();
+    auto size = log.max_record_size();
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        log.discard_completed_segments(id, rps);
+        mx.fail = true;
+    });
+
+    try {
+        while (!mx.thrown) {
+            rp_handle h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            });
+            rps.put(std::move(h));
+        }
+    } catch (...) {
+        BOOST_FAIL("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+    }
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+/**
+ * Test generating an exception in segment file allocation
+ */
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex) {
+    co_await do_test_exception_in_allocate_ex(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_no_recycle) {
+    co_await do_test_exception_in_allocate_ex(false, false);
+}
+
+/**
+ * Test generating an exception in segment file allocation, but also 
+ * delete the file, which in turn should cause follow-up exceptions
+ * in cleanup delete. Which CL should handle
+ */
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file) {
+    co_await do_test_exception_in_allocate_ex(true, false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_exceptions_in_allocate_ex_deleted_file_no_recycle) {
+    co_await do_test_exception_in_allocate_ex(true);
 }
