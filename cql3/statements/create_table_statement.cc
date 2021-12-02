@@ -45,6 +45,7 @@
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/adjacent_find.hpp>
+#include <seastar/core/coroutine.hh>
 
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -105,24 +106,22 @@ std::vector<column_definition> create_table_statement::get_columns() const
 
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
     auto schema = get_cf_meta_data(qp.db());
-    return make_ready_future<>().then([this, schema = std::move(schema), &mm = qp.get_migration_manager()] {
-        return mm.announce_new_column_family(std::move(schema));
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::CREATED,
-                    event::schema_change::target_type::TABLE,
-                    this->keyspace(),
-                    this->column_family());
-        } catch (const exceptions::already_exists_exception& e) {
-            if (_if_not_exists) {
-                return ::shared_ptr<cql_transport::event::schema_change>();
-            }
-            throw e;
+    auto& mm = qp.get_migration_manager();
+    try {
+
+        co_await mm.announce_new_column_family(std::move(schema));
+        using namespace cql_transport;
+        co_return ::make_shared<event::schema_change>(
+            event::schema_change::change_type::CREATED,
+            event::schema_change::target_type::TABLE,
+            this->keyspace(),
+            this->column_family());
+    } catch (const exceptions::already_exists_exception& e) {
+        if (_if_not_exists) {
+            co_return ::shared_ptr<cql_transport::event::schema_change>();
         }
-    });
+        throw e;
+    }
 }
 
 /**
