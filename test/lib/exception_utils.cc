@@ -21,6 +21,7 @@
 
 #include "test/lib/exception_utils.hh"
 
+#include <regex>
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -52,5 +53,15 @@ std::function<bool(const std::exception&)> exception_predicate::message_equals(
                 [=] (const std::exception& e) {
                     return fmt::format("Message '{}' doesn't equal '{}'\n{}:{}: invoked here",
                                        e.what(), text, loc.file_name(), loc.line());
+                });
+}
+
+std::function<bool(const std::exception&)> exception_predicate::message_matches(
+        const std::string& regex,
+        const std::experimental::source_location& loc) {
+    return make([=] (const std::exception& e) { return std::regex_search(e.what(), std::regex(regex)); },
+                [=] (const std::exception& e) {
+                    return fmt::format("Message '{}' doesn't match '{}'\n{}:{}: invoked here",
+                                       e.what(), regex, loc.file_name(), loc.line());
                 });
 }

@@ -45,4 +45,9 @@ extern std::function<bool(const std::exception&)> message_equals(
         const sstring& text,
         const std::experimental::source_location& loc = std::experimental::source_location::current());
 
+/// Returns a predicate that will check if the exception message matches the given regular expression.
+extern std::function<bool(const std::exception&)> message_matches(
+        const std::string& regex,
+        const std::experimental::source_location& loc = std::experimental::source_location::current());
+
 } // namespace exception_predicate
