@@ -450,6 +450,7 @@ set(scylla_sources
     db/large_data_handler.cc
     db/legacy_schema_migrator.cc
     db/marshal/type_parser.cc
+    db/rate_limiter.cc
     db/schema_tables.cc
     db/size_estimates_virtual_reader.cc
     db/snapshot-ctl.cc
