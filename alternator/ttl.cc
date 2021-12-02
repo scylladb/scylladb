@@ -298,6 +298,12 @@ static future<> expire_item(service::storage_proxy& proxy,
         qs.get_trace_state(), qs.get_permit());
 }
 
+static size_t random_offset(size_t min, size_t max) {
+    static thread_local std::default_random_engine re{std::random_device{}()};
+    std::uniform_int_distribution<size_t> dist(min, max);
+    return dist(re);
+}
+
 // A class for iterating over all the token ranges *owned* by this shard.
 // We consider a token *owned* by this shard if:
 // 1. This node is a replica for this token.
@@ -313,25 +319,32 @@ static future<> expire_item(service::storage_proxy& proxy,
 // do.
 // FIXME: need to decide how to choose primary ranges in multi-DC setup!
 // We could call get_primary_ranges_within_dc() below instead of get_primary_ranges().
+// NOTICE: Iteration currently starts from a random token range in order to improve
+// the chances of covering all ranges during a scan when restarts occur.
+// A more deterministic way would be to regularly persist the scanning state,
+// but that incurs overhead that we want to avoid if not needed.
 class token_ranges_owned_by_this_shard {
     schema_ptr _s;
     // _token_ranges will contain a list of token ranges owned by this node.
     // We'll further need to split each such range to the pieces owned by
     // the current shard, using _intersecter.
-    dht::token_range_vector _token_ranges;
-    dht::token_range_vector::const_iterator _range_it;
+    const dht::token_range_vector _token_ranges;
+    // NOTICE: _range_idx is used modulo _token_ranges size when accessing
+    // the data to ensure that it doesn't go out of bounds
+    size_t _range_idx;
+    size_t _end_idx;
     std::optional<dht::selective_token_range_sharder> _intersecter;
 public:
-    // FIXME: add a constructor to start iteration in the middle, to continue
-    // a scan after reboot. A simpler option is to begin the scan at a random
-    // position.
     token_ranges_owned_by_this_shard(database& db, schema_ptr s)
         :  _s(s)
         , _token_ranges(db.find_keyspace(s->ks_name()).
             get_effective_replication_map()->get_primary_ranges(
             utils::fb_utilities::get_broadcast_address()))
-        , _range_it(_token_ranges.cbegin())
-    {}
+        , _range_idx(random_offset(0, _token_ranges.size() - 1))
+        , _end_idx(_range_idx + _token_ranges.size())
+    {
+        tlogger.debug("Generating token ranges starting from base range {} of {}", _range_idx, _token_ranges.size());
+    }
 
     // Return the next token_range owned by this shard, or nullopt when the
     // iteration ends.
@@ -339,7 +352,7 @@ public:
         // We may need three or more iterations in the following loop if a
         // vnode doesn't intersect with the given shard at all (such a small
         // vnode is unlikely, but possible). The loop cannot be infinite
-        // because each iteration of the loop advances _range_it.
+        // because each iteration of the loop advances _range_idx.
         for (;;) {
             if (_intersecter) {
                 std::optional<dht::token_range> ret = _intersecter->next();
@@ -347,13 +360,13 @@ public:
                     return ret;
                 }
                 // done with this range, go to next one
-                ++_range_it;
+                ++_range_idx;
                 _intersecter = std::nullopt;
             }
-            if (_range_it == _token_ranges.cend()) {
+            if (_range_idx == _end_idx) {
                 return std::nullopt;
             }
-            _intersecter.emplace(_s->get_sharder(), *_range_it, this_shard_id());
+            _intersecter.emplace(_s->get_sharder(), _token_ranges[_range_idx % _token_ranges.size()], this_shard_id());
         }
     }
 
@@ -567,9 +580,6 @@ static future<bool> scan_table(
         tlogger.info("table {} TTL column has unsupported type, not scanning", s->cf_name());
         co_return false;
     }
-    // FIXME: need to persist position in the scan, and start from it instead
-    // of the beginning. Alternatively/additionally, can scan from a random
-    // position.
     // FIXME: need to pace the scan, not do it all at once.
     // FIXME: consider if we should ask the scan without caching?
     // can we use cache but not fill it?
