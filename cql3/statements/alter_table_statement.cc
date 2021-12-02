@@ -53,6 +53,7 @@
 #include "database.hh"
 #include "db/view/view.hh"
 #include "cql3/query_processor.hh"
+#include "cdc/cdc_extension.hh"
 
 namespace cql3 {
 
@@ -363,6 +364,15 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             if (s->is_counter() && _properties->get_default_time_to_live() > 0) {
                 throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
             }
+
+            if (auto it = schema_extensions.find(cdc::cdc_extension::NAME); it != schema_extensions.end()) {
+                const auto& cdc_opts = dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
+                if (!cdc_opts.is_enabled_set()) {
+                    // "enabled" flag not specified
+                    throw exceptions::invalid_request_exception("Altering CDC options requires specyfing \"enabled\" flag");
+                }
+            }
+
             _properties->apply_to_builder(cfm, std::move(schema_extensions));
         }
         break;
