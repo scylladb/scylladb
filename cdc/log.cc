@@ -331,10 +331,6 @@ std::ostream& cdc::operator<<(std::ostream& os, image_mode m) {
 }
 
 cdc::options::options(const std::map<sstring, sstring>& map) {
-    if (!map.contains("enabled")) {
-        return;
-    }
-
     for (auto& p : map) {
         auto key = p.first;
         auto val = p.second;
@@ -347,7 +343,7 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
 
         if (key == "enabled") {
             if (is_true || is_false) {
-                _enabled = is_true;    
+                enabled(is_true);
             } else {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"enabled\": " + p.second);
             }
@@ -391,11 +387,12 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
 }
 
 std::map<sstring, sstring> cdc::options::to_map() const {
-    if (!_enabled) {
+    if (!is_enabled_set()) {
         return {};
     }
+
     return {
-        { "enabled", _enabled ? "true" : "false" },
+        { "enabled", enabled() ? "true" : "false" },
         { "preimage", to_string(_preimage) },
         { "postimage", _postimage ? "true" : "false" },
         { "delta", to_string(_delta_mode) },
@@ -408,7 +405,7 @@ sstring cdc::options::to_sstring() const {
 }
 
 bool cdc::options::operator==(const options& o) const {
-    return _enabled == o._enabled && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl
+    return enabled() == o.enabled() && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl
             && _delta_mode == o._delta_mode;
 }
 bool cdc::options::operator!=(const options& o) const {
