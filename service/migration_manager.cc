@@ -826,45 +826,43 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
 
-        return seastar::async([this, keyspace, schema, &old_cfm, drop_views, &db] {
-            // If drop_views is false (the default), we don't allow to delete a
-            // table which has views which aren't part of an index. If drop_views
-            // is true, we delete those views as well.
-            auto&& views = old_cfm.views();
-            if (!drop_views && views.size() > schema->all_indices().size()) {
-                auto explicit_view_names = views
-                                        | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
-                                        | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
-                throw exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
-                            schema->ks_name(), ::join(", ", explicit_view_names)));
-            }
-            mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
+        // If drop_views is false (the default), we don't allow to delete a
+        // table which has views which aren't part of an index. If drop_views
+        // is true, we delete those views as well.
+        auto&& views = old_cfm.views();
+        if (!drop_views && views.size() > schema->all_indices().size()) {
+            auto explicit_view_names = views
+                                    | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
+                                    | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
+            throw exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
+                        schema->ks_name(), ::join(", ", explicit_view_names)));
+        }
+        mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
 
-            std::vector<mutation> drop_si_mutations;
-            if (!schema->all_indices().empty()) {
-                auto builder = schema_builder(schema).without_indexes();
-                drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), api::new_timestamp(), false);
+        std::vector<mutation> drop_si_mutations;
+        if (!schema->all_indices().empty()) {
+            auto builder = schema_builder(schema).without_indexes();
+            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), api::new_timestamp(), false);
+        }
+        auto ts = api::new_timestamp();
+        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
+        mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
+        for (auto& v : views) {
+            if (!old_cfm.get_index_manager().is_index(v)) {
+                mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
+                auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, api::new_timestamp());
+                mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
             }
-            auto ts = api::new_timestamp();
-            auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
-            mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
-            for (auto& v : views) {
-                if (!old_cfm.get_index_manager().is_index(v)) {
-                    mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
-                    auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, api::new_timestamp());
-                    mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
-                }
-            }
+        }
 
+        // notifiers must run in seastar thread
+        co_await seastar::async([&] {
             get_notifier().before_drop_column_family(*schema, mutations, ts);
-            return mutations;
-        }).then([this, keyspace](std::vector<mutation> mutations) {
-            return include_keyspace_and_announce(*keyspace, std::move(mutations));
         });
+        co_return co_await include_keyspace_and_announce(*keyspace, std::move(mutations));
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(format("Cannot drop non existing table '{}' in keyspace '{}'.", cf_name, ks_name));
     }
-
 }
 
 future<> migration_manager::announce_type_drop(user_type dropped_type)
