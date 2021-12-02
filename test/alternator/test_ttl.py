@@ -203,7 +203,7 @@ def test_update_ttl_errors(dynamodb):
 # test will finish in a much more reasonable time.
 @pytest.mark.veryslow
 def test_ttl_expiration(dynamodb):
-    duration = 1200 if is_aws(dynamodb) else 3
+    duration = 1200 if is_aws(dynamodb) else 10
     # delta is a quarter of the test duration, but no less than one second,
     # and we use it to schedule some expirations a bit after the test starts,
     # not immediately.
@@ -269,6 +269,20 @@ def test_ttl_expiration(dynamodb):
         p9 = random_string()
         print(Decimal(str(time.time()-60)))
         table.put_item(Item={'p': p9, 'expiration': Decimal(str(time.time()-60))})
+
+        def check_expired():
+            # After the delay, p1,p3,p5,p6,p7 should be alive, p0,p2,p4 should not
+            return not 'Item' in table.get_item(Key={'p': p0}) \
+                and 'Item' in table.get_item(Key={'p': p1}) \
+                and not 'Item' in table.get_item(Key={'p': p2}) \
+                and 'Item' in table.get_item(Key={'p': p3}) \
+                and not 'Item' in table.get_item(Key={'p': p4}) \
+                and 'Item' in table.get_item(Key={'p': p5}) \
+                and 'Item' in table.get_item(Key={'p': p6}) \
+                and 'Item' in table.get_item(Key={'p': p7}) \
+                and not 'Item' in table.get_item(Key={'p': p8}) \
+                and not 'Item' in table.get_item(Key={'p': p9})
+
         # We could have just done time.sleep(duration) here, but in case a
         # user is watching this long test, let's output the status every
         # minute, and it also allows us to test what happens when an item
@@ -299,19 +313,11 @@ def test_ttl_expiration(dynamodb):
             # Always keep p5's expiration delta into the future
             table.update_item(Key={'p': p5},
                 AttributeUpdates={'expiration': {'Value': int(time.time())+delta, 'Action': 'PUT'}})
+            if check_expired():
+                break
             time.sleep(duration/15.0)
 
-        # After the delay, p1,p3,p5,p6,p7 should be alive, p0,p2,p4 should not
-        assert not 'Item' in table.get_item(Key={'p': p0})
-        assert 'Item' in table.get_item(Key={'p': p1})
-        assert not 'Item' in table.get_item(Key={'p': p2})
-        assert 'Item' in table.get_item(Key={'p': p3})
-        assert not 'Item' in table.get_item(Key={'p': p4})
-        assert 'Item' in table.get_item(Key={'p': p5})
-        assert 'Item' in table.get_item(Key={'p': p6})
-        assert 'Item' in table.get_item(Key={'p': p7})
-        assert not 'Item' in table.get_item(Key={'p': p8})
-        assert not 'Item' in table.get_item(Key={'p': p9})
+        assert check_expired()
 
 # test_ttl_expiration above used a table with just a hash key. Because the
 # code to *delete* items in a table which also has a range key is subtly
@@ -324,7 +330,7 @@ def test_ttl_expiration_with_rangekey(dynamodb):
     # Note that unlike test_ttl_expiration, this test doesn't have a fixed
     # duration - it finishes as soon as the item we expect to be expired
     # is expired.
-    max_duration = 1200 if is_aws(dynamodb) else 3
+    max_duration = 1200 if is_aws(dynamodb) else 10
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -362,7 +368,7 @@ def test_ttl_expiration_with_rangekey(dynamodb):
 # because DynamoDB delays expiration by around 10 minutes.
 @pytest.mark.veryslow
 def test_ttl_expiration_hash(dynamodb):
-    duration = 1200 if is_aws(dynamodb) else 3
+    duration = 1200 if is_aws(dynamodb) else 10
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ]) as table:
@@ -376,20 +382,25 @@ def test_ttl_expiration_hash(dynamodb):
         table.put_item(Item={'p': p1})
         table.put_item(Item={'p': p2})
         start_time = time.time()
+
+        def check_expired():
+            return not 'Item' in table.get_item(Key={'p': p1}) and 'Item' in table.get_item(Key={'p': p2})
+
         while time.time() < start_time + duration:
             print(f"--- {int(time.time()-start_time)} seconds")
             if 'Item' in table.get_item(Key={'p': p1}):
                 print("p1 alive")
             if 'Item' in table.get_item(Key={'p': p2}):
                 print("p2 alive")
+            if check_expired():
+                break
             time.sleep(duration/15)
         # After the delay, p2 should be alive, p1 should not
-        assert not 'Item' in table.get_item(Key={'p': p1})
-        assert 'Item' in table.get_item(Key={'p': p2})
+        assert check_expired()
 
 @pytest.mark.veryslow
 def test_ttl_expiration_range(dynamodb):
-    duration = 1200 if is_aws(dynamodb) else 3
+    duration = 1200 if is_aws(dynamodb) else 10
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ]) as table:
@@ -404,16 +415,21 @@ def test_ttl_expiration_range(dynamodb):
         table.put_item(Item={'p': p, 'c': c1})
         table.put_item(Item={'p': p, 'c': c2})
         start_time = time.time()
+
+        def check_expired():
+            return not 'Item' in table.get_item(Key={'p': p, 'c': c1}) and 'Item' in table.get_item(Key={'p': p, 'c': c2})
+
         while time.time() < start_time + duration:
             print(f"--- {int(time.time()-start_time)} seconds")
             if 'Item' in table.get_item(Key={'p': p, 'c': c1}):
                 print("c1 alive")
             if 'Item' in table.get_item(Key={'p': p, 'c': c2}):
                 print("c2 alive")
+            if check_expired():
+                break
             time.sleep(duration/15)
         # After the delay, c2 should be alive, c1 should not
-        assert not 'Item' in table.get_item(Key={'p': p, 'c': c1})
-        assert 'Item' in table.get_item(Key={'p': p, 'c': c2})
+        assert check_expired()
 
 # In the above key-attribute tests, the key attribute we used for the
 # expiration-time attribute had the expected numeric type. If the key
@@ -456,7 +472,7 @@ def test_ttl_expiration_gsi_lsi(dynamodb):
     # items are expired with significant delay. Whereas a 10 minute delay
     # for regular tables was typical, in the table we have here we saw
     # a typical delay of 30 minutes before items expired.
-    max_duration = 3600 if is_aws(dynamodb) else 3
+    max_duration = 3600 if is_aws(dynamodb) else 10
     with new_test_table(dynamodb,
         KeySchema=[
             { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -542,7 +558,7 @@ def test_ttl_expiration_gsi_lsi(dynamodb):
 def test_ttl_expiration_lsi_key(dynamodb):
     # In my experiments, a 30-minute (1800 seconds) is the typical delay
     # for expiration in this test for DynamoDB
-    max_duration = 3600 if is_aws(dynamodb) else 3
+    max_duration = 3600 if is_aws(dynamodb) else 10
     with new_test_table(dynamodb,
         KeySchema=[
             { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -597,7 +613,7 @@ def test_ttl_expiration_streams(dynamodb, dynamodbstreams):
     # In my experiments, a 30-minute (1800 seconds) is the typical
     # expiration delay in this test. If the test doesn't finish within
     # max_duration, we report a failure.
-    max_duration = 3600 if is_aws(dynamodb) else 3
+    max_duration = 3600 if is_aws(dynamodb) else 10
     with new_test_table(dynamodb,
         KeySchema=[
             { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -709,7 +725,7 @@ def test_ttl_expiration_long(dynamodb):
     # the size of a single page (I tested this by stopping the scanner after
     # the first page and checking which N starts to generate incorrect results)
     N=400
-    max_duration = 1200 if is_aws(dynamodb) else 10
+    max_duration = 1200 if is_aws(dynamodb) else 15
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
