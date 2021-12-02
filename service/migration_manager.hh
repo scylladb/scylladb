@@ -140,6 +140,8 @@ public:
     future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp);
     future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp);
 
+    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type);
+
     future<> announce_new_type(user_type new_type);
 
     future<> announce_new_function(shared_ptr<cql3::functions::user_function> func);
@@ -191,6 +193,7 @@ private:
             const keyspace_metadata& keyspace, std::vector<mutation> mutations);
 
     future<std::vector<mutation>> include_keyspace(const keyspace_metadata& keyspace, std::vector<mutation> mutations);
+    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type);
     future<> do_announce_new_type(user_type new_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);

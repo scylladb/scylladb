@@ -727,11 +727,20 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
     }
 }
 
-future<> migration_manager::do_announce_new_type(user_type new_type) {
+future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(new_type->_keyspace);
     auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
-    return include_keyspace_and_announce(*keyspace.metadata(), std::move(mutations));
+    return include_keyspace(*keyspace.metadata(), std::move(mutations));
+}
+
+future<> migration_manager::do_announce_new_type(user_type new_type) {
+    co_return co_await announce(co_await do_prepare_new_type_announcement(std::move(new_type)));
+}
+
+future<std::vector<mutation>> migration_manager::prepare_new_type_announcement(user_type new_type) {
+    mlogger.info("Prepare Create new User Type: {}", new_type->get_name_as_string());
+    return do_prepare_new_type_announcement(std::move(new_type));
 }
 
 future<> migration_manager::announce_new_type(user_type new_type) {
