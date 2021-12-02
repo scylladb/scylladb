@@ -1557,8 +1557,8 @@ class shard_reader : public enable_lw_shared_from_this<shard_reader>, public fla
 private:
     shared_ptr<reader_lifecycle_policy> _lifecycle_policy;
     const unsigned _shard;
-    const dht::partition_range* _pr;
-    const query::partition_slice& _ps;
+    dht::partition_range _pr;
+    query::partition_slice _ps;
     const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
@@ -1583,7 +1583,7 @@ public:
         : impl(std::move(schema), std::move(permit))
         , _lifecycle_policy(std::move(lifecycle_policy))
         , _shard(shard)
-        , _pr(&pr)
+        , _pr(pr)
         , _ps(ps)
         , _pc(pc)
         , _trace_state(std::move(trace_state))
@@ -1667,7 +1667,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             });
             auto s = gs.get();
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
-                        s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+                        s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), _pr, _ps, _pc, _trace_state, _fwd_mr));
             tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
             auto f = rreader->fill_buffer(timeout);
             return f.then([rreader = std::move(rreader)] () mutable {
@@ -1721,7 +1721,7 @@ future<> shard_reader::next_partition() {
 }
 
 future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
-    _pr = &pr;
+    _pr = pr;
 
     if (!_reader && !_read_ahead) {
         // No need to fast-forward uncreated readers, they will be passed the new
@@ -1730,12 +1730,12 @@ future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeo
     }
 
     auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
-    return f.then([this, &pr, timeout] {
+    return f.then([this, timeout] {
         _end_of_stream = false;
         clear_buffer();
 
-        return smp::submit_to(_shard, [this, &pr, timeout] {
-            return _reader->fast_forward_to(pr, timeout);
+        return smp::submit_to(_shard, [this, timeout] {
+            return _reader->fast_forward_to(_pr, timeout);
         });
     });
 }
