@@ -215,7 +215,7 @@ void compaction_manager_test::deregister_compaction(const sstables::compaction_d
     auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data.compaction_uuid == c.compaction_uuid; });
     if (it != _cm._tasks.end()) {
         auto task = *it;
-        testlog.debug("compaction_manager_test: deregister_compaction uuid={}: task {} cf={}", c.compaction_uuid, fmt::ptr(task.get()), fmt::ptr(task->compacting_cf));
+        testlog.debug("compaction_manager_test: deregister_compaction uuid={}: task {} table={}", c.compaction_uuid, fmt::ptr(task.get()), fmt::ptr(task->compacting_table));
         _cm._tasks.erase(it);
     } else {
         testlog.debug("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);

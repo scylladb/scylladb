@@ -44,11 +44,10 @@
 #include "seastarx.hh"
 
 class table;
-using column_family = table;
 class compacting_sstable_registration;
 
-// Compaction manager is a feature used to manage compaction jobs from multiple
-// column families pertaining to the same database.
+// Compaction manager provides facilities to submit and track compaction jobs on
+// behalf of existing tables.
 class compaction_manager {
 public:
     struct stats {
@@ -83,7 +82,7 @@ private:
     };
 
     struct task {
-        column_family* compacting_cf = nullptr;
+        table* compacting_table = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         bool stopping = false;
@@ -94,8 +93,8 @@ private:
         compaction_state& compaction_state;
         gate::holder gate_holder;
 
-        explicit task(column_family* cf, sstables::compaction_type type, struct compaction_state& cs)
-            : compacting_cf(cf)
+        explicit task(table* t, sstables::compaction_type type, struct compaction_state& cs)
+            : compacting_table(t)
             , type(type)
             , compaction_state(cs)
             , gate_holder(compaction_state.gate.hold())
@@ -145,13 +144,13 @@ private:
 
     future<> _waiting_reevalution = make_ready_future<>();
     condition_variable _postponed_reevaluation;
-    // column families that wait for compaction but had its submission postponed due to ongoing compaction.
-    std::unordered_set<column_family*> _postponed;
+    // tables that wait for compaction but had its submission postponed due to ongoing compaction.
+    std::unordered_set<table*> _postponed;
     // tracks taken weights of ongoing compactions, only one compaction per weight is allowed.
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
-    // Purpose is to serialize major compaction across all column families, so as to
+    // Purpose is to serialize major compaction across all tables, so to
     // reduce disk space requirement.
     semaphore _major_compaction_sem{1};
 
@@ -161,7 +160,7 @@ private:
     seastar::named_semaphore _rewrite_sstables_sem = {1, named_semaphore_exception_factory{"rewrite sstables"}};
 
     std::function<void()> compaction_submission_callback();
-    // all registered column families are submitted for compaction at a constant interval.
+    // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
@@ -173,24 +172,21 @@ private:
     unsigned current_compaction_fan_in_threshold() const;
 
     // Return true if compaction can be initiated
-    bool can_register_compaction(column_family* cf, int weight, unsigned fan_in) const;
-    // Register weight for a column family. Do that only if can_register_weight()
+    bool can_register_compaction(table* t, int weight, unsigned fan_in) const;
+    // Register weight for a table. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);
-    // Deregister weight for a column family.
+    // Deregister weight for a table.
     void deregister_weight(int weight);
 
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
-    std::vector<sstables::shared_sstable> get_candidates(const column_family& cf);
+    std::vector<sstables::shared_sstable> get_candidates(const table& t);
 
     void register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
     void deregister_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
 
     // Return true if compaction manager and task weren't asked to stop.
     inline bool can_proceed(const lw_shared_ptr<task>& task);
-
-    // Check if column family is being cleaned up.
-    inline bool check_for_cleanup(column_family *cf);
 
     inline future<> put_task_to_sleep(lw_shared_ptr<task>& task);
 
@@ -201,11 +197,11 @@ private:
 
     void postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions();
-    // Postpone compaction for a column family that couldn't be executed due to ongoing
+    // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.
-    void postpone_compaction_for_column_family(column_family* cf);
+    void postpone_compaction_for_table(table* t);
 
-    future<> perform_sstable_scrub_validate_mode(column_family* cf);
+    future<> perform_sstable_scrub_validate_mode(table* t);
 
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
@@ -216,7 +212,7 @@ private:
     class can_purge_tombstones_tag;
     using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
-    future<> rewrite_sstables(column_family* cf, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<> rewrite_sstables(table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     optimized_optional<abort_source::subscription> _early_abort_subscription;
 public:
@@ -244,51 +240,51 @@ public:
     void do_stop() noexcept;
     void really_do_stop();
 
-    // Submit a column family to be compacted.
-    void submit(column_family* cf);
+    // Submit a table to be compacted.
+    void submit(table* t);
 
-    // Submit a column family to be off-strategy compacted.
-    void submit_offstrategy(column_family* cf);
+    // Submit a table to be off-strategy compacted.
+    void submit_offstrategy(table* t);
 
-    // Submit a column family to be cleaned up and wait for its termination.
+    // Submit a table to be cleaned up and wait for its termination.
     //
-    // Performs a cleanup on each sstable of the column family, excluding
+    // Performs a cleanup on each sstable of the table, excluding
     // those ones that are irrelevant to this node or being compacted.
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(database& db, column_family* cf);
+    future<> perform_cleanup(database& db, table* t);
 
-    // Submit a column family to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(database& db, column_family* cf, bool exclude_current_version);
+    // Submit a table to be upgraded and wait for its termination.
+    future<> perform_sstable_upgrade(database& db, table* t, bool exclude_current_version);
 
-    // Submit a column family to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(column_family* cf, sstables::compaction_type_options::scrub::mode scrub_mode);
+    // Submit a table to be scrubbed and wait for its termination.
+    future<> perform_sstable_scrub(table* t, sstables::compaction_type_options::scrub::mode scrub_mode);
 
-    // Submit a column family for major compaction.
-    future<> perform_major_compaction(column_family* cf);
+    // Submit a table for major compaction.
+    future<> perform_major_compaction(table* t);
 
 
-    // Run a custom job for a given column family, defined by a function
+    // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately
     // if manager was asked to stop.
     //
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(column_family* cf, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(table* t, sstables::compaction_type type, noncopyable_function<future<>(sstables::compaction_data&)> job);
 
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(table* t, std::function<future<> ()> func);
 
-    // Adds a column family to the compaction manager.
+    // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting
     // compaction jobs of all types.
-    void add(column_family* cf);
+    void add(table* t);
 
-    // Remove a column family from the compaction manager.
-    // Cancel requests on cf and wait for a possible ongoing compaction on cf.
-    future<> remove(column_family* cf);
+    // Remove a table from the compaction manager.
+    // Cancel requests on table and wait for possible ongoing compactions.
+    future<> remove(table* t);
 
     const stats& get_stats() const {
         return _stats;
@@ -298,12 +294,12 @@ public:
     // throws std::out_of_range exception if not found.
     compaction_state& get_compaction_state(table* t);
 
-    const std::vector<sstables::compaction_info> get_compactions(table* cf = nullptr) const;
+    const std::vector<sstables::compaction_info> get_compactions(table* t = nullptr) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
-    bool has_table_ongoing_compaction(const column_family* cf) const {
-        return std::any_of(_tasks.begin(), _tasks.end(), [cf] (const lw_shared_ptr<task>& task) {
-            return task->compacting_cf == cf && task->compaction_running;
+    bool has_table_ongoing_compaction(const table* t) const {
+        return std::any_of(_tasks.begin(), _tasks.end(), [t] (const lw_shared_ptr<task>& task) {
+            return task->compacting_table == t && task->compaction_running;
         });
     };
 
@@ -315,7 +311,7 @@ public:
     future<> stop_compaction(sstring type);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, column_family* cf = nullptr, std::optional<sstables::compaction_type> type_opt = {});
+    future<> stop_ongoing_compactions(sstring reason, table* t = nullptr, std::optional<sstables::compaction_type> type_opt = {});
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -325,8 +321,8 @@ public:
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
 
-    // Propagate replacement of sstables to all ongoing compaction of a given column family
-    void propagate_replacement(column_family*cf, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
+    // Propagate replacement of sstables to all ongoing compaction of a given table
+    void propagate_replacement(table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
     static sstables::compaction_data create_compaction_data();
 
