@@ -3415,7 +3415,11 @@ class std_unique_ptr:
         self.obj = obj
 
     def get(self):
-        return self.obj['_M_t']['_M_t']['_M_head_impl']
+        try:
+            std_tuple(self.obj['_M_t']['_M_t'])[0].dereference()
+            return std_tuple(self.obj['_M_t']['_M_t'])[0]
+        except:
+            return self.obj['_M_t']['_M_t']['_M_head_impl']
 
     def dereference(self):
         return self.get().dereference()
