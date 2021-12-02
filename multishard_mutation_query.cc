@@ -639,6 +639,64 @@ struct page_consume_result {
     }
 };
 
+// A special-purpose multi-range reader for multishard reads
+//
+// It is different from the "stock" multi-range reader
+// (make_flat_multi_range_reader()) in the following ways:
+// * It guarantees that a buffer never crosses two ranges.
+// * It guarantees that after calling `fill_buffer()` the underlying reader's
+//   buffer's *entire* content is moved into its own buffer. In other words,
+//   calling detach_buffer() after fill_buffer() is guranted to get all
+//   fragments fetched in that call, none will be left in the underlying
+//   reader's one.
+class multi_range_reader : public flat_mutation_reader::impl {
+    flat_mutation_reader _reader;
+    dht::partition_range_vector::const_iterator _it;
+    const dht::partition_range_vector::const_iterator _end;
+
+public:
+    multi_range_reader(schema_ptr s, reader_permit permit, flat_mutation_reader rd, const dht::partition_range_vector& ranges)
+        : impl(std::move(s), std::move(permit)) , _reader(std::move(rd)) , _it(ranges.begin()) , _end(ranges.end()) { }
+
+    virtual future<> fill_buffer() override {
+        while (is_buffer_empty()) {
+            if (_reader.is_buffer_empty() && _reader.is_end_of_stream()) {
+                if (++_it == _end) {
+                    _end_of_stream = true;
+                    break;
+                } else {
+                    co_await _reader.fast_forward_to(*_it);
+                }
+            }
+            if (_reader.is_buffer_empty()) {
+                co_await _reader.fill_buffer();
+            }
+            _reader.move_buffer_content_to(*this);
+        }
+    }
+
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+
+    virtual future<> fast_forward_to(position_range) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty() && !is_end_of_stream()) {
+            return _reader.next_partition();
+        }
+        return make_ready_future<>();
+    }
+
+    virtual future<> close() noexcept override {
+        return _reader.close();
+    }
+};
+
+
 } // anonymous namespace
 
 template <typename ResultBuilder>
@@ -649,21 +707,14 @@ future<page_consume_result<ResultBuilder>> read_page(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         ResultBuilder&& result_builder) {
-    auto ms = mutation_source([&] (schema_ptr s,
-            reader_permit permit,
-            const dht::partition_range& pr,
-            const query::partition_slice& ps,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding,
-            mutation_reader::forwarding fwd_mr) {
-        return make_multishard_combining_reader(ctx, std::move(s), std::move(permit), pr, ps, pc, std::move(trace_state), fwd_mr);
-    });
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
-            cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
+    auto reader = make_multishard_combining_reader(ctx, s, ctx->permit(), ranges.front(), cmd.slice,
+            service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding(ranges.size() > 1));
+    if (ranges.size() > 1) {
+        reader = make_flat_mutation_reader<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
+    }
 
     std::exception_ptr ex;
     try {
