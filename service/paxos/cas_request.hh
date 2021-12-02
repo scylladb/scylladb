@@ -26,16 +26,6 @@
 
 class mutation;
 
-namespace seastar {
-
-template <typename PtrType>
-class foreign_ptr;
-
-template <typename T>
-class lw_shared_ptr;
-
-} // namespace seastar
-
 namespace query {
 
 class result;
