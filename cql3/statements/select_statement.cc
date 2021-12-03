@@ -150,6 +150,7 @@ select_statement::select_statement(schema_ptr schema,
     , _parameters(std::move(parameters))
     , _selection(std::move(selection))
     , _restrictions(std::move(restrictions))
+    , _restrictions_need_filtering(_restrictions->need_filtering())
     , _group_by_cell_indices(group_by_cell_indices)
     , _is_reversed(is_reversed)
     , _limit(std::move(limit))
