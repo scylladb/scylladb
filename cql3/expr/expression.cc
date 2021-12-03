@@ -1093,6 +1093,78 @@ expression replace_token(const expression& expr, const column_definition* new_cd
     });
 }
 
+bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun) {
+    if (auto res = predicate_fun(e)) {
+        return res;
+    }
+    return expr::visit(overloaded_functor{
+            [&] (const binary_operator& op) {
+                if (auto found = recurse_until(op.lhs, predicate_fun)) {
+                    return found;
+                }
+                return recurse_until(op.rhs, predicate_fun);
+            },
+            [&] (const conjunction& conj) {
+                for (auto& child : conj.children) {
+                    if (auto found = recurse_until(child, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
+            [&] (const column_value& cv) {
+                if (cv.sub.has_value()) {
+                    return recurse_until(*cv.sub, predicate_fun);
+                }
+                return false;
+            },
+            [&] (const column_mutation_attribute& a) {
+                return recurse_until(a.column, predicate_fun);
+            },
+            [&] (const function_call& fc) {
+                for (auto& arg : fc.args) {
+                    if (auto found = recurse_until(arg, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
+            [&] (const cast& c) {
+                return recurse_until(c.arg, predicate_fun);
+            },
+            [&] (const field_selection& fs) {
+                return recurse_until(fs.structure, predicate_fun);
+            },
+            [&] (const tuple_constructor& t) {
+                for (auto& e : t.elements) {
+                    if (auto found = recurse_until(e, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
+            [&] (const collection_constructor& c) {
+                for (auto& e : c.elements) {
+                    if (auto found = recurse_until(e, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
+            [&] (const usertype_constructor& c) {
+                for (auto& [k, v] : c.elements) {
+                    if (auto found = recurse_until(v, predicate_fun)) {
+                        return found;
+                    }
+                }
+                return false;
+            },
+            [](LeafExpression auto const&) {
+                return false;
+            }
+        }, e);
+}
+
 expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate) {
     auto recurse = [&] (const expression& e) -> expression {
@@ -1922,5 +1994,17 @@ bool contains_bind_marker(const expression& e) {
     const bind_variable* search_res = find_in_expression<bind_variable>(e, [](const bind_variable&) { return true; });
     return search_res != nullptr;
 }
+
+size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f) {
+    size_t ret = 0;
+    recurse_until(e, [&] (const expression& e) {
+        if (auto op = as_if<binary_operator>(&e)) {
+            ret += f(*op) ? 1 : 0;
+        }
+        return false;
+    });
+    return ret;
+}
+
 } // namespace expr
 } // namespace cql3
