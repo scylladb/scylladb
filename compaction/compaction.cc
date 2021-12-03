@@ -1426,7 +1426,7 @@ public:
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr);
+        auto crawling_reader = downgrade_to_v1(_compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr));
         return make_flat_mutation_reader<reader>(std::move(crawling_reader), _options.operation_mode);
     }
 
@@ -1691,7 +1691,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     clogger.info("Scrubbing in validate mode {}", sstables_list_msg);
 
     auto permit = table_s.make_compaction_reader_permit();
-    auto reader = sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr);
+    auto reader = downgrade_to_v1(sstables->make_crawling_reader(schema, permit, descriptor.io_priority, nullptr));
 
     const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
 

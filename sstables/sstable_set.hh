@@ -157,7 +157,7 @@ public:
             mutation_reader::forwarding,
             read_monitor_generator& rmg = default_read_monitor_generator()) const;
 
-    flat_mutation_reader make_crawling_reader(
+    flat_mutation_reader_v2 make_crawling_reader(
             schema_ptr,
             reader_permit,
             const io_priority_class&,
