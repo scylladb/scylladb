@@ -38,11 +38,12 @@ class test_reader_lifecycle_policy
 
     struct reader_context {
         std::optional<reader_concurrency_semaphore> semaphore;
-        std::optional<const dht::partition_range> range;
+        lw_shared_ptr<const dht::partition_range> range;
         std::optional<const query::partition_slice> slice;
 
         reader_context() = default;
-        reader_context(dht::partition_range range, query::partition_slice slice) : range(std::move(range)), slice(std::move(slice)) {
+        reader_context(dht::partition_range range, query::partition_slice slice)
+            : range(make_lw_shared<const dht::partition_range>(std::move(range))), slice(std::move(slice)) {
         }
     };
 
@@ -67,12 +68,17 @@ public:
             mutation_reader::forwarding fwd_mr) override {
         const auto shard = this_shard_id();
         if (_contexts[shard]) {
-            _contexts[shard]->range.emplace(range);
+            _contexts[shard]->range = make_lw_shared<const dht::partition_range>(range);
             _contexts[shard]->slice.emplace(slice);
         } else {
             _contexts[shard] = make_foreign(std::make_unique<reader_context>(range, slice));
         }
         return _factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
+    }
+    void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
+        const auto shard = this_shard_id();
+        assert(_contexts[shard]);
+        _contexts[shard]->range = std::move(range);
     }
     virtual future<> destroy_reader(stopped_reader reader) noexcept override {
         auto& ctx = _contexts[this_shard_id()];

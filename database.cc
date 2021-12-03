@@ -2368,7 +2368,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             : public reader_lifecycle_policy
             , public enable_shared_from_this<streaming_reader_lifecycle_policy> {
         struct reader_context {
-            foreign_unique_ptr<const dht::partition_range> range;
+            foreign_ptr<lw_shared_ptr<const dht::partition_range>> range;
             foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
             reader_concurrency_semaphore* semaphore;
         };
@@ -2389,11 +2389,15 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             const auto shard = this_shard_id();
             auto& cf = _db.local().find_column_family(schema);
 
-            _contexts[shard].range = make_foreign(std::make_unique<const dht::partition_range>(range));
+            _contexts[shard].range = make_foreign(make_lw_shared<const dht::partition_range>(range));
             _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
             _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
             return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
+        }
+        virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
+            const auto shard = this_shard_id();
+            _contexts[shard].range = make_foreign(std::move(range));
         }
         virtual future<> destroy_reader(stopped_reader reader) noexcept override {
             auto ctx = std::move(_contexts[this_shard_id()]);

@@ -102,7 +102,7 @@ class read_context : public reader_lifecycle_policy {
     struct reader_meta {
         struct remote_parts {
             reader_permit permit;
-            std::unique_ptr<const dht::partition_range> range;
+            lw_shared_ptr<const dht::partition_range> range;
             std::unique_ptr<const query::partition_slice> slice;
             utils::phased_barrier::operation read_operation;
             std::optional<reader_concurrency_semaphore::inactive_read_handle> handle;
@@ -110,7 +110,7 @@ class read_context : public reader_lifecycle_policy {
 
             remote_parts(
                     reader_permit permit,
-                    std::unique_ptr<const dht::partition_range> range = nullptr,
+                    lw_shared_ptr<const dht::partition_range> range = nullptr,
                     std::unique_ptr<const query::partition_slice> slice = nullptr,
                     utils::phased_barrier::operation read_operation = {},
                     std::optional<reader_concurrency_semaphore::inactive_read_handle> handle = {})
@@ -259,6 +259,8 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
+    virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override;
+
     virtual future<> destroy_reader(stopped_reader reader) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
@@ -341,7 +343,7 @@ flat_mutation_reader read_context::create_reader(
 
     auto remote_parts = reader_meta::remote_parts(
             std::move(permit),
-            std::make_unique<const dht::partition_range>(pr),
+            make_lw_shared<const dht::partition_range>(pr),
             std::make_unique<const query::partition_slice>(ps),
             table.read_in_progress());
 
@@ -355,6 +357,11 @@ flat_mutation_reader read_context::create_reader(
 
     return table.as_mutation_source().make_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+}
+
+void read_context::update_read_range(lw_shared_ptr<const dht::partition_range> range) {
+    auto& rm = _readers[this_shard_id()];
+    rm.rparts->range = std::move(range);
 }
 
 future<> read_context::destroy_reader(stopped_reader reader) noexcept {
