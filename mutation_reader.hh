@@ -74,12 +74,12 @@ template <typename MutationFilter>
 requires requires(MutationFilter mf, const dht::decorated_key& dk) {
     { mf(dk) } -> std::same_as<bool>;
 }
-class filtering_reader : public flat_mutation_reader::impl {
-    flat_mutation_reader _rd;
+class filtering_reader : public flat_mutation_reader_v2::impl {
+    flat_mutation_reader_v2 _rd;
     MutationFilter _filter;
     static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const dht::decorated_key&)>>::value, "bad MutationFilter signature");
 public:
-    filtering_reader(flat_mutation_reader rd, MutationFilter&& filter)
+    filtering_reader(flat_mutation_reader_v2 rd, MutationFilter&& filter)
         : impl(rd.schema(), rd.permit())
         , _rd(std::move(rd))
         , _filter(std::forward<MutationFilter>(filter)) {
@@ -132,8 +132,8 @@ public:
 // accepts mutation const& and returns a bool. The mutation stays in the
 // stream if and only if the filter returns true.
 template <typename MutationFilter>
-flat_mutation_reader make_filtering_reader(flat_mutation_reader rd, MutationFilter&& filter) {
-    return make_flat_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
+flat_mutation_reader_v2 make_filtering_reader(flat_mutation_reader_v2 rd, MutationFilter&& filter) {
+    return make_flat_mutation_reader_v2<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }
 
 /// Create a wrapper that filters fragments according to partition range and slice.

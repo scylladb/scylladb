@@ -92,9 +92,9 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
                 auto rd = mt->as_data_source().make_reader_v2(s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {
-                    rd = upgrade_to_v2(make_filtering_reader(downgrade_to_v1(std::move(rd)), [this] (const dht::decorated_key& dk) -> bool {
+                    rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
                         return this_shard_owns(dk);
-                    }));
+                    });
                 }
 
                 return rd;
@@ -175,9 +175,9 @@ mutation_source streaming_virtual_table::as_mutation_source() {
         auto rd = make_slicing_filtering_reader(std::move(reader_and_handle.first), pr, slice);
 
         if (!_shard_aware) {
-            rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
+            rd = downgrade_to_v1(make_filtering_reader(upgrade_to_v2(std::move(rd)), [this] (const dht::decorated_key& dk) -> bool {
                 return this_shard_owns(dk);
-            });
+            }));
         }
 
         if (reversed) {
