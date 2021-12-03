@@ -251,7 +251,7 @@ SEASTAR_TEST_CASE(test_filtering) {
         auto m4 = make_mutation_with_key(s, "key4");
 
         // All pass
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                  [] (const dht::decorated_key& dk) { return true; }))
             .produces(m1)
             .produces(m2)
@@ -260,47 +260,47 @@ SEASTAR_TEST_CASE(test_filtering) {
             .produces_end_of_stream();
 
         // None pass
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                  [] (const dht::decorated_key& dk) { return false; }))
             .produces_end_of_stream();
 
         // Trim front
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                 [&] (const dht::decorated_key& dk) { return !dk.key().equal(*s, m1.key()); }))
             .produces(m2)
             .produces(m3)
             .produces(m4)
             .produces_end_of_stream();
 
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
             [&] (const dht::decorated_key& dk) { return !dk.key().equal(*s, m1.key()) && !dk.key().equal(*s, m2.key()); }))
             .produces(m3)
             .produces(m4)
             .produces_end_of_stream();
 
         // Trim back
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                  [&] (const dht::decorated_key& dk) { return !dk.key().equal(*s, m4.key()); }))
             .produces(m1)
             .produces(m2)
             .produces(m3)
             .produces_end_of_stream();
 
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                  [&] (const dht::decorated_key& dk) { return !dk.key().equal(*s, m4.key()) && !dk.key().equal(*s, m3.key()); }))
             .produces(m1)
             .produces(m2)
             .produces_end_of_stream();
 
         // Trim middle
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                  [&] (const dht::decorated_key& dk) { return !dk.key().equal(*s, m3.key()); }))
             .produces(m1)
             .produces(m2)
             .produces(m4)
             .produces_end_of_stream();
 
-        assert_that(make_filtering_reader(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4}),
+        assert_that(make_filtering_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m1, m2, m3, m4})),
                  [&] (const dht::decorated_key& dk) { return !dk.key().equal(*s, m2.key()) && !dk.key().equal(*s, m3.key()); }))
             .produces(m1)
             .produces(m4)
@@ -2376,12 +2376,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
             return table.as_mutation_source().make_reader(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
-        auto reference_reader = make_filtering_reader(
+        auto reference_reader = downgrade_to_v1(make_filtering_reader(upgrade_to_v2(
                 make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
-                    schema, make_reader_permit(env), partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority()),
+                    schema, make_reader_permit(env), partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority())),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
-                });
+                }));
         auto close_reference_reader = deferred_close(reference_reader);
 
         std::vector<mutation> reference_muts;

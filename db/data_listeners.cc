@@ -85,13 +85,13 @@ flat_mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, c
 
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
         dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
-        return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
+        return downgrade_to_v1(make_filtering_reader(upgrade_to_v2(std::move(rd)), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
             // The data query may be executing after the toppartitions_data_listener object has been removed, so check
             if (zis) {
                 zis->_top_k_read.append(toppartitions_item_key{s, dk});
             }
             return true;
-        });
+        }));
     }
 
     return std::move(rd);

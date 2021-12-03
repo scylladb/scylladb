@@ -1125,7 +1125,7 @@ public:
         : cleanup_compaction(table_s, std::move(descriptor), cdata, opts.owned_ranges) {}
 
     flat_mutation_reader make_sstable_reader() const override {
-        return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());
+        return downgrade_to_v1(make_filtering_reader(upgrade_to_v2(regular_compaction::make_sstable_reader()), make_partition_filter()));
     }
 
     std::string_view report_start_desc() const override {
