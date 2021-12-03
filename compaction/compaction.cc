@@ -430,7 +430,7 @@ protected:
     schema_ptr _schema;
     reader_permit _permit;
     std::vector<shared_sstable> _sstables;
-    const unsigned _total_input_sstables;
+    std::vector<unsigned long> _input_sstable_generations;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
     std::unordered_set<shared_sstable> _new_partial_sstables;
@@ -443,7 +443,6 @@ protected:
     uint64_t _start_size = 0;
     uint64_t _end_size = 0;
     uint64_t _estimated_partitions = 0;
-    std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
     bool _contains_multi_fragment_runs = false;
@@ -474,7 +473,6 @@ protected:
         , _schema(_table_s.schema())
         , _permit(_table_s.make_compaction_reader_permit())
         , _sstables(std::move(descriptor.sstables))
-        , _total_input_sstables(_sstables.size())
         , _type(descriptor.options.type())
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
@@ -505,7 +503,7 @@ protected:
     void setup_new_sstable(shared_sstable& sst) {
         _all_new_sstables.push_back(sst);
         _new_partial_sstables.insert(sst);
-        for (auto ancestor : _ancestors) {
+        for (auto ancestor : _input_sstable_generations) {
             sst->add_ancestor(ancestor);
         }
     }
@@ -627,7 +625,7 @@ private:
             timestamp_tracker.update(sst_stats.max_timestamp);
 
             // Compacted sstable keeps track of its ancestors.
-            _ancestors.push_back(sst->generation());
+            _input_sstable_generations.push_back(sst->generation());
             _start_size += sst->bytes_on_disk();
             _cdata.total_partitions += sst->get_estimated_key_count();
             formatted_msg += sst;
@@ -725,7 +723,7 @@ private:
         // By the time being, using estimated key count.
         log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
-                _total_input_sstables, new_sstables_msg, pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
+                _input_sstable_generations.size(), new_sstables_msg, pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_end_size, duration),
                 _cdata.total_partitions, _cdata.total_keys_written);
 
