@@ -80,7 +80,7 @@ column_identifier_raw::column_identifier_raw(sstring raw_text, bool keep_case)
     }
 }
 
-::shared_ptr<selection::selectable> column_identifier_raw::prepare(const schema& s) const {
+::shared_ptr<column_identifier> column_identifier_raw::prepare(const schema& s) const {
     return prepare_column_identifier(s);
 }
 
@@ -123,15 +123,15 @@ std::ostream& operator<<(std::ostream& out, const column_identifier_raw& id) {
 }
 
 ::shared_ptr<selection::selector::factory>
-column_identifier::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
-    auto def = get_column_definition(*schema, *this);
+selectable_column::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
+    auto def = get_column_definition(*schema, _ci);
     if (!def) {
-        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _text));
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
     }
     // Do not allow explicitly selecting hidden columns. We also skip them on
     // "SELECT *" (see selection::wildcard()).
     if (def->is_hidden_from_cql()) {
-        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _text));
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
     }
     return selection::simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
 }

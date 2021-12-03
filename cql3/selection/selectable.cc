@@ -153,9 +153,9 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
         },
         [&] (const expr::column_value& column) -> shared_ptr<selectable> {
-            // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
+            // There is no path that reaches here, but expr::column_value and selectable_column are logically the same,
             // so bridge them.
-            return ::make_shared<column_identifier>(column.col->name(), column.col->name_as_text());
+            return ::make_shared<selectable_column>(column_identifier(column.col->name(), column.col->name_as_text()));
         },
         [&] (const expr::token& tok) -> shared_ptr<selectable> {
             // expr::token implicitly the partition key as arguments, but
@@ -165,12 +165,12 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             auto args = boost::copy_range<std::vector<shared_ptr<selectable>>>(
                 s.partition_key_columns()
                 | boost::adaptors::transformed([&] (const column_definition& cdef) {
-                    return ::make_shared<column_identifier>(cdef.name(), cdef.name_as_text());
+                    return ::make_shared<selectable_column>(column_identifier(cdef.name(), cdef.name_as_text()));
                 }));
             return ::make_shared<selectable::with_function>(std::move(name), std::move(args));
         },
         [&] (const expr::unresolved_identifier& ui) -> shared_ptr<selectable> {
-            return ui.ident->prepare(s);
+            return make_shared<selectable_column>(*ui.ident->prepare(s));
         },
         [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
             auto unresolved_id = expr::as<expr::unresolved_identifier>(cma.column);
@@ -204,7 +204,7 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
             return make_shared<selectable::with_field_selection>(prepare_selectable(s, fs.structure),
-                    static_pointer_cast<column_identifier>(fs.field->prepare(s)));
+                    fs.field->prepare(s));
         },
         [&] (const expr::null&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "null found its way to selector context");
