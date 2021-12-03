@@ -1347,7 +1347,7 @@ int main(int ac, char** av) {
                 api::unset_transport_controller(ctx).get();
             });
 
-            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss);
+            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter, ss, proxy);
 
             ss.local().register_protocol_server(thrift_ctl);
 

@@ -206,6 +206,7 @@ class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     sharded<service::storage_service>& _ss;
+    sharded<service::storage_proxy>& _proxy;
     ::timeout_config _timeout_config;
     service::client_state _client_state;
     service::query_state _query_state;
@@ -223,10 +224,12 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
+            auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
         : _db(db)
         , _query_processor(qp)
         , _ss(ss)
+        , _proxy(proxy)
         , _timeout_config(timeout_config)
         , _client_state(service::client_state::external_tag{}, auth_service, nullptr, _timeout_config, socket_address(), true)
         // FIXME: Handlers are not created per query, but rather per connection, so it makes little sense to store
@@ -234,7 +237,7 @@ public:
         // for CQL queries which piggy-back on Thrift protocol.
         , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
         , _current_permit(current_permit)
-    { }
+    { (void)_proxy; }
 
     const sstring& current_keyspace() const {
         return _query_state.get_client_state().get_raw_keyspace();
@@ -2023,6 +2026,7 @@ class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     sharded<service::storage_service>& _ss;
+    sharded<service::storage_proxy>& _proxy;
     auth::service& _auth_service;
     timeout_config _timeout_config;
     service_permit& _current_permit;
@@ -2030,13 +2034,14 @@ public:
     explicit handler_factory(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
                              sharded<service::storage_service>& ss,
+                             sharded<service::storage_proxy>& proxy,
                              auth::service& auth_service,
                              ::timeout_config timeout_config,
                              service_permit& current_permit)
-        : _db(db), _query_processor(qp), _ss(ss), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
+        : _db(db), _query_processor(qp), _ss(ss), _proxy(proxy), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db, _query_processor, _ss, _auth_service, _timeout_config, _current_permit);
+        return new thrift_handler(_db, _query_processor, _ss, _proxy, _auth_service, _timeout_config, _current_permit);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -2045,7 +2050,7 @@ public:
 
 std::unique_ptr<CassandraCobSvIfFactory>
 create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp,
-        sharded<service::storage_service>& ss, auth::service& auth_service,
-        ::timeout_config timeout_config, service_permit& current_permit) {
-    return std::make_unique<handler_factory>(db, qp, ss, auth_service, timeout_config, current_permit);
+        sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
+        auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit) {
+    return std::make_unique<handler_factory>(db, qp, ss, proxy, auth_service, timeout_config, current_permit);
 }
