@@ -1084,7 +1084,7 @@ sstable_set::create_single_key_sstable_reader(
             std::move(permit), sstable_histogram, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable_set::make_range_sstable_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1100,13 +1100,13 @@ sstable_set::make_range_sstable_reader(
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
         return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
-    return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
+    return upgrade_to_v2(make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
                     pr,
                     std::move(trace_state),
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr);
+            fwd_mr));
 }
 
 flat_mutation_reader_v2

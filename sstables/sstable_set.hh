@@ -123,7 +123,7 @@ public:
     ///
     /// The reader is unrestricted, but will account its resource usage on the
     /// semaphore belonging to the passed-in permit.
-    flat_mutation_reader make_range_sstable_reader(
+    flat_mutation_reader_v2 make_range_sstable_reader(
         schema_ptr,
         reader_permit,
         const dht::partition_range&,
