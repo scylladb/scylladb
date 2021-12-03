@@ -71,9 +71,6 @@ public:
     // Return if optimization to rule out sstables based on clustering key filter should be applied.
     bool use_clustering_key_filter() const;
 
-    // Return true if compaction strategy doesn't care if a sstable belonging to partial sstable run is compacted.
-    bool can_compact_partial_runs() const;
-
     // An estimation of number of compaction for strategy to be satisfied.
     int64_t estimated_pending_compactions(table_state& table_s) const;
 
@@ -81,8 +78,6 @@ public:
         switch (type) {
         case compaction_strategy_type::null:
             return "NullCompactionStrategy";
-        case compaction_strategy_type::major:
-            return "MajorCompactionStrategy";
         case compaction_strategy_type::size_tiered:
             return "SizeTieredCompactionStrategy";
         case compaction_strategy_type::leveled:
@@ -101,8 +96,6 @@ public:
         sstring short_name = (pos == sstring::npos) ? name : name.substr(pos + 35);
         if (short_name == "NullCompactionStrategy") {
             return compaction_strategy_type::null;
-        } else if (short_name == "MajorCompactionStrategy") {
-            return compaction_strategy_type::major;
         } else if (short_name == "SizeTieredCompactionStrategy") {
             return compaction_strategy_type::size_tiered;
         } else if (short_name == "LeveledCompactionStrategy") {
