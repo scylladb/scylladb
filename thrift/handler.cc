@@ -237,7 +237,7 @@ public:
         // for CQL queries which piggy-back on Thrift protocol.
         , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
         , _current_permit(current_permit)
-    { (void)_proxy; }
+    { }
 
     const sstring& current_keyspace() const {
         return _query_state.get_client_state().get_raw_keyspace();
@@ -301,7 +301,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
@@ -331,7 +331,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
@@ -362,7 +362,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto&& prange = make_partition_range(*schema, range);
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             // KeyRange::count is the number of thrift rows to return, while
@@ -525,7 +525,7 @@ public:
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -541,7 +541,7 @@ public:
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -578,7 +578,7 @@ public:
 
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -605,7 +605,7 @@ public:
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 // This mutation contains only counter tombstones so it can be applied like non-counter mutations.
                 auto timeout = db::timeout_clock::now() + _timeout_config.counter_write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -618,7 +618,7 @@ public:
                 return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -631,7 +631,7 @@ public:
                 return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -647,7 +647,7 @@ public:
                 if (_db.local().find_schema(current_keyspace(), cfname)->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot truncate Materialized Views");
                 }
-                return service::get_local_storage_proxy().truncate_blocking(current_keyspace(), cfname);
+                return _proxy.local().truncate_blocking(current_keyspace(), cfname);
             });
         });
     }
@@ -703,7 +703,7 @@ public:
                 }
             }
             auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts, nullptr);
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.get_max_result_size(slice),
                     query::row_limit(row_limit));
             auto f = _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::SELECT);
