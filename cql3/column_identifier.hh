@@ -41,8 +41,6 @@
 
 #pragma once
 
-#include "cql3/selection/selectable.hh"
-
 #include "schema.hh"
 
 #include <algorithm>
@@ -96,17 +94,6 @@ public:
 #endif
 
     using raw = column_identifier_raw;
-};
-
-class selectable_column : public selection::selectable {
-    column_identifier _ci;
-public:
-    explicit selectable_column(column_identifier ci) : _ci(std::move(ci)) {}
-    virtual ::shared_ptr<selection::selector::factory> new_selector_factory(database& db, schema_ptr schema,
-        std::vector<const column_definition*>& defs) override;
-    virtual sstring to_string() const override {
-        return _ci.to_string();
-    }
 };
 
 /**

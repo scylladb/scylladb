@@ -21,7 +21,6 @@
 
 #include "cql3/column_identifier.hh"
 #include "exceptions/exceptions.hh"
-#include "cql3/selection/simple_selector.hh"
 #include "cql3/util.hh"
 #include "cql3/query_options.hh"
 
@@ -120,20 +119,6 @@ sstring column_identifier_raw::to_string() const {
 
 std::ostream& operator<<(std::ostream& out, const column_identifier_raw& id) {
     return out << id._text;
-}
-
-::shared_ptr<selection::selector::factory>
-selectable_column::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
-    auto def = get_column_definition(*schema, _ci);
-    if (!def) {
-        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
-    }
-    // Do not allow explicitly selecting hidden columns. We also skip them on
-    // "SELECT *" (see selection::wildcard()).
-    if (def->is_hidden_from_cql()) {
-        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
-    }
-    return selection::simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
 }
 
 }

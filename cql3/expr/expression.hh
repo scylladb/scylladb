@@ -26,10 +26,12 @@
 #include <seastar/core/shared_ptr.hh>
 #include <variant>
 #include <concepts>
+#include <numeric>
 
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/assignment_testable.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
 #include "database_fwd.hh"
