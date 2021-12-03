@@ -169,7 +169,6 @@ def testAlterNonFrozenUDT(cql, test_keyspace):
                 assert_rows(execute(cql, table, "SELECT v FROM %s"), [user_type("a", 3, "foo", "abc", "c", 0)])
                 assert_rows(execute(cql, table, "SELECT v.c FROM %s"), [0])
 
-@pytest.mark.xfail(reason="#9671")
 def testUDTWithUnsetValues(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(x int, y int)") as myType:
         with create_type(cql, test_keyspace, f"(a frozen<{myType}>)") as myOtherType:

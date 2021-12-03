@@ -1679,8 +1679,8 @@ constant evaluate(const usertype_constructor& user_val, const query_options& opt
 
         constant field_val = evaluate(cur_field->second, options);
         if (field_val.is_unset_value()) {
-            // TODO: Behaviour copied from user_types::delayed_value::bind(), but this seems incorrect
-            field_val.value = raw_value::make_null();
+            throw exceptions::invalid_request_exception(format(
+                "Invalid unset value for field '{}' of user defined type ", utype.field_name_as_string(i)));
         }
 
         field_values.emplace_back(std::move(field_val.value).to_managed_bytes_opt());
