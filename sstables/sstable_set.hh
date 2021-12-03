@@ -22,6 +22,7 @@
 #pragma once
 
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
@@ -134,7 +135,7 @@ public:
         read_monitor_generator& rmg = default_read_monitor_generator()) const;
 
     // Filters out mutations that don't belong to the current shard.
-    flat_mutation_reader make_local_shard_sstable_reader(
+    flat_mutation_reader_v2 make_local_shard_sstable_reader(
         schema_ptr,
         reader_permit,
         const dht::partition_range&,

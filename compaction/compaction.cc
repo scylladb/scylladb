@@ -894,7 +894,7 @@ public:
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return _compacting->make_local_shard_sstable_reader(_schema,
+        return downgrade_to_v1(_compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
                 query::full_partition_range,
                 _schema->full_slice(),
@@ -902,7 +902,7 @@ public:
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
-                default_read_monitor_generator());
+                default_read_monitor_generator()));
     }
 
     std::string_view report_start_desc() const override {
@@ -940,7 +940,7 @@ public:
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return _compacting->make_local_shard_sstable_reader(_schema,
+        return downgrade_to_v1(_compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
                 query::full_partition_range,
                 _schema->full_slice(),
@@ -948,7 +948,7 @@ public:
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
-                _monitor_generator);
+                _monitor_generator));
     }
 
     std::string_view report_start_desc() const override {

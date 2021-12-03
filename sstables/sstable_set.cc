@@ -34,7 +34,6 @@
 #include "sstable_set_impl.hh"
 
 #include "database.hh"
-#include "flat_mutation_reader_v2.hh"
 
 namespace sstables {
 
@@ -1110,7 +1109,7 @@ sstable_set::make_range_sstable_reader(
             fwd_mr);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable_set::make_local_shard_sstable_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1129,15 +1128,15 @@ sstable_set::make_local_shard_sstable_reader(
     };
     if (auto sstables = _impl->all(); sstables->size() == 1) [[unlikely]] {
         auto sst = *sstables->begin();
-        return downgrade_to_v1(reader_factory_fn(sst, pr));
+        return reader_factory_fn(sst, pr);
     }
-    return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
+    return upgrade_to_v2(make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
                     pr,
                     std::move(trace_state),
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr);
+            fwd_mr));
 }
 
 flat_mutation_reader sstable_set::make_crawling_reader(

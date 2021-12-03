@@ -1521,7 +1521,7 @@ future<> view_builder::initialize_reader_at_current_token(build_step& step) {
   return step.reader.close().then([this, &step] {
     step.pslice = make_partition_slice(*step.base->schema());
     step.prange = dht::partition_range(dht::ring_position::starting_at(step.current_token()), dht::ring_position::max());
-    step.reader = step.base->get_sstable_set().make_local_shard_sstable_reader(
+    step.reader = downgrade_to_v1(step.base->get_sstable_set().make_local_shard_sstable_reader(
             step.base->schema(),
             _permit,
             step.prange,
@@ -1529,7 +1529,7 @@ future<> view_builder::initialize_reader_at_current_token(build_step& step) {
             default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::no,
-            mutation_reader::forwarding::no);
+            mutation_reader::forwarding::no));
   });
 }
 
