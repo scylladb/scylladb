@@ -633,6 +633,7 @@ private:
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
             if (tombstone_expiration_enabled() && fully_expired.contains(sst)) {
+                log_debug("Fully expired sstable {} will be dropped on compaction completion", sst->get_filename());
                 continue;
             }
 
