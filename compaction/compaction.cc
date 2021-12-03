@@ -633,7 +633,6 @@ private:
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
             if (tombstone_expiration_enabled() && fully_expired.contains(sst)) {
-                on_skipped_expired_sstable(sst);
                 continue;
             }
 
@@ -747,9 +746,6 @@ private:
     virtual void on_new_partition() {}
 
     virtual void on_end_of_compaction() {};
-
-    // Inform about every expired sstable that was skipped during setup phase
-    virtual void on_skipped_expired_sstable(shared_sstable sstable) {}
 
     // create a writer based on decorated key.
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
@@ -964,12 +960,6 @@ public:
 
     virtual void on_end_of_compaction() override {
         replace_remaining_exhausted_sstables();
-    }
-
-    virtual void on_skipped_expired_sstable(shared_sstable sstable) override {
-        // manually register expired sstable into monitor, as it's not being actually compacted
-        // this will allow expired sstable to be removed from tracker once compaction completes
-        _monitor_generator(std::move(sstable));
     }
 private:
     void maybe_replace_exhausted_sstables_by_sst(shared_sstable sst) {
