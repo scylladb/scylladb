@@ -25,7 +25,6 @@ namespace sstables {
 
 enum class compaction_strategy_type {
     null,
-    major,
     size_tiered,
     leveled,
     date_tiered,

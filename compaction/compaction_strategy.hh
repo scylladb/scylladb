@@ -78,8 +78,6 @@ public:
         switch (type) {
         case compaction_strategy_type::null:
             return "NullCompactionStrategy";
-        case compaction_strategy_type::major:
-            return "MajorCompactionStrategy";
         case compaction_strategy_type::size_tiered:
             return "SizeTieredCompactionStrategy";
         case compaction_strategy_type::leveled:
@@ -98,8 +96,6 @@ public:
         sstring short_name = (pos == sstring::npos) ? name : name.substr(pos + 35);
         if (short_name == "NullCompactionStrategy") {
             return compaction_strategy_type::null;
-        } else if (short_name == "MajorCompactionStrategy") {
-            return compaction_strategy_type::major;
         } else if (short_name == "SizeTieredCompactionStrategy") {
             return compaction_strategy_type::size_tiered;
         } else if (short_name == "LeveledCompactionStrategy") {
