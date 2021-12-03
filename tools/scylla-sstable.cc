@@ -194,43 +194,39 @@ class dumping_consumer : public sstable_consumer {
     public:
         explicit text_dumper(const schema& s) : _schema(s) { }
         virtual future<> on_start_of_stream() override {
-            std::cout << "{stream_start}" << std::endl;
+            fmt::print("{{stream_start}}\n");
             return make_ready_future<>();
         }
         virtual future<stop_iteration> on_new_sstable(const sstables::sstable* const sst) override {
-            std::cout << "{sstable_start";
-            if (sst) {
-                std::cout << ": filename " << sst->get_filename();
-            }
-            std::cout << "}" << std::endl;
+            fmt::print("{{sstable_start{}}}\n", sst ? fmt::format(": filename {}", sst->get_filename()) : "");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_start&& ps) override {
-            std::cout << ps << std::endl;
+            fmt::print("{}\n", ps);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(static_row&& sr) override {
-            std::cout << static_row::printer(_schema, sr) << std::endl;
+            fmt::print("{}\n", static_row::printer(_schema, sr));
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(clustering_row&& cr) override {
-            std::cout << clustering_row::printer(_schema, cr) << std::endl;
+            fmt::print("{}\n", clustering_row::printer(_schema, cr));
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override {
-            std::cout << rtc << std::endl;
+            fmt::print("{}\n", rtc);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
-            std::cout << "{partition_end}" << std::endl;
+            fmt::print("{{partition_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> on_end_of_sstable() override {
-            std::cout << "{sstable_end}" << std::endl;
+            fmt::print("{{sstable_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<> on_end_of_stream() override {
-            std::cout << "{stream_end}" << std::endl;
+            fmt::print("{{stream_end}}\n");
             return make_ready_future<>();
         }
     };
