@@ -209,7 +209,7 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const t
         if (_compacting_sstables.contains(sst)) {
             continue;
         }
-        if (!cs.can_compact_partial_runs() && partial_run_identifiers.contains(sst->run_identifier())) {
+        if (partial_run_identifiers.contains(sst->run_identifier())) {
             continue;
         }
         candidates.push_back(sst);

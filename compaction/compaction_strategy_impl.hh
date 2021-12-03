@@ -71,10 +71,6 @@ public:
         return _use_clustering_key_filter;
     }
 
-    virtual bool can_compact_partial_runs() const {
-        return false;
-    }
-
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
     bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before);
