@@ -278,6 +278,66 @@ if __name__ == "__main__":
                     disk_properties["read_bandwidth"] = 2527296683 * nr_disks
                     disk_properties["write_iops"] = 156326 * nr_disks
                     disk_properties["write_bandwidth"] = 1063657088 * nr_disks
+            elif idata.instance() == "im4gn.large":
+                disk_properties["read_iops"] = 33943
+                disk_properties["read_bandwidth"] = 288433525
+                disk_properties["write_iops"] = 27877
+                disk_properties["write_bandwidth"] = 126864680
+            elif idata.instance() == "im4gn.xlarge":
+                disk_properties["read_iops"] = 68122
+                disk_properties["read_bandwidth"] = 576603520
+                disk_properties["write_iops"] = 55246
+                disk_properties["write_bandwidth"] = 254534954
+            elif idata.instance() == "im4gn.2xlarge":
+                disk_properties["read_iops"] = 136422
+                disk_properties["read_bandwidth"] = 1152663765
+                disk_properties["write_iops"] = 92184
+                disk_properties["write_bandwidth"] = 508926453
+            elif idata.instance() == "im4gn.4xlarge":
+                disk_properties["read_iops"] = 273050
+                disk_properties["read_bandwidth"] = 1638427264
+                disk_properties["write_iops"] = 92173
+                disk_properties["write_bandwidth"] = 1027966826
+            elif idata.instance() == "im4gn.8xlarge":
+                disk_properties["read_iops"] = 250241 * nr_disks
+                disk_properties["read_bandwidth"] = 1163130709 * nr_disks
+                disk_properties["write_iops"] = 86374 * nr_disks
+                disk_properties["write_bandwidth"] = 977617664 * nr_disks
+            elif idata.instance() == "im4gn.16xlarge":
+                disk_properties["read_iops"] = 273030 * nr_disks
+                disk_properties["read_bandwidth"] = 1638211413 * nr_disks
+                disk_properties["write_iops"] = 92607 * nr_disks
+                disk_properties["write_bandwidth"] = 1028340266 * nr_disks
+            elif idata.instance() == "is4gen.medium":
+                disk_properties["read_iops"] = 33965
+                disk_properties["read_bandwidth"] = 288462506
+                disk_properties["write_iops"] = 27876
+                disk_properties["write_bandwidth"] = 126954200
+            elif idata.instance() == "is4gen.large":
+                disk_properties["read_iops"] = 68131
+                disk_properties["read_bandwidth"] = 576654869
+                disk_properties["write_iops"] = 55257
+                disk_properties["write_bandwidth"] = 254551002
+            elif idata.instance() == "is4gen.xlarge":
+                disk_properties["read_iops"] = 136413
+                disk_properties["read_bandwidth"] = 1152747904
+                disk_properties["write_iops"] = 92180
+                disk_properties["write_bandwidth"] = 508889546
+            elif idata.instance() == "is4gen.2xlarge":
+                disk_properties["read_iops"] = 273038
+                disk_properties["read_bandwidth"] = 1628982613
+                disk_properties["write_iops"] = 92182
+                disk_properties["write_bandwidth"] = 1027983530
+            elif idata.instance() == "is4gen.4xlarge":
+                disk_properties["read_iops"] = 260493 * nr_disks
+                disk_properties["read_bandwidth"] = 1217396928 * nr_disks
+                disk_properties["write_iops"] = 83169 * nr_disks
+                disk_properties["write_bandwidth"] = 1000390784 * nr_disks
+            elif idata.instance() == "is4gen.8xlarge":
+                disk_properties["read_iops"] = 273021 * nr_disks
+                disk_properties["read_bandwidth"] = 1656354602 * nr_disks
+                disk_properties["write_iops"] = 92233 * nr_disks
+                disk_properties["write_bandwidth"] = 1028010325 * nr_disks
             if "read_iops" in disk_properties:
                 properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
                 yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
