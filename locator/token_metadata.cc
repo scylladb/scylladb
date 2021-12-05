@@ -86,7 +86,6 @@ private:
     void sort_tokens();
 
 public:
-    token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
     token_metadata_impl() noexcept {};
     token_metadata_impl(const token_metadata_impl&) = default;
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
@@ -346,11 +345,6 @@ token_metadata_impl::ring_range(const token& start) const {
     auto begin = token_metadata::tokens_iterator(start, this);
     auto end = token_metadata::tokens_iterator();
     return boost::make_iterator_range(begin, end);
-}
-
-token_metadata_impl::token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
-    _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
-    sort_tokens();
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
@@ -981,10 +975,6 @@ std::multimap<inet_address, token> token_metadata_impl::get_endpoint_to_token_ma
 
 token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
     : _impl(std::move(impl)) {
-}
-
-token_metadata::token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology)
-        : _impl(std::make_unique<token_metadata_impl>(std::move(token_to_endpoint_map), std::move(endpoints_map), std::move(topology))) {
 }
 
 token_metadata::token_metadata()

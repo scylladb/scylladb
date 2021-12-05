@@ -168,7 +168,6 @@ private:
 
         friend class token_metadata_impl;
     };
-    token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
     token_metadata();
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
