@@ -21,3 +21,6 @@
 [submodule "scylla-python3"]
 	path = tools/python3
 	url = ../scylla-python3
+[submodule "tools/scylla-cli"]
+	path = tools/scylla-cli
+	url = git@github.com:scylladb/scylla-cli.git
