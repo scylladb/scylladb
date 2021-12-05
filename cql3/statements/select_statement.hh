@@ -84,6 +84,7 @@ protected:
     lw_shared_ptr<const parameters> _parameters;
     ::shared_ptr<selection::selection> _selection;
     ::shared_ptr<restrictions::statement_restrictions> _restrictions;
+    const bool _restrictions_need_filtering;
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
     std::optional<expr::expression> _limit;
