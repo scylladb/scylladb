@@ -206,6 +206,7 @@ class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     sharded<service::storage_service>& _ss;
+    sharded<service::storage_proxy>& _proxy;
     ::timeout_config _timeout_config;
     service::client_state _client_state;
     service::query_state _query_state;
@@ -223,10 +224,12 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
+            auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit)
         : _db(db)
         , _query_processor(qp)
         , _ss(ss)
+        , _proxy(proxy)
         , _timeout_config(timeout_config)
         , _client_state(service::client_state::external_tag{}, auth_service, nullptr, _timeout_config, socket_address(), true)
         // FIXME: Handlers are not created per query, but rather per connection, so it makes little sense to store
@@ -298,7 +301,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
@@ -328,7 +331,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
@@ -359,7 +362,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto&& prange = make_partition_range(*schema, range);
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             // KeyRange::count is the number of thrift rows to return, while
@@ -421,6 +424,7 @@ public:
     }
 
     static future<> do_get_paged_slice(
+            sharded<service::storage_proxy>& proxy,
             schema_ptr schema,
             uint32_t column_limit,
             dht::partition_range_vector range,
@@ -430,8 +434,7 @@ public:
             std::vector<KeySlice>& output,
             service::query_state& qs,
             service_permit permit) {
-        auto& proxy = service::get_local_storage_proxy();
-        auto cmd = make_paged_read_cmd(proxy, *schema, column_limit, start_column, range);
+        auto cmd = make_paged_read_cmd(proxy.local(), *schema, column_limit, start_column, range);
         std::optional<partition_key> start_key;
         auto end = range[0].end();
         if (start_column && !schema->thrift().is_dynamic()) {
@@ -442,12 +445,12 @@ public:
         }
         auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
         auto timeout = db::timeout_clock::now() + timeout_config.range_read_timeout;
-        return proxy.query(schema, cmd, std::move(range), consistency_level, {timeout, std::move(permit), qs.get_client_state()}).then(
+        return proxy.local().query(schema, cmd, std::move(range), consistency_level, {timeout, std::move(permit), qs.get_client_state()}).then(
                 [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
             return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {
                 return to_key_slices(*schema, cmd->slice, v, column_limit);
             });
-        }).then([schema, cmd, column_limit, range = std::move(range1), consistency_level, start_key = std::move(start_key), end = std::move(end), &timeout_config, &output, &qs, permit = std::move(permit)](auto&& slices) mutable {
+        }).then([&proxy, schema, cmd, column_limit, range = std::move(range1), consistency_level, start_key = std::move(start_key), end = std::move(end), &timeout_config, &output, &qs, permit = std::move(permit)](auto&& slices) mutable {
             auto columns = std::accumulate(slices.begin(), slices.end(), 0u, [](auto&& acc, auto&& ks) {
                 return acc + ks.columns.size();
             });
@@ -456,7 +459,7 @@ public:
                 if (!output.empty() || !start_key) {
                     if (range.size() > 1 && columns < column_limit) {
                         range.erase(range.begin());
-                        return do_get_paged_slice(std::move(schema), column_limit - columns, std::move(range), nullptr, consistency_level, timeout_config, output, qs, std::move(permit));
+                        return do_get_paged_slice(proxy, std::move(schema), column_limit - columns, std::move(range), nullptr, consistency_level, timeout_config, output, qs, std::move(permit));
                     }
                     return make_ready_future();
                 }
@@ -466,7 +469,7 @@ public:
             }
             auto start = dht::decorate_key(*schema, std::move(*start_key));
             range[0] = dht::partition_range(dht::partition_range::bound(std::move(start), false), std::move(end));
-            return do_get_paged_slice(schema, column_limit - columns, std::move(range), nullptr, consistency_level, timeout_config, output, qs, std::move(permit));
+            return do_get_paged_slice(proxy, schema, column_limit - columns, std::move(range), nullptr, consistency_level, timeout_config, output, qs, std::move(permit));
         });
     }
 
@@ -490,7 +493,7 @@ public:
                 }
                 auto f = _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::SELECT);
                 return f.then([this, schema, count = range.count, start_column, prange = std::move(prange), consistency_level, &output, permit = std::move(permit)] () mutable {
-                    return do_get_paged_slice(std::move(schema), count, std::move(prange), &start_column,
+                    return do_get_paged_slice(_proxy, std::move(schema), count, std::move(prange), &start_column,
                             cl_from_thrift(consistency_level), _timeout_config, output, _query_state, std::move(permit)).then([&output] {
                         return std::move(output);
                     });
@@ -522,7 +525,7 @@ public:
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -538,7 +541,7 @@ public:
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -575,7 +578,7 @@ public:
 
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -602,7 +605,7 @@ public:
             return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 // This mutation contains only counter tombstones so it can be applied like non-counter mutations.
                 auto timeout = db::timeout_clock::now() + _timeout_config.counter_write_timeout;
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -615,7 +618,7 @@ public:
                 return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -628,7 +631,7 @@ public:
                 return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
-                return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
+                return _proxy.local().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
             });
         });
     }
@@ -644,7 +647,7 @@ public:
                 if (_db.local().find_schema(current_keyspace(), cfname)->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot truncate Materialized Views");
                 }
-                return service::get_local_storage_proxy().truncate_blocking(current_keyspace(), cfname);
+                return _proxy.local().truncate_blocking(current_keyspace(), cfname);
             });
         });
     }
@@ -700,7 +703,7 @@ public:
                 }
             }
             auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts, nullptr);
-            auto& proxy = service::get_local_storage_proxy();
+            auto& proxy = _proxy.local();
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.get_max_result_size(slice),
                     query::row_limit(row_limit));
             auto f = _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::SELECT);
@@ -2023,6 +2026,7 @@ class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     sharded<service::storage_service>& _ss;
+    sharded<service::storage_proxy>& _proxy;
     auth::service& _auth_service;
     timeout_config _timeout_config;
     service_permit& _current_permit;
@@ -2030,13 +2034,14 @@ public:
     explicit handler_factory(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
                              sharded<service::storage_service>& ss,
+                             sharded<service::storage_proxy>& proxy,
                              auth::service& auth_service,
                              ::timeout_config timeout_config,
                              service_permit& current_permit)
-        : _db(db), _query_processor(qp), _ss(ss), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
+        : _db(db), _query_processor(qp), _ss(ss), _proxy(proxy), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db, _query_processor, _ss, _auth_service, _timeout_config, _current_permit);
+        return new thrift_handler(_db, _query_processor, _ss, _proxy, _auth_service, _timeout_config, _current_permit);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -2045,7 +2050,7 @@ public:
 
 std::unique_ptr<CassandraCobSvIfFactory>
 create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp,
-        sharded<service::storage_service>& ss, auth::service& auth_service,
-        ::timeout_config timeout_config, service_permit& current_permit) {
-    return std::make_unique<handler_factory>(db, qp, ss, auth_service, timeout_config, current_permit);
+        sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
+        auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit) {
+    return std::make_unique<handler_factory>(db, qp, ss, proxy, auth_service, timeout_config, current_permit);
 }

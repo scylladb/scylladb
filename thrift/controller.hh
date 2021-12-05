@@ -33,7 +33,10 @@ class thrift_server;
 class database;
 namespace auth { class service; }
 namespace cql3 { class query_processor; }
-namespace service { class storage_service; }
+namespace service {
+class storage_service;
+class storage_proxy;
+}
 
 class thrift_controller : public protocol_server {
     std::unique_ptr<distributed<thrift_server>> _server;
@@ -46,12 +49,13 @@ class thrift_controller : public protocol_server {
     sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _mem_limiter;
     sharded<service::storage_service>& _ss;
+    sharded<service::storage_proxy>& _proxy;
 
     future<> do_start_server();
     future<> do_stop_server();
 
 public:
-    thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss);
+    thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy);
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;
