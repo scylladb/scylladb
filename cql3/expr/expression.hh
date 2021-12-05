@@ -72,15 +72,15 @@ namespace expr {
 struct allow_local_index_tag {};
 using allow_local_index = bool_class<allow_local_index_tag>;
 
-class binary_operator;
-class conjunction;
+struct binary_operator;
+struct conjunction;
 struct column_value;
 struct token;
-class unresolved_identifier;
-class column_mutation_attribute;
-class function_call;
-class cast;
-class field_selection;
+struct unresolved_identifier;
+struct column_mutation_attribute;
+struct function_call;
+struct cast;
+struct field_selection;
 struct null;
 struct bind_variable;
 struct untyped_constant;
