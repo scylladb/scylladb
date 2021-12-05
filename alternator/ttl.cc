@@ -579,7 +579,8 @@ static future<bool> scan_table(
         // Note that because of issue #9167 we need to run a separate
         // query on each partition range, and can't pass several of
         // them into one partition_range_vector.
-        dht::partition_range_vector partition_ranges = {*range};
+        dht::partition_range_vector partition_ranges;
+        partition_ranges.push_back(std::move(*range));
         // FIXME: if scanning a single range fails, including network errors,
         // we fail the entire scan (and rescan from the beginning). Need to
         // reconsider this. Saving the scan position might be a good enough
