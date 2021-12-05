@@ -50,6 +50,10 @@ public:
         return false;
     }
 
+    virtual bool is_symmetric() const noexcept override {
+        return true;
+    }
+
     /**
      * We need to override this because the default implementation depends
      * on token calculations but LocalStrategy may be used before tokens are set up.

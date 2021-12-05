@@ -123,6 +123,10 @@ public:
     // returns the node itself as the natural_endpoints and the node will not
     // appear in the pending_endpoints.
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
+    virtual bool is_symmetric() const noexcept {
+        return false;
+    }
+
     replication_strategy_type get_type() const noexcept { return _my_type; }
     const replication_strategy_config_options get_config_options() const noexcept { return _config_options; }
 
