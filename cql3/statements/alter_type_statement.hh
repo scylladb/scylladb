@@ -85,7 +85,7 @@ private:
         virtual future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) = 0;
     };
 
-    future<> do_announce_migration(database& db, service::migration_manager& mm, base_visitor& visitor) const;
+    future<std::vector<mutation>> prepare_announcement_mutations(database& db, service::migration_manager& mm) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {

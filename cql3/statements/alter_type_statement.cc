@@ -82,8 +82,8 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<> alter_type_statement::do_announce_migration(database& db, service::migration_manager& mm, base_visitor& visitor) const
-{
+future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(database& db, service::migration_manager& mm) const {
+    std::vector<mutation> m;
     auto&& ks = db.find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
@@ -102,10 +102,10 @@ future<> alter_type_statement::do_announce_migration(database& db, service::migr
     }
 
     auto&& updated = make_updated_type(db, to_update->second);
-
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
-    co_await visitor(updated);
+    auto res = co_await mm.prepare_update_type_announcement(updated);
+    std::move(res.begin(), res.end(), std::back_inserter(m));
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
         auto cfm = schema_builder(schema);
@@ -120,36 +120,22 @@ future<> alter_type_statement::do_announce_migration(database& db, service::migr
         }
         if (modified) {
             if (schema->is_view()) {
-                co_await visitor(view_ptr(cfm.build()));
+                auto res = co_await mm.prepare_view_update_announcement(view_ptr(cfm.build()));
+                std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
-                co_await visitor(cfm.build(), false, {}, std::nullopt);
+                auto res = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, {}, std::nullopt);
+                std::move(res.begin(), res.end(), std::back_inserter(m));
             }
         }
     }
+
+    co_return m;
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
 alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
     try {
-        struct visitor : public base_visitor {
-            service::migration_manager& mm;
-            std::vector<mutation> mutations;
-            future<> operator()(view_ptr view) override {
-                auto m = co_await mm.prepare_view_update_announcement(std::move(view));
-                std::move(m.begin(), m.end(), std::back_inserter(mutations));
-            }
-            future<> operator()(user_type type) override {
-                auto m = co_await mm.prepare_update_type_announcement(std::move(type));
-                std::move(m.begin(), m.end(), std::back_inserter(mutations));
-            }
-            future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) override {
-                auto m = co_await mm.prepare_column_family_update_announcement(std::move(cfm), from_thrift, std::move(view_updates), ts_opt);
-                std::move(m.begin(), m.end(), std::back_inserter(mutations));
-            }
-            visitor(service::migration_manager& mm_) : mm(mm_) {}
-        } v(qp.get_migration_manager());
-
-        co_await do_announce_migration(qp.db(), qp.get_migration_manager(), v);
+        auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager());
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(
@@ -158,7 +144,7 @@ alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
                 keyspace(),
                 _name.get_string_type_name());
 
-        co_return std::make_pair(std::move(ret), std::move(v.mutations));
+        co_return std::make_pair(std::move(ret), std::move(m));
     } catch(no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
     }
