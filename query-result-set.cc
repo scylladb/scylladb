@@ -76,7 +76,7 @@ std::ostream& operator<<(std::ostream& out, const result_set& rs) {
     return out;
 }
 
-static logging::logger query_result_log("query result log");
+static logging::logger query_result_log("query_result_log");
 
 non_null_data_value::non_null_data_value(data_value&& v) : _v(std::move(v)) {
     if (_v.is_null()) {
