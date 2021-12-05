@@ -1,0 +1,63 @@
+#! /bin/bash -e
+
+function usage () {
+    echo "Usage $(basename $0) <path/to/scylla>" 1>&2
+    exit 1
+}
+
+scylla="$(realpath ${SCYLLA-$1})"
+[ -x "$scylla" ] || usage
+
+here=$(dirname $(readlink -e "$0"))
+src=$(realpath -e "$here"/../..)
+scylla_cli=$(realpath -e "$src"/tools/scylla-cli/scylla-cli.py)
+
+_WORKDIR="$(readlink -e ${TMPDIR-/tmp})"/scylla-cli-$$
+scylla_link="$_WORKDIR"/test-cli-scylla
+scylla_log="$_WORKDIR"/test-cli-scylla.log
+scylla_status_file="$_WORKDIR"/test-cli-scylla.status
+mkdir "$_WORKDIR"
+
+code=0
+scylla_code=0
+cleanup() {
+    pkill --parent $$ || echo "Could not pkill $scylla_link"
+    rm -rf --preserve-root "$_WORKDIR"
+    if [ $code != 0 ]; then
+        echo "test failed with code $code" 1>&2
+        exit $code
+    elif [ $scylla_code != 0 ]; then
+        echo "scylla exited with code $scylla_code" 1>&2
+        exit 1
+    fi
+    exit 0
+}
+trap 'cleanup' EXIT
+
+# for easier pkill
+ln -s "$scylla" "$scylla_link"
+
+# see explanation of SCYLLA_IP in ../alternator/run
+scylla_ip=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
+
+{ "$scylla_link" --developer-mode=true -W "$_WORKDIR" \
+    -c2 -m256M \
+    --api-address $scylla_ip \
+    --rpc-address $scylla_ip \
+    --listen-address $scylla_ip \
+    --prometheus-address $scylla_ip \
+    --seed-provider-parameters seeds=$scylla_ip \
+        >& "$scylla_log"; echo $? > "$scylla_status_file"; } &
+
+while ! grep -q "Scylla API server listening" "$scylla_log" && ! test -f "$scylla_status_file"; do
+    sleep 1;
+done
+
+if [ -f "$scylla_status_file"  ]; then
+    scylla_code=$(cat "$scylla_status_file")
+else
+    uptime=$("$scylla_cli" -a $scylla_ip system uptime_ms)
+    code=$?
+    echo "scylla uptime is $uptime ms"
+    echo "exit code=$code"
+fi
