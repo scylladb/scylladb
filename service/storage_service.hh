@@ -642,6 +642,8 @@ private:
      * @param keyspaceName the keyspace ranges belong to
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
+     *
+     * Must run inside seastar::async context
      */
     std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges) const;
 public:

@@ -134,8 +134,45 @@ public:
     // Note: must be called with initialized, non-empty token_metadata.
     future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;
 
+    class range_addresses {
+        std::unordered_map<dht::token_range, inet_address_vector_replica_set> _range_addresses;
+        bool _is_symmetric = false;
+
+    public:
+        explicit range_addresses(bool is_symmetric) : _is_symmetric(is_symmetric) {}
+
+        future<> clear_gently() noexcept;
+
+        auto cbegin() const {
+            return _range_addresses.cbegin();
+        }
+
+        auto begin() const {
+            return cbegin();
+        }
+
+        auto cend() const {
+            return _range_addresses.cend();
+        }
+
+        auto end() const {
+            return cend();
+        }
+
+        auto size() const noexcept {
+            return _range_addresses.size();
+        }
+
+        bool is_symmetric() const noexcept {
+            return _is_symmetric;
+        }
+
+        void insert(dht::token_range range, inet_address_vector_replica_set endpoints);
+        std::optional<inet_address_vector_replica_set> find(const dht::token_range& range);
+    };
+
     // Caller must ensure that token_metadata will not change throughout the call.
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
+    future<range_addresses> get_range_addresses(const token_metadata& tm) const;
 
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address) const;
 
@@ -241,7 +278,7 @@ public:
     // Note: must be called after token_metadata has been initialized.
     dht::token_range_vector get_primary_ranges_within_dc(inet_address ep) const;
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set>
+    future<abstract_replication_strategy::range_addresses>
     get_range_addresses() const;
 
     // returns empty vector if token not found.

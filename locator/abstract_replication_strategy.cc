@@ -253,28 +253,74 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
     co_return ret;
 }
 
-std::unordered_map<dht::token_range, inet_address_vector_replica_set>
-effective_replication_map::get_range_addresses() const {
-    const token_metadata& tm = *_tmptr;
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (auto& t : tm.sorted_tokens()) {
-        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = get_natural_endpoints(t);
-        for (auto& r : ranges) {
-            ret.emplace(r, eps);
-        }
-    }
-    return ret;
+future<> abstract_replication_strategy::range_addresses::clear_gently() noexcept {
+    return utils::clear_gently(_range_addresses);
 }
 
-future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+void abstract_replication_strategy::range_addresses::insert(dht::token_range range, inet_address_vector_replica_set endpoints) {
+    if (is_symmetric() && !_range_addresses.empty()) {
+        auto it = _range_addresses.begin();
+        auto msg = fmt::format("Inserting range={} endpoints={} into symmetric range_addresses already containing range={} endpoints={}",
+                range, endpoints, it->first, it->second);
+        on_internal_error(rslogger, msg);
+    }
+    _range_addresses[range] = std::move(endpoints);
+}
+
+std::optional<inet_address_vector_replica_set> abstract_replication_strategy::range_addresses::find(const dht::token_range& range) {
+    if (_range_addresses.empty()) {
+        return std::nullopt;
+    }
+    if (_is_symmetric) {
+        return std::make_optional<inet_address_vector_replica_set>(_range_addresses.begin()->second);
+    }
+    auto it = _range_addresses.find(range);
+    if (it != _range_addresses.end()) {
+        return std::make_optional<inet_address_vector_replica_set>(it->second);
+    }
+    return std::nullopt;
+}
+
+future<abstract_replication_strategy::range_addresses>
+effective_replication_map::get_range_addresses() const {
+    const token_metadata& tm = *_tmptr;
+    auto is_symmetric = _rs->is_symmetric();
+    auto ret = abstract_replication_strategy::range_addresses(is_symmetric);
+    if (is_symmetric) {
+        // get te endpoints for an arbitrary token
+        // since all are symmetric
+        auto t = dht::token(dht::token_kind::key, 0);
+        auto eps = get_natural_endpoints(t);
+        ret.insert(dht::token_range(), std::move(eps));
+    } else {
+        for (auto& t : tm.sorted_tokens()) {
+            dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
+            auto eps = get_natural_endpoints(t);
+            for (auto& r : ranges) {
+                ret.insert(r, eps);
+                co_await coroutine::maybe_yield();
+            }
+        }
+    }
+    co_return ret;
+}
+
+future<abstract_replication_strategy::range_addresses>
 abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (auto& t : tm.sorted_tokens()) {
-        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
+    auto ret = range_addresses(is_symmetric());
+    if (is_symmetric()) {
+        // get te endpoints for an arbitrary token
+        // since all are symmetric
+        auto t = dht::token(dht::token_kind::key, 0);
         auto eps = co_await calculate_natural_endpoints(t, tm);
-        for (auto& r : ranges) {
-            ret.emplace(r, eps);
+        ret.insert(dht::token_range(), std::move(eps));
+    } else {
+        for (auto& t : tm.sorted_tokens()) {
+            dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
+            auto eps = co_await calculate_natural_endpoints(t, tm);
+            for (auto& r : ranges) {
+                ret.insert(r, eps);
+            }
         }
     }
     co_return ret;

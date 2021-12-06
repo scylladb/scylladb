@@ -3034,20 +3034,21 @@ future<> storage_service::shutdown_protocol_servers() {
     }
 }
 
+// Runs inside seastar::async context
 std::unordered_multimap<inet_address, dht::token_range>
 storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) const {
     auto my_address = get_broadcast_address();
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto erm = ks.get_effective_replication_map();
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = erm->get_range_addresses();
+    auto range_addresses = erm->get_range_addresses().get0();
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
     for (auto r : ranges) {
         inet_address_vector_replica_set possible_nodes;
-        auto it = range_addresses.find(r);
-        if (it != range_addresses.end()) {
-            possible_nodes = it->second;
+        auto opt_replica_set = range_addresses.find(r);
+        if (opt_replica_set) {
+            possible_nodes = *opt_replica_set;
         }
 
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();

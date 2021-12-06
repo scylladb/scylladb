@@ -1342,12 +1342,12 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                     seastar::thread::maybe_yield();
                     if (src_range.contains(desired_range, dht::tri_compare)) {
                         std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
-                        auto it = pending_range_addresses.find(desired_range);
-                        if (it == pending_range_addresses.end()) {
+                        auto opt_replica_set = pending_range_addresses.find(desired_range);
+                        if (!opt_replica_set) {
                             throw std::runtime_error(format("Can not find desired_range = {} in pending_range_addresses", desired_range));
                         }
 
-                        std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
+                        std::unordered_set<inet_address> new_endpoints(opt_replica_set->begin(), opt_replica_set->end());
                         rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, old_endpoints={}, new_endpoints={}",
                                 keyspace_name, desired_range, old_endpoints, new_endpoints);
                         // Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.

@@ -117,7 +117,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto erm = ks.get_effective_replication_map();
 
-    auto range_addresses = erm->get_range_addresses();
+    auto range_addresses = co_await erm->get_range_addresses();
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
@@ -129,7 +129,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
             co_await coroutine::maybe_yield();
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
-                inet_address_vector_replica_set& addresses = x.second;
+                const auto& addresses = x.second;
                 auto preferred = snitch->get_sorted_list_by_proximity(_address, addresses);
                 for (inet_address& p : preferred) {
                     range_sources[desired_range].push_back(p);
@@ -175,12 +175,12 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
                 std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
-                auto it = pending_range_addresses.find(desired_range);
-                if (it == pending_range_addresses.end()) {
+                auto eps_opt = pending_range_addresses.find(desired_range);
+                if (!eps_opt) {
                     throw std::runtime_error(format("Can not find desired_range = {} in pending_range_addresses", desired_range));
                 }
 
-                std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
+                std::unordered_set<inet_address> new_endpoints(eps_opt->begin(), eps_opt->end());
                 //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                 //So we need to be careful to only be strict when endpoints == RF
                 if (old_endpoints.size() == erm->get_replication_factor()) {
