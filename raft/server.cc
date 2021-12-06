@@ -95,6 +95,7 @@ public:
     future<> stepdown(logical_clock::duration timeout) override;
     future<> modify_config(std::vector<server_address> add, std::vector<server_id> del) override;
     future<entry_id> add_entry_on_leader(command command);
+    void register_metrics() override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -228,7 +229,6 @@ private:
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
 
-    void register_metrics();
     seastar::metrics::metric_groups _metrics;
 
     // Server address set to be used by RPC module to maintain its address
@@ -323,8 +323,6 @@ future<> server_impl::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
-    // Metrics access _fsm, so create them only after the pointer is populated
-    register_metrics();
     co_return;
 }
 
@@ -1082,7 +1080,7 @@ void server_impl::abort_snapshot_transfers() {
 }
 
 future<> server_impl::abort() {
-    logger.trace("abort() called");
+    logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
 

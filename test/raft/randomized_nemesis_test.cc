@@ -210,7 +210,7 @@ raft::command make_command(const cmd_id_t& cmd_id, const Input& input) {
 
 // TODO: handle other errors?
 template <PureStateMachine M>
-using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown>;
+using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::stopped_error>;
 
 // Sends a given `input` as a command to `server`, waits until the command gets replicated
 // and applied on that server and returns the produced output.
@@ -256,6 +256,8 @@ future<call_result_t<M>> call(
             return make_ready_future<call_result_t<M>>(e);
         } catch (raft::commit_status_unknown e) {
             return make_ready_future<call_result_t<M>>(e);
+        } catch (raft::stopped_error e) {
+            return make_ready_future<call_result_t<M>>(e);
         } catch (logical_timer::timed_out<typename M::output_t> e) {
             (void)e.get_future().discard_result()
                 .handle_exception([] (std::exception_ptr eptr) {
@@ -267,11 +269,16 @@ future<call_result_t<M>> call(
                     } catch (const raft::not_a_leader&) {
                     } catch (const raft::stopped_error&) {
                     } catch (const timed_out_error&) {
+                    } catch (const broken_promise&) {
+                        // FIXME: workaround for #9688
                     }
                 });
             return make_ready_future<call_result_t<M>>(timed_out_error{});
         } catch (seastar::timed_out_error& e) {
             return make_ready_future<call_result_t<M>>(e);
+        } catch (broken_promise&) {
+            // FIXME: workaround for #9688
+            return make_ready_future<call_result_t<M>>(raft::stopped_error{});
         }
     });
 }
@@ -696,9 +703,7 @@ public:
 };
 
 template <typename State>
-class persistence : public raft::persistence {
-    snapshots_t<State>& _snapshots;
-
+class persistence {
     std::pair<raft::snapshot_descriptor, State> _stored_snapshot;
     std::pair<raft::term_t, raft::server_id> _stored_term_and_vote;
 
@@ -726,9 +731,8 @@ public:
     // containing opnly this server's ID which must be also provided here as `init_config_id`.
     // Otherwise it must be initialized with an empty configuration (it will be added to the cluster
     // through a configuration change) and `init_config_id` must be `nullopt`.
-    persistence(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id, State init_state)
-        : _snapshots(snaps)
-        , _stored_snapshot(
+    persistence(std::optional<raft::server_id> init_config_id, State init_state)
+        : _stored_snapshot(
                 raft::snapshot_descriptor{
                     .config = init_config_id ? raft::configuration{*init_config_id} : raft::configuration{}
                 },
@@ -736,45 +740,38 @@ public:
         , _stored_term_and_vote(raft::term_t{1}, raft::server_id{})
     {}
 
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override {
+    void store_term_and_vote(raft::term_t term, raft::server_id vote) {
         _stored_term_and_vote = std::pair{term, vote};
-        co_return;
     }
 
-    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
-        co_return _stored_term_and_vote;
+    std::pair<raft::term_t, raft::server_id> load_term_and_vote() {
+        return _stored_term_and_vote;
     }
 
-    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
+    void store_snapshot(const raft::snapshot_descriptor& snap, State snap_data, size_t preserve_log_entries) {
         // The snapshot's index cannot be smaller than the index of the first stored entry minus one;
         // that would create a ``gap'' in the log.
         assert(_stored_entries.empty() || snap.idx + 1 >= _stored_entries.front()->idx);
 
-        auto it = _snapshots.find(snap.id);
-        assert(it != _snapshots.end());
-        _stored_snapshot = {snap, it->second};
+        _stored_snapshot = {snap, std::move(snap_data)};
 
         if (!_stored_entries.empty() && snap.idx > _stored_entries.back()->idx) {
             // Clear the log in order to not create a gap.
             _stored_entries.clear();
-            co_return;
+            return;
         }
 
         auto first_to_remain = snap.idx + 1 >= preserve_log_entries ? raft::index_t{snap.idx + 1 - preserve_log_entries} : raft::index_t{0};
         _stored_entries.erase(_stored_entries.begin(), find(first_to_remain));
-
-        co_return;
     }
 
-    virtual future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
-        auto [snap, state] = _stored_snapshot;
-        _snapshots.insert_or_assign(snap.id, std::move(state));
-        co_return snap;
+    std::pair<raft::snapshot_descriptor, State> load_snapshot() {
+        return _stored_snapshot;
     }
 
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override {
+    void store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
         if (entries.empty()) {
-            co_return;
+            return;
         }
 
         // The raft server is supposed to provide entries in strictly increasing order,
@@ -790,16 +787,64 @@ public:
             assert(entries[i]->idx == entries[i-1]->idx + 1);
             _stored_entries.push_back(entries[i]);
         }
+    }
 
+    raft::log_entries load_log() {
+        return _stored_entries;
+    }
+
+    void truncate_log(raft::index_t idx) {
+        _stored_entries.erase(find(idx), _stored_entries.end());
+    }
+};
+
+template <typename State>
+class persistence_proxy : public raft::persistence {
+    snapshots_t<State>& _snapshots;
+    lw_shared_ptr<::persistence<State>> _persistence;
+
+public:
+    persistence_proxy(snapshots_t<State>& snaps, lw_shared_ptr<::persistence<State>> persistence)
+        : _snapshots(snaps)
+        , _persistence(std::move(persistence))
+    {}
+
+    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override {
+        _persistence->store_term_and_vote(term, vote);
+        co_return;
+    }
+
+    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
+        co_return _persistence->load_term_and_vote();
+    }
+
+    // Stores not only the snapshot descriptor but also the corresponding snapshot.
+    virtual future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
+        auto it = _snapshots.find(snap.id);
+        assert(it != _snapshots.end());
+
+        _persistence->store_snapshot(snap, it->second, preserve_log_entries);
+        co_return;
+    }
+
+    // Loads not only the snapshot descriptor but also the corresponding snapshot.
+    virtual future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
+        auto [snap, state] = _persistence->load_snapshot();
+        _snapshots.insert_or_assign(snap.id, std::move(state));
+        co_return snap;
+    }
+
+    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override {
+        _persistence->store_log_entries(entries);
         co_return;
     }
 
     virtual future<raft::log_entries> load_log() override {
-        co_return _stored_entries;
+        co_return _persistence->load_log();
     }
 
     virtual future<> truncate_log(raft::index_t idx) override {
-        _stored_entries.erase(find(idx), _stored_entries.end());
+        _persistence->truncate_log(idx);
         co_return;
     }
 
@@ -979,7 +1024,7 @@ private:
 };
 
 using reconfigure_result_t = std::variant<std::monostate,
-    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress>;
+    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error>;
 
 future<reconfigure_result_t> reconfigure(
         const std::vector<raft::server_id>& ids,
@@ -1004,6 +1049,11 @@ future<reconfigure_result_t> reconfigure(
         co_return e;
     } catch (raft::conf_change_in_progress e) {
         co_return e;
+    } catch (broken_promise&) {
+        // FIXME: workaround for #9688
+        co_return raft::stopped_error{};
+    } catch (raft::stopped_error e) {
+        co_return e;
     } catch (logical_timer::timed_out<void> e) {
         (void)e.get_future().discard_result()
             .handle_exception([] (std::exception_ptr eptr) {
@@ -1013,6 +1063,8 @@ future<reconfigure_result_t> reconfigure(
                 } catch (const raft::commit_status_unknown&) {
                 } catch (const raft::not_a_leader&) {
                 } catch (const raft::stopped_error&) {
+                } catch (const broken_promise&) {
+                    // FIXME: workaround for #9688
                 }
             });
         co_return timed_out_error{};
@@ -1044,24 +1096,25 @@ public:
     // by the server (the state machine, RPC instance and so on). The server will use
     // `send_rpc` to send RPC messages to other servers and `fd` for failure detection.
     //
-    // If this is the first server in the cluster, pass `first_server = true`; this will
-    // cause the server to be created with a non-empty singleton configuration containing itself.
-    // Otherwise, pass `first_server = false`; that server, in order to function, must be then added
-    // by the existing cluster through a configuration change.
+    // The server is started with `persistence` as its underlying persistent storage.
+    // This can be used to simulate a server that is restarting by giving it a `persistence`
+    // that was previously used by a different instance of `raft_server<M>` (but make sure
+    // they had the same `id` and that the previous instance is no longer using this
+    // `persistence`).
     //
     // The created server is not started yet; use `start` for that.
     static std::unique_ptr<raft_server> create(
             raft::server_id id,
+            lw_shared_ptr<persistence<typename M::state_t>> persistence,
             shared_ptr<failure_detector> fd,
             raft::server::configuration cfg,
-            bool first_server,
             typename rpc<typename M::state_t>::send_message_t send_rpc) {
         using state_t = typename M::state_t;
 
         auto snapshots = std::make_unique<snapshots_t<state_t>>();
         auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
         auto rpc_ = std::make_unique<rpc<state_t>>(id, *snapshots, std::move(send_rpc));
-        auto persistence_ = std::make_unique<persistence<state_t>>(*snapshots, first_server ? std::optional{id} : std::nullopt, M::init);
+        auto persistence_ = std::make_unique<persistence_proxy<state_t>>(*snapshots, std::move(persistence));
 
         auto& sm_ref = *sm;
         auto& rpc_ref = *rpc_;
@@ -1087,8 +1140,6 @@ public:
     raft_server(raft_server&&) = delete;
 
     // Start the server. Can be called at most once.
-    //
-    // TODO: implement server ``crashes'' and ``restarts''.
     future<> start() {
         assert(!_started);
         _started = true;
@@ -1120,9 +1171,13 @@ public:
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         assert(_started);
-        return with_gate(_gate, [this, input = std::move(input), timeout, &timer] {
-            return ::call(std::move(input), timeout, timer, *_server, _sm);
-        });
+        try {
+            co_return co_await with_gate(_gate, [this, input = std::move(input), timeout, &timer] {
+                return ::call(std::move(input), timeout, timer, *_server, _sm);
+            });
+        } catch (const gate_closed_exception&) {
+            co_return raft::stopped_error{};
+        }
     }
 
     future<reconfigure_result_t> reconfigure(
@@ -1130,9 +1185,13 @@ public:
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         assert(_started);
-        return with_gate(_gate, [this, &ids, timeout, &timer] {
-            return ::reconfigure(ids, timeout, timer, *_server);
-        });
+        try {
+            co_return co_await with_gate(_gate, [this, &ids, timeout, &timer] {
+                return ::reconfigure(ids, timeout, timer, *_server);
+            });
+        } catch (const gate_closed_exception&) {
+            co_return raft::stopped_error{};
+        }
     }
 
     bool is_leader() const {
@@ -1202,7 +1261,11 @@ class environment : public seastar::weakly_referencable<environment<M>> {
     using state_t = typename M::state_t;
     using output_t = typename M::output_t;
 
+    // Invariant: if `_server` is engaged then it uses `_persistence` and `_fd`
+    // underneath and is initialized using `_cfg`.
     struct route {
+        raft::server::configuration _cfg;
+        lw_shared_ptr<persistence<state_t>> _persistence;
         std::unique_ptr<raft_server<M>> _server;
         shared_ptr<failure_detector> _fd;
     };
@@ -1228,14 +1291,35 @@ class environment : public seastar::weakly_referencable<environment<M>> {
     // no more in-progress methods running on this object.
     seastar::gate _gate;
 
+    // Used to implement `crash`.
+    //
+    // We cannot destroy a server immediately in order to simulate a crash:
+    // there may be fibers running that use the server's internals.
+    // We move these 'crashed' servers into continuations attached to this fiber
+    // and abort them there before destruction.
+    future<> _crash_fiber = make_ready_future<>();
+
+    // Servers that are aborting in the background (in `_crash_fiber`).
+    // We need these pointers so we keep ticking the servers
+    // (in general, `abort()` requires the server to be ticked in order to finish).
+    // One downside of this is that ticks may cause the servers to output traces.
+    // Hopefully these crashing servers abort quickly so they don't stay too long
+    // and make the logs unreadable...
+    std::unordered_set<raft_server<M>*> _crashing_servers;
+
 public:
     environment(environment_config cfg)
             : _fd_convict_threshold(cfg.fd_convict_threshold), _network(cfg.network_delay,
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
-            auto& [s, fd] = _routes.at(dst);
-            fd->receive_heartbeat(src);
-            if (m) {
-                s->deliver(src, *m);
+            auto& n = _routes.at(dst);
+            assert(n._persistence);
+            assert(n._fd);
+
+            if (n._server) {
+                n._fd->receive_heartbeat(src);
+                if (m) {
+                    n._server->deliver(src, *m);
+                }
             }
         }) {
     }
@@ -1254,57 +1338,213 @@ public:
     // TODO: adjustable/randomizable ticking ratios
     void tick_servers() {
         for (auto& [_, r] : _routes) {
-            r._server->tick();
+            if (r._server) {
+                r._server->tick();
+            }
+
+            assert(r._fd);
             r._fd->tick();
+        }
+
+        for (auto& srv: _crashing_servers) {
+            srv->tick();
         }
     }
 
-    // Creates and starts a server with a local (uniquely owned) failure detector,
-    // connects it to the network and returns its ID.
+    // A 'node' is a container for a Raft server, its storage ('persistence') and failure detector.
+    // At a given point in time at most one Raft server instance can be running on a node.
+    // Different instances may be running at different points in time, but they will all have
+    // the same ID (returned by `new_node`) and will reuse the same storage and failure detector
+    // (this can be used to simulate a server that is restarting).
     //
-    // If `first == true` the server is created with a singleton configuration containing itself.
+    // The storage is initialized when the node is created and will be used by the first started server.
+    // If `first == true` the storage is created with a singleton server configuration containing only
+    // the ID returned from the function. Otherwise it is created with an empty configuration
+    // (a server started on this node will have to be joined to an existing cluster in this case).
+    raft::server_id new_node(bool first, raft::server::configuration cfg) {
+        _gate.check();
+
+        auto id = to_raft_id(_next_id++);
+        auto [it, inserted] = _routes.emplace(id, route{
+            ._cfg = std::move(cfg),
+            ._persistence = make_lw_shared<persistence<state_t>>(first ? std::optional{id} : std::nullopt, M::init),
+            ._server = nullptr,
+            ._fd = nullptr,
+        });
+        assert(inserted);
+        auto& n = it->second;
+
+        n._fd = seastar::make_shared<failure_detector>(_fd_convict_threshold,
+                [id, &n, this] (raft::server_id dst) {
+            // Ping others only if a server is running.
+            if (n._server) {
+                _network.send(id, dst, std::nullopt);
+            }
+        });
+
+        // Add us to other servers' failure detectors.
+        for (auto& [_, r] : _routes) {
+            r._fd->add_server(id);
+        }
+
+        // Add other servers to our failure detector.
+        for (auto& [id, _] : _routes) {
+            n._fd->add_server(id);
+        }
+
+        return id;
+    }
+
+    // Starts a server on node `id`.
+    // Assumes node with `id` exists (i.e. an earlier `new_node` call returned `id`) and that no server is running on node `id`.
+    future<> start_server(raft::server_id id) {
+        return with_gate(_gate, [this, id] () -> future<> {
+            auto& n = _routes.at(id);
+            assert(n._persistence);
+            assert(n._fd);
+            assert(!n._server);
+
+            lw_shared_ptr<raft_server<M>*> this_srv_addr = make_lw_shared<raft_server<M>*>(nullptr);
+            auto srv = raft_server<M>::create(id, n._persistence, n._fd, n._cfg,
+                    [id, this_srv_addr, &n, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
+                // Allow the message out only if we are still the currently running server on this node.
+                if (*this_srv_addr == n._server.get()) {
+                    _network.send(id, dst, {std::move(m)});
+                }
+            });
+            *this_srv_addr = srv.get();
+
+            co_await srv->start();
+            n._server = std::move(srv);
+        });
+    }
+
+    // Creates a new node, connects it to the network, starts a server on it and returns its ID.
+    //
+    // If `first == true` the node is created with a singleton configuration containing only its ID.
     // Otherwise it is created with an empty configuration. The user must explicitly ask for a configuration change
     // if they want to make a cluster (group) out of this server and other existing servers.
     // The user should be able to create multiple clusters by calling `new_server` multiple times with `first = true`.
     // (`first` means ``first in group'').
     future<raft::server_id> new_server(bool first, raft::server::configuration cfg = {}) {
-        return with_gate(_gate, [this, first, cfg = std::move(cfg)] () -> future<raft::server_id> {
-            auto id = to_raft_id(_next_id++);
+        auto id = new_node(first, std::move(cfg));
+        // not using co_await here due to miscompile
+        return start_server(id).then([id] () { return id; });
+    }
 
-            // TODO: in the future we want to simulate multiple raft servers running on a single ``node'',
-            // sharing a single failure detector. We will then likely split `new_server` into two steps: `new_node` and `new_server`,
-            // the first creating the failure detector for a node and wiring it up, the second creating a server on a given node.
-            // We will also possibly need to introduce some kind of ``node IDs'' which `failure_detector` (and `network`)
-            // will operate on (currently they operate on `raft::server_id`s, assuming a 1-1 mapping of server-to-node).
-            auto fd = seastar::make_shared<failure_detector>(_fd_convict_threshold, [id, this] (raft::server_id dst) {
-                _network.send(id, dst, std::nullopt);
-            });
+    // Gracefully stop a running server.
+    // Assumes a server is currently running on the node `id`.
+    // When the future resolves, a new server may be started on this node. It will reuse the storage
+    // of the previously running server (so the Raft log etc. will be preserved).
+    future<> stop(raft::server_id id) {
+        return with_gate(_gate, [this, id] () -> future<> {
+            auto& n = _routes.at(id);
+            assert(n._persistence);
+            assert(n._server);
+            assert(n._fd);
 
-            auto srv = raft_server<M>::create(id, fd, std::move(cfg), first,
-                    [id, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
-                _network.send(id, dst, {std::move(m)});
-            });
-
-            co_await srv->start();
-
-            // Add us to other servers' failure detectors.
-            for (auto& [_, r] : _routes) {
-                r._fd->add_server(id);
-            }
-
-            // Add other servers to our failure detector.
-            for (auto& [id, _] : _routes) {
-                fd->add_server(id);
-            }
-
-            _routes.emplace(id, route{std::move(srv), std::move(fd)});
-
-            co_return id;
+            co_await n._server->abort();
+            n._server = nullptr;
         });
     }
 
-    raft_server<M>& get_server(raft::server_id id) {
-        return *_routes.at(id)._server;
+    // Immediately stop a running server.
+    // Assumes a server is currently running on the node `id`.
+    // A new server may be started on this node when the function returns. It will reuse the storage
+    // of the previously running server (so the Raft log etc. will be preserved).
+    void crash(raft::server_id id) {
+        _gate.check();
+
+        auto& n = _routes.at(id);
+        assert(n._persistence);
+        assert(n._server);
+        assert(n._fd);
+
+        // Let the 'crashed' server continue working on its copy of persistence;
+        // none of that work will be seen by later servers restarted on this node
+        // since they'll use a separate copy.
+        n._persistence = make_lw_shared<persistence<state_t>>(*n._persistence);
+        // Setting `n._server` to nullptr cuts out the network access both for the server and failure detector.
+        // Even though the server will continue running for some time (in order to be gracefully aborted),
+        // none of that work will be seen by the rest of the environment. From others' point of view
+        // the server is immediately gone.
+        auto srv = std::exchange(n._server, nullptr);
+        _crashing_servers.insert(srv.get());
+
+        _crash_fiber = _crash_fiber.then([this, srv_ = std::move(srv)] () mutable -> future<> {
+            auto srv = std::move(srv_);
+            tlogger.trace("crash fiber: aborting {}", srv->id());
+            co_await srv->abort();
+            tlogger.trace("crash fiber: finished aborting {}", srv->id());
+            _crashing_servers.erase(srv.get());
+            // abort() ensures there are no in-progress calls on the server, so we can destroy it.
+        });
+    }
+
+    bool is_leader(raft::server_id id) {
+        auto& n = _routes.at(id);
+        if (!n._server) {
+            return false;
+        }
+        return n._server->is_leader();
+    }
+
+    future<call_result_t<M>> call(
+            raft::server_id id,
+            typename M::input_t input,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        auto& n = _routes.at(id);
+        if (!n._server) {
+            // A 'remote' caller doesn't know in general if the server is down or just slow to respond.
+            // Simulate this by timing out the call.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+
+        auto srv = n._server.get();
+        auto res = co_await srv->call(std::move(input), timeout, timer);
+
+        if (srv != n._server.get()) {
+            // The server stopped while the call was happening.
+            // As above, we simulate a 'remote' call by timing it out in this case.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+        co_return res;
+    }
+
+    future<reconfigure_result_t> reconfigure(
+            raft::server_id id,
+            const std::vector<raft::server_id>& ids,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        auto& n = _routes.at(id);
+        if (!n._server) {
+            // A 'remote' caller doesn't know in general if the server is down or just slow to respond.
+            // Simulate this by timing out the call.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+
+        auto srv = n._server.get();
+        auto res = co_await srv->reconfigure(ids, timeout, timer);
+
+        if (srv != n._server.get()) {
+            // The server stopped while the call was happening.
+            // As above, we simulate a 'remote' call by timing it out in this case.
+            co_await timer.sleep_until(timeout);
+            co_return timed_out_error{};
+        }
+        co_return res;
+    }
+
+    std::optional<raft::configuration> get_configuration(raft::server_id id) {
+        auto& n = _routes.at(id);
+        if (!n._server) {
+            return std::nullopt;
+        }
+        return n._server->get_configuration();
     }
 
     network<message_t>& get_network() {
@@ -1316,8 +1556,12 @@ public:
         // Close the gate before iterating over _routes to prevent concurrent modification by other methods.
         co_await _gate.close();
         for (auto& [_, r] : _routes) {
-            co_await r._server->abort();
+            if (r._server) {
+                co_await r._server->abort();
+                r._server = nullptr;
+            }
         }
+        co_await std::move(_crash_fiber);
         _stopped = true;
     }
 };
@@ -1433,7 +1677,7 @@ struct wait_for_leader {
                     co_return raft::server_id{};
                 }
 
-                auto it = std::find_if(nodes.begin(), nodes.end(), [&env] (raft::server_id id) { return env->get_server(id).is_leader(); });
+                auto it = std::find_if(nodes.begin(), nodes.end(), [&env] (raft::server_id id) { return env->is_leader(id); });
                 if (it != nodes.end()) {
                     co_return *it;
                 }
@@ -1476,7 +1720,7 @@ SEASTAR_TEST_CASE(basic_test) {
         assert(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
 
         auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
-            return env.get_server(leader_id).call(std::move(input),  timer.now() + timeout, timer);
+            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
         };
 
         auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
@@ -1495,7 +1739,7 @@ SEASTAR_TEST_CASE(basic_test) {
         tlogger.debug("Started 2 more servers, changing configuration");
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(leader_id).reconfigure({leader_id, id2, id3}, timer.now() + 100_t, timer)));
+            co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
 
         tlogger.debug("Configuration changed");
 
@@ -1555,22 +1799,22 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
                 });
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(id1).reconfigure({id1, id2}, timer.now() + 100_t, timer)));
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
 
         // Append a bunch of entries
         for (int i = 1; i <= 10; ++i) {
             assert(std::holds_alternative<typename ExReg::ret>(
-                co_await env.get_server(id1).call(ExReg::exchange{0}, timer.now() + 100_t, timer)));
+                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
         }
 
-        assert(env.get_server(id1).is_leader());
+        assert(env.is_leader(id1));
 
         // Force a term increase by partitioning the network and waiting for the leader to step down
         tlogger.trace("add grudge");
         env.get_network().add_grudge(id2, id1);
         env.get_network().add_grudge(id1, id2);
 
-        while (env.get_server(id1).is_leader()) {
+        while (env.is_leader(id1)) {
             co_await seastar::later();
         }
 
@@ -1599,7 +1843,7 @@ SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
                     .snapshot_trailing = 2,
                 });
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(l).reconfigure({l, id3}, timer.now() + 1000_t, timer)));
+            co_await env.reconfigure(l, {l, id3}, timer.now() + 1000_t, timer)));
     });
 }
 
@@ -1637,22 +1881,22 @@ SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
                 });
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(id1).reconfigure({id1, id2}, timer.now() + 100_t, timer)));
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
 
         // Append a bunch of entries
         for (int i = 1; i <= 10; ++i) {
             assert(std::holds_alternative<typename ExReg::ret>(
-                co_await env.get_server(id1).call(ExReg::exchange{0}, timer.now() + 100_t, timer)));
+                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
         }
 
-        assert(env.get_server(id1).is_leader());
+        assert(env.is_leader(id1));
 
         // Partition the network, forcing the leader to step down.
         tlogger.trace("add grudge");
         env.get_network().add_grudge(id2, id1);
         env.get_network().add_grudge(id1, id2);
 
-        while (env.get_server(id1).is_leader()) {
+        while (env.is_leader(id1)) {
             co_await seastar::later();
         }
 
@@ -1767,7 +2011,7 @@ struct raft_call {
         tlogger.debug("db call start inp {} tid {} start time {} current time {} contact {}", input, ctx.thread, ctx.start, s.timer.now(), contact);
 
         auto [res, last] = co_await bouncing{[input = input, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
-            return env.get_server(id).call(input, timeout, timer);
+            return env.call(id, input, timeout, timer);
         }}(s.timer, s.known, contact, 6, 10_t, 10_t);
         tlogger.debug("db call end inp {} tid {} start time {} current time {} last contact {}", input, ctx.thread, ctx.start, s.timer.now(), last);
 
@@ -1808,7 +2052,7 @@ public:
         auto mid = nodes.begin() + (nodes.size() / 2);
         if (nodes.size() % 2) {
             // Odd number of nodes, let's ensure that the leader (if there is one) is in the minority
-            auto it = std::find_if(mid, nodes.end(), [&env = s.env] (raft::server_id id) { return env.get_server(id).is_leader(); });
+            auto it = std::find_if(mid, nodes.end(), [&env = s.env] (raft::server_id id) { return env.is_leader(id); });
             if (it != nodes.end()) {
                 std::swap(*nodes.begin(), *it);
             }
@@ -1876,7 +2120,7 @@ struct reconfiguration {
 
         assert(s.known.size() > 0);
         auto [res, last] = co_await bouncing{[&nodes, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
-            return env.get_server(id).reconfigure(nodes, timeout, timer);
+            return env.reconfigure(id, nodes, timeout, timer);
         }}(s.timer, s.known, *s.known.begin(), 10, 10_t, 10_t);
 
         std::visit(make_visitor(
@@ -1900,6 +2144,50 @@ struct reconfiguration {
 
     friend std::ostream& operator<<(std::ostream& os, const reconfiguration& r) {
         return os << format("reconfiguration{{timeout:{}}}", r.timeout);
+    }
+};
+
+template <PureStateMachine M>
+struct stop_crash {
+    raft::logical_clock::duration restart_delay;
+
+    struct state_type {
+        environment<M>& env;
+        std::unordered_set<raft::server_id>& known;
+        logical_timer& timer;
+        std::mt19937 rnd;
+    };
+
+    struct result_type {};
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        assert(s.known.size() > 0);
+        auto it = s.known.begin();
+        std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(s.rnd));
+        auto srv = *it;
+
+        static std::bernoulli_distribution bdist{0.5};
+        if (bdist(s.rnd)) {
+            tlogger.debug("Crashing server {}", srv);
+            s.env.crash(srv);
+        } else {
+            tlogger.debug("Stopping server {}...", srv);
+            co_await s.env.stop(srv);
+            tlogger.debug("Server {} stopped", srv);
+        }
+        co_await s.timer.sleep(restart_delay);
+        tlogger.debug("Restarting server {}", srv);
+        co_await s.env.start_server(srv);
+
+        co_return result_type{};
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const stop_crash& c) {
+        return os << format("stop_crash{{delay:{}}}", c.restart_delay);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const result_type&) {
+        return os << "";
     }
 };
 
@@ -2138,7 +2426,8 @@ SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             network_majority_grudge<AppendReg>,
-            reconfiguration<AppendReg>
+            reconfiguration<AppendReg>,
+            stop_crash<AppendReg>
         >>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
 
@@ -2203,16 +2492,11 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         }
 
         assert(std::holds_alternative<std::monostate>(
-            co_await env.get_server(leader_id).reconfigure(
+            co_await env.reconfigure(leader_id,
                 std::vector<raft::server_id>{known_config.begin(), known_config.end()}, timer.now() + 100_t, timer)));
 
-        auto threads = operation::make_thread_set(all_servers.size() + 2);
-        auto nemesis_thread = some(threads);
-
-        auto threads_without_nemesis = threads;
-        threads_without_nemesis.erase(nemesis_thread);
-
-        auto reconfig_thread = some(threads_without_nemesis);
+        auto threads = operation::make_thread_set(all_servers.size() + 3);
+        auto [partition_thread, reconfig_thread, crash_thread] = take<3>(threads);
 
 
         raft_call<AppendReg>::state_type db_call_state {
@@ -2236,10 +2520,18 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             .rnd = std::mt19937{seed}
         };
 
+        stop_crash<AppendReg>::state_type crash_state {
+            .env = env,
+            .known = known_config,
+            .timer = timer,
+            .rnd = std::mt19937{seed}
+        };
+
         auto init_state = op_type::state_type{
             std::move(db_call_state),
             std::move(network_majority_grudge_state),
-            std::move(reconfiguration_state)
+            std::move(reconfiguration_state),
+            std::move(crash_state)
         };
 
         using namespace generator;
@@ -2256,7 +2548,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
 
         auto gen = op_limit(500,
-            pin(nemesis_thread,
+            pin(partition_thread,
                 stagger(seed, timer.now() + 200_t, 1200_t, 1200_t,
                     random(seed, [] (std::mt19937& engine) {
                         static std::uniform_int_distribution<raft::logical_clock::rep> dist{400, 800};
@@ -2267,11 +2559,19 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                     stagger(seed, timer.now() + 1000_t, 500_t, 500_t,
                         constant([] () { return op_type{reconfiguration<AppendReg>{500_t}}; })
                     ),
-                    stagger(seed, timer.now(), 0_t, 50_t,
-                        sequence(1, [] (int32_t i) {
-                            assert(i > 0);
-                            return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                        })
+                    pin(crash_thread,
+                        stagger(seed, timer.now() + 200_t, 100_t, 200_t,
+                            random(seed, [] (std::mt19937& engine) {
+                                static std::uniform_int_distribution<raft::logical_clock::rep> dist{0, 100};
+                                return op_type{stop_crash<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
+                            })
+                        ),
+                        stagger(seed, timer.now(), 0_t, 50_t,
+                            sequence(1, [] (int32_t i) {
+                                assert(i > 0);
+                                return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                            })
+                        )
                     )
                 )
             )
@@ -2348,28 +2648,29 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 assert(false);
             });
 
-            if (env.get_server(leader).is_leader()) {
+            if (env.is_leader(leader)) {
                 tlogger.debug("Leader {} found after {} ticks", leader, timer.now() - now);
             } else {
                 tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
                 continue;
             }
 
-            auto config = env.get_server(leader).get_configuration();
-            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config.current, config.previous);
+            auto config = env.get_configuration(leader);
+            assert(config);
+            tlogger.debug("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
 
             for (auto& s: all_servers) {
-                auto& srv = env.get_server(s);
-                if (srv.is_leader() && s != leader) {
-                    auto conf = srv.get_configuration();
-                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf.current, conf.previous);
+                if (env.is_leader(s) && s != leader) {
+                    auto conf = env.get_configuration(s);
+                    assert(conf);
+                    tlogger.debug("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
                 }
             }
 
             tlogger.debug("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
-                return env.get_server(id).call(AppendReg::append{-1}, timer.now() + 200_t, timer);
+                return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
