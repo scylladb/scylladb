@@ -102,7 +102,7 @@
                "parameters":[
                   {
                      "name":"type",
-                     "description":"the type of compaction to stop. Can be one of: - COMPACTION - VALIDATION - CLEANUP - SCRUB - INDEX_BUILD",
+                     "description":"The type of compaction to stop. Can be one of: COMPACTION | CLEANUP | SCRUB | UPGRADE | RESHAPE",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
