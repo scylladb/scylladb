@@ -356,13 +356,7 @@ inet_address_vector_topology_change effective_replication_map::pending_endpoints
 }
 
 bool effective_replication_map::has_pending_ranges(inet_address endpoint) const noexcept {
-    for (const auto& item : _pending_ranges_interval_map) {
-        const auto& nodes = item.second;
-        if (nodes.contains(endpoint)) {
-            return true;
-        }
-    }
-    return false;
+    return _pending_nodes.contains(endpoint);
 }
 
 future<effective_replication_map::address_ranges>
@@ -474,6 +468,7 @@ future<> effective_replication_map::calculate_pending_ranges_for_bootstrap(
 
 future<> effective_replication_map::set_pending_ranges(pending_ranges map) {
     co_await clear_pending_ranges_gently();
+    _pending_nodes = {};
 
     if (map.empty()) {
         co_return;
@@ -481,12 +476,15 @@ future<> effective_replication_map::set_pending_ranges(pending_ranges map) {
 
     // construct a interval map to speed up the search
     pending_ranges_interval_map interval_map;
+    std::unordered_set<inet_address> pending_nodes;
     for (auto& m : map) {
+        pending_nodes.insert(m.second.begin(), m.second.end());
         interval_map +=
                 std::make_pair(token_metadata::range_to_interval(m.first), std::move(m.second));
         co_await coroutine::maybe_yield();
     }
     _pending_ranges_interval_map = std::move(interval_map);
+    _pending_nodes = std::move(pending_nodes);
 }
 
 future<> effective_replication_map::update_pending_ranges() {

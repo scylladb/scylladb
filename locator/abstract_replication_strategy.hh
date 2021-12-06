@@ -176,6 +176,7 @@ private:
     replication_map _replication_map;
     size_t _replication_factor;
     pending_ranges_interval_map _pending_ranges_interval_map;
+    std::unordered_set<inet_address> _pending_nodes;
     std::optional<factory_key> _factory_key = std::nullopt;
     effective_replication_map_factory* _factory = nullptr;
 
