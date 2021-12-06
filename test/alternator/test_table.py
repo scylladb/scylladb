@@ -16,6 +16,9 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 # Tests for basic table operations: CreateTable, DeleteTable, ListTables.
+# Also some basic tests for UpdateTable - although UpdateTable usually
+# enables more elaborate features (such as GSI or Streams) and those are
+# tested elsewhere.
 
 import pytest
 from botocore.exceptions import ClientError
@@ -311,3 +314,17 @@ def test_table_sse_off(dynamodb):
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]);
     table.delete();
+
+# Test that trying to delete a table that doesn't exist fails in the
+# appropriate way (ResourceNotFoundException)
+def test_delete_table_non_existent(dynamodb, test_table):
+    client = dynamodb.meta.client
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        client.delete_table(TableName=random_string(20))
+
+# Test that trying to update a table that doesn't exist fails in the
+# appropriate way (ResourceNotFoundException)
+def test_update_table_non_existent(dynamodb, test_table):
+    client = dynamodb.meta.client
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        client.update_table(TableName=random_string(20), BillingMode='PAY_PER_REQUEST')
