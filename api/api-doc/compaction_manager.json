@@ -113,6 +113,46 @@
          ]
       },
       {
+         "path":"/compaction_manager/stop_keyspace_compaction/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Stop all running compaction-like tasks in the given keyspace and tables having the provided type.",
+               "type":"void",
+               "nickname":"stop_keyspace_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to stop compaction in",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"tables",
+                     "description":"Comma-seperated tables to stop compaction in",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type",
+                     "description":"The type of compaction to stop. Can be one of: COMPACTION | CLEANUP | SCRUB | UPGRADE | RESHAPE",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
       "path": "/compaction_manager/metrics/pending_tasks",
       "operations": [
         {
