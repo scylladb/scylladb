@@ -808,6 +808,19 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"quarantine_mode",
+                     "description":"Controls whether to scrub quarantined sstables (default INCLUDE)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum":[
+                        "INCLUDE",
+                        "EXCLUDE",
+                        "ONLY"
+                     ],
+                     "paramType":"query"
+                  },
+                  {
                      "name":"keyspace",
                      "description":"The keyspace to query about",
                      "required":true,

@@ -1854,7 +1854,11 @@ std::vector<sstring> sstable::component_filenames() const {
 }
 
 bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_dir, "staging");
+    return boost::algorithm::ends_with(_dir, staging_dir);
+}
+
+bool sstable::is_quarantined() const noexcept {
+    return boost::algorithm::ends_with(_dir, quarantine_dir);
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, int64_t generation,
@@ -2096,6 +2100,22 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
     });
 }
 
+future<> sstable::move_to_quarantine(bool do_sync_dirs) {
+    auto path = fs::path(_dir);
+    sstring basename = path.filename().native();
+    if (basename == quarantine_dir) {
+        co_return;
+    } else if (basename == staging_dir) {
+        path = path.parent_path();
+    }
+    // Note: moving a sstable in a snapshot or in the uploads dir to quarantine
+    // will move it into a "quarantine" subdirectory of its current directory.
+    auto new_dir = (path / sstables::quarantine_dir).native();
+    sstlog.info("Moving SSTable {} to quarantine in {}", get_filename(), new_dir);
+    co_await touch_directory(new_dir);
+    co_await move_to_new_dir(std::move(new_dir), generation(), do_sync_dirs);
+}
+
 flat_mutation_reader_v2
 sstable::make_reader(
         schema_ptr schema,
@@ -2195,7 +2215,8 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
+    static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
+            sstables::staging_dir, sstables::quarantine_dir, sstables::upload_dir, sstables::snapshots_dir).c_str());
 
     std::smatch match;
 

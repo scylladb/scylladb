@@ -220,6 +220,10 @@ sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<s
     return newtab;
 }
 
+sstables::shared_sstable table::make_streaming_staging_sstable() {
+    return make_streaming_sstable_for_write(sstables::staging_dir);
+}
+
 flat_mutation_reader
 table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            const dht::partition_range_vector& ranges) const {
@@ -1155,7 +1159,7 @@ std::vector<sstables::shared_sstable> table::in_strategy_sstables() const {
     auto sstables = _main_sstables->all();
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables
             | boost::adaptors::filtered([this] (auto& sst) {
-        return !_sstables_staging.contains(sst->generation());
+        return sstables::is_eligible_for_compaction(sst);
     }));
 }
 
@@ -1453,7 +1457,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
     return seastar::async([this] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
         for (auto& datadir : _config.all_datadirs) {
-            fs::path snapshots_dir = fs::path(datadir) / "snapshots";
+            fs::path snapshots_dir = fs::path(datadir) / sstables::snapshots_dir;
             auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get0();
             if (!file_exists) {
                 continue;

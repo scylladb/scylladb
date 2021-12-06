@@ -328,7 +328,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, distributed<db
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
-        auto upload = fs::path(global_table->dir()) / "upload";
+        auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
         directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
@@ -376,7 +376,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, distributed<db
         auto datadir = upload.parent_path();
         if (use_view_update_path) {
             // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-           datadir /= "staging";
+           datadir /= sstables::staging_dir;
         }
 
         size_t loaded = directory.map_reduce0([&db, ks, cf, datadir, &view_update_generator] (sstables::sstable_directory& dir) {
@@ -393,7 +393,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<database>& db, sstr
         global_column_family_ptr global_table(db, ks, cf);
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
-        auto upload = fs::path(global_table->dir()) / "upload";
+        auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
 
         directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
@@ -464,9 +464,17 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
     });
 }
 
-future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
-    return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf)] {
+future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf, bool must_exist) {
+    return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), must_exist] {
         assert(this_shard_id() == 0);
+
+        if (!file_exists(sstdir).get0()) {
+            if (must_exist) {
+                throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", ks, cf, sstdir));
+            }
+            return;
+        }
+
         // First pass, cleanup temporary sstable directories and sstables pending delete.
         cleanup_column_family_temp_sst_dirs(sstdir).get();
         auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
@@ -549,7 +557,9 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
                 auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
                 return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
-                    return distributed_loader::populate_column_family(db, sstdir + "/staging", ks_name, cfname);
+                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::staging_dir, ks_name, cfname);
+                }).then([&db, sstdir, ks_name, cfname] {
+                    return distributed_loader::populate_column_family(db, sstdir + "/" + sstables::quarantine_dir, ks_name, cfname, false /* must_exist */);
                 }).then([&db, sstdir, uuid, ks_name, cfname] {
                     return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
                 }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {

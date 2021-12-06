@@ -79,6 +79,10 @@
 
 namespace sstables {
 
+bool is_eligible_for_compaction(const shared_sstable& sst) noexcept {
+    return !sst->requires_view_building() && !sst->is_quarantined();
+}
+
 logging::logger clogger("compaction");
 
 static const std::unordered_map<compaction_type, sstring> compaction_types = {
@@ -146,6 +150,23 @@ std::string_view to_string(compaction_type_options::scrub::mode scrub_mode) {
 
 std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::mode scrub_mode) {
     return os << to_string(scrub_mode);
+}
+
+std::string_view to_string(compaction_type_options::scrub::quarantine_mode quarantine_mode) {
+    switch (quarantine_mode) {
+        case compaction_type_options::scrub::quarantine_mode::include:
+            return "include";
+        case compaction_type_options::scrub::quarantine_mode::exclude:
+            return "exclude";
+        case compaction_type_options::scrub::quarantine_mode::only:
+            return "only";
+    }
+    on_internal_error_noexcept(clogger, format("Invalid scrub quarantine mode {}", int(quarantine_mode)));
+    return "(invalid)";
+}
+
+std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quarantine_mode quarantine_mode) {
+    return os << to_string(quarantine_mode);
 }
 
 std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
@@ -1675,6 +1696,12 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     const auto valid = co_await scrub_validate_mode_validate_reader(std::move(reader), cdata);
 
     clogger.info("Finished scrubbing in validate mode {} - sstable(s) are {}", sstables_list_msg, valid ? "valid" : "invalid");
+
+    if (!valid) {
+        for (auto& sst : *sstables->all()) {
+            co_await sst->move_to_quarantine();
+        }
+    }
 
     co_return compaction_result {
         .new_sstables = {},

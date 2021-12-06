@@ -2277,7 +2277,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                             return lister::rmdir(std::move(snapshot_dir));
                         }, [tag_ptr] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == *tag_ptr; });
                     }
-                 }, [] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == "snapshots"; });
+                 }, [] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == sstables::snapshots_dir; });
             }, table_filter);
         }, *filter);
     });

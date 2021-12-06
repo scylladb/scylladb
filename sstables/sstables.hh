@@ -127,6 +127,11 @@ private:
     friend class sstables_manager;
 };
 
+constexpr const char* staging_dir = "staging";
+constexpr const char* upload_dir = "upload";
+constexpr const char* snapshots_dir = "snapshots";
+constexpr const char* quarantine_dir = "quarantine";
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:
@@ -197,6 +202,16 @@ public:
 
     future<> set_generation(int64_t generation);
     future<> move_to_new_dir(sstring new_dir, int64_t generation, bool do_sync_dirs = true);
+
+    // Move the sstable to the quarantine_dir
+    //
+    // If the sstable is alredy quarantined, this is a noop.
+    // If the sstable is in the base directory or in the staging_dir,
+    // it is moved into the quarantine_dir subdirectory of the base directory.
+    //
+    // Note: moving a sstable in any other dir to quarantine
+    // will move it into a quarantine_dir subdirectory of its current directory.
+    future<> move_to_quarantine(bool do_sync_dirs = true);
 
     int64_t generation() const {
         return _generation;
@@ -409,6 +424,8 @@ public:
     }
 
     bool requires_view_building() const;
+
+    bool is_quarantined() const noexcept;
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 

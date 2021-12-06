@@ -706,9 +706,7 @@ public:
             lw_shared_ptr<sstables::sstable_set> sstables) const;
 
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
-    sstables::shared_sstable make_streaming_staging_sstable() {
-        return make_streaming_sstable_for_write("staging");
-    }
+    sstables::shared_sstable make_streaming_staging_sstable();
 
     mutation_source as_mutation_source() const;
     mutation_source as_mutation_source_excluding(std::vector<sstables::shared_sstable>& sst) const;
