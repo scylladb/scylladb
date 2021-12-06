@@ -397,7 +397,7 @@ future<> effective_replication_map::calculate_pending_ranges_for_replacing(
         if (it != address_ranges.end()) {
             for (auto& rng : it->second) {
                 rslogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, rng);
-                new_pending_ranges.emplace(rng, replacing_node);
+                new_pending_ranges[rng].emplace(replacing_node);
                 co_await coroutine::maybe_yield();
             }
         }
@@ -436,7 +436,7 @@ future<> effective_replication_map::calculate_pending_ranges_for_leaving(
         std::set_difference(new_endpoints.begin(), new_endpoints.end(),
             current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
         for (auto& ep : diff) {
-            new_pending_ranges.emplace(r, ep);
+            new_pending_ranges[r].emplace(ep);
         }
     }
     co_await metadata.clear_gently();
@@ -466,23 +466,17 @@ future<> effective_replication_map::calculate_pending_ranges_for_bootstrap(
         co_await all_left_metadata.update_normal_tokens(tokens, endpoint);
         auto all_left_address_ranges = co_await _rs->get_address_ranges(all_left_metadata, endpoint);
         for (auto& x : all_left_address_ranges) {
-            new_pending_ranges.emplace(x, endpoint);
+            new_pending_ranges[x].emplace(endpoint);
         }
         all_left_metadata.remove_endpoint(endpoint);
     }
 }
 
-future<> effective_replication_map::set_pending_ranges(pending_ranges new_pending_ranges) {
+future<> effective_replication_map::set_pending_ranges(pending_ranges map) {
     co_await clear_pending_ranges_gently();
 
-    if (new_pending_ranges.empty()) {
+    if (map.empty()) {
         co_return;
-    }
-
-    std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
-    for (const auto& x : new_pending_ranges) {
-        map[x.first].emplace(x.second);
-        co_await coroutine::maybe_yield();
     }
 
     // construct a interval map to speed up the search
