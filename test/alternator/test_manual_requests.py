@@ -208,3 +208,10 @@ def test_content_type(dynamodb, test_table):
     req = get_signed_request(dynamodb, 'PutItem', payload)
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     assert response.headers['Content-Type'] == 'application/x-amz-json-1.0'
+
+# An unknown operation should result with an UnknownOperationException:
+def test_unknown_operation(dynamodb):
+    req = get_signed_request(dynamodb, 'BoguousOperationName', '{}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 400
+    assert 'UnknownOperationException' in response.text
