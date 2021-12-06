@@ -349,8 +349,7 @@ inet_address_vector_topology_change effective_replication_map::pending_endpoints
     auto interval = token_metadata::range_to_interval(range<dht::token>(token));
     const auto it = ks_map.find(interval);
     if (it != ks_map.end()) {
-        // interval_map does not work with std::vector, convert to std::vector of ips
-        return inet_address_vector_topology_change(it->second.begin(), it->second.end());
+        return it->second;
     }
     return inet_address_vector_topology_change{};
 }
@@ -479,12 +478,13 @@ future<> effective_replication_map::set_pending_ranges(pending_ranges map) {
     std::unordered_set<inet_address> pending_nodes;
     for (auto& m : map) {
         pending_nodes.insert(m.second.begin(), m.second.end());
-        interval_map +=
-                std::make_pair(token_metadata::range_to_interval(m.first), std::move(m.second));
+        auto endpoints = inet_address_vector_topology_change(m.second.begin(), m.second.end());
+        interval_map.insert(std::make_pair(token_metadata::range_to_interval(m.first), std::move(endpoints)));
         co_await coroutine::maybe_yield();
     }
     _pending_ranges_interval_map = std::move(interval_map);
     _pending_nodes = std::move(pending_nodes);
+    co_await utils::clear_gently(map);
 }
 
 future<> effective_replication_map::update_pending_ranges() {

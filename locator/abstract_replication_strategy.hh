@@ -169,7 +169,7 @@ public:
 private:
     using address_ranges = std::unordered_map<inet_address, dht::token_range_vector>;
     using pending_ranges = std::unordered_map<range<token>, std::unordered_set<inet_address>>;
-    using pending_ranges_interval_map = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
+    using pending_ranges_interval_map = boost::icl::interval_map<token, inet_address_vector_topology_change>;
 
     abstract_replication_strategy::ptr_type _rs;
     token_metadata_ptr _tmptr;
