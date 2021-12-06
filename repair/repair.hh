@@ -444,6 +444,8 @@ enum class node_ops_cmd : uint32_t {
      repair_updater,
 };
 
+std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd);
+
 // The cmd and ops_uuid are mandatory for each request.
 // The ignore_nodes and leaving_node are optional.
 struct node_ops_cmd_request {
