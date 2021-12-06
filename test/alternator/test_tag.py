@@ -237,3 +237,10 @@ def test_tag_resource_unicode(test_table):
     got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)
     assert 'Tags' in got
     assert multiset(got['Tags']) == multiset(tags)
+
+# Test that the Tags option of TagResource is required
+def test_tag_resource_missing_tags(test_table):
+    client = test_table.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn)
