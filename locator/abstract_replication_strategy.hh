@@ -265,6 +265,8 @@ private:
 
     future<> set_pending_ranges(pending_ranges new_pending_ranges);
 
+    future<> clear_pending_ranges_gently() noexcept;
+
      /**
       * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
       *

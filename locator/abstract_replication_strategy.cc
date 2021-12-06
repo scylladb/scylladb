@@ -323,11 +323,17 @@ inet_address_vector_replica_set effective_replication_map::get_natural_endpoints
     return _rs->get_natural_endpoints(search_token, *this);
 }
 
-future<> effective_replication_map::clear_gently() noexcept {
-    for (auto& [range, eps] : _pending_ranges_interval_map) {
-        eps.clear();
+future<> effective_replication_map::clear_pending_ranges_gently() noexcept {
+    while (!_pending_ranges_interval_map.empty()) {
+        auto it = _pending_ranges_interval_map.begin();
+        it->second.clear();
+        _pending_ranges_interval_map.erase(it);
         co_await coroutine::maybe_yield();
     }
+}
+
+future<> effective_replication_map::clear_gently() noexcept {
+    co_await clear_pending_ranges_gently();
     co_await utils::clear_gently(_replication_map);
     co_await utils::clear_gently(_tmptr);
 }
@@ -467,7 +473,7 @@ future<> effective_replication_map::calculate_pending_ranges_for_bootstrap(
 }
 
 future<> effective_replication_map::set_pending_ranges(pending_ranges new_pending_ranges) {
-    _pending_ranges_interval_map = {};
+    co_await clear_pending_ranges_gently();
 
     if (new_pending_ranges.empty()) {
         co_return;
