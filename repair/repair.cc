@@ -1799,3 +1799,52 @@ future<> repair_service::init_metrics() {
     _node_ops_metrics.init();
     return make_ready_future<>();
 }
+
+std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
+    switch (cmd) {
+        case node_ops_cmd::removenode_prepare:
+            return out << "removenode_prepare";
+        case node_ops_cmd::removenode_heartbeat:
+            return out << "removenode_heartbeat";
+        case node_ops_cmd::removenode_sync_data:
+            return out << "removenode_sync_data";
+        case node_ops_cmd::removenode_abort:
+            return out << "removenode_abort";
+        case node_ops_cmd::removenode_done:
+            return out << "removenode_done";
+        case node_ops_cmd::replace_prepare:
+            return out << "replace_prepare";
+        case node_ops_cmd::replace_prepare_mark_alive:
+            return out << "replace_prepare_mark_alive";
+        case node_ops_cmd::replace_prepare_pending_ranges:
+            return out << "replace_prepare_pending_ranges";
+        case node_ops_cmd::replace_heartbeat:
+            return out << "replace_heartbeat";
+        case node_ops_cmd::replace_abort:
+            return out << "replace_abort";
+        case node_ops_cmd::replace_done:
+            return out << "replace_done";
+        case node_ops_cmd::decommission_prepare:
+            return out << "decommission_prepare";
+        case node_ops_cmd::decommission_heartbeat:
+            return out << "decommission_heartbeat";
+        case node_ops_cmd::decommission_abort:
+            return out << "decommission_abort";
+        case node_ops_cmd::decommission_done:
+            return out << "decommission_done";
+        case node_ops_cmd::bootstrap_prepare:
+            return out << "bootstrap_prepare";
+        case node_ops_cmd::bootstrap_heartbeat:
+            return out << "bootstrap_heartbeat";
+        case node_ops_cmd::bootstrap_abort:
+            return out << "bootstrap_abort";
+        case node_ops_cmd::bootstrap_done:
+            return out << "bootstrap_done";
+        case node_ops_cmd::query_pending_ops:
+            return out << "query_pending_ops";
+        case node_ops_cmd::repair_updater:
+            return out << "repair_updater";
+        default:
+            return out << "unknown cmd (" << cmd << ")";
+    }
+}

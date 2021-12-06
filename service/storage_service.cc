@@ -2344,7 +2344,7 @@ void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const no
         // Peer node wants to start a new node operation. Make sure no pending node operation is in progress.
         if (!_node_ops.empty()) {
             msg = format("node_ops_cmd_check: Node {} rejected node_ops_cmd={} from node={} with ops_uuid={}, pending_node_ops={}, pending node ops is in progress",
-                    get_broadcast_address(), uint32_t(req.cmd), coordinator, req.ops_uuid, ops_uuids);
+                    get_broadcast_address(), req.cmd, coordinator, req.ops_uuid, ops_uuids);
         }
     } else {
         if (ops_uuids.size() == 1 && ops_uuids.front() == req.ops_uuid) {
@@ -2352,11 +2352,11 @@ void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const no
         } else if (ops_uuids.size() == 0) {
             // The ops_uuid received is unknown. Fail the request.
             msg = format("node_ops_cmd_check: Node {} rejected node_ops_cmd={} from node={} with ops_uuid={}, pending_node_ops={}, the node ops is unknown",
-                    get_broadcast_address(), uint32_t(req.cmd), coordinator, req.ops_uuid, ops_uuids);
+                    get_broadcast_address(), req.cmd, coordinator, req.ops_uuid, ops_uuids);
         } else {
             // Other node ops is in progress. Fail the request.
             msg = format("node_ops_cmd_check: Node {} rejected node_ops_cmd={} from node={} with ops_uuid={}, pending_node_ops={}, pending node ops is in progress",
-                    get_broadcast_address(), uint32_t(req.cmd), coordinator, req.ops_uuid, ops_uuids);
+                    get_broadcast_address(), req.cmd, coordinator, req.ops_uuid, ops_uuids);
         }
     }
     if (!msg.empty()) {
@@ -2368,7 +2368,7 @@ void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const no
 future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
     return seastar::async([this, coordinator, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
-        slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", uint32_t(req.cmd), ops_uuid);
+        slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", req.cmd, ops_uuid);
 
         if (req.cmd == node_ops_cmd::query_pending_ops) {
             bool ok = true;
@@ -2573,7 +2573,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::bootstrap_abort) {
             node_ops_abort(ops_uuid);
         } else {
-            auto msg = format("node_ops_cmd_handler: ops_uuid={}, unknown cmd={}", req.ops_uuid, uint32_t(req.cmd));
+            auto msg = format("node_ops_cmd_handler: ops_uuid={}, unknown cmd={}", req.ops_uuid, req.cmd);
             slogger.warn("{}", msg);
             throw std::runtime_error(msg);
         }
