@@ -167,7 +167,7 @@ public:
     };
 
 private:
-    using address_ranges = std::unordered_multimap<inet_address, dht::token_range>;
+    using address_ranges = std::unordered_map<inet_address, dht::token_range_vector>;
     using pending_ranges = std::unordered_multimap<range<token>, inet_address>;
     using pending_ranges_interval_map = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
 

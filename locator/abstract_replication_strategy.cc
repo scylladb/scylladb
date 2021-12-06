@@ -369,7 +369,7 @@ effective_replication_map::calculate_address_ranges() const {
         rslogger.debug("effective_replication_map: calculate_address_ranges: token={} primary_range={} endpoints={}", t, r, eps);
         for (auto ep : eps) {
             for (auto&& rng : r) {
-                ret.emplace(ep, rng);
+                ret[ep].push_back(rng);
             }
         }
         co_await coroutine::maybe_yield();
@@ -387,12 +387,13 @@ future<> effective_replication_map::calculate_pending_ranges_for_replacing(
     for (const auto& node : replacing_endpoints) {
         auto existing_node = node.first;
         auto replacing_node = node.second;
-        for (const auto& x : address_ranges) {
-            if (x.first == existing_node) {
-                rslogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x.second);
-                new_pending_ranges.emplace(x.second, replacing_node);
+        auto it = address_ranges.find(existing_node);
+        if (it != address_ranges.end()) {
+            for (auto& rng : it->second) {
+                rslogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, rng);
+                new_pending_ranges.emplace(rng, replacing_node);
+                co_await coroutine::maybe_yield();
             }
-            co_await coroutine::maybe_yield();
         }
     }
 }
@@ -405,11 +406,14 @@ future<> effective_replication_map::calculate_pending_ranges_for_leaving(
     // get all ranges that will be affected by leaving nodes
     std::unordered_set<range<token>> affected_ranges;
     for (auto endpoint : leaving_endpoints) {
-        auto r = address_ranges.equal_range(endpoint);
-        for (auto x = r.first; x != r.second; x++) {
-            affected_ranges.emplace(x->second);
+        auto it = address_ranges.find(endpoint);
+        if (it != address_ranges.end()) {
+            auto& r = it->second;
+            for (auto x = r.begin(); x != r.end(); x++) {
+                affected_ranges.emplace(*x);
+                co_await coroutine::maybe_yield();
+            }
         }
-        co_await coroutine::maybe_yield();
     }
     // for each of those ranges, find what new nodes will be responsible for the range when
     // all leaving nodes are gone.
