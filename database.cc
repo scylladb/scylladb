@@ -983,16 +983,16 @@ const utils::UUID& database::find_uuid(const schema_ptr& schema) const {
 keyspace& database::find_keyspace(std::string_view name) {
     try {
         return _keyspaces.at(name);
-    } catch (...) {
-        std::throw_with_nested(no_such_keyspace(name));
+    } catch (std::out_of_range&) {
+        throw no_such_keyspace(name);
     }
 }
 
 const keyspace& database::find_keyspace(std::string_view name) const {
     try {
         return _keyspaces.at(name);
-    } catch (...) {
-        std::throw_with_nested(no_such_keyspace(name));
+    } catch (std::out_of_range&) {
+        throw no_such_keyspace(name);
     }
 }
 
@@ -1032,7 +1032,7 @@ column_family& database::find_column_family(std::string_view ks_name, std::strin
     auto uuid = find_uuid(ks_name, cf_name);
     try {
         return find_column_family(uuid);
-    } catch (...) { // FIXME: no_such_column_family&
+    } catch (no_such_column_family&) {
         on_internal_error(dblog, fmt::format("find_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
 }
@@ -1041,7 +1041,7 @@ const column_family& database::find_column_family(std::string_view ks_name, std:
     auto uuid = find_uuid(ks_name, cf_name);
     try {
         return find_column_family(uuid);
-    } catch (...) { // FIXME: no_such_column_family&
+    } catch (no_such_column_family&) {
         on_internal_error(dblog, fmt::format("find_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
 }
@@ -1050,7 +1050,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
-        std::throw_with_nested(no_such_column_family(uuid));
+        throw no_such_column_family(uuid);
     }
 }
 
@@ -1058,7 +1058,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     try {
         return *_column_families.at(uuid);
     } catch (...) {
-        std::throw_with_nested(no_such_column_family(uuid));
+        throw no_such_column_family(uuid);
     }
 }
 
@@ -1278,7 +1278,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
     auto uuid = find_uuid(ks_name, cf_name);
     try {
         return find_schema(uuid);
-    } catch (...) { // FIXME: no_such_column_family&
+    } catch (no_such_column_family&) {
         on_internal_error(dblog, fmt::format("find_schema {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
 }
