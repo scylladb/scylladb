@@ -211,22 +211,46 @@ if __name__ == "__main__":
                 disk_properties["read_bandwidth"] = 2015342735 * nr_disks
                 disk_properties["write_iops"] = 181500 * nr_disks
                 disk_properties["write_bandwidth"] = 808775652 * nr_disks
-            elif idata.instance_class() == "i3en":
-                if idata.instance() == "i3en.large":
-                    disk_properties["read_iops"] = 43315
-                    disk_properties["read_bandwidth"] = 330301440
-                    disk_properties["write_iops"] = 33177
-                    disk_properties["write_bandwidth"] = 165675008
-                elif idata.instance() in ("i3en.xlarge", "i3en.2xlarge"):
-                    disk_properties["read_iops"] = 84480 * nr_disks
-                    disk_properties["read_bandwidth"] = 666894336 * nr_disks
-                    disk_properties["write_iops"] = 66969 * nr_disks
-                    disk_properties["write_bandwidth"] = 333447168 * nr_disks
-                else:
-                    disk_properties["read_iops"] = 257024 * nr_disks
-                    disk_properties["read_bandwidth"] = 2043674624 * nr_disks
-                    disk_properties["write_iops"] = 174080 * nr_disks
-                    disk_properties["write_bandwidth"] = 1024458752 * nr_disks
+            elif idata.instance() == "i3en.large":
+                disk_properties["read_iops"] = 46139
+                disk_properties["read_bandwidth"] = 373852245
+                disk_properties["write_iops"] = 35590
+                disk_properties["write_bandwidth"] = 164844096
+            elif idata.instance() == "i3en.xlarge":
+                disk_properties["read_iops"] = 92769
+                disk_properties["read_bandwidth"] = 744705941
+                disk_properties["write_iops"] = 69856
+                disk_properties["write_bandwidth"] = 329454026
+            elif idata.instance() == "i3en.2xlarge":
+                disk_properties["read_iops"] = 92737 * nr_disks
+                disk_properties["read_bandwidth"] = 743647317 * nr_disks
+                disk_properties["write_iops"] = 69951 * nr_disks
+                disk_properties["write_bandwidth"] = 329828618 * nr_disks
+            elif idata.instance() == "i3en.3xlarge":
+                disk_properties["read_iops"] = 213037
+                disk_properties["read_bandwidth"] = 2007229013
+                disk_properties["write_iops"] = 75274
+                disk_properties["write_bandwidth"] = 1015899242
+            elif idata.instance() == "i3en.6xlarge":
+                disk_properties["read_iops"] = 264672 * nr_disks
+                disk_properties["read_bandwidth"] = 2014744320 * nr_disks
+                disk_properties["write_iops"] = 126580 * nr_disks
+                disk_properties["write_bandwidth"] = 1022841706 * nr_disks
+            elif idata.instance() == "i3en.12xlarge":
+                disk_properties["read_iops"] = 246669 * nr_disks
+                disk_properties["read_bandwidth"] = 1594523306 * nr_disks
+                disk_properties["write_iops"] = 92610 * nr_disks
+                disk_properties["write_bandwidth"] = 1025237184 * nr_disks
+            elif idata.instance() == "i3en.24xlarge":
+                disk_properties["read_iops"] = 256361 * nr_disks
+                disk_properties["read_bandwidth"] = 1841487189 * nr_disks
+                disk_properties["write_iops"] = 112888 * nr_disks
+                disk_properties["write_bandwidth"] = 1024429674 * nr_disks
+            elif idata.instance() == "i3en.metal":
+                disk_properties["read_iops"] = 247589 * nr_disks
+                disk_properties["read_bandwidth"] = 2231663616 * nr_disks
+                disk_properties["write_iops"] = 117925 * nr_disks
+                disk_properties["write_bandwidth"] = 1021009301 * nr_disks
             elif idata.instance_class() == "i2":
                 disk_properties["read_iops"] = 64000 * nr_disks
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
