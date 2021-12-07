@@ -84,8 +84,8 @@ table::make_sstable_reader(schema_ptr s,
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
                 _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
     } else {
-        return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
-                std::move(trace_state), fwd, fwd_mr);
+        return downgrade_to_v1(sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
+                std::move(trace_state), fwd, fwd_mr));
     }
 }
 
@@ -266,8 +266,8 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_perm
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
     const auto fwd_mr = mutation_reader::forwarding::no;
-    return sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice, pc,
-            std::move(trace_state), fwd, fwd_mr);
+    return downgrade_to_v1(sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice, pc,
+            std::move(trace_state), fwd, fwd_mr));
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {

@@ -22,6 +22,7 @@
 #pragma once
 
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
@@ -122,7 +123,7 @@ public:
     ///
     /// The reader is unrestricted, but will account its resource usage on the
     /// semaphore belonging to the passed-in permit.
-    flat_mutation_reader make_range_sstable_reader(
+    flat_mutation_reader_v2 make_range_sstable_reader(
         schema_ptr,
         reader_permit,
         const dht::partition_range&,
@@ -134,7 +135,7 @@ public:
         read_monitor_generator& rmg = default_read_monitor_generator()) const;
 
     // Filters out mutations that don't belong to the current shard.
-    flat_mutation_reader make_local_shard_sstable_reader(
+    flat_mutation_reader_v2 make_local_shard_sstable_reader(
         schema_ptr,
         reader_permit,
         const dht::partition_range&,
@@ -156,7 +157,7 @@ public:
             mutation_reader::forwarding,
             read_monitor_generator& rmg = default_read_monitor_generator()) const;
 
-    flat_mutation_reader make_crawling_reader(
+    flat_mutation_reader_v2 make_crawling_reader(
             schema_ptr,
             reader_permit,
             const io_priority_class&,

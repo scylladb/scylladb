@@ -621,7 +621,7 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
             schema);
 }
 
-using sstable_reader_factory_type = std::function<flat_mutation_reader(shared_sstable&, const dht::partition_range& pr)>;
+using sstable_reader_factory_type = std::function<flat_mutation_reader_v2(shared_sstable&, const dht::partition_range& pr)>;
 
 static logging::logger irclogger("incremental_reader_selector");
 
@@ -636,7 +636,7 @@ class incremental_reader_selector : public reader_selector {
     std::unordered_set<int64_t> _read_sstable_gens;
     sstable_reader_factory_type _fn;
 
-    flat_mutation_reader create_reader(shared_sstable sst) {
+    flat_mutation_reader_v2 create_reader(shared_sstable sst) {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         return _fn(sst, *_pr);
     }
@@ -680,7 +680,7 @@ public:
 
             readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
                     | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
-                    | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+                    | boost::adaptors::transformed([this] (auto& sst) { return downgrade_to_v1(this->create_reader(sst)); }));
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
         irclogger.trace("{}: created {} new readers", fmt::ptr(this), readers.size());
@@ -1084,7 +1084,7 @@ sstable_set::create_single_key_sstable_reader(
             std::move(permit), sstable_histogram, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable_set::make_range_sstable_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1098,18 +1098,18 @@ sstable_set::make_range_sstable_reader(
 {
     auto reader_factory_fn = [s, permit, &slice, &pc, trace_state, fwd, fwd_mr, &monitor_generator]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        return sst->make_reader_v1(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
+        return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
-    return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
+    return upgrade_to_v2(make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
                     pr,
                     std::move(trace_state),
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr);
+            fwd_mr));
 }
 
-flat_mutation_reader
+flat_mutation_reader_v2
 sstable_set::make_local_shard_sstable_reader(
         schema_ptr s,
         reader_permit permit,
@@ -1124,22 +1124,22 @@ sstable_set::make_local_shard_sstable_reader(
     auto reader_factory_fn = [s, permit, &slice, &pc, trace_state, fwd, fwd_mr, &monitor_generator]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
         assert(!sst->is_shared());
-        return sst->make_reader_v1(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
+        return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
     if (auto sstables = _impl->all(); sstables->size() == 1) [[unlikely]] {
         auto sst = *sstables->begin();
         return reader_factory_fn(sst, pr);
     }
-    return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
+    return upgrade_to_v2(make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
                     pr,
                     std::move(trace_state),
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr);
+            fwd_mr));
 }
 
-flat_mutation_reader sstable_set::make_crawling_reader(
+flat_mutation_reader_v2 sstable_set::make_crawling_reader(
         schema_ptr schema,
         reader_permit permit,
         const io_priority_class& pc,
@@ -1147,9 +1147,9 @@ flat_mutation_reader sstable_set::make_crawling_reader(
         read_monitor_generator& monitor_generator) const {
     std::vector<flat_mutation_reader> readers;
     _impl->for_each_sstable([&] (const shared_sstable& sst) mutable {
-        readers.emplace_back(sst->make_crawling_reader_v1(schema, permit, pc, trace_ptr, monitor_generator(sst)));
+        readers.emplace_back(downgrade_to_v1(sst->make_crawling_reader(schema, permit, pc, trace_ptr, monitor_generator(sst))));
     });
-    return make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    return upgrade_to_v2(make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
 }
 
 unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vector<shared_sstable>& sstables) {
