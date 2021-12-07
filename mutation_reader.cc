@@ -41,17 +41,93 @@ static constexpr size_t merger_small_vector_size = 4;
 template<typename T>
 using merger_vector = utils::small_vector<T, merger_small_vector_size>;
 
-using stream_id_t = const flat_mutation_reader*;
+using stream_id_t = const flat_mutation_reader_v2*;
 
 struct mutation_fragment_and_stream_id {
-    mutation_fragment fragment;
+    mutation_fragment_v2 fragment;
     stream_id_t stream_id;
 
-    mutation_fragment_and_stream_id(mutation_fragment fragment, stream_id_t stream_id) : fragment(std::move(fragment)), stream_id(stream_id)
+    mutation_fragment_and_stream_id(mutation_fragment_v2 fragment, stream_id_t stream_id) : fragment(std::move(fragment)), stream_id(stream_id)
     { }
 };
 
 using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment_and_stream_id>::iterator>;
+
+// Merges range tombstone changes coming from different streams (readers).
+//
+// Add tombstones by calling apply().
+// Updates to the same stream identified by stream_id overwrite each other.
+// Applying an empty tombstone to a stream removes said stream.
+//
+// Call get() to get the tombstone with the highest timestamp from the currently
+// active ones.
+// Get returns disengaged optional when the last apply() call(s) didn't introduce
+// a change in the max tombstone.
+//
+// Call clear() when leaving the range abruptly (next_partition() or
+// fast_forward_to()).
+//
+// The merger doesn't keep track of the position component of the tombstones.
+// Emit them with the current position.
+class range_tombstone_change_merger {
+    struct stream_tombstone {
+        stream_id_t stream_id;
+        ::tombstone tombstone;
+    };
+
+private:
+    std::vector<stream_tombstone> _tombstones;
+    tombstone _current_tombstone;
+
+private:
+    const stream_tombstone* get_tombstone() const {
+        const stream_tombstone* max_tomb{nullptr};
+
+        for (const auto& tomb : _tombstones) {
+            if (!max_tomb || tomb.tombstone > max_tomb->tombstone) {
+                max_tomb = &tomb;
+            }
+        }
+        return max_tomb;
+    }
+
+public:
+    void apply(stream_id_t stream_id, tombstone tomb) {
+        auto it = std::find_if(_tombstones.begin(), _tombstones.end(), [&] (const stream_tombstone& tomb) {
+            return tomb.stream_id == stream_id;
+        });
+        if (it == _tombstones.end()) {
+            if (tomb) {
+                _tombstones.push_back({stream_id, tomb});
+            }
+        } else {
+            if (tomb) {
+                it->tombstone = tomb;
+            } else {
+                auto last = _tombstones.end() - 1;
+                if (it != last) {
+                    std::swap(*it, *last);
+                }
+                _tombstones.pop_back();
+            }
+        }
+    }
+
+    std::optional<tombstone> get() {
+        const auto* tomb = get_tombstone();
+        if (tomb && tomb->tombstone == _current_tombstone) {
+            return {};
+        } else {
+            _current_tombstone = tomb ? tomb->tombstone : tombstone();
+            return _current_tombstone;
+        }
+    }
+
+    void clear() {
+        _tombstones.clear();
+        _current_tombstone = {};
+    }
+};
 
 template<typename Producer>
 concept FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range) {
@@ -98,61 +174,65 @@ class mutation_fragment_merger {
     using iterator = merger_vector<mutation_fragment_and_stream_id>::iterator;
 
     const schema_ptr _schema;
+    reader_permit _permit;
     Producer _producer;
-    iterator _it{};
-    iterator _end{};
-
-    future<> fetch() {
-        if (!empty()) {
-            return make_ready_future<>();
-        }
-
-        return _producer().then([this] (mutation_fragment_batch fragments) {
-            _it = fragments.begin();
-            _end = fragments.end();
-        });
-    }
-
-    bool empty() const {
-        return _it == _end;
-    }
-
-    const mutation_fragment_and_stream_id& top() const {
-        return *_it;
-    }
-
-    mutation_fragment_and_stream_id pop() {
-        return std::move(*_it++);
-    }
+    range_tombstone_change_merger _tombstone_merger;
+    mutation_fragment_v2_opt _result;
 
 public:
-    mutation_fragment_merger(schema_ptr schema, Producer&& producer)
+    mutation_fragment_merger(schema_ptr schema, reader_permit permit, Producer&& producer)
         : _schema(std::move(schema))
+        , _permit(std::move(permit))
         , _producer(std::move(producer)) {
     }
 
-    future<mutation_fragment_opt> operator()() {
-        return fetch().then([this] () -> mutation_fragment_opt {
-            if (empty()) {
-                return mutation_fragment_opt();
-            }
-            auto current = pop();
-            while (!empty() && current.fragment.mergeable_with(top().fragment)) {
-                current.fragment.apply(*_schema, pop().fragment);
-            }
-            return std::move(current.fragment);
+    future<mutation_fragment_v2_opt> operator()() {
+        _result = {};
+        return repeat([this] {
+            return _producer().then([this] (mutation_fragment_batch fragments) {
+                const auto begin = fragments.begin();
+                const auto end = fragments.end();
+                if (begin == end) {
+                    return stop_iteration::yes;
+                }
+                // If fragment is a range tombstone change, all others in the batch
+                // have to be too. This follows from all fragments in the batch
+                // having identical positions, and range tombstones never having the
+                // same position as a clustering row.
+                if (begin->fragment.is_range_tombstone_change()) {
+                    for (auto it = begin; it != end; ++it) {
+                        _tombstone_merger.apply(it->stream_id, it->fragment.as_range_tombstone_change().tombstone());
+                    }
+                    if (auto tomb_opt = _tombstone_merger.get()) {
+                        _result = mutation_fragment_v2(*_schema, _permit, range_tombstone_change(begin->fragment.position(), *tomb_opt));
+                        return stop_iteration::yes;
+                    }
+                    return stop_iteration::no;
+                } else {
+                    for (auto it = begin + 1; it != end; ++it) {
+                        begin->fragment.apply(*_schema, std::move(it->fragment));
+                    }
+                    _result = std::move(begin->fragment);
+                    return stop_iteration::yes;
+                }
+            });
+        }).then([this] {
+            return std::move(_result);
         });
     }
 
     future<> next_partition() {
+        _tombstone_merger.clear();
         return _producer.next_partition();
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {
+        _tombstone_merger.clear();
         return _producer.fast_forward_to(pr);
     }
 
     future<> fast_forward_to(position_range pr) {
+        _tombstone_merger.clear();
         return _producer.fast_forward_to(std::move(pr));
     }
 
@@ -165,13 +245,13 @@ public:
 // stream of mutation-fragments.
 class mutation_reader_merger {
 public:
-    using reader_iterator = std::list<flat_mutation_reader>::iterator;
+    using reader_iterator = std::list<flat_mutation_reader_v2>::iterator;
 
     struct reader_and_fragment {
         reader_iterator reader{};
-        mutation_fragment fragment;
+        mutation_fragment_v2 fragment;
 
-        reader_and_fragment(reader_iterator r, mutation_fragment f)
+        reader_and_fragment(reader_iterator r, mutation_fragment_v2 f)
             : reader(r)
             , fragment(std::move(f)) {
         }
@@ -179,11 +259,11 @@ public:
 
     struct reader_and_last_fragment_kind {
         reader_iterator reader{};
-        mutation_fragment::kind last_kind = mutation_fragment::kind::partition_end;
+        mutation_fragment_v2::kind last_kind = mutation_fragment_v2::kind::partition_end;
 
         reader_and_last_fragment_kind() = default;
 
-        reader_and_last_fragment_kind(reader_iterator r, mutation_fragment::kind k)
+        reader_and_last_fragment_kind(reader_iterator r, mutation_fragment_v2::kind k)
             : reader(r)
             , last_kind(k) {
         }
@@ -205,10 +285,10 @@ private:
     std::unique_ptr<reader_selector> _selector;
     // We need a list because we need stable addresses across additions
     // and removals.
-    std::list<flat_mutation_reader> _all_readers;
+    std::list<flat_mutation_reader_v2> _all_readers;
     // We remove unneeded readers in batches. Until it is their time they
     // are kept in _to_remove.
-    std::list<flat_mutation_reader> _to_remove;
+    std::list<flat_mutation_reader_v2> _to_remove;
     // Readers positioned at a partition, different from the one we are
     // reading from now. For these readers the attached fragment is
     // always partition_start. Used to pick the next partition.
@@ -272,7 +352,7 @@ public:
  * This class is a simple adapter over `mutation_fragment_merger` that provides
  * a `flat_mutation_reader` interface. */
 template <FragmentProducer Producer>
-class merging_reader : public flat_mutation_reader::impl {
+class merging_reader : public flat_mutation_reader_v2::impl {
     mutation_fragment_merger<Producer> _merger;
     streamed_mutation::forwarding _fwd_sm;
 public:
@@ -281,7 +361,7 @@ public:
             streamed_mutation::forwarding fwd_sm,
             Producer&& producer)
         : impl(std::move(schema), std::move(permit))
-        , _merger(_schema, std::move(producer))
+        , _merger(_schema, _permit, std::move(producer))
         , _fwd_sm(fwd_sm) {}
 
     virtual future<> fill_buffer() override;
@@ -326,8 +406,8 @@ void mutation_reader_merger::maybe_add_readers(const std::optional<dht::ring_pos
 
 void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader> new_readers) {
     for (auto&& new_reader : new_readers) {
-        _all_readers.emplace_back(std::move(new_reader));
-        _next.emplace_back(std::prev(_all_readers.end()), mutation_fragment::kind::partition_end);
+        _all_readers.emplace_back(upgrade_to_v2(std::move(new_reader)));
+        _next.emplace_back(std::prev(_all_readers.end()), mutation_fragment_v2::kind::partition_end);
     }
 }
 
@@ -392,7 +472,7 @@ future<> mutation_reader_merger::prepare_next() {
 
 future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         reader_and_last_fragment_kind rk, reader_galloping reader_galloping) {
-    return (*rk.reader)().then([this, rk, reader_galloping] (mutation_fragment_opt mfo) {
+    return (*rk.reader)().then([this, rk, reader_galloping] (mutation_fragment_v2_opt mfo) {
         auto to_close = make_ready_future<>();
         if (mfo) {
             if (mfo->is_partition_start()) {
@@ -415,7 +495,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
                 _fragment_heap.emplace_back(rk.reader, std::move(*mfo));
                 boost::range::push_heap(_fragment_heap, fragment_heap_compare(*_schema));
             }
-        } else if (_fwd_sm == streamed_mutation::forwarding::yes && rk.last_kind != mutation_fragment::kind::partition_end) {
+        } else if (_fwd_sm == streamed_mutation::forwarding::yes && rk.last_kind != mutation_fragment_v2::kind::partition_end) {
             // When in streamed_mutation::forwarding mode we need
             // to keep track of readers that returned
             // end-of-stream to know what readers to ff. We can't
@@ -428,7 +508,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
             _to_remove.splice(_to_remove.end(), _all_readers, rk.reader);
             if (_to_remove.size() >= 4) {
                 auto to_remove = std::move(_to_remove);
-                to_close = parallel_for_each(to_remove, [] (flat_mutation_reader& r) {
+                to_close = parallel_for_each(to_remove, [] (flat_mutation_reader_v2& r) {
                     return r.close();
                 });
                 if (reader_galloping) {
@@ -495,7 +575,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         _current.emplace_back(_single_reader.reader->pop_mutation_fragment(), &*_single_reader.reader);
         _single_reader.last_kind = _current.back().fragment.mutation_fragment_kind();
         if (_current.back().fragment.is_end_of_partition()) {
-            _next.emplace_back(std::exchange(_single_reader.reader, {}), mutation_fragment::kind::partition_end);
+            _next.emplace_back(std::exchange(_single_reader.reader, {}), mutation_fragment_v2::kind::partition_end);
         }
         return make_ready_future<mutation_fragment_batch>(_current);
     }
@@ -537,7 +617,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         }
         while (!_reader_heap.empty() && key(_fragment_heap).equal(*_schema, key(_reader_heap)));
         if (_fragment_heap.size() == 1) {
-            _single_reader = { _fragment_heap.back().reader, mutation_fragment::kind::partition_start };
+            _single_reader = { _fragment_heap.back().reader, mutation_fragment_v2::kind::partition_start };
             _current.emplace_back(std::move(_fragment_heap.back().fragment), &*_single_reader.reader);
             _fragment_heap.clear();
             _gallop_mode_hits = 0;
@@ -585,7 +665,7 @@ future<> mutation_reader_merger::next_partition() {
     // at the start of the next partition.
     prepare_forwardable_readers();
     for (auto& rk : _next) {
-        rk.last_kind = mutation_fragment::kind::partition_end;
+        rk.last_kind = mutation_fragment_v2::kind::partition_end;
         co_await rk.reader->next_partition();
     }
 }
@@ -599,9 +679,9 @@ future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr)
     _reader_heap.clear();
 
     for (auto it = _all_readers.begin(); it != _all_readers.end(); ++it) {
-        _next.emplace_back(it, mutation_fragment::kind::partition_end);
+        _next.emplace_back(it, mutation_fragment_v2::kind::partition_end);
     }
-    return parallel_for_each(_all_readers, [this, &pr] (flat_mutation_reader& mr) {
+    return parallel_for_each(_all_readers, [this, &pr] (flat_mutation_reader_v2& mr) {
         return mr.fast_forward_to(pr);
     }).then([this, &pr] {
         add_readers(_selector->fast_forward_to(pr));
@@ -616,10 +696,10 @@ future<> mutation_reader_merger::fast_forward_to(position_range pr) {
 }
 
 future<> mutation_reader_merger::close() noexcept {
-    return parallel_for_each(std::move(_to_remove), [] (flat_mutation_reader& mr) {
+    return parallel_for_each(std::move(_to_remove), [] (flat_mutation_reader_v2& mr) {
         return mr.close();
     }).then([this] {
-        return parallel_for_each(std::move(_all_readers), [] (flat_mutation_reader& mr) {
+        return parallel_for_each(std::move(_all_readers), [] (flat_mutation_reader_v2& mr) {
             return mr.close();
         });
     });
@@ -628,7 +708,7 @@ future<> mutation_reader_merger::close() noexcept {
 template <FragmentProducer P>
 future<> merging_reader<P>::fill_buffer() {
     return repeat([this] {
-        return _merger().then([this] (mutation_fragment_opt mfo) {
+        return _merger().then([this] (mutation_fragment_v2_opt mfo) {
             if (!mfo) {
                 _end_of_stream = true;
                 return stop_iteration::yes;
@@ -687,10 +767,10 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::unique_ptr<reader_selector> selector,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<merging_reader<mutation_reader_merger>>(schema,
+    return downgrade_to_v1(make_flat_mutation_reader_v2<merging_reader<mutation_reader_merger>>(schema,
             std::move(permit),
             fwd_sm,
-            mutation_reader_merger(schema, std::move(selector), fwd_sm, fwd_mr));
+            mutation_reader_merger(schema, std::move(selector), fwd_sm, fwd_mr)));
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
@@ -2394,7 +2474,7 @@ class clustering_order_reader_merger {
     //
     // The peeked reader is pushed onto the _peeked_readers heap.
     future<> peek_reader(reader_iterator it) {
-        return it->reader.peek().then([this, it] (mutation_fragment* mf) {
+        return it->reader.peek().then([this, it] (mutation_fragment_v2* mf) {
             if (!mf) {
                 // The reader returned end-of-stream before returning end-of-partition
                 // (otherwise we would have removed it in a previous peek). This means that
@@ -2474,7 +2554,7 @@ class clustering_order_reader_merger {
     // If the galloping reader wins with other readers again, the fragment is returned as the next batch.
     // Otherwise, the reader is pushed onto _peeked_readers and we retry in non-galloping mode.
     future<mutation_fragment_batch> peek_galloping_reader() {
-        return _galloping_reader->reader.peek().then([this] (mutation_fragment* mf) {
+        return _galloping_reader->reader.peek().then([this] (mutation_fragment_v2* mf) {
             bool erase = false;
             if (mf) {
                 if (mf->is_partition_start()) {
@@ -2591,7 +2671,7 @@ public:
                 // Not forwarding, so all readers must be exhausted.
                 // Return a partition end fragment unless all readers have been empty from the beginning.
                 if (_partition_start_fetched) {
-                    _current_batch.emplace_back(mutation_fragment(*_schema, _permit, partition_end()), nullptr);
+                    _current_batch.emplace_back(mutation_fragment_v2(*_schema, _permit, partition_end()), nullptr);
                 }
                 _should_emit_partition_end = false;
             }
@@ -2683,7 +2763,7 @@ flat_mutation_reader make_clustering_combined_reader(schema_ptr schema,
         reader_permit permit,
         streamed_mutation::forwarding fwd_sm,
         std::unique_ptr<position_reader_queue> rq) {
-    return make_flat_mutation_reader<merging_reader<clustering_order_reader_merger>>(
+    return downgrade_to_v1(make_flat_mutation_reader_v2<merging_reader<clustering_order_reader_merger>>(
             schema, permit, fwd_sm,
-            clustering_order_reader_merger(schema, permit, fwd_sm, std::move(rq)));
+            clustering_order_reader_merger(schema, permit, fwd_sm, std::move(rq))));
 }
