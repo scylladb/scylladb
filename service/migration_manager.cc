@@ -615,11 +615,6 @@ future<std::vector<mutation>> migration_manager::prepare_new_column_family_annou
     return prepare_new_column_family_announcement(std::move(cfm), api::new_timestamp());
 }
 
-future<> migration_manager::include_keyspace_and_announce(
-        const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
-    co_return co_await announce(co_await include_keyspace(keyspace, std::move(mutations)));
-}
-
 future<std::vector<mutation>> migration_manager::include_keyspace(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
@@ -732,45 +727,6 @@ future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announce
     auto mutations = db::schema_tables::make_drop_aggregate_mutations(aggregate, api::new_timestamp());
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
-
-#if 0
-public static void announceKeyspaceUpdate(KSMetaData ksm) throws ConfigurationException
-{
-    announceKeyspaceUpdate(ksm, false);
-}
-
-public static void announceKeyspaceUpdate(KSMetaData ksm, boolean announceLocally) throws ConfigurationException
-{
-    ksm.validate();
-
-    KSMetaData oldKsm = Schema.instance.getKSMetaData(ksm.name);
-    if (oldKsm == null)
-        throw new ConfigurationException(String.format("Cannot update non existing keyspace '%s'.", ksm.name));
-
-    mlogger.info(String.format("Update Keyspace '%s' From %s To %s", ksm.name, oldKsm, ksm));
-    announce(LegacySchemaTables.makeCreateKeyspaceMutation(ksm, FBUtilities.timestampMicros()), announceLocally);
-}
-
-public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift) throws ConfigurationException
-{
-    announceColumnFamilyUpdate(cfm, fromThrift, false);
-}
-
-public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift, boolean announceLocally) throws ConfigurationException
-{
-    cfm.validate();
-
-    CFMetaData oldCfm = Schema.instance.getCFMetaData(cfm.ksName, cfm.cfName);
-    if (oldCfm == null)
-        throw new ConfigurationException(String.format("Cannot update non existing table '%s' in keyspace '%s'.", cfm.cfName, cfm.ksName));
-    KSMetaData ksm = Schema.instance.getKSMetaData(cfm.ksName);
-
-    oldCfm.validateCompatility(cfm);
-
-    mlogger.info(String.format("Update table '%s/%s' From %s To %s", cfm.ksName, cfm.cfName, oldCfm, cfm));
-    announce(LegacySchemaTables.makeUpdateTableMutation(ksm, oldCfm, cfm, FBUtilities.timestampMicros(), fromThrift), announceLocally);
-}
-#endif
 
 std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name) {
     auto& db = _storage_proxy.get_db().local();
@@ -901,15 +857,6 @@ future<std::vector<mutation>> migration_manager::prepare_view_drop_announcement(
                                                          cf_name, ks_name));
     }
 }
-
-#if 0
-public static void announceAggregateDrop(UDAggregate udf, boolean announceLocally)
-{
-    mlogger.info(String.format("Drop aggregate function overload '%s' args '%s'", udf.name(), udf.argTypes()));
-    KSMetaData ksm = Schema.instance.getKSMetaData(udf.name().keyspace);
-    announce(LegacySchemaTables.makeDropAggregateMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
-}
-#endif
 
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {

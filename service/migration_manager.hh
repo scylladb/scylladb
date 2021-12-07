@@ -167,12 +167,8 @@ public:
 private:
     future<> uninit_messaging_service();
 
-    future<> include_keyspace_and_announce(
-            const keyspace_metadata& keyspace, std::vector<mutation> mutations);
-
     future<std::vector<mutation>> include_keyspace(const keyspace_metadata& keyspace, std::vector<mutation> mutations);
     future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type);
-    future<> do_announce_new_type(user_type new_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 
