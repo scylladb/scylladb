@@ -76,6 +76,25 @@ static sstring validate_keyspace(http_context& ctx, const parameters& param) {
     throw bad_param_exception("Keyspace " + param["keyspace"] + " Does not exist");
 }
 
+// splits a request parameter assumed to hold a comma-separated list of table names
+// verify that the tables are found, otherwise a bad_param_exception exception is thrown
+// containing the description of the respective no_such_column_family error.
+static std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
+    auto it = query_params.find(param_name);
+    if (it == query_params.end()) {
+        return {};
+    }
+    std::vector<sstring> names = split(it->second, ",");
+    try {
+        for (const auto& table_name : names) {
+            ctx.db.local().find_column_family(ks_name, table_name);
+        }
+    } catch (const no_such_column_family& e) {
+        throw bad_param_exception(e.what());
+    }
+    return names;
+}
+
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {
     ss::token_range r;
     r.start_token = d._start_token;
@@ -99,7 +118,7 @@ using ks_cf_func = std::function<future<json::json_return_type>(http_context&, s
 static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = split_cf(req->get_query_param("cf"));
+        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
@@ -582,7 +601,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = split_cf(req->get_query_param("cf"));
+        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
@@ -606,7 +625,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = split_cf(req->get_query_param("cf"));
+        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
@@ -653,7 +672,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_families = split_cf(req->get_query_param("cf"));
+        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
@@ -993,14 +1012,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::enable_auto_compaction.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto tables = split_cf(req->get_query_param("cf"));
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         return set_tables_autocompaction(ctx, ss.local(), keyspace, tables, true);
     });
 
     ss::disable_auto_compaction.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
-        auto tables = split_cf(req->get_query_param("cf"));
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
         return set_tables_autocompaction(ctx, ss.local(), keyspace, tables, false);
     });
