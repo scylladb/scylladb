@@ -1345,6 +1345,9 @@ def clang_inline_threshold():
 optimization_flags = [
     '--param inline-unit-growth=300', # gcc
     f'-mllvm -inline-threshold={clang_inline_threshold()}',  # clang
+    # clang generates 16-byte loads that break store-to-load forwarding
+    # gcc also has some trouble: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103554
+    '-fno-slp-vectorize',
 ]
 optimization_flags = [o
                       for o in optimization_flags
