@@ -112,13 +112,13 @@ class querier_base {
 protected:
     schema_ptr _schema;
     reader_permit _permit;
-    std::unique_ptr<const dht::partition_range> _range;
+    lw_shared_ptr<const dht::partition_range> _range;
     std::unique_ptr<const query::partition_slice> _slice;
     std::variant<flat_mutation_reader, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
 
 public:
-    querier_base(reader_permit permit, std::unique_ptr<const dht::partition_range> range,
+    querier_base(reader_permit permit, lw_shared_ptr<const dht::partition_range> range,
             std::unique_ptr<const query::partition_slice> slice, flat_mutation_reader reader, dht::partition_ranges_view query_ranges)
         : _schema(reader.schema())
         , _permit(std::move(permit))
@@ -132,7 +132,7 @@ public:
             query::partition_slice slice, const mutation_source& ms, const io_priority_class& pc, tracing::trace_state_ptr trace_ptr)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
-        , _range(std::make_unique<const dht::partition_range>(std::move(range)))
+        , _range(make_lw_shared<const dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<const query::partition_slice>(std::move(slice)))
         , _reader(ms.make_reader(_schema, _permit, *_range, *_slice, pc, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _query_ranges(*_range)
@@ -268,7 +268,7 @@ class shard_mutation_querier : public querier_base {
 private:
     shard_mutation_querier(
             std::unique_ptr<const dht::partition_range_vector> query_ranges,
-            std::unique_ptr<const dht::partition_range> reader_range,
+            lw_shared_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
             flat_mutation_reader reader,
             reader_permit permit,
@@ -284,7 +284,7 @@ private:
 public:
     shard_mutation_querier(
             const dht::partition_range_vector query_ranges,
-            std::unique_ptr<const dht::partition_range> reader_range,
+            lw_shared_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
             flat_mutation_reader reader,
             reader_permit permit,
@@ -298,7 +298,7 @@ public:
         return {&_nominal_pkey, _nominal_ckey ? &*_nominal_ckey : nullptr};
     }
 
-    std::unique_ptr<const dht::partition_range> reader_range() && {
+    lw_shared_ptr<const dht::partition_range> reader_range() && {
         return std::move(_range);
     }
 

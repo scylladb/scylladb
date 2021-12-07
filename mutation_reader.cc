@@ -1489,7 +1489,7 @@ class shard_reader : public flat_mutation_reader::impl {
 private:
     shared_ptr<reader_lifecycle_policy> _lifecycle_policy;
     const unsigned _shard;
-    const dht::partition_range* _pr;
+    foreign_ptr<lw_shared_ptr<const dht::partition_range>> _pr;
     const query::partition_slice& _ps;
     const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
@@ -1514,7 +1514,7 @@ public:
         : impl(std::move(schema), std::move(permit))
         , _lifecycle_policy(std::move(lifecycle_policy))
         , _shard(shard)
-        , _pr(&pr)
+        , _pr(make_foreign(make_lw_shared<const dht::partition_range>(pr)))
         , _ps(ps)
         , _pc(pc)
         , _trace_state(std::move(trace_state))
@@ -1672,11 +1672,10 @@ future<> shard_reader::next_partition() {
 }
 
 future<> shard_reader::fast_forward_to(const dht::partition_range& pr) {
-    _pr = &pr;
-
     if (!_reader && !_read_ahead) {
         // No need to fast-forward uncreated readers, they will be passed the new
         // range when created.
+        _pr = make_foreign(make_lw_shared<const dht::partition_range>(pr));
         co_return;
     }
 
@@ -1688,8 +1687,11 @@ future<> shard_reader::fast_forward_to(const dht::partition_range& pr) {
     _end_of_stream = false;
     clear_buffer();
 
-    co_await smp::submit_to(_shard, [this, &pr] {
-        return _reader->fast_forward_to(pr);
+    _pr = co_await smp::submit_to(_shard, [this, &pr] () -> future<foreign_ptr<lw_shared_ptr<const dht::partition_range>>> {
+        auto new_pr = make_lw_shared<const dht::partition_range>(pr);
+        co_await _reader->fast_forward_to(*new_pr);
+        _lifecycle_policy->update_read_range(new_pr);
+        co_return make_foreign(std::move(new_pr));
     });
 }
 

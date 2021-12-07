@@ -491,6 +491,17 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) = 0;
 
+    /// Updates the read-range of the shard reader.
+    ///
+    /// Gives the lifecycle-policy a chance to update its stored read-range (if
+    /// the case). Called after any modification to the read range (typically
+    /// after fast_forward_to()). The range is identical to the one the reader
+    /// holds a reference to after the modification happened. When this method
+    /// is called, it is safe to destroy the previous range instance.
+    ///
+    /// This method has to be called on the shard the reader lives on.
+    virtual void update_read_range(lw_shared_ptr<const dht::partition_range> pr) = 0;
+
     /// Destroy the shard reader.
     ///
     /// Will be called when the multishard reader is being destroyed. It will be

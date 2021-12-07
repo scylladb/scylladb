@@ -133,7 +133,7 @@ using stateful_query = bool_class<class stateful>;
 template <typename ResultBuilder>
 static std::pair<typename ResultBuilder::end_result_type, size_t>
 read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
-        const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
+        const dht::partition_range_vector& original_ranges, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     ResultBuilder res_builder(s, slice);
     auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid,
@@ -141,9 +141,11 @@ read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s,
 
     bool has_more = true;
 
+    auto ranges = std::make_unique<dht::partition_range_vector>(original_ranges);
+
     // First page is special, needs to have `is_first_page` set.
     {
-        auto res = ResultBuilder::query(db, s, cmd, {range}, nullptr, db::no_timeout);
+        auto res = ResultBuilder::query(db, s, cmd, *ranges, nullptr, db::no_timeout);
         has_more = res_builder.add(*res);
         cmd.is_first_page = query::is_first_page::no;
     }
@@ -154,6 +156,7 @@ read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s,
 
     unsigned npages = 0;
 
+    const auto cmp = dht::ring_position_comparator(*s);
 
     // Rest of the pages. Loop until an empty page turns up. Not very
     // sophisticated but simple and safe.
@@ -164,9 +167,19 @@ read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s,
 
         ++npages;
 
+        // Force freeing the vector to avoid hiding any bugs related to storing
+        // references to the ranges vector (which is not alive between pages in
+        // real life).
+        ranges = std::make_unique<dht::partition_range_vector>(original_ranges);
+
+        while (!ranges->front().contains(res_builder.last_pkey(), cmp)) {
+            ranges->erase(ranges->begin());
+        }
+        assert(!ranges->empty());
+
         const auto pkrange_begin_inclusive = res_builder.last_ckey() && res_builder.last_pkey_rows() < slice.partition_row_limit();
 
-        auto pkrange = dht::partition_range(dht::partition_range::bound(res_builder.last_pkey(), pkrange_begin_inclusive), range.end());
+        ranges->front() = dht::partition_range(dht::partition_range::bound(res_builder.last_pkey(), pkrange_begin_inclusive), ranges->front().end());
 
         if (res_builder.last_ckey()) {
             auto ckranges = cmd.slice.default_row_ranges();
@@ -176,7 +189,7 @@ read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s,
             cmd.slice.set_range(*s, res_builder.last_pkey().key(), std::move(ckranges));
         }
 
-        auto res = ResultBuilder::query(db, s, cmd, {pkrange}, nullptr, db::no_timeout);
+        auto res = ResultBuilder::query(db, s, cmd, *ranges, nullptr, db::no_timeout);
 
         if (is_stateful) {
             tests::require(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
@@ -186,6 +199,14 @@ read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s,
     }
 
     return std::pair(std::move(res_builder).get_end_result(), npages);
+}
+
+template <typename ResultBuilder>
+static std::pair<typename ResultBuilder::end_result_type, size_t>
+read_partitions_with_generic_paged_scan(distributed<database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+        const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
+    dht::partition_range_vector ranges{range};
+    return read_partitions_with_generic_paged_scan<ResultBuilder>(db, std::move(s), page_size, max_size, is_stateful, ranges, slice, page_hook);
 }
 
 class mutation_result_builder {
@@ -400,6 +421,61 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         }).first;
 
         check_results_are_equal(results1, results3);
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+        using namespace std::chrono_literals;
+
+        env.db().invoke_on_all([] (database& db) {
+            db.set_querier_cache_entry_ttl(2s);
+        }).get();
+
+        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_read_all");
+
+        const auto limit = std::numeric_limits<uint64_t>::max();
+
+        const auto slice = s->full_slice();
+
+        for (const auto step : {1ul, pkeys.size() / 4u, pkeys.size() / 2u}) {
+
+            dht::partition_range_vector ranges;
+            ranges.push_back(dht::partition_range::make_ending_with({*pkeys.begin(), false}));
+            const auto max_r = pkeys.size() - 1;
+            for (unsigned r = 0; r < max_r; r += step) {
+                ranges.push_back(dht::partition_range::make({pkeys.at(r), true}, {pkeys.at(std::min(max_r, r + step)), false}));
+            }
+            ranges.push_back(dht::partition_range::make_starting_with({*pkeys.rbegin(), true}));
+
+            unsigned i = 0;
+
+            testlog.debug("Scan with step={}, ranges={}", step, ranges);
+
+            // Keep indent the same to reduce white-space noise
+            for (const auto page_size : {1, 4, 8, 19, 100}) {
+            for (const auto stateful : {stateful_query::no, stateful_query::yes}) {
+                testlog.debug("[scan #{}]: page_size={}, stateful={}", i++, page_size, stateful);
+
+                // First read all partition-by-partition (not paged).
+                auto expected_results = read_all_partitions_one_by_one(env.db(), s, pkeys);
+
+                auto results = read_partitions_with_generic_paged_scan<mutation_result_builder>(env.db(), s, page_size, limit, stateful, ranges, slice, [&] (size_t) {
+                    tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+                }).first;
+
+                check_results_are_equal(expected_results, results);
+
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
+                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0u);
+            }}
+        }
+
+        require_eventually_empty_caches(env.db());
 
         return make_ready_future<>();
     }).get();
