@@ -1342,6 +1342,15 @@ def clang_inline_threshold():
     else:
         return 2500
 
+for mode_level in args.mode_o_levels:
+    ( mode, level ) = mode_level.split('=', 2)
+    if mode not in modes:
+        raise Exception(f'Mode {mode} is missing, cannot configure optimization level for it')
+    modes[mode]['optimization-level'] = level
+
+for mode in modes:
+    modes[mode]['cxxflags'] += f' -O{modes[mode]["optimization-level"]}'
+
 optimization_flags = [
     '--param inline-unit-growth=300', # gcc
     f'-mllvm -inline-threshold={clang_inline_threshold()}',  # clang
@@ -1357,15 +1366,6 @@ modes['release']['cxxflags'] += ' ' + ' '.join(optimization_flags)
 if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
     for mode in modes:
         modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
-
-for mode_level in args.mode_o_levels:
-    ( mode, level ) = mode_level.split('=', 2)
-    if mode not in modes:
-        raise Exception(f'Mode {mode} is missing, cannot configure optimization level for it')
-    modes[mode]['optimization-level'] = level
-
-for mode in modes:
-    modes[mode]['cxxflags'] += f' -O{modes[mode]["optimization-level"]}'
 
 has_wasmtime = os.path.isfile('/usr/lib64/libwasmtime.a') and os.path.isdir('/usr/local/include/wasmtime')
 
