@@ -328,11 +328,12 @@ select_statement::do_execute(service::storage_proxy& proxy,
     _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
 
     auto slice = make_partition_slice(options);
+    auto max_result_size = proxy.get_max_result_size(slice);
     auto command = ::make_lw_shared<query::read_command>(
             _schema->id(),
             _schema->version(),
             std::move(slice),
-            proxy.get_max_result_size(slice),
+            max_result_size,
             query::row_limit(limit),
             query::partition_limit(query::max_partitions),
             now,
