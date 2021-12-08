@@ -226,7 +226,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, std::vector<shared_sstable> candidates) {
+time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidates) {
     auto gc_before = gc_clock::now() - table_s.schema()->gc_grace_seconds();
 
     if (candidates.empty()) {

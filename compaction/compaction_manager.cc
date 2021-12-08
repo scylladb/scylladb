@@ -435,6 +435,7 @@ compaction_manager::compaction_manager(compaction_scheduling_group csg, maintena
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
+    , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
 }
@@ -447,6 +448,7 @@ compaction_manager::compaction_manager(compaction_scheduling_group csg, maintena
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
+    , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     register_metrics();
 }
@@ -456,6 +458,7 @@ compaction_manager::compaction_manager()
     , _backlog_manager(_compaction_controller)
     , _maintenance_sg(maintenance_scheduling_group{default_scheduling_group(), default_priority_class()})
     , _available_memory(1)
+    , _strategy_control(std::make_unique<strategy_control>(*this))
 {
     // No metric registration because this constructor is supposed to be used only by the testing
     // infrastructure.
@@ -673,7 +676,7 @@ void compaction_manager::submit(table* t) {
           return with_scheduling_group(_compaction_controller.sg(), [this, task = std::move(task)] () mutable {
             table& t = *task->compacting_table;
             sstables::compaction_strategy cs = t.get_compaction_strategy();
-            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t.as_table_state(), get_candidates(t));
+            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t.as_table_state(), get_strategy_control(), get_candidates(t));
             int weight = calculate_weight(descriptor);
 
             if (descriptor.sstables.empty() || !can_proceed(task) || t.is_auto_compaction_disabled_by_user()) {
@@ -1093,6 +1096,24 @@ void compaction_manager::propagate_replacement(table* t,
             task->compaction_data.pending_replacements.push_back({ removed, added });
         }
     }
+}
+
+class compaction_manager::strategy_control : public compaction::strategy_control {
+    compaction_manager& _cm;
+public:
+    explicit strategy_control(compaction_manager& cm) noexcept : _cm(cm) {}
+
+    bool has_ongoing_compaction(table_state& table_s) const noexcept override {
+        return std::any_of(_cm._tasks.begin(), _cm._tasks.end(), [&s = table_s.schema()] (const lw_shared_ptr<task>& task) {
+            return task->compaction_running
+                && task->compacting_table->schema()->ks_name() == s->ks_name()
+                && task->compacting_table->schema()->cf_name() == s->cf_name();
+        });
+    }
+};
+
+compaction::strategy_control& compaction_manager::get_strategy_control() const noexcept {
+    return *_strategy_control;
 }
 
 double compaction_backlog_tracker::backlog() const {

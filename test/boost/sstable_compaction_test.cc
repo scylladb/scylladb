@@ -175,6 +175,20 @@ static std::unique_ptr<table_state> make_table_state_for_test(column_family_for_
     return std::make_unique<table_state_for_test>(t, env);
 }
 
+class strategy_control_for_test : public strategy_control {
+    bool _has_ongoing_compaction;
+public:
+    explicit strategy_control_for_test(bool has_ongoing_compaction) noexcept : _has_ongoing_compaction(has_ongoing_compaction) {}
+
+    bool has_ongoing_compaction(table_state& table_s) const noexcept override {
+        return _has_ongoing_compaction;
+    }
+};
+
+static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has_ongoing_compaction) {
+    return std::make_unique<strategy_control_for_test>(has_ongoing_compaction);
+}
+
 SEASTAR_TEST_CASE(compaction_manager_basic_test) {
   return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
@@ -1845,7 +1859,8 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
         candidates.push_back(std::move(sst));
     }
     auto table_s = make_table_state_for_test(cf, env);
-    auto desc = cs.get_sstables_for_compaction(*table_s, std::move(candidates));
+    auto strategy_c = make_strategy_control_for_test(false);
+    auto desc = cs.get_sstables_for_compaction(*table_s, *strategy_c, std::move(candidates));
     BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
     return cf.stop_and_keep_alive();
   });
@@ -1915,13 +1930,14 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         // that's needed because sstable with expired data should be old enough.
         sstables::test(sst).set_data_file_write_time(db_clock::time_point::min());
         auto table_s = make_table_state_for_test(cf, env);
-        auto descriptor = cs.get_sstables_for_compaction(*table_s, { sst });
+        auto strategy_c = make_strategy_control_for_test(false);
+        auto descriptor = cs.get_sstables_for_compaction(*table_s, *strategy_c, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
         sst->set_sstable_level(1);
-        descriptor = cs.get_sstables_for_compaction(*table_s, { sst });
+        descriptor = cs.get_sstables_for_compaction(*table_s, *strategy_c, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
         // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.
@@ -1929,10 +1945,10 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
 
         // check tombstone compaction is disabled by default for DTCS
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::date_tiered, {});
-        descriptor = cs.get_sstables_for_compaction(*table_s, { sst });
+        descriptor = cs.get_sstables_for_compaction(*table_s, *strategy_c, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 0);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::date_tiered, options);
-        descriptor = cs.get_sstables_for_compaction(*table_s, { sst });
+        descriptor = cs.get_sstables_for_compaction(*table_s, *strategy_c, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
@@ -1941,7 +1957,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_threshold", "0.5f");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
-            auto descriptor = cs.get_sstables_for_compaction(*table_s, { sst });
+            auto descriptor = cs.get_sstables_for_compaction(*table_s, *strategy_c, { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which was recently created won't be included due to min interval
@@ -1950,7 +1966,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             options.emplace("tombstone_compaction_interval", "3600");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now());
-            auto descriptor = cs.get_sstables_for_compaction(*table_s, { sst });
+            auto descriptor = cs.get_sstables_for_compaction(*table_s, *strategy_c, { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
     });
@@ -3057,7 +3073,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) -> std::vector<shared_sstable> {
             auto input_ssts = std::vector<shared_sstable>(sstables.begin(), sstables.end());
             auto table_s = make_table_state_for_test(cf, env);
-            auto desc = cs.get_sstables_for_compaction(*table_s, std::move(input_ssts));
+            auto strategy_c = make_strategy_control_for_test(false);
+            auto desc = cs.get_sstables_for_compaction(*table_s, *strategy_c, std::move(input_ssts));
 
             // nothing to compact, move on.
             if (desc.sstables.empty()) {

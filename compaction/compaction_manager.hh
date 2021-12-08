@@ -40,6 +40,7 @@
 #include "compaction.hh"
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
+#include "strategy_control.hh"
 #include "backlog_controller.hh"
 #include "seastarx.hh"
 
@@ -216,6 +217,9 @@ private:
     future<> rewrite_sstables(table* t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     optimized_optional<abort_source::subscription> _early_abort_subscription;
+
+    class strategy_control;
+    std::unique_ptr<strategy_control> _strategy_control;
 public:
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, abort_source& as);
     compaction_manager(compaction_scheduling_group csg, maintenance_scheduling_group msg, size_t available_memory, uint64_t shares, abort_source& as);
@@ -322,6 +326,8 @@ public:
     void propagate_replacement(table* t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
     static sstables::compaction_data create_compaction_data();
+
+    compaction::strategy_control& get_strategy_control() const noexcept;
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
