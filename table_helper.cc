@@ -131,8 +131,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
                 std::map<sstring, sstring> opts;
                 opts["replication_factor"] = replication_factor;
                 auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
-                // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
-                qp.get_migration_manager().announce_new_keyspace(ksm, api::min_timestamp).get();
+                qp.get_migration_manager().announce_new_keyspace(ksm).get();
             }
 
             qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);

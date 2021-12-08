@@ -239,15 +239,13 @@ future<> system_distributed_keyspace::start() {
         return futurize_invoke(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
     };
 
-    // We use min_timestamp so that the default keyspace metadata will lose with any manual adjustments.
-    // See issue #2129.
     co_await ignore_existing([this] {
         auto ksm = keyspace_metadata::new_keyspace(
                 NAME,
                 "org.apache.cassandra.locator.SimpleStrategy",
                 {{"replication_factor", "3"}},
                 true /* durable_writes */);
-        return _mm.announce_new_keyspace(ksm, api::min_timestamp);
+        return _mm.announce_new_keyspace(ksm);
     });
 
     co_await ignore_existing([this] {
@@ -256,7 +254,7 @@ future<> system_distributed_keyspace::start() {
                 "org.apache.cassandra.locator.EverywhereStrategy",
                 {},
                 true /* durable_writes */);
-        return _mm.announce_new_keyspace(ksm, api::min_timestamp);
+        return _mm.announce_new_keyspace(ksm);
     });
 
     for (auto&& table : ensured_tables()) {

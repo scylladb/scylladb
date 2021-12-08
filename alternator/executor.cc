@@ -4050,7 +4050,7 @@ future<> executor::create_keyspace(std::string_view keyspace_name) {
         }
         auto opts = get_network_topology_options(_gossiper, rf);
         auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
-        return _mm.announce_new_keyspace(ksm, api::new_timestamp());
+        return _mm.announce_new_keyspace(ksm);
     });
 }
 

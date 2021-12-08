@@ -134,9 +134,7 @@ public:
 
     future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
 
-    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp);
-
-    std::vector<mutation> prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp);
+    std::vector<mutation> prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm);
 
 
     // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
