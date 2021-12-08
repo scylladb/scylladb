@@ -953,8 +953,12 @@ future<> database::remove(const column_family& cf) noexcept {
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
     auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
-    // FIXME: throw internal error if uuid not found below
-    auto cf = _column_families.at(uuid);
+    lw_shared_ptr<table> cf;
+    try {
+        cf = _column_families.at(uuid);
+    } catch (std::out_of_range&) {
+        on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
+    }
     co_await remove(*cf);
     cf->clear_views();
     co_return co_await cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
@@ -1026,21 +1030,19 @@ std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_famili
 
 column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {
     auto uuid = find_uuid(ks_name, cf_name);
-    // FIXME: throw internal error if uuid not found below
     try {
         return find_column_family(uuid);
-    } catch (...) {
-        std::throw_with_nested(no_such_column_family(ks_name, cf_name));
+    } catch (...) { // FIXME: no_such_column_family&
+        on_internal_error(dblog, fmt::format("find_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
 }
 
 const column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) const {
     auto uuid = find_uuid(ks_name, cf_name);
-    // FIXME: throw internal error if uuid not found below
     try {
         return find_column_family(uuid);
-    } catch (...) {
-        std::throw_with_nested(no_such_column_family(ks_name, cf_name));
+    } catch (...) { // FIXME: no_such_column_family&
+        on_internal_error(dblog, fmt::format("find_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
 }
 
@@ -1274,11 +1276,10 @@ std::vector<view_ptr> keyspace_metadata::views() const {
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
     auto uuid = find_uuid(ks_name, cf_name);
-    // FIXME: throw internal error if uuid not found below
     try {
         return find_schema(uuid);
-    } catch (std::out_of_range&) {
-        std::throw_with_nested(no_such_column_family(ks_name, cf_name));
+    } catch (...) { // FIXME: no_such_column_family&
+        on_internal_error(dblog, fmt::format("find_schema {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
 }
 
