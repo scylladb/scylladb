@@ -477,21 +477,20 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     tracing::add_table_name(trace_state, keyspace_name, table_name);
 
     if (!_proxy.get_db().local().has_schema(keyspace_name, table_name)) {
-        return make_ready_future<request_return_type>(api_error::resource_not_found(
-                format("Requested resource not found: Table: {} not found", table_name)));
+        co_return api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
     }
-    return _mm.announce_column_family_drop(keyspace_name, table_name, service::migration_manager::drop_views::yes).then([this, keyspace_name] {
-        return _mm.announce_keyspace_drop(keyspace_name);
-    }).then([table_name = std::move(table_name)] {
-        // FIXME: need more attributes?
-        rjson::value table_description = rjson::empty_object();
-        rjson::add(table_description, "TableName", rjson::from_string(table_name));
-        rjson::add(table_description, "TableStatus", "DELETING");
-        rjson::value response = rjson::empty_object();
-        rjson::add(response, "TableDescription", std::move(table_description));
-        elogger.trace("returning {}", response);
-        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
-    });
+
+    co_await _mm.announce_column_family_drop(keyspace_name, table_name, service::migration_manager::drop_views::yes);
+    co_await _mm.announce_keyspace_drop(keyspace_name);
+
+    // FIXME: need more attributes?
+    rjson::value table_description = rjson::empty_object();
+    rjson::add(table_description, "TableName", rjson::from_string(table_name));
+    rjson::add(table_description, "TableStatus", "DELETING");
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "TableDescription", std::move(table_description));
+    elogger.trace("returning {}", response);
+    co_return make_jsonable(std::move(response));
 }
 
 static data_type parse_key_type(const std::string& type) {
