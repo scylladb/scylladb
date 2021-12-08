@@ -31,6 +31,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/print.hh>
 #include <seastar/util/log.hh>
+#include <seastar/util/log-cli.hh>
 #include <seastar/net/tls.hh>
 
 #include "cdc/cdc_extension.hh"
@@ -986,39 +987,18 @@ bool db::config::check_experimental(experimental_features_t::feature f) const {
 
 namespace bpo = boost::program_options;
 
-logging::settings db::config::logging_settings(const bpo::variables_map& map) const {
-    struct convert {
-        std::unordered_map<sstring, seastar::log_level> operator()(const seastar::program_options::string_map& map) const {
-            std::unordered_map<sstring, seastar::log_level> res;
-            for (auto& p : map) {
-                res.emplace(p.first, (*this)(p.second));
-            };
-            return res;
-        }
-        seastar::log_level operator()(const sstring& s) const {
-            return boost::lexical_cast<seastar::log_level>(s);
-        }
-        bool operator()(bool b) const {
-            return b;
-        }
-    };
-
-    auto value = [&map](auto& v, auto dummy) {
-        auto name = utils::hyphenate(v.name());
-        const bpo::variable_value& opt = map[name];
-
+logging::settings db::config::logging_settings(const log_cli::options& opts) const {
+    auto value = [&](auto& v, const auto& opt) {
         if (opt.defaulted() && v.is_set()) {
             return v();
         }
-        using expected = std::decay_t<decltype(dummy)>;
-
-        return convert()(opt.as<expected>());
+        return opt.get_value();
     };
 
-    return logging::settings{ value(logger_log_level, seastar::program_options::string_map())
-        , value(default_log_level, sstring())
-        , value(log_to_stdout, bool())
-        , value(log_to_syslog, bool())
+    return logging::settings{ value(logger_log_level, opts.logger_log_level)
+        , value(default_log_level, opts.default_log_level)
+        , value(log_to_stdout, opts.log_to_stdout)
+        , value(log_to_syslog, opts.log_to_syslog)
     };
 }
 
