@@ -953,6 +953,7 @@ future<> database::remove(const column_family& cf) noexcept {
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
     auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
+    // FIXME: throw internal error if uuid not found below
     auto cf = _column_families.at(uuid);
     co_await remove(*cf);
     cf->clear_views();
@@ -966,8 +967,8 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
 const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
         return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
-    } catch (...) {
-        throw std::out_of_range("");
+    } catch (std::out_of_range&) {
+        throw no_such_column_family(ks, cf);
     }
 }
 
@@ -1024,16 +1025,20 @@ std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_famili
 }
 
 column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {
+    auto uuid = find_uuid(ks_name, cf_name);
+    // FIXME: throw internal error if uuid not found below
     try {
-        return find_column_family(find_uuid(ks_name, cf_name));
+        return find_column_family(uuid);
     } catch (...) {
         std::throw_with_nested(no_such_column_family(ks_name, cf_name));
     }
 }
 
 const column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) const {
+    auto uuid = find_uuid(ks_name, cf_name);
+    // FIXME: throw internal error if uuid not found below
     try {
-        return find_column_family(find_uuid(ks_name, cf_name));
+        return find_column_family(uuid);
     } catch (...) {
         std::throw_with_nested(no_such_column_family(ks_name, cf_name));
     }
@@ -1268,8 +1273,10 @@ std::vector<view_ptr> keyspace_metadata::views() const {
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
+    auto uuid = find_uuid(ks_name, cf_name);
+    // FIXME: throw internal error if uuid not found below
     try {
-        return find_schema(find_uuid(ks_name, cf_name));
+        return find_schema(uuid);
     } catch (std::out_of_range&) {
         std::throw_with_nested(no_such_column_family(ks_name, cf_name));
     }
