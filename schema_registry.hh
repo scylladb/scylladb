@@ -87,6 +87,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
 
     friend class schema_registry;
 private:
+    void erase();
     void pair_with(const schema& s);
     schema_ptr do_load(schema_factory factory);
 public:

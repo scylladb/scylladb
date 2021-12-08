@@ -39,6 +39,16 @@ schema_version_loading_failed::schema_version_loading_failed(table_schema_versio
         : std::runtime_error{format("Failed to load schema version {}", v)}
 { }
 
+void schema_registry_entry::erase() {
+    slogger.debug("Dropping {}", _version);
+    assert(_schemas.empty());
+    try {
+        _registry._entries.erase(_version);
+    } catch (...) {
+        slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
+    }
+}
+
 void schema_registry_entry::pair_with(const schema& s) {
     if (std::find(_schemas.begin(), _schemas.end(), &s) != _schemas.end()) {
         slogger.trace("Registry entry already paired with schema@{} of version {}", fmt::ptr(&s), s.version());
@@ -66,15 +76,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     , _registry(r)
     , _sync_state(sync_state::NOT_SYNCED)
 {
-    _erase_timer.set_callback([this] {
-        slogger.debug("Dropping {}", _version);
-        assert(_schemas.empty());
-        try {
-            _registry._entries.erase(_version);
-        } catch (...) {
-            slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
-        }
-    });
+    _erase_timer.set_callback([this] { erase(); });
 }
 
 schema_registry::~schema_registry() = default;
