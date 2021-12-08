@@ -420,8 +420,8 @@ public:
             auto e = current_allocator().construct<rows_entry>(_schema, *_current_row[0].it);
             e->set_continuous(latest_i != rows.end() && latest_i->continuous());
             _snp.tracker()->insert(*e);
-            rows.insert_before(latest_i, *e);
-            return {*e, true};
+            auto e_i = rows.insert_before(latest_i, *e);
+            return ensure_result{*e_i, true};
         }
     }
 
@@ -456,8 +456,8 @@ public:
         auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
             is_continuous(latest_i != rows.end() && latest_i->continuous()));
         _snp.tracker()->insert(*e);
-        rows.insert_before(latest_i, *e);
-        return ensure_result{*e, true};
+        auto e_i = rows.insert_before(latest_i, *e);
+        return ensure_result{*e_i, true};
     }
 
     // Brings the entry pointed to by the cursor to the front of the LRU
