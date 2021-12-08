@@ -193,10 +193,6 @@ void storage_service::register_metrics() {
     });
 }
 
-bool storage_service::is_auto_bootstrap() const {
-    return _db.local().get_config().auto_bootstrap();
-}
-
 bool storage_service::is_first_node() {
     if (_db.local().is_replacing()) {
         return false;

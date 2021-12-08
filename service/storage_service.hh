@@ -283,7 +283,6 @@ public:
     }
 
 private:
-    bool is_auto_bootstrap() const;
     inet_address get_broadcast_address() const {
         return utils::fb_utilities::get_broadcast_address();
     }
