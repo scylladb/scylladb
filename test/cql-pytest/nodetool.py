@@ -77,7 +77,11 @@ def take_snapshot(cql, table, tag, skip_flush):
     if has_rest_api(cql):
         requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params={'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush})
     else:
-        run_nodetool(cql, "flush", ks, cf)
+        args = ['--tag', tag, '--table', cf]
+        if skip_flush:
+            args.append('--skip-flush')
+        args.append(ks)
+        run_nodetool(cql, "snapshot", *args)
 
 def refreshsizeestimates(cql):
     if has_rest_api(cql):
