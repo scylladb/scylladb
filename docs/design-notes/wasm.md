@@ -1,6 +1,6 @@
 # WASM support for user-defined functions
 
-This document describes the details of WASM language support in user-defined functions (UDF). `wasm` is one of the possible languages to implement these functions in, aside `lua`.
+This document describes the details of WASM language support in user-defined functions (UDF). The language `wasm` is one of the possible languages to use, besides Lua, to implement these functions.
 
 ## Experimental status
 
