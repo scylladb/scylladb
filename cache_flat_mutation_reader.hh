@@ -593,8 +593,8 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
                 clogger.trace("csm {}: insert dummy at {}", fmt::ptr(this), _lower_bound);
                 auto it = with_allocator(_lsa_manager.region().allocator(), [&] {
                     auto& rows = _snp->version()->partition().mutable_clustered_rows();
-                    auto new_entry = current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no);
-                    return rows.insert_before(_next_row.get_iterator_in_latest_version(), *new_entry);
+                    auto new_entry = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no));
+                    return rows.insert_before(_next_row.get_iterator_in_latest_version(), std::move(new_entry));
                 });
                 _snp->tracker()->insert(*it);
                 _last_row = partition_snapshot_row_weakref(*_snp, it, true);
