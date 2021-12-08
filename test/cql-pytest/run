@@ -17,7 +17,10 @@ else:
 pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
-run.wait_for_services(pid, [lambda: check_cql(ip)])
+run.wait_for_services(pid, [
+    lambda: run.check_rest_api(ip),
+    lambda: check_cql(ip)
+])
 success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'
