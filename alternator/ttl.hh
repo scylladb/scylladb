@@ -24,6 +24,7 @@
 #include "seastarx.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/semaphore.hh>
 
 class database;
 
@@ -44,6 +45,8 @@ class expiration_service final : public seastar::peering_sharded_service<expirat
     // should be triggered. stop() below uses both _abort_source and _end.
     std::optional<future<>> _end;
     abort_source _abort_source;
+    // Ensures that at most 1 page of scan results at a time is processed by the TTL service
+    named_semaphore _page_sem{1, named_semaphore_exception_factory{"alternator_ttl"}};
     bool shutting_down() { return _abort_source.abort_requested(); }
 public:
     // sharded_service<expiration_service>::start() creates this object on

@@ -414,8 +414,7 @@ struct scan_ranges_context {
         command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice));
         executor::client_state client_state{executor::client_state::internal_tag()};
         tracing::trace_state_ptr trace_state;
-        // FIXME: is empty_service_permit() the right thing?
-        // view builder has _permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout))
+        // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism
         query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, empty_service_permit());
         // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
         // DCs or only once for each range? If the latter, we need to change the CLs in the
@@ -434,7 +433,8 @@ static future<> scan_table_ranges(
         service::storage_proxy& proxy,
         const scan_ranges_context& scan_ctx,
         dht::partition_range_vector&& partition_ranges,
-        abort_source& abort_source)
+        abort_source& abort_source,
+        named_semaphore& page_sem)
 {
     const schema_ptr& s = scan_ctx.s;
     assert (partition_ranges.size() == 1); // otherwise issue #9167 will cause incorrect results.
@@ -444,6 +444,7 @@ static future<> scan_table_ranges(
         if (abort_source.abort_requested()) {
             co_return;
         }
+        auto units = co_await get_units(page_sem, 1);
         // We don't to limit page size in number of rows because there is a
         // builtin limit of the page's size in bytes. Setting this limit to 1
         // is useful for debugging the paging code with moderate-size data.
@@ -535,7 +536,8 @@ static future<bool> scan_table(
     service::storage_proxy& proxy,
     database& db,
     schema_ptr s,
-    abort_source& abort_source)
+    abort_source& abort_source,
+    named_semaphore& page_sem)
 {
     // Check if an expiration-time attribute is enabled for this table.
     // If not, just return false immediately.
@@ -595,7 +597,7 @@ static future<bool> scan_table(
         // we fail the entire scan (and rescan from the beginning). Need to
         // reconsider this. Saving the scan position might be a good enough
         // solution for this problem.
-        co_await scan_table_ranges(proxy, scan_ctx, std::move(partition_ranges), abort_source);
+        co_await scan_table_ranges(proxy, scan_ctx, std::move(partition_ranges), abort_source, page_sem);
     }
     co_return true;
 }
@@ -621,7 +623,7 @@ future<> expiration_service::run() {
                 co_return;
             }
             try {
-                co_await scan_table(_proxy, _db, s, _abort_source);
+                co_await scan_table(_proxy, _db, s, _abort_source, _page_sem);
             } catch (...) {
                 // The scan of a table may fail in the middle for many
                 // reasons, including network failure and even the table
