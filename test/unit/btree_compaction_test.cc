@@ -72,8 +72,8 @@ int main(int argc, char **argv) {
 
             stress_compact_collection(cfg,
                 /* insert */ [&] (int key) {
-                    test_key *k = current_allocator().construct<test_key>(key);
-                    auto ti = t->insert(*k, test_key_tri_compare{});
+                    auto k = alloc_strategy_unique_ptr<test_key>(current_allocator().construct<test_key>(key));
+                    auto ti = t->insert(std::move(k), test_key_tri_compare{});
                     assert(ti.second);
                 },
                 /* erase */ [&] (int key) {

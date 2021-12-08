@@ -60,9 +60,8 @@ BOOST_AUTO_TEST_CASE(test_ops_empty_tree) {
 BOOST_AUTO_TEST_CASE(test_plain_key_pointer) {
     test_tree t;
 
-    test_key k(1);
-    t.insert(k, cmp);
-    t.clear();
+    t.insert(std::make_unique<test_key>(1), cmp);
+    t.clear_and_dispose(key_deleter);
 }
 
 BOOST_AUTO_TEST_CASE(test_double_insert) {
