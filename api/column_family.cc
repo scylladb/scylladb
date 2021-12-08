@@ -59,8 +59,8 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
 const utils::UUID& get_uuid(const sstring& ks, const sstring& cf, const database& db) {
     try {
         return db.find_uuid(ks, cf);
-    } catch (std::out_of_range& e) {
-        throw bad_param_exception(format("Column family '{}:{}' not found", ks, cf));
+    } catch (no_such_column_family& e) {
+        throw bad_param_exception(e.what());
     }
 }
 

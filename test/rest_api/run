@@ -2,7 +2,9 @@
 
 import sys
 
-import run   # run.py in this directory
+# Use the run.py library from ../cql-pytest:
+sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+import run
 
 print('Scylla is: ' + run.scylla + '.')
 
@@ -19,8 +21,9 @@ ip = run.pid_to_ip(pid)
 
 run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),
-    lambda: check_cql(ip)
+    lambda: run.check_cql(ip)
 ])
+
 success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'

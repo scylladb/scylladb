@@ -8,6 +8,7 @@ import shutil
 import signal
 import atexit
 import tempfile
+import requests
 
 # run_with_temporary_dir() is a utility function for running a process, such
 # as Scylla, Cassandra or Redis, inside its own new temporary directory,
@@ -259,6 +260,17 @@ def check_ssl_cql(ip):
     # try, you get mysterious EOF errors (see issue #6971) :-(
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     check_cql(ip, ssl_context)
+
+# Test that the Scylla REST API is serving.
+# Can be used as a checker function with wait_for_services() below.
+def check_rest_api(ip, port=10000):
+    try:
+        requests.get(f"http://{ip}:{port}/")
+        # getting "/" returns error status 404 but we don't care
+        # as long as the server returns it
+    except requests.exceptions.ConnectionError:
+        raise NotYetUp
+    # Any other exception may indicate a problem, and is passed to the caller.
 
 # wait_for_services() waits for scylla to finish booting successfully and
 # listen to services checked by the given "checkers". Raises an exception

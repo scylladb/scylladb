@@ -95,13 +95,6 @@ inline std::vector<sstring> split(const sstring& text, const char* separator) {
 }
 
 /**
- * Split a column family parameter
- */
-inline std::vector<sstring> split_cf(const sstring& cf) {
-    return split(cf, ",");
-}
-
-/**
  * A helper function to sum values on an a distributed object that
  * has a get_stats method.
  *
