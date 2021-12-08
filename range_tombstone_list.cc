@@ -42,28 +42,30 @@ static auto construct_range_tombstone_entry(Args&&... args) {
 }
 
 void range_tombstone_list::apply_reversibly(const schema& s,
-        clustering_key_prefix start, bound_kind start_kind,
-        clustering_key_prefix end,
+        clustering_key_prefix start_key, bound_kind start_kind,
+        clustering_key_prefix end_key,
         bound_kind end_kind,
         tombstone tomb,
         reverter& rev)
 {
+    position_in_partition start(position_in_partition::range_tag_t(), bound_view(std::move(start_key), start_kind));
+    position_in_partition end(position_in_partition::range_tag_t(), bound_view(std::move(end_key), end_kind));
+
     if (!_tombstones.empty()) {
-        bound_view::compare less(s);
-        bound_view start_bound(start, start_kind);
+        position_in_partition::less_compare less(s);
         auto last = --_tombstones.end();
         range_tombstones_type::iterator it;
-        if (less(start_bound, last->end_bound())) {
-            it = _tombstones.upper_bound(start_bound, [less](auto&& sb, auto&& rt) {
-                return less(sb, rt.end_bound());
+        if (less(start, last->end_position())) {
+            it = _tombstones.upper_bound(start, [less](auto&& sb, auto&& rt) {
+                return less(sb, rt.end_position());
             });
         } else {
             it = _tombstones.end();
         }
-        insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
+        insert_from(s, std::move(it), std::move(start), std::move(end), std::move(tomb), rev);
         return;
     }
-    auto rt = construct_range_tombstone_entry(std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
+    auto rt = construct_range_tombstone_entry(std::move(start), std::move(end), std::move(tomb));
     rev.insert(_tombstones.end(), *rt);
     rt.release();
 }
@@ -81,35 +83,31 @@ void range_tombstone_list::apply_reversibly(const schema& s,
  */
 void range_tombstone_list::insert_from(const schema& s,
     range_tombstones_type::iterator it,
-    clustering_key_prefix start,
-    bound_kind start_kind,
-    clustering_key_prefix end,
-    bound_kind end_kind,
+    position_in_partition start,
+    position_in_partition end,
     tombstone tomb,
     reverter& rev)
 {
-    bound_view::compare less(s);
-    bound_view end_bound(end, end_kind);
+    position_in_partition::tri_compare cmp(s);
+
     if (it != _tombstones.begin()) {
         auto prev = std::prev(it);
-        if (prev->tombstone().tomb == tomb && prev->end_bound().adjacent(s, bound_view(start, start_kind))) {
-            start = prev->tombstone().start;
-            start_kind = prev->tombstone().start_kind;
+        if (prev->tombstone().tomb == tomb && cmp(prev->end_position(), start) == 0) {
+            start = prev->position();
             rev.erase(prev);
         }
     }
     while (it != _tombstones.end()) {
-        bound_view start_bound(start, start_kind);
-        if (less(end_bound, start_bound)) {
+        if (cmp(end, start) <= 0) {
             return;
         }
 
-        if (less(end_bound, it->start_bound())) {
+        if (cmp(end, it->position()) < 0) {
             // not overlapping
-            if (it->tombstone().tomb == tomb && end_bound.adjacent(s, it->start_bound())) {
-                rev.update(it, {std::move(start), start_kind, it->tombstone().end, it->tombstone().end_kind, tomb});
+            if (it->tombstone().tomb == tomb && cmp(end, it->position()) == 0) {
+                rev.update(it, {std::move(start), std::move(start), tomb});
             } else {
-                auto rt = construct_range_tombstone_entry(std::move(start), start_kind, std::move(end), end_kind, tomb);
+                auto rt = construct_range_tombstone_entry(std::move(start), std::move(end), tomb);
                 rev.insert(it, *rt);
                 rt.release();
             }
@@ -119,34 +117,29 @@ void range_tombstone_list::insert_from(const schema& s,
         auto c = tomb <=> it->tombstone().tomb;
         if (c == 0) {
             // same timestamp, overlapping or adjacent, so merge.
-            if (less(it->start_bound(), start_bound)) {
-                start = it->tombstone().start;
-                start_kind = it->tombstone().start_kind;
+            if (cmp(it->position(), start) < 0) {
+                start = it->position();
             }
-            if (less(end_bound, it->end_bound())) {
-                end = it->tombstone().end;
-                end_kind = it->tombstone().end_kind;
-                end_bound = bound_view(end, end_kind);
+            if (cmp(end, it->end_position()) < 0) {
+                end = it->end_position();
             }
             it = rev.erase(it);
         } else if (c > 0) {
             // We overwrite the current tombstone.
 
-            if (less(it->start_bound(), start_bound)) {
-                auto new_end = bound_view(start, invert_kind(start_kind));
-                if (!less(new_end, it->start_bound())) {
-                    // Here it->start < start
-                    auto rt = construct_range_tombstone_entry(it->start_bound(), new_end, it->tombstone().tomb);
-                    rev.update(it, {start_bound, it->end_bound(), it->tombstone().tomb});
+            if (cmp(it->position(), start) < 0) {
+                {
+                    auto rt = construct_range_tombstone_entry(it->position(), start, it->tombstone().tomb);
+                    rev.update(it, {start, it->end_position(), it->tombstone().tomb});
                     rev.insert(it, *rt);
                     rt.release();
                 }
             }
 
-            if (less(end_bound, it->end_bound())) {
+            if (cmp(end, it->end_position()) < 0) {
                 // Here start <= it->start and end < it->end.
-                auto rt = construct_range_tombstone_entry(std::move(start), start_kind, end, end_kind, std::move(tomb));
-                rev.update(it, {std::move(end), invert_kind(end_kind), it->tombstone().end, it->tombstone().end_kind, it->tombstone().tomb});
+                auto rt = construct_range_tombstone_entry(std::move(start), end, std::move(tomb));
+                rev.update(it, {std::move(end), it->end_position(), it->tombstone().tomb});
                 rev.insert(it, *rt);
                 rt.release();
                 return;
@@ -157,30 +150,28 @@ void range_tombstone_list::insert_from(const schema& s,
         } else {
             // We don't overwrite the current tombstone.
 
-            if (less(start_bound, it->start_bound())) {
+            if (cmp(start, it->position()) < 0) {
                 // The new tombstone starts before the current one.
-                if (less(it->start_bound(), end_bound)) {
+                if (cmp(it->position(), end) < 0) {
                     // Here start < it->start and it->start < end.
-                    auto new_end_kind = invert_kind(it->tombstone().start_kind);
-                    if (!less(bound_view(it->tombstone().start, new_end_kind), start_bound)) {
-                        auto rt = construct_range_tombstone_entry(std::move(start), start_kind, it->tombstone().start, new_end_kind, tomb);
+                    {
+                        auto rt = construct_range_tombstone_entry(std::move(start), it->position(), tomb);
                         it = rev.insert(it, *rt);
                         rt.release();
                         ++it;
                     }
                 } else {
                     // Here start < it->start and end <= it->start, so just insert the new tombstone.
-                    auto rt = construct_range_tombstone_entry(std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
+                    auto rt = construct_range_tombstone_entry(std::move(start), std::move(end), std::move(tomb));
                     rev.insert(it, *rt);
                     rt.release();
                     return;
                 }
             }
 
-            if (less(it->end_bound(), end_bound)) {
+            if (cmp(it->end_position(), end) < 0) {
                 // Here the current tombstone overwrites a range of the new one.
-                start = it->tombstone().end;
-                start_kind = invert_kind(it->tombstone().end_kind);
+                start = it->end_position();
                 ++it;
             } else {
                 // Here the current tombstone completely overwrites the new one.
@@ -190,7 +181,7 @@ void range_tombstone_list::insert_from(const schema& s,
     }
 
     // If we got here, then just insert the remainder at the end.
-    auto rt = construct_range_tombstone_entry(std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
+    auto rt = construct_range_tombstone_entry(std::move(start), std::move(end), std::move(tomb));
     rev.insert(it, *rt);
     rt.release();
 }

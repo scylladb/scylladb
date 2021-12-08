@@ -297,7 +297,13 @@ public:
 private:
     void apply_reversibly(const schema& s, clustering_key_prefix start, bound_kind start_kind,
                           clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);
-    void insert_from(const schema& s, range_tombstones_type::iterator it, clustering_key_prefix start,
-                     bound_kind start_kind, clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);
+
+    void insert_from(const schema& s,
+                     range_tombstones_type::iterator it,
+                     position_in_partition start,
+                     position_in_partition end,
+                     tombstone tomb,
+                     reverter& rev);
+
     range_tombstones_type::iterator find(const schema& s, const range_tombstone_entry& rt);
 };
