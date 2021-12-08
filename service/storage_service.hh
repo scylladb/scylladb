@@ -369,6 +369,8 @@ private:
     void run_replace_ops();
     void run_bootstrap_ops();
 
+    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace();
+
 public:
     future<bool> is_initialized();
 

@@ -604,6 +604,26 @@ void storage_service::mark_existing_views_as_built() {
     }).get();
 }
 
+std::list<gms::inet_address> storage_service::get_ignore_dead_nodes_for_replace() {
+    std::vector<sstring> ignore_nodes_strs;
+    std::list<gms::inet_address> ignore_nodes;
+    boost::split(ignore_nodes_strs, _db.local().get_config().ignore_dead_nodes_for_replace(), boost::is_any_of(","));
+    for (std::string n : ignore_nodes_strs) {
+        try {
+            std::replace(n.begin(), n.end(), '\"', ' ');
+            std::replace(n.begin(), n.end(), '\'', ' ');
+            boost::trim_all(n);
+            if (!n.empty()) {
+                auto node = gms::inet_address(n);
+                ignore_nodes.push_back(node);
+            }
+        } catch (...) {
+            throw std::runtime_error(format("Failed to parse --ignore-dead-nodes-for-replace parameter: ignore_nodes={}, node={}", ignore_nodes_strs, n));
+        }
+    }
+    return ignore_nodes;
+}
+
 // Runs inside seastar::async context
 void storage_service::bootstrap() {
     _is_bootstrap_mode = true;
@@ -2100,8 +2120,7 @@ void storage_service::run_replace_ops() {
     }
     auto replace_address = _db.local().get_replace_address().value();
     auto uuid = utils::make_random_uuid();
-    // TODO: Specify ignore_nodes
-    std::list<gms::inet_address> ignore_nodes;
+    std::list<gms::inet_address> ignore_nodes = get_ignore_dead_nodes_for_replace();
     // Step 1: Decide who needs to sync data for replace operation
     std::list<gms::inet_address> sync_nodes;
     for (const auto& x :_gossiper.endpoint_state_map) {
@@ -2145,7 +2164,7 @@ void storage_service::run_replace_ops() {
             throw std::runtime_error(msg);
         }
         if (!nodes_down.empty()) {
-            auto msg = format("replace[{}]: Nodes={} needed for replace operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+            auto msg = format("replace[{}]: Nodes={} needed for replace operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes-for-replace <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes-for-replace 127.0.0.1,127.0.0.2", uuid, nodes_down);
             slogger.warn("{}", msg);
             throw std::runtime_error(msg);
         }
@@ -2185,7 +2204,7 @@ void storage_service::run_replace_ops() {
         // Step 7: Sync data for replace
         if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
-            _repair.local().replace_with_repair(get_token_metadata_ptr(), _bootstrap_tokens).get();
+            _repair.local().replace_with_repair(get_token_metadata_ptr(), _bootstrap_tokens, ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
