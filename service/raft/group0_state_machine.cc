@@ -49,7 +49,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     return make_ready_future<>();
 }
 
-future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_id snp) {
+future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
     // Note that this may bring newer state than the schema state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine idempotent it is not a problem.
