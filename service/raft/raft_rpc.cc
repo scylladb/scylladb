@@ -18,6 +18,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include <seastar/core/coroutine.hh>
 #include "service/raft/raft_rpc.hh"
 #include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
@@ -30,8 +31,8 @@ namespace service {
 
 static seastar::logger rlogger("raft_rpc");
 
-raft_rpc::raft_rpc(netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id)
-    : _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _address_map(address_map)
+raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms, raft_address_map<>& address_map, raft::group_id gid, raft::server_id srv_id)
+    : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _address_map(address_map)
 {}
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
@@ -193,7 +194,8 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
-    return _client->apply_snapshot(from, std::move(snp));
+    co_await _sm.transfer_snapshot(_address_map.get_inet_address(from), snp.snp.id);
+    co_return co_await _client->apply_snapshot(from, std::move(snp));
 }
 
 future<raft::add_entry_reply> raft_rpc::execute_add_entry(raft::server_id from, raft::command cmd) {
