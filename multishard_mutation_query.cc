@@ -659,6 +659,9 @@ public:
         : impl(std::move(s), std::move(permit)) , _reader(std::move(rd)) , _it(ranges.begin()) , _end(ranges.end()) { }
 
     virtual future<> fill_buffer() override {
+        if (is_end_of_stream()) {
+            co_return;
+        }
         while (is_buffer_empty()) {
             if (_reader.is_buffer_empty() && _reader.is_end_of_stream()) {
                 if (++_it == _end) {
