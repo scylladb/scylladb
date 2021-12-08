@@ -139,9 +139,9 @@ private:
     compaction_mode(const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
-    get_next_non_expired_sstables(table_state& table_s, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before);
+    get_next_non_expired_sstables(table_state& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before);
 
-    std::vector<shared_sstable> get_compaction_candidates(table_state& table_s, std::vector<shared_sstable> candidate_sstables);
+    std::vector<shared_sstable> get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables);
 public:
     // Find the lowest timestamp for window of given size
     static timestamp_type
@@ -154,8 +154,8 @@ public:
     get_buckets(std::vector<shared_sstable> files, time_window_compaction_strategy_options& options);
 
     std::vector<shared_sstable>
-    newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets, int min_threshold, int max_threshold,
-            timestamp_type now);
+    newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
+        int min_threshold, int max_threshold, timestamp_type now);
 
     static std::vector<shared_sstable>
     trim_to_threshold(std::vector<shared_sstable> bucket, int max_threshold);
