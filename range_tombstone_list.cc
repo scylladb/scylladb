@@ -48,11 +48,15 @@ void range_tombstone_list::apply_reversibly(const schema& s,
         tombstone tomb,
         reverter& rev)
 {
+    position_in_partition::less_compare less(s);
     position_in_partition start(position_in_partition::range_tag_t(), bound_view(std::move(start_key), start_kind));
     position_in_partition end(position_in_partition::range_tag_t(), bound_view(std::move(end_key), end_kind));
 
+    if (!less(start, end)) {
+        return;
+    }
+
     if (!_tombstones.empty()) {
-        position_in_partition::less_compare less(s);
         auto last = --_tombstones.end();
         range_tombstones_type::iterator it;
         if (less(start, last->end_position())) {

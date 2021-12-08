@@ -210,6 +210,35 @@ BOOST_AUTO_TEST_CASE(test_overlapping_addition) {
     BOOST_REQUIRE(it == l.end());
 }
 
+BOOST_AUTO_TEST_CASE(test_adjacent_empty_range_tombstone) {
+    range_tombstone_list l(*s);
+
+    l.apply(*s, rtie(1, 1, 2));
+    l.apply(*s, rt(1, 2, 3));
+    l.apply(*s, rtei(2, 2, 2));
+    l.apply(*s, rtei(2, 4, 3));
+
+    auto it = l.begin();
+    assert_rt(rt(1, 4, 3), *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_empty_range_tombstones_are_dropped) {
+    range_tombstone_list l(*s);
+
+    l.apply(*s, rtei(0, 0, 1));
+    l.apply(*s, rtie(0, 0, 1));
+    l.apply(*s, rt(1, 2, 1));
+    l.apply(*s, rtei(4, 4, 1));
+    l.apply(*s, rtie(5, 5, 1));
+    l.apply(*s, rt(7, 8, 1));
+
+    auto it = l.begin();
+    assert_rt(rt(1, 2, 1), *it++);
+    assert_rt(rt(7, 8, 1), *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
 BOOST_AUTO_TEST_CASE(test_simple_overlap) {
     range_tombstone_list l1(*s);
 
@@ -471,6 +500,23 @@ static std::vector<range_tombstone> make_random() {
         }
 
         rts.emplace_back(std::move(start_b), std::move(end_b), tombstone(dist(gen), gc_now));
+    }
+
+    int32_t size_empty = dist(gen) / 2;
+    for (int32_t i = 0; i < size_empty; ++i) {
+        clustering_key_prefix key = make_random_ckey();
+        bool start_incl = dist(gen) > 25;
+        if (start_incl) {
+            rts.emplace_back(
+                    position_in_partition::before_key(key),
+                    position_in_partition::before_key(key),
+                    tombstone(dist(gen), gc_now));
+        } else {
+            rts.emplace_back(
+                    position_in_partition::after_key(key),
+                    position_in_partition::after_key(key),
+                    tombstone(dist(gen), gc_now));
+        }
     }
 
     return rts;
