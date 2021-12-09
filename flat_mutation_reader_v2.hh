@@ -780,3 +780,5 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
 future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&);
+
+flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m);

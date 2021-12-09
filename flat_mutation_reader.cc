@@ -340,6 +340,109 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
     return make_flat_mutation_reader<reader>(std::move(m));
 }
 
+flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
+    class reader : public flat_mutation_reader_v2::impl {
+        flat_mutation_reader_v2 _underlying;
+        position_range _current;
+        mutation_fragment_v2_opt _next;
+        tombstone _active_tombstone;
+        bool _current_has_content = false;
+        // When resolves, _next is engaged or _end_of_stream is set.
+        future<> ensure_next() {
+            if (_next) {
+                co_return;
+            }
+            _next = co_await _underlying();
+            if (!_next) {
+                maybe_emit_end_tombstone();
+                _end_of_stream = true;
+            }
+        }
+        void maybe_emit_start_tombstone() {
+            if (!_current_has_content && _active_tombstone) {
+                _current_has_content = true;
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition_view::before_key(_current.start()), _active_tombstone));
+            }
+        }
+        void maybe_emit_end_tombstone() {
+            if (_active_tombstone) {
+                push_mutation_fragment(*_schema, _permit, range_tombstone_change(position_in_partition_view::after_key(_current.end()), {}));
+            }
+        }
+    public:
+        reader(flat_mutation_reader_v2 r) : impl(r.schema(), r.permit()), _underlying(std::move(r)), _current({
+            position_in_partition(position_in_partition::partition_start_tag_t()),
+            position_in_partition(position_in_partition::after_static_row_tag_t())
+        }) { }
+        virtual future<> fill_buffer() override {
+            while (!is_buffer_full()) {
+                co_await ensure_next();
+                if (is_end_of_stream()) {
+                    break;
+                }
+                position_in_partition::tri_compare cmp(*_schema);
+                if (cmp(_next->position(), _current.end()) >= 0) {
+                    maybe_emit_start_tombstone();
+                    maybe_emit_end_tombstone();
+                    _end_of_stream = true;
+                    // keep _next, it may be relevant for next range
+                    break;
+                }
+                if (_next->relevant_for_range(*_schema, _current.start())) {
+                    if (!_current_has_content && (!_next->is_range_tombstone_change() || cmp(_next->position(), _current.start()) != 0)) {
+                        maybe_emit_start_tombstone();
+                    }
+                    if (_next->is_range_tombstone_change()) {
+                        _active_tombstone = _next->as_range_tombstone_change().tombstone();
+                    }
+                    _current_has_content = true;
+                    push_mutation_fragment(std::move(*_next));
+                } else if (_next->is_range_tombstone_change()) {
+                    _active_tombstone = _next->as_range_tombstone_change().tombstone();
+                }
+                _next = {};
+            }
+        }
+        virtual future<> fast_forward_to(position_range pr) override {
+            _current = std::move(pr);
+            _end_of_stream = false;
+            _current_has_content = false;
+            forward_buffer_to(_current.start());
+            return make_ready_future<>();
+        }
+        virtual future<> next_partition() override {
+            _end_of_stream = false;
+            if (!_next || !_next->is_partition_start()) {
+                co_await _underlying.next_partition();
+                _next = {};
+            }
+            clear_buffer_to_next_partition();
+            _current = {
+                position_in_partition(position_in_partition::partition_start_tag_t()),
+                position_in_partition(position_in_partition::after_static_row_tag_t())
+            };
+            _active_tombstone = {};
+            _current_has_content = false;
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            _end_of_stream = false;
+            clear_buffer();
+            _next = {};
+            _current = {
+                position_in_partition(position_in_partition::partition_start_tag_t()),
+                position_in_partition(position_in_partition::after_static_row_tag_t())
+            };
+            _active_tombstone = {};
+            _current_has_content = false;
+            return _underlying.fast_forward_to(pr);
+        }
+        virtual future<> close() noexcept override {
+            return _underlying.close();
+        }
+    };
+    return make_flat_mutation_reader_v2<reader>(std::move(m));
+}
+
 flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_partition) {
     class reader : public flat_mutation_reader::impl {
         flat_mutation_reader _underlying;
