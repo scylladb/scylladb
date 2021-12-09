@@ -393,7 +393,7 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func, lw_
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 5, 5, 6);").get();
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 6, 5, 6);").get();
 
-            return func(e);
+            func(e).get();
         }, db_cfg_ptr).get();
     });
 }
