@@ -24,6 +24,7 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
 
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
@@ -45,7 +46,7 @@ namespace {
 sstring read_file(std::filesystem::path path) {
     auto file = open_file_dma(path.native(), open_flags::ro).get();
     auto fstream = make_file_input_stream(file);
-    return httpd::read_entire_stream_contiguous(fstream).get();
+    return util::read_entire_stream_contiguous(fstream).get();
 }
 
 std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {

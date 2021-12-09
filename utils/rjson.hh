@@ -168,7 +168,7 @@ std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_le
 rjson::value parse_yieldable(std::string_view str, size_t max_nested_level = default_max_nested_level);
 
 // chunked_content holds a non-contiguous buffer of bytes - such as bytes
-// read by httpd::read_entire_stream(). We assume that chunked_content does
+// read by util::read_entire_stream(). We assume that chunked_content does
 // not contain any empty buffers (the vector can be empty, meaning empty
 // content - but individual buffers cannot).
 using chunked_content = std::vector<temporary_buffer<char>>;
