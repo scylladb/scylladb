@@ -852,53 +852,57 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.flush();
         });
+
+        std::set<sstring> expected = {
+            "manifest.json",
+        };
+
         // move a random sstable to quarantine
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
-        for (auto i = 0; i < smp::count && !found; i++) {
-            found = co_await db.invoke_on((shard + i) % smp::count, [] (database& db) -> future<bool> {
+        for (auto i = 0; i < smp::count; i++) {
+            co_await db.invoke_on((shard + i) % smp::count, [&] (database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
                 auto sstables = cf.in_strategy_sstables();
                 if (sstables.empty()) {
-                    co_return false;
+                    co_return;
+                }
+                // collect all expected sstable data files
+                for (auto sst : sstables) {
+                    expected.insert(fs::path(sst->get_filename()).filename().native());
+                }
+                if (std::exchange(found, true)) {
+                    co_return;
                 }
                 auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
-                testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
                 auto sst = sstables[idx];
                 auto quarantine_dir = sst->get_dir() + "/" + sstables::quarantine_dir;
                 co_await touch_directory(quarantine_dir);
+                testlog.debug("Moving sstable #{} out of {}: {} to quarantine", idx, sstables.size(), sst->get_filename());
                 co_await sst->move_to_new_dir(quarantine_dir, sst->generation());
-                co_return true;
             });
         }
         BOOST_REQUIRE(found);
 
         co_await take_snapshot(db, true /* skip_flush */);
 
-        std::set<sstring> expected = {
-            "manifest.json",
-        };
-
-        // collect all expected sstable files
-        auto& cf = db.local().find_column_family("ks", "cf");
-        co_await lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
-            expected.insert(de.name);
-            return make_ready_future<>();
-        });
-
-        co_await lister::scan_dir(fs::path(cf.dir()) / sstables::quarantine_dir, { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
-            expected.insert(de.name);
-            return make_ready_future<>();
-        });
+        testlog.debug("Expected: {}", expected);
 
         // snapshot triggered a flush and wrote the data down.
         BOOST_REQUIRE_GT(expected.size(), 1);
 
+        auto& cf = db.local().find_column_family("ks", "cf");
+
         // all files were copied and manifest was generated
         co_await lister::scan_dir((fs::path(cf.dir()) / sstables::snapshots_dir / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+            testlog.debug("Found in snapshots: {}", de.name);
             expected.erase(de.name);
             return make_ready_future<>();
         });
+
+        if (!expected.empty()) {
+            testlog.error("Not in snapshots: {}", expected);
+        }
 
         BOOST_REQUIRE(expected.empty());
     });
