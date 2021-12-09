@@ -1052,22 +1052,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     _stats.api_operations.update_table++;
     elogger.trace("Updating table {}", request);
 
-    schema_ptr tab = get_table(_proxy, request);
-    // the ugly but harmless conversion to string_view here is because
-    // Seastar's sstring is missing a find(std::string_view) :-()
-    if (std::string_view(tab->cf_name()).find(INTERNAL_TABLE_PREFIX) == 0) {
-        return make_ready_future<request_return_type>(api_error::validation(
-                format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
-    }
-    tracing::add_table_name(trace_state, tab->ks_name(), tab->cf_name());
-
-    schema_builder builder(tab);
-
-    rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
-    if (stream_specification && stream_specification->IsObject()) {
-        add_stream_options(*stream_specification, builder, _proxy);
-    }
-
     static const std::vector<sstring> unsupported = {
         "AttributeDefinitions", 
         "GlobalSecondaryIndexUpdates", 
@@ -1084,6 +1068,23 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     if (rjson::find(request, "BillingMode")) {
         verify_billing_mode(request);
+    }
+
+    schema_ptr tab = get_table(_proxy, request);
+    // the ugly but harmless conversion to string_view here is because
+    // Seastar's sstring is missing a find(std::string_view) :-()
+    if (std::string_view(tab->cf_name()).find(INTERNAL_TABLE_PREFIX) == 0) {
+        return make_ready_future<request_return_type>(api_error::validation(
+                format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
+    }
+
+    tracing::add_table_name(trace_state, tab->ks_name(), tab->cf_name());
+
+    schema_builder builder(tab);
+
+    rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+    if (stream_specification && stream_specification->IsObject()) {
+        add_stream_options(*stream_specification, builder, _proxy);
     }
 
     auto schema = builder.build();
