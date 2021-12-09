@@ -229,9 +229,9 @@ public:
         rjson::value&,
         bool = false);
 
-    void add_stream_options(const rjson::value& stream_spec, schema_builder&) const;
-    void supplement_table_info(rjson::value& descr, const schema& schema) const;
-    void supplement_table_stream_info(rjson::value& descr, const schema& schema) const;
+    static void add_stream_options(const rjson::value& stream_spec, schema_builder&, service::storage_proxy& sp);
+    static void supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
+    static void supplement_table_stream_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
 };
 
 }

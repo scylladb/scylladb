@@ -91,13 +91,13 @@ std::string json_string::to_json() const {
     return _value;
 }
 
-void executor::supplement_table_info(rjson::value& descr, const schema& schema) const {
+void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
     rjson::add(descr, "TableStatus", "ACTIVE");
     auto schema_id_str = schema.id().to_sstring();
     rjson::add(descr, "TableId", rjson::from_string(schema_id_str));
 
-    executor::supplement_table_stream_info(descr, schema);
+    executor::supplement_table_stream_info(descr, schema, sp);
 }
 
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
@@ -458,7 +458,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     }
     rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
 
-    supplement_table_stream_info(table_description, *schema);
+    supplement_table_stream_info(table_description, *schema, _proxy);
     
     // FIXME: still missing some response fields (issue #5026)
 
@@ -975,7 +975,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
 
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        add_stream_options(*stream_specification, builder);
+        add_stream_options(*stream_specification, builder, _proxy);
     }
 
     // Parse the "Tags" parameter early, so we can avoid creating the table
@@ -1019,7 +1019,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                     return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
                 }).then([this, table_info = std::move(table_info), schema] () mutable {
                     rjson::value status = rjson::empty_object();
-                    supplement_table_info(table_info, *schema);
+                    supplement_table_info(table_info, *schema, _proxy);
                     rjson::add(status, "TableDescription", std::move(table_info));
                     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
                 });
@@ -1048,7 +1048,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        add_stream_options(*stream_specification, builder);
+        add_stream_options(*stream_specification, builder, _proxy);
     }
 
     static const std::vector<sstring> unsupported = {
@@ -1075,7 +1075,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
     }).then([this, table_info = std::move(request), schema] () mutable {
         rjson::value status = rjson::empty_object();
-        supplement_table_info(table_info, *schema);
+        supplement_table_info(table_info, *schema, _proxy);
         rjson::add(status, "TableDescription", std::move(table_info));
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
     });
