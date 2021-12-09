@@ -71,7 +71,7 @@ static const sstring TTL_TAG_KEY("system:ttl_attribute");
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_time_to_live++;
     if (!_proxy.get_db().local().features().cluster_supports_alternator_ttl()) {
-        co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator_ttl' experimental feature is enabled on all nodes.");
+        co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
     }
 
     schema_ptr schema = get_table(_proxy, request);
