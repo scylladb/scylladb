@@ -190,7 +190,7 @@ std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
-    auto timestamp = api::max_timestamp;
+    auto timestamp = table_s.min_memtable_timestamp();
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {

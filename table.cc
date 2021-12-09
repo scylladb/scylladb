@@ -53,6 +53,7 @@
 #include "db/commitlog/commitlog.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
+#include <boost/range/algorithm.hpp>
 
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
@@ -273,6 +274,19 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_perm
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
+}
+
+api::timestamp_type table::min_memtable_timestamp() const {
+    if (_memtables->empty()) {
+        return api::max_timestamp;
+    }
+
+    return *boost::range::min_element(
+        *_memtables
+        | boost::adaptors::transformed(
+            [](const shared_memtable& m) { return m->get_min_timestamp(); }
+        )
+    );
 }
 
 // Not performance critical. Currently used for testing only.
@@ -2399,6 +2413,9 @@ public:
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _t.get_sstables_manager().configure_writer(std::move(origin));
+    }
+    api::timestamp_type min_memtable_timestamp() const override {
+        return _t.min_memtable_timestamp();
     }
 };
 

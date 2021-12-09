@@ -165,6 +165,10 @@ public:
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         return _env.manager().configure_writer(std::move(origin));
     }
+
+    api::timestamp_type min_memtable_timestamp() const override {
+        return _t->min_memtable_timestamp();
+    }
 };
 
 static std::unique_ptr<table_state> make_table_state_for_test(column_family_for_tests& t, test_env& env) {
