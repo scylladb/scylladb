@@ -61,6 +61,7 @@
 #include <boost/range/algorithm/find_end.hpp>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
+#include "schema_registry.hh"
 
 logging::logger elogger("alternator-executor");
 
@@ -733,9 +734,16 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 // to races during concurrent updates of the same table. Once Scylla schema updates
 // are fixed, this issue will automatically get fixed as well.
 future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
-    schema_builder builder(schema);
-    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(std::move(tags_map)));
-    return mm.announce_column_family_update(builder.build(), false, std::nullopt);
+    co_await mm.container().invoke_on(0, [s = global_schema_ptr(std::move(schema)), tags_map = std::move(tags_map)] (service::migration_manager& mm) -> future<> {
+        co_await mm.schema_read_barrier();
+
+        schema_builder builder(s);
+        builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
+
+        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), std::nullopt);
+
+        co_await mm.announce(std::move(m));
+    });
 }
 
 future<executor::request_return_type> executor::tag_resource(client_state& client_state, service_permit permit, rjson::value request) {
