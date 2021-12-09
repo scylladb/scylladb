@@ -69,7 +69,7 @@ const locator::token_metadata& http_context::get_token_metadata() {
 namespace ss = httpd::storage_service_json;
 using namespace json;
 
-static sstring validate_keyspace(http_context& ctx, const parameters& param) {
+sstring validate_keyspace(http_context& ctx, const parameters& param) {
     if (ctx.db.local().has_keyspace(param["keyspace"])) {
         return param["keyspace"];
     }
@@ -79,7 +79,7 @@ static sstring validate_keyspace(http_context& ctx, const parameters& param) {
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
-static std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
+std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
     auto it = query_params.find(param_name);
     if (it == query_params.end()) {
         return {};

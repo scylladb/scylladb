@@ -46,6 +46,15 @@ class gossiper;
 
 namespace api {
 
+// verify that the keyspace parameter is found, otherwise a bad_param_exception exception is thrown
+// containing the description of the respective keyspace error.
+sstring validate_keyspace(http_context& ctx, const parameters& param);
+
+// splits a request parameter assumed to hold a comma-separated list of table names
+// verify that the tables are found, otherwise a bad_param_exception exception is thrown
+// containing the description of the respective no_such_column_family error.
+std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs);
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, routes& r);
