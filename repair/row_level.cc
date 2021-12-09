@@ -211,7 +211,7 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
     return _algorithms;
 };
 
-static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const std::vector<gms::inet_address>& nodes) {
+static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const inet_address_vector_replica_set& nodes) {
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
     parallel_for_each(boost::irange(size_t(0), nodes.size()), [&ms, &nodes_algorithms, &nodes] (size_t idx) {
         return ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx])).then(
@@ -743,7 +743,7 @@ public:
             uint32_t repair_meta_id,
             streaming::stream_reason reason,
             shard_config master_node_shard_config,
-            std::vector<gms::inet_address> all_live_peer_nodes,
+            inet_address_vector_replica_set all_live_peer_nodes,
             size_t nr_peer_nodes = 1,
             row_level_repair* row_level_repair_ptr = nullptr)
             : _db(db)
@@ -907,7 +907,7 @@ public:
                     repair_meta_id,
                     reason,
                     std::move(master_node_shard_config),
-                    std::vector<gms::inet_address>{from});
+                    inet_address_vector_replica_set{from});
             rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
             bool insertion = repair_meta_map().emplace(id, rm).second;
             if (!insertion) {
@@ -2480,7 +2480,7 @@ class row_level_repair {
     sstring _cf_name;
     utils::UUID _table_id;
     dht::token_range _range;
-    std::vector<gms::inet_address> _all_live_peer_nodes;
+    inet_address_vector_replica_set _all_live_peer_nodes;
     column_family& _cf;
 
     // Repair master and followers will propose a sync boundary. Each of them
@@ -2532,7 +2532,7 @@ public:
         , _cf_name(std::move(cf_name))
         , _table_id(std::move(table_id))
         , _range(std::move(range))
-        , _all_live_peer_nodes(std::move(all_live_peer_nodes))
+        , _all_live_peer_nodes(sort_peer_nodes(all_live_peer_nodes))
         , _cf(_ri.db.local().find_column_family(_table_id))
         , _seed(get_random_seed()) {
     }
@@ -2543,6 +2543,14 @@ private:
         next_step,
         all_done,
     };
+
+    inet_address_vector_replica_set sort_peer_nodes(const std::vector<gms::inet_address>& nodes) {
+        auto myip = utils::fb_utilities::get_broadcast_address();
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        inet_address_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
+        snitch->sort_by_proximity(myip, sorted_nodes);
+        return sorted_nodes;
+    }
 
     size_t get_max_row_buf_size(row_level_diff_detect_algorithm algo) {
         // Max buffer size per repair round
