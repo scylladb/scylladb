@@ -863,42 +863,49 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
+future<> migration_manager::announce_with_raft(std::vector<mutation> schema) {
+    assert(this_shard_id() == 0);
+    auto schema_features = _feat.cluster_schema_features();
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    raft::command cmd;
+    ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
+    // todo: add schema version into command, to apply
+    // only on condition the version is the same.
+    // qqq: what happens if there is a command in between?
+    // there is a new schema version, apply skipped, but
+    // we don't get a proper error.
+    co_return co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
+    // TODO: return "retry" error if apply is a no-op - check
+    // new schema version
+}
+
+future<> migration_manager::announce_without_raft(std::vector<mutation> schema) {
+    auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
+
+    try {
+        using namespace std::placeholders;
+        auto all_live = _gossiper.get_live_members();
+        auto live_members = all_live | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
+            // only push schema to nodes with known and equal versions
+            return endpoint != utils::fb_utilities::get_broadcast_address() &&
+                _messaging.knows_version(endpoint) &&
+                _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
+        });
+        co_await parallel_for_each(live_members.begin(), live_members.end(),
+            std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
+    } catch (...) {
+        mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
+    }
+
+    co_return co_await std::move(f);
+}
+
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
     if (_raft_gr.is_enabled()) {
-        assert(this_shard_id() == 0);
-        auto schema_features = _feat.cluster_schema_features();
-        auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-        raft::command cmd;
-        ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
-        // todo: add schema version into command, to apply
-        // only on condition the version is the same.
-        // qqq: what happens if there is a command in between?
-        // there is a new schema version, apply skipped, but
-        // we don't get a proper error.
-        co_return co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
-        // TODO: return "retry" error if apply is a no-op - check
-        // new schema version
-    } else {
-        auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
-
-        try {
-            using namespace std::placeholders;
-            auto all_live = _gossiper.get_live_members();
-            auto live_members = all_live | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
-                // only push schema to nodes with known and equal versions
-                return endpoint != utils::fb_utilities::get_broadcast_address() &&
-                    _messaging.knows_version(endpoint) &&
-                    _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
-            });
-            co_await parallel_for_each(live_members.begin(), live_members.end(),
-                std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
-        } catch (...) {
-            mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
-        }
-
-        co_return co_await std::move(f);
+        return announce_with_raft(std::move(schema));
     }
+    return announce_without_raft(std::move(schema));
 }
 
 future<> migration_manager::schema_read_barrier() {

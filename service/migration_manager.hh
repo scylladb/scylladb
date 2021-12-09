@@ -176,6 +176,9 @@ private:
 
     future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
 
+    future<> announce_with_raft(std::vector<mutation> schema);
+    future<> announce_without_raft(std::vector<mutation> schema);
+
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
 
