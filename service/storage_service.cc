@@ -3640,7 +3640,7 @@ shared_ptr<abort_source> node_ops_meta_data::get_abort_source() {
 
 void storage_service::node_ops_update_heartbeat(utils::UUID ops_uuid) {
     slogger.debug("node_ops_update_heartbeat: ops_uuid={}", ops_uuid);
-    auto permit = seastar::get_units(_node_ops_abort_sem, 1);
+    auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
@@ -3650,7 +3650,7 @@ void storage_service::node_ops_update_heartbeat(utils::UUID ops_uuid) {
 
 void storage_service::node_ops_done(utils::UUID ops_uuid) {
     slogger.debug("node_ops_done: ops_uuid={}", ops_uuid);
-    auto permit = seastar::get_units(_node_ops_abort_sem, 1);
+    auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
@@ -3661,7 +3661,7 @@ void storage_service::node_ops_done(utils::UUID ops_uuid) {
 
 void storage_service::node_ops_abort(utils::UUID ops_uuid) {
     slogger.debug("node_ops_abort: ops_uuid={}", ops_uuid);
-    auto permit = seastar::get_units(_node_ops_abort_sem, 1);
+    auto permit = seastar::get_units(_node_ops_abort_sem, 1).get0();
     auto it = _node_ops.find(ops_uuid);
     if (it != _node_ops.end()) {
         node_ops_meta_data& meta = it->second;
