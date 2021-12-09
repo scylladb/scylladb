@@ -1071,6 +1071,80 @@ bool is_on_collection(const binary_operator& b) {
     return false;
 }
 
+bool contains_column(const column_definition& column, const expression& e) {
+    const column_value* find_res = find_in_expression<column_value>(e,
+        [&](const column_value& column_val) -> bool {
+            return (*column_val.col == column);
+        }
+    );
+    return find_res != nullptr;
+}
+
+bool contains_nonpure_function(const expression& e) {
+    const function_call* find_res = find_in_expression<function_call>(e,
+        [&](const function_call& fc) {
+            return std::visit(overloaded_functor {
+                [](const functions::function_name&) -> bool {
+                    on_internal_error(expr_logger,
+                    "contains_nonpure_function called on unprepared expression - expected function pointer, got name");
+                },
+                [](const ::shared_ptr<functions::function>& fun) -> bool {
+                    return !fun->is_pure();
+                }
+            }, fc.func);
+        }
+    );
+    return find_res != nullptr;
+}
+
+bool has_eq_restriction_on_column(const column_definition& column, const expression& e) {
+    std::function<bool(const expression&)> column_in_lhs = [&](const expression& e) -> bool {
+        return visit(overloaded_functor {
+            [&](const column_value& cv) {
+                // Use column_defintion::operator== for comparison,
+                // columns with the same name but different schema will not be equal.
+                return *cv.col == column;
+            },
+            [&](const tuple_constructor& tc) {
+                for (const expression& elem : tc.elements) {
+                    if (column_in_lhs(elem)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            [&](const auto&) {return false;}
+        }, e);
+    };
+
+    // Look for binary operator describing eq relation with this column on lhs
+    const binary_operator* eq_restriction_search_res = find_binop(e, [&](const binary_operator& b) {
+        if (b.op != oper_t::EQ) {
+            return false;
+        }
+
+        if (!column_in_lhs(b.lhs)) {
+            return false;
+        }
+
+        // These conditions are not allowed to occur in the current code,
+        // but they might be allowed in the future.
+        // They are added now to avoid surprises later.
+        //
+        // These conditions detect cases like:
+        // WHERE column1 = column2
+        // WHERE column1 = row_number()
+        if (contains_column(column, b.rhs) || contains_nonpure_function(b.rhs)) {
+            return false;
+        }
+
+        return true;
+    });
+
+    return eq_restriction_search_res != nullptr;
+}
+
 expression replace_column_def(const expression& expr, const column_definition* new_cdef) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
         if (expr::is<column_value>(expr)) {

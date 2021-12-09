@@ -598,6 +598,14 @@ std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions
     return {chosen_index, chosen_index_restrictions};
 }
 
+bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
+    if (!_where.has_value()) {
+        return false;
+    }
+
+    return expr::has_eq_restriction_on_column(column, *_where);
+}
+
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(database& db) const {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {

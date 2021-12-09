@@ -486,9 +486,9 @@ whereClause returns [std::vector<cql3::relation_ptr> clause]
 
 orderByClause[raw::select_statement::parameters::orderings_type& orderings]
     @init{
-        bool reversed = false;
+        raw::select_statement::ordering ordering = raw::select_statement::ordering::ascending;
     }
-    : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.emplace_back(c, reversed); }
+    : c=cident (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })? { orderings.emplace_back(c, ordering); }
     ;
 
 jsonValue returns [expression value]

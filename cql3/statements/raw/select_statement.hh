@@ -71,9 +71,15 @@ namespace raw {
 class select_statement : public cf_statement
 {
 public:
+    // Ordering of selected values as defined by the basic comparison order.
+    // Even for a column that by default has ordering 4, 3, 2, 1 ordering it in ascending order will result in 1, 2, 3, 4.
+    enum class ordering {
+        ascending,
+        descending
+    };
     class parameters final {
     public:
-        using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, bool>>;
+        using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering>>;
     private:
         const orderings_type _orderings;
         const bool _is_distinct;
@@ -101,6 +107,8 @@ public:
 
     using result_row_type = std::vector<bytes_opt>;
     using ordering_comparator_type = compare_fn<result_row_type>;
+private:
+    using prepared_orderings_type = std::vector<std::pair<const column_definition*, ordering>>;
 private:
     lw_shared_ptr<const parameters> _parameters;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
@@ -136,19 +144,28 @@ private:
     /** Returns an expression for the limit or nullopt if no limit is set */
     std::optional<expr::expression> prepare_limit(database& db, prepare_context& ctx, const std::optional<expr::expression>& limit);
 
+    // Checks whether it is legal to have ORDER BY in this statement
     static void verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions);
+
+    void handle_unrecognized_ordering_column(const column_identifier& column) const;
+
+    // Processes ORDER BY column orderings, converts column_identifiers to column_defintions
+    prepared_orderings_type prepare_orderings(const schema& schema) const;
+
+    void verify_ordering_is_valid(const prepared_orderings_type&, const schema&, const restrictions::statement_restrictions& restrictions) const;
+
+    // Checks whether this ordering reverses all results.
+    // We only allow leaving select results unchanged or reversing them.
+    bool is_ordering_reversed(const prepared_orderings_type&) const;
+
+    select_statement::ordering_comparator_type get_ordering_comparator(
+        const prepared_orderings_type&,
+        selection::selection& selection,
+        const restrictions::statement_restrictions& restrictions);
 
     static void validate_distinct_selection(const schema& schema,
         const selection::selection& selection,
         const restrictions::statement_restrictions& restrictions);
-
-    void handle_unrecognized_ordering_column(const column_identifier& column) const;
-
-    select_statement::ordering_comparator_type get_ordering_comparator(const schema& schema,
-        selection::selection& selection,
-        const restrictions::statement_restrictions& restrictions);
-
-    bool is_reversed(const schema& schema) const;
 
     /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
     void check_needs_filtering(

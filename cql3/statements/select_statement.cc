@@ -1411,8 +1411,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     if (!_parameters->orderings().empty()) {
         assert(!for_view);
         verify_ordering_is_allowed(*restrictions);
-        ordering_comparator = get_ordering_comparator(*schema, *selection, *restrictions);
-        is_reversed_ = is_reversed(*schema);
+        prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
+        verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);
+
+        ordering_comparator = get_ordering_comparator(prepared_orderings, *selection, *restrictions);
+        is_reversed_ = is_ordering_reversed(prepared_orderings);
     }
 
     std::vector<sstring> warnings;
@@ -1501,6 +1504,164 @@ void select_statement::verify_ordering_is_allowed(const restrictions::statement_
     }
 }
 
+void select_statement::handle_unrecognized_ordering_column(const column_identifier& column) const
+{
+    if (contains_alias(column)) {
+        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", column));
+    }
+    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", column));
+}
+
+select_statement::prepared_orderings_type select_statement::prepare_orderings(const schema& schema) const {
+    prepared_orderings_type prepared_orderings;
+    prepared_orderings.reserve(_parameters->orderings().size());
+
+    for (auto&& [column_id, column_ordering] : _parameters->orderings()) {
+        ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
+
+        const column_definition* def = schema.get_column_definition(column->name());
+        if (def == nullptr) {
+            handle_unrecognized_ordering_column(*column);
+        }
+
+        if (!def->is_clustering_key()) {
+            throw exceptions::invalid_request_exception(format("Order by is currently only supported on the clustered columns of the PRIMARY KEY, got {}", *column));
+        }
+
+        prepared_orderings.emplace_back(def, column_ordering);
+    }
+
+    // Uncomment this to allow specifing ORDER BY columns in any order.
+    // Right now specifying ORDER BY (c2 asc, c1 asc) is illegal, it can only be ORDER BY (c1 asc, c2 asc).
+    //
+    // std::sort(prepared_orderings.begin(), prepared_orderings.end(),
+    //     [](const std::pair<const column_definition*, ordering>& a, const std::pair<const column_definition*, ordering>& b) {
+    //         return a.first->component_index() < b.first->component_index();
+    //     }
+    // );
+
+    return prepared_orderings;
+}
+
+// Checks whether this ordering causes select results on this column to be reversed.
+// A clustering column can be ordered in the descending order in the table.
+// Then specifying ascending order would cause the results of this column to be reverse in comparison to a standard select.
+static bool are_column_select_results_reversed(const column_definition& column, select_statement::ordering column_ordering) {
+    if (column_ordering == select_statement::ordering::ascending) {
+        if (column.type->is_reversed()) {
+            return true;
+        } else {
+            return false;
+        }
+    } else { // descending ordering
+        if (column.type->is_reversed()) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+}
+
+bool select_statement::is_ordering_reversed(const prepared_orderings_type& orderings) const {
+    if (orderings.empty()) {
+        return false;
+    }
+
+    return are_column_select_results_reversed(*orderings[0].first, orderings[0].second);
+}
+
+void select_statement::verify_ordering_is_valid(const prepared_orderings_type& orderings,
+                                                const schema& schema,
+                                                const restrictions::statement_restrictions& restrictions) const {
+    if (orderings.empty()) {
+        return;
+    }
+
+    // Verify that columns are in the same order as in schema definition
+    for (size_t i = 0; i + 1 < orderings.size(); i++) {
+        if (orderings[i].first->component_index() >= orderings[i + 1].first->component_index()) {
+            throw exceptions::invalid_request_exception("Order by currently only supports the ordering of columns following their declared order in the PRIMARY KEY");
+        }
+    }
+
+    // We only allow leaving select results unchanged or reversing them. Find out if they should be reversed.
+    bool is_reversed = is_ordering_reversed(orderings);
+
+    // Now verify that
+    // 1. Each column in the specified clustering prefix either has an ordering, or an EQ restriction.
+    //    When there is an EQ restriction ordering is not needed because only a single value is possible.
+    // 2. The ordering leaves the selected rows unchanged or reverses the normal result.
+    //    For that to happen the ordering must reverse all columns or none at all.
+    uint32_t max_ck_index = orderings.back().first->component_index();
+    auto orderings_iterator = orderings.begin();
+    for (uint32_t ck_column_index = 0; ck_column_index <= max_ck_index; ck_column_index++) {
+         if (orderings_iterator->first->component_index() == ck_column_index) {
+            // We have ordering for this column, let's see if its reversing is right.
+            const column_definition* cur_ck_column = orderings_iterator->first;
+            bool is_cur_column_reversed = are_column_select_results_reversed(*cur_ck_column, orderings_iterator->second);
+            if (is_cur_column_reversed != is_reversed) {
+                throw exceptions::invalid_request_exception(
+                    format("Unsupported order by relation - only reversing all columns is supported, "
+                           "but column {} has opposite ordering", cur_ck_column->name_as_text()));
+            }
+            orderings_iterator++;
+        } else {
+            // We don't have ordering for this column. Check if there is an EQ restriction or fail with an error.
+            const column_definition& cur_ck_column = schema.clustering_column_at(ck_column_index);
+            if (!restrictions.has_eq_restriction_on_column(cur_ck_column)) {
+                throw exceptions::invalid_request_exception(format(
+                    "Unsupported order by relation - column {} doesn't have an ordering or EQ relation.",
+                    cur_ck_column.name_as_text()));
+            }
+        }
+    }
+}
+
+select_statement::ordering_comparator_type select_statement::get_ordering_comparator(const prepared_orderings_type& orderings,
+    selection::selection& selection,
+    const restrictions::statement_restrictions& restrictions) {
+    if (!restrictions.key_is_in_relation()) {
+        return {};
+    }
+
+    // For the comparator we only need columns that have ordering defined.
+    // Other columns are required to have an EQ restriction, so they will have no more than a single value.
+
+    std::vector<std::pair<uint32_t, data_type>> sorters;
+    sorters.reserve(orderings.size());
+
+    // If we order post-query (see orderResults), the sorted column needs to be in the ResultSet for sorting,
+    // even if we don't
+    // ultimately ship them to the client (CASSANDRA-4911).
+    for (auto&& [column_def, is_descending] : orderings) {
+        auto index = selection.index_of(*column_def);
+        if (index < 0) {
+            index = selection.add_column_for_post_processing(*column_def);
+        }
+
+        sorters.emplace_back(index, column_def->type);
+    }
+
+    return [sorters = std::move(sorters)] (const result_row_type& r1, const result_row_type& r2) mutable {
+        for (auto&& e : sorters) {
+            auto& c1 = r1[e.first];
+            auto& c2 = r2[e.first];
+            auto type = e.second;
+
+            if (bool(c1) != bool(c2)) {
+                return bool(c2);
+            }
+            if (c1) {
+                auto result = type->compare(*c1, *c2);
+                if (result != 0) {
+                    return result < 0;
+                }
+            }
+        }
+        return false;
+    };
+}
+
 void select_statement::validate_distinct_selection(const schema& schema,
                                                    const selection::selection& selection,
                                                    const restrictions::statement_restrictions& restrictions)
@@ -1527,107 +1688,6 @@ void select_statement::validate_distinct_selection(const schema& schema,
             throw exceptions::invalid_request_exception(format("SELECT DISTINCT queries must request all the partition key columns (missing {})", def.name_as_text()));
         }
     }
-}
-
-void select_statement::handle_unrecognized_ordering_column(const column_identifier& column) const
-{
-    if (contains_alias(column)) {
-        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", column));
-    }
-    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", column));
-}
-
-select_statement::ordering_comparator_type
-select_statement::get_ordering_comparator(const schema& schema,
-                                          selection::selection& selection,
-                                          const restrictions::statement_restrictions& restrictions)
-{
-    if (!restrictions.key_is_in_relation()) {
-        return {};
-    }
-
-    std::vector<std::pair<uint32_t, data_type>> sorters;
-    sorters.reserve(_parameters->orderings().size());
-
-    // If we order post-query (see orderResults), the sorted column needs to be in the ResultSet for sorting,
-    // even if we don't
-    // ultimately ship them to the client (CASSANDRA-4911).
-    for (auto&& e : _parameters->orderings()) {
-        auto&& raw = e.first;
-        ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(schema);
-        const column_definition* def = schema.get_column_definition(column->name());
-        if (!def) {
-            handle_unrecognized_ordering_column(*column);
-        }
-        auto index = selection.index_of(*def);
-        if (index < 0) {
-            index = selection.add_column_for_post_processing(*def);
-        }
-
-        sorters.emplace_back(index, def->type);
-    }
-
-    return [sorters = std::move(sorters)] (const result_row_type& r1, const result_row_type& r2) mutable {
-        for (auto&& e : sorters) {
-            auto& c1 = r1[e.first];
-            auto& c2 = r2[e.first];
-            auto type = e.second;
-
-            if (bool(c1) != bool(c2)) {
-                return bool(c2);
-            }
-            if (c1) {
-                auto result = type->compare(*c1, *c2);
-                if (result != 0) {
-                    return result < 0;
-                }
-            }
-        }
-        return false;
-    };
-}
-
-bool select_statement::is_reversed(const schema& schema) const {
-    assert(_parameters->orderings().size() > 0);
-    parameters::orderings_type::size_type i = 0;
-    bool is_reversed_ = false;
-    bool relation_order_unsupported = false;
-
-    for (auto&& e : _parameters->orderings()) {
-        ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(schema);
-        bool reversed = e.second;
-
-        auto def = schema.get_column_definition(column->name());
-        if (!def) {
-            handle_unrecognized_ordering_column(*column);
-        }
-
-        if (!def->is_clustering_key()) {
-            throw exceptions::invalid_request_exception(format("Order by is currently only supported on the clustered columns of the PRIMARY KEY, got {}", *column));
-        }
-
-        if (i != def->component_index()) {
-            throw exceptions::invalid_request_exception(
-                "Order by currently only support the ordering of columns following their declared order in the PRIMARY KEY");
-        }
-
-        bool current_reverse_status = (reversed != def->type->is_reversed());
-
-        if (i == 0) {
-            is_reversed_ = current_reverse_status;
-        }
-
-        if (is_reversed_ != current_reverse_status) {
-            relation_order_unsupported = true;
-        }
-        ++i;
-    }
-
-    if (relation_order_unsupported) {
-        throw exceptions::invalid_request_exception("Unsupported order by relation");
-    }
-
-    return is_reversed_;
 }
 
 /// True iff restrictions require ALLOW FILTERING despite there being no coordinator-side filtering.
