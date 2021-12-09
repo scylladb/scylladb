@@ -198,8 +198,6 @@ public:
     future<> start();
     future<> stop() { return make_ready_future<>(); }
 
-    future<> create_keyspace(std::string_view keyspace_name);
-
     static sstring table_name(const schema&);
     static db::timeout_clock::time_point default_timeout();
     static void set_default_timeout(db::timeout_clock::duration timeout);
