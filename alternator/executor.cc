@@ -1062,7 +1062,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     for (auto& s : unsupported) {
         if (rjson::find(request, s)) {
-            throw api_error::validation(s + " not supported");
+            co_return coroutine::make_exception(api_error::validation(s + " not supported"));
         }
     }
 
@@ -1070,32 +1070,39 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    schema_ptr tab = get_table(_proxy, request);
-    // the ugly but harmless conversion to string_view here is because
-    // Seastar's sstring is missing a find(std::string_view) :-()
-    if (std::string_view(tab->cf_name()).find(INTERNAL_TABLE_PREFIX) == 0) {
-        return make_ready_future<request_return_type>(api_error::validation(
-                format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
-    }
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
+                                                (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
+        co_await mm.schema_read_barrier();
 
-    tracing::add_table_name(trace_state, tab->ks_name(), tab->cf_name());
+        schema_ptr tab = get_table(p.local(), request);
 
-    schema_builder builder(tab);
+        tracing::add_table_name(gt, tab->ks_name(), tab->cf_name());
 
-    rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
-    if (stream_specification && stream_specification->IsObject()) {
-        add_stream_options(*stream_specification, builder, _proxy);
-    }
+        // the ugly but harmless conversion to string_view here is because
+        // Seastar's sstring is missing a find(std::string_view) :-()
+        if (std::string_view(tab->cf_name()).find(INTERNAL_TABLE_PREFIX) == 0) {
+            co_return coroutine::make_exception(api_error::validation(format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
+        }
 
-    auto schema = builder.build();
+        schema_builder builder(tab);
 
-    return _mm.announce_column_family_update(schema, false, std::nullopt).then([this] {
-        return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
-    }).then([this, table_info = std::move(request), schema] () mutable {
+        rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+        if (stream_specification && stream_specification->IsObject()) {
+            add_stream_options(*stream_specification, builder, p.local());
+        }
+
+        auto schema = builder.build();
+
+        auto m = co_await mm.prepare_column_family_update_announcement(schema, false,  std::vector<view_ptr>(), std::nullopt);
+
+        co_await mm.announce(std::move(m));
+
+        co_await wait_for_schema_agreement(mm, db::timeout_clock::now() + 10s);
+
         rjson::value status = rjson::empty_object();
-        supplement_table_info(table_info, *schema, _proxy);
-        rjson::add(status, "TableDescription", std::move(table_info));
-        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
+        supplement_table_info(request, *schema, p.local());
+        rjson::add(status, "TableDescription", std::move(request));
+        co_return make_jsonable(std::move(status));
     });
 }
 
