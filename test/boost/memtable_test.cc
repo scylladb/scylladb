@@ -28,10 +28,12 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "schema_builder.hh"
 #include <seastar/util/closeable.hh>
+#include "service/migration_manager.hh"
 
 #include <seastar/core/thread.hh>
 #include "memtable.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -702,4 +704,70 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
     }, db_config);
 }
 
+SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
+    auto db_config = make_shared<db::config>();
+    db_config->enable_cache.set(false);
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        database& db = env.local_db();
+        service::migration_manager& mm = env.migration_manager().local();
 
+        sstring ks_name = "ks";
+        sstring table_name = "table_name";
+
+        schema_ptr s = schema_builder(ks_name, table_name)
+            .with_column(to_bytes("pk"), int32_type, column_kind::partition_key)
+            .with_column(to_bytes("ck"), int32_type, column_kind::clustering_key)
+            .with_column(to_bytes("id"), int32_type)
+            .set_gc_grace_seconds(1)
+            .build();
+        mm.announce_new_column_family(s).get();
+
+        table& t = db.find_column_family(ks_name, table_name);
+
+        dht::decorated_key pk = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(1)));
+        clustering_key ck_to_delete = clustering_key::from_single_value(*s, serialized(2));
+        clustering_key ck = clustering_key::from_single_value(*s, serialized(3));
+
+        api::timestamp_type insertion_timestamp_before_delete = api::new_timestamp();
+        forward_jump_clocks(1s);
+        api::timestamp_type deletion_timestamp = api::new_timestamp();
+        forward_jump_clocks(1s);
+        api::timestamp_type insertion_timestamp_after_delete = api::new_timestamp();
+
+        mutation m_delete = mutation(s, pk);
+        m_delete.partition().apply_delete(
+            *s,
+            ck_to_delete,
+            tombstone{deletion_timestamp, gc_clock::now()});
+        t.apply(m_delete);
+
+        // Insert data that won't be removed by tombstone to prevent compaction from skipping whole partition
+        mutation m_insert = mutation(s, pk);
+        m_insert.set_clustered_cell(ck, to_bytes("id"), data_value(3), insertion_timestamp_after_delete);
+        t.apply(m_insert);
+
+        // Flush and wait until the gc_grace_seconds pass
+        t.flush().get();
+        forward_jump_clocks(2s);
+
+        // Apply the past mutation to memtable to simulate repair. This row should be deleted by tombstone
+        mutation m_past_insert = mutation(s, pk);
+        m_past_insert.set_clustered_cell(
+            ck_to_delete,
+            to_bytes("id"),
+            data_value(4),
+            insertion_timestamp_before_delete);
+        t.apply(m_past_insert);
+
+        // Trigger compaction. If all goes well, compaction should check if a relevant row is in the memtable
+        // and should not purge the tombstone.
+        t.compact_all_sstables().get();
+
+        // If we get additional row (1, 2, 4), that means the tombstone was purged and data was resurrected
+        assert_that(env.execute_cql(format("SELECT * FROM {}.{};", ks_name, table_name)).get0())
+            .is_rows()
+            .with_rows_ignore_order({
+                {serialized(1), serialized(3), serialized(3)}, 
+            });
+    }, db_config);
+}
