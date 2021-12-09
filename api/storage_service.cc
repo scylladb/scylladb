@@ -70,10 +70,11 @@ namespace ss = httpd::storage_service_json;
 using namespace json;
 
 sstring validate_keyspace(http_context& ctx, const parameters& param) {
-    if (ctx.db.local().has_keyspace(param["keyspace"])) {
-        return param["keyspace"];
+    const auto& ks_name = param["keyspace"];
+    if (ctx.db.local().has_keyspace(ks_name)) {
+        return ks_name;
     }
-    throw bad_param_exception("Keyspace " + param["keyspace"] + " Does not exist");
+    throw bad_param_exception(no_such_keyspace(ks_name).what());
 }
 
 // splits a request parameter assumed to hold a comma-separated list of table names
