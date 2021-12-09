@@ -278,9 +278,9 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
                 co_return;
             }
             _next = co_await _underlying();
-                if (!_next) {
-                    _end_of_stream = true;
-                }
+            if (!_next) {
+                _end_of_stream = true;
+            }
         }
     public:
         reader(flat_mutation_reader r) : impl(r.schema(), r.permit()), _underlying(std::move(r)), _current({
@@ -290,19 +290,19 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
         virtual future<> fill_buffer() override {
             while (!is_buffer_full()) {
                 co_await ensure_next();
-                    if (is_end_of_stream()) {
-                        break;
-                    }
-                    position_in_partition::less_compare cmp(*_schema);
-                    if (!cmp(_next->position(), _current.end())) {
-                        _end_of_stream = true;
-                        // keep _next, it may be relevant for next range
-                        break;
-                    }
-                    if (_next->relevant_for_range(*_schema, _current.start())) {
-                        push_mutation_fragment(std::move(*_next));
-                    }
-                    _next = {};
+                if (is_end_of_stream()) {
+                    break;
+                }
+                position_in_partition::less_compare cmp(*_schema);
+                if (!cmp(_next->position(), _current.end())) {
+                    _end_of_stream = true;
+                    // keep _next, it may be relevant for next range
+                    break;
+                }
+                if (_next->relevant_for_range(*_schema, _current.start())) {
+                    push_mutation_fragment(std::move(*_next));
+                }
+                _next = {};
             }
         }
         virtual future<> fast_forward_to(position_range pr) override {
