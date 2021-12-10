@@ -72,7 +72,7 @@
 #include <unordered_set>
 #include "utils/disk-error-handler.hh"
 #include "utils/updateable_value.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
@@ -1091,7 +1091,7 @@ public:
     compaction::table_state& as_table_state() const noexcept;
 };
 
-class user_types_metadata;
+using user_types_metadata = data_dictionary::user_types_metadata;
 
 class keyspace_metadata final {
     sstring _name;

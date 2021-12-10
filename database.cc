@@ -65,7 +65,7 @@
 #include "db/large_data_handler.hh"
 #include "db/data_listeners.hh"
 
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/util/memory_diagnostics.hh>
 
@@ -2334,11 +2334,6 @@ future<> database::drain() {
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
-}
-
-std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
-    os << "org.apache.cassandra.config.UTMetaData@" << &m;
-    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {

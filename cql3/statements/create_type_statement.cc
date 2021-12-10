@@ -43,7 +43,7 @@
 #include "database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/column_identifier.hh"
 

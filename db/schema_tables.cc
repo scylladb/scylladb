@@ -87,7 +87,7 @@
 #include "cql_type_parser.hh"
 #include "db/timeout_clock.hh"
 #include "database.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 
 #include "index/target_parser.hh"
 #include "lang/lua.hh"

@@ -48,7 +48,7 @@
 #include "service/storage_proxy.hh"
 #include "database.hh"
 #include "boost/range/adaptor/map.hpp"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 
 namespace cql3 {
 

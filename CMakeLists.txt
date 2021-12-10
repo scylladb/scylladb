@@ -435,6 +435,7 @@ set(scylla_sources
     cql3/util.cc
     cql3/ut_name.cc
     cql3/values.cc
+    data_dictionary/data_dictionary.cc
     database.cc
     db/batchlog_manager.cc
     db/commitlog/commitlog.cc

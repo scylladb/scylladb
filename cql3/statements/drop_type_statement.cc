@@ -47,7 +47,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "database.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 
 namespace cql3 {
 
