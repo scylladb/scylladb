@@ -173,6 +173,11 @@ public:
         return {partition_region::clustered, bound_weight::after_all_prefixed, &ck};
     }
 
+    // Returns a view to after_key(pos._ck) if pos.is_clustering_row() else returns pos as-is.
+    static position_in_partition_view after_key(position_in_partition_view pos) {
+        return {partition_region::clustered, pos._bound_weight == bound_weight::equal ? bound_weight::after_all_prefixed : pos._bound_weight, pos._ck};
+    }
+
     static position_in_partition_view before_key(const clustering_key& ck) {
         return {partition_region::clustered, bound_weight::before_all_prefixed, &ck};
     }
