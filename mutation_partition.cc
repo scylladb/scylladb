@@ -247,8 +247,7 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     if (_rows.empty() || !_rows.rbegin()->is_last_dummy()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::yes));
-        _rows.insert_before(_rows.end(), *e);
-        e.release();
+        _rows.insert_before(_rows.end(), std::move(e));
     }
 }
 
@@ -2114,8 +2113,7 @@ mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const
 {
     auto e = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
-    _rows.insert_before(_rows.end(), *e);
-    e.release();
+    _rows.insert_before(_rows.end(), std::move(e));
 }
 
 bool mutation_partition::is_fully_continuous() const {
@@ -2155,16 +2153,14 @@ void mutation_partition::set_continuity(const schema& s, const position_range& p
         auto e = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(s, pr.end(), is_dummy::yes,
                     end == _rows.end() ? is_continuous::yes : end->continuous()));
-        end = _rows.insert_before(end, *e);
-        e.release();
+        end = _rows.insert_before(end, std::move(e));
     }
 
     auto i = _rows.lower_bound(pr.start(), cmp);
     if (cmp(pr.start(), i->position()) < 0) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(s, pr.start(), is_dummy::yes, i->continuous()));
-        i = _rows.insert_before(i, *e);
-        e.release();
+        i = _rows.insert_before(i, std::move(e));
     }
 
     assert(i != end);

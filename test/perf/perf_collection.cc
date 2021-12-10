@@ -298,9 +298,8 @@ public:
     }
     virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
-        perf_intrusive_key key(k);
-        auto i = _t.insert_before(_t.end(), key);
-        _t.erase(i);
+        auto i = _t.insert_before(_t.end(), std::make_unique<perf_intrusive_key>(k));
+        _t.erase_and_dispose(i, [] (perf_intrusive_key* k) noexcept { delete k; });
     }
     virtual void show_stats() override {
         struct intrusive_b::stats st = _t.get_stats();

@@ -404,10 +404,6 @@ public:
         return std::pair(cur.insert(std::move(kptr)), true);
     }
 
-    std::pair<iterator, bool> insert(Key& key, Compare cmp) {
-        return insert(simple_key_pointer(key), std::move(cmp));
-    }
-
     /*
      * Inserts the key into the tree using hint as an attempt not to lookup
      * its position with logN algo. If the new key is hint - 1 <= key <= hint
@@ -445,18 +441,10 @@ public:
         return insert(std::move(kptr), std::move(cmp));
     }
 
-    std::pair<iterator, bool> insert_before_hint(iterator hint, Key& k, Compare cmp) {
-        return insert_before_hint(hint, simple_key_pointer(k), std::move(cmp));
-    }
-
     /*
      * Constant-time insertion right before the given position. No sorting
      * is checked, the tree will be broken if the key/it are not in order.
      */
-    iterator insert_before(iterator it, Key& k) {
-        seastar::memory::on_alloc_point();
-        return it.insert_before(simple_key_pointer(k));
-    }
 
     template <typename Pointer>
     requires KeyPointer<Pointer, Key>
@@ -1049,23 +1037,6 @@ public:
 
         return st;
     }
-
-private:
-    /*
-     * Helper for insertions of plain references to keys. Doesn't care
-     * about key's memory ownership.
-     */
-    class simple_key_pointer {
-        Key& _key;
-
-    public:
-        explicit simple_key_pointer(Key& key) noexcept : _key(key) {}
-        simple_key_pointer(const simple_key_pointer&) = delete;
-        simple_key_pointer(simple_key_pointer&&) noexcept = default;
-
-        Key& operator*() const noexcept { return _key; }
-        Key* release() const noexcept { return &_key; }
-    };
 };
 
 /*
