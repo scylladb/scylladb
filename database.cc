@@ -108,24 +108,6 @@ make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_sou
             as);
 }
 
-lw_shared_ptr<keyspace_metadata>
-keyspace_metadata::new_keyspace(std::string_view name,
-                                std::string_view strategy_name,
-                                locator::replication_strategy_config_options options,
-                                bool durables_writes,
-                                std::vector<schema_ptr> cf_defs)
-{
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
-}
-
-void keyspace_metadata::add_user_type(const user_type ut) {
-    _user_types.add_type(ut);
-}
-
-void keyspace_metadata::remove_user_type(const user_type ut) {
-    _user_types.remove_type(ut);
-}
-
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
     : _metadata(std::move(metadata))
     , _config(std::move(cfg))
@@ -1214,40 +1196,6 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
     return find_column_family(schema->id());
 }
 
-keyspace_metadata::keyspace_metadata(std::string_view name,
-             std::string_view strategy_name,
-             locator::replication_strategy_config_options strategy_options,
-             bool durable_writes,
-             std::vector<schema_ptr> cf_defs)
-    : keyspace_metadata(name,
-                        strategy_name,
-                        std::move(strategy_options),
-                        durable_writes,
-                        std::move(cf_defs),
-                        user_types_metadata{}) { }
-
-keyspace_metadata::keyspace_metadata(std::string_view name,
-             std::string_view strategy_name,
-             locator::replication_strategy_config_options strategy_options,
-             bool durable_writes,
-             std::vector<schema_ptr> cf_defs,
-             user_types_metadata user_types)
-    : _name{name}
-    , _strategy_name{locator::abstract_replication_strategy::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
-    , _strategy_options{std::move(strategy_options)}
-    , _durable_writes{durable_writes}
-    , _user_types{std::move(user_types)}
-{
-    for (auto&& s : cf_defs) {
-        _cf_meta_data.emplace(s->cf_name(), s);
-    }
-}
-
-void keyspace_metadata::validate(const locator::topology& topology) const {
-    using namespace locator;
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), strategy_options(), topology);
-}
-
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
     ksm.validate(get_token_metadata().get_topology());
     if (!has_keyspace(ksm.name())) {
@@ -1260,19 +1208,6 @@ void database::validate_new_keyspace(keyspace_metadata& ksm) {
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }
-}
-
-std::vector<schema_ptr> keyspace_metadata::tables() const {
-    return boost::copy_range<std::vector<schema_ptr>>(_cf_meta_data
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([] (auto&& s) { return !s->is_view(); }));
-}
-
-std::vector<view_ptr> keyspace_metadata::views() const {
-    return boost::copy_range<std::vector<view_ptr>>(_cf_meta_data
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered(std::mem_fn(&schema::is_view))
-            | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
@@ -2334,34 +2269,6 @@ future<> database::drain() {
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
-}
-
-std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
-    os << "KSMetaData{";
-    os << "name=" << m._name;
-    os << ", strategyClass=" << m._strategy_name;
-    os << ", strategyOptions={";
-    int n = 0;
-    for (auto& p : m._strategy_options) {
-        if (n++ != 0) {
-            os << ", ";
-        }
-        os << p.first << "=" << p.second;
-    }
-    os << "}";
-    os << ", cfMetaData={";
-    n = 0;
-    for (auto& p : m._cf_meta_data) {
-        if (n++ != 0) {
-            os << ", ";
-        }
-        os << p.first << "=" << p.second;
-    }
-    os << "}";
-    os << ", durable_writes=" << m._durable_writes;
-    os << ", userTypes=" << m._user_types;
-    os << "}";
-    return os;
 }
 
 template <typename T>

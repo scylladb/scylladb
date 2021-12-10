@@ -47,7 +47,9 @@
 #include <seastar/core/sstring.hh>
 #include <optional>
 
+namespace data_dictionary {
 class keyspace_metadata;
+}
 
 namespace locator {
     class token_metadata;
@@ -73,8 +75,8 @@ public:
     void validate();
     std::map<sstring, sstring> get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
-    lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&);
-    lw_shared_ptr<keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old, const locator::token_metadata&);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&);
 
 #if 0
     public KSMetaData asKSMetadataUpdate(KSMetaData old) throws RequestValidationException

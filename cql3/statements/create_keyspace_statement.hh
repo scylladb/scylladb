@@ -52,7 +52,9 @@ class token_metadata;
 
 };
 
+namespace data_dictionary {
 class keyspace_metadata;
+}
 
 namespace cql3 {
 
@@ -102,7 +104,7 @@ public:
     virtual future<::shared_ptr<messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 
-    lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm);
 };
 
 std::optional<sstring> check_restricted_replication_strategy(

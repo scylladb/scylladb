@@ -180,11 +180,11 @@ public:
         return created;
     }
 private:
-    keyspace_metadata& _ks;
+    data_dictionary::keyspace_metadata& _ks;
     std::vector<entry> _definitions;
 };
 
-db::cql_type_parser::raw_builder::raw_builder(keyspace_metadata &ks)
+db::cql_type_parser::raw_builder::raw_builder(data_dictionary::keyspace_metadata &ks)
     : _impl(std::make_unique<impl>(ks))
 {}
 
