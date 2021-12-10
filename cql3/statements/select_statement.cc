@@ -613,8 +613,8 @@ indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(proxy, std::move(partition_ranges), state, options, now, paging_state).then_unpack(
-            [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
-        return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     });
 }
 
@@ -705,8 +705,8 @@ indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(proxy, std::move(primary_keys), state, options, now, paging_state).then_unpack(
-            [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
-        return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     });
 }
 
@@ -753,14 +753,13 @@ future<shared_ptr<cql_transport::messages::result_message>>
 indexed_table_select_statement::process_base_query_results(
         foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd,
-        service::storage_proxy& proxy,
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const
 {
     if (paging_state) {
-        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, proxy, state, options);
+        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
     return process_results(std::move(results), std::move(cmd), options, now);
@@ -950,7 +949,7 @@ bytes indexed_table_select_statement::compute_idx_token(const partition_key& key
 }
 
 lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
@@ -1074,9 +1073,9 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
             // page size is set to the internal count page size, regardless of the user-provided value
             internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
             return repeat([this, &builder, &options, &internal_options, &proxy, &state, now, whole_partitions, partition_slices] () {
-                auto consume_results = [this, &builder, &options, &internal_options, &proxy, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) {
+                auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                     if (paging_state) {
-                        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, proxy, state, options);
+                        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
                     }
                     internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                     if (_restrictions_need_filtering) {
