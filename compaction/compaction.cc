@@ -828,7 +828,7 @@ protected:
     }
 public:
     bool enable_garbage_collected_sstable_writer() const noexcept {
-        return _contains_multi_fragment_runs;
+        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max();
     }
 
     static future<compaction_result> run(std::unique_ptr<compaction> c);
