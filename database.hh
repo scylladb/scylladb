@@ -74,6 +74,7 @@
 #include "utils/updateable_value.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/keyspace_metadata.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
@@ -1195,18 +1196,8 @@ public:
     void mark_as_populated();
 };
 
-class no_such_keyspace : public std::runtime_error {
-public:
-    no_such_keyspace(std::string_view ks_name);
-};
-
-class no_such_column_family : public std::runtime_error {
-public:
-    no_such_column_family(const utils::UUID& uuid);
-    no_such_column_family(std::string_view ks_name, std::string_view cf_name);
-    no_such_column_family(std::string_view ks_name, const utils::UUID& uuid);
-};
-
+using no_such_keyspace = data_dictionary::no_such_keyspace;
+using no_such_column_family = data_dictionary::no_such_column_family;
 
 struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
