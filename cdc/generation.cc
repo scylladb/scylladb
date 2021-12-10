@@ -834,6 +834,11 @@ future<> generation_service::check_and_repair_cdc_streams() {
                 latest, db_clock::now());
             should_regenerate = true;
         } else {
+          if (tmptr->sorted_tokens().size() != gen->entries().size()) {
+              // We probably have garbage streams from old generations
+              cdc_log.info("Generation size does not match the token ring, regenerating");
+              should_regenerate = true;
+          } else {
             std::unordered_set<dht::token> gen_ends;
             for (const auto& entry : gen->entries()) {
                 gen_ends.insert(entry.token_range_end);
@@ -845,6 +850,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
                     break;
                 }
             }
+          }
         }
     }
 
