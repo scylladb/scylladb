@@ -333,9 +333,15 @@ public:
         maybe_abort_compaction();
         return _compaction_writer->writer.consume(std::move(sr));
     }
+    stop_iteration consume(static_row&& sr) {
+        return consume(std::move(sr), tombstone{}, bool{});
+    }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
         maybe_abort_compaction();
         return _compaction_writer->writer.consume(std::move(cr));
+    }
+    stop_iteration consume(clustering_row&& cr) {
+        return consume(std::move(cr), row_tombstone{}, bool{});
     }
     stop_iteration consume(range_tombstone&& rt) {
         maybe_abort_compaction();
@@ -685,8 +691,28 @@ private:
         _ms_metadata.max_timestamp = timestamp_tracker.max();
     }
 
+    // This consumer will perform mutation compaction on producer side using
+    // compacting_reader. It's useful for allowing data from different buckets
+    // to be compacted together.
+    future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
+        auto consumer = make_interposer_consumer([this] (flat_mutation_reader reader) mutable {
+            return seastar::async([this, reader = std::move(reader)] () mutable {
+                auto close_reader = deferred_close(reader);
+                auto cfc = make_stable_flattened_mutations_consumer<compacting_sstable_writer>(get_compacting_sstable_writer());
+                reader.consume_in_thread(std::move(cfc));
+            });
+        });
+        return consumer(make_compacting_reader(downgrade_to_v1(make_sstable_reader()), compaction_time, max_purgeable_func()));
+    }
+
     future<> consume() {
         auto now = gc_clock::now();
+        // consume_without_gc_writer(), which uses compacting_reader, is ~3% slower.
+        // let's only use it when GC writer is disabled and interposer consumer is enabled, as we
+        // wouldn't like others to pay the penalty for something they don't need.
+        if (!enable_garbage_collected_sstable_writer() && use_interposer_consumer()) {
+            return consume_without_gc_writer(now);
+        }
         auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader reader) mutable
         {
             return seastar::async([this, reader = std::move(reader), now] () mutable {
