@@ -1672,6 +1672,10 @@ bool gossiper::is_normal(const inet_address& endpoint) const {
     return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_NORMAL);
 }
 
+bool gossiper::is_left(const inet_address& endpoint) const {
+    return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_LEFT);
+}
+
 bool gossiper::is_normal_ring_member(const inet_address& endpoint) const {
     auto status = get_gossip_status(endpoint);
     return status == sstring(versioned_value::STATUS_NORMAL) || status == sstring(versioned_value::SHUTDOWN);
