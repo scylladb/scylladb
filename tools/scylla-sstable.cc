@@ -1163,11 +1163,6 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
         return format("* {}: {}\n  Options:\n{}", op.name(), op.description(), opt_list);
     }), "\n"));
 
-    const auto op_list = boost::algorithm::join(operations | boost::adaptors::transformed(
-                    [] (const auto& op) { return sstring(op.name()); } ), ", ");
-
-    const auto op_help = fmt::format("operation to run, one of ({})", op_list);
-
     app_template app(std::move(app_cfg));
 
     for (const auto& op : operations) {
@@ -1192,8 +1187,8 @@ $ scylla-sstable --validate /path/to/md-123456-big-Data.db /path/to/md-123457-bi
 
     //FIXME: this exposes all core options, which we are not interested in.
     //FIXME: make WARN the default log level
-    return app.run(argc, argv, [&app, &op_list] {
-        return async([&app, &op_list] {
+    return app.run(argc, argv, [&app] {
+        return async([&app] {
             auto& app_config = app.configuration();
 
             const auto& operation = tools::utils::get_selected_operation(app.configuration(), operations, "operation");
