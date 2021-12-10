@@ -14,7 +14,6 @@ import colorama
 import difflib
 import filecmp
 import glob
-import io
 import itertools
 import logging
 import multiprocessing
@@ -142,7 +141,7 @@ class TestSuite(ABC):
         return self.tests
 
     def add_test_list(self, mode, options):
-        lst = [ os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern)) ]
+        lst = [os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern))]
         if lst:
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
@@ -201,16 +200,16 @@ class BoostTestSuite(UnitTestSuite):
 
     def __init__(self, path, cfg):
         super().__init__(path, cfg)
-        self._cases_cache = { 'name': None, 'cases': [] }
+        self._cases_cache = {'name': None, 'cases': []}
 
     def create_test(self, shortname, args, suite, mode, options):
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
             if self._cases_cache['name'] != shortname:
-                cases = subprocess.run([ os.path.join("build", mode, "test", suite.name, shortname), '--list_content' ],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        check=True, universal_newlines=True).stderr
-                case_list = [ case[:-1] for case in cases.splitlines() if case.endswith('*')]
+                cases = subprocess.run([os.path.join("build", mode, "test", suite.name, shortname), '--list_content'],
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE,
+                                       check=True, universal_newlines=True).stderr
+                case_list = [case[:-1] for case in cases.splitlines() if case.endswith('*')]
                 self._cases_cache['name'] = shortname
                 self._cases_cache['cases'] = case_list
 
@@ -242,6 +241,7 @@ class CqlTestSuite(TestSuite):
     @property
     def pattern(self):
         return "*_test.cql"
+
 
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
@@ -289,8 +289,10 @@ class Test:
 
 
 class UnitTest(Test):
-    standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 --kernel-page-cache 1 --blocked-reactor-notify-ms 2000000 --collectd 0"
-                                " --max-networking-io-control-blocks=100")
+    standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 "
+                                "--kernel-page-cache 1 "
+                                "--blocked-reactor-notify-ms 2000000 --collectd 0 "
+                                "--max-networking-io-control-blocks=100 ")
 
     def __init__(self, test_no, shortname, args, suite, mode, options):
         super().__init__(test_no, shortname, suite, mode, options)
@@ -426,6 +428,7 @@ class CqlTest(Test):
         if self.is_equal_result is False:
             print_unidiff(self.result, self.reject)
 
+
 class RunTest(Test):
     """Run tests in a directory started by a run script"""
 
@@ -451,6 +454,7 @@ class RunTest(Test):
         self.success = await run_test(self, options, gentle_kill=True, env=self.env)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
+
 
 class TabularConsoleOutput:
     """Print test progress to the console"""
@@ -524,11 +528,13 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
         ]
         try:
             log.write("=== TEST.PY STARTING TEST #{} ===\n".format(test.id).encode(encoding="UTF-8"))
-            log.write("export UBSAN_OPTIONS='{}'\n".format(":".join(filter(None, UBSAN_OPTIONS))).encode(encoding="UTF-8"))
-            log.write("export ASAN_OPTIONS='{}'\n".format(":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
+            log.write("export UBSAN_OPTIONS='{}'\n".format(
+                ":".join(filter(None, UBSAN_OPTIONS))).encode(encoding="UTF-8"))
+            log.write("export ASAN_OPTIONS='{}'\n".format(
+                ":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
             log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
             log.write("=== TEST.PY TEST OUTPUT ===\n".format(test.id).encode(encoding="UTF-8"))
-            log.flush();
+            log.flush()
             test.time_start = time.time()
             test.time_end = 0
 
@@ -536,7 +542,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             args = test.args
             if options.cpus:
                 path = 'taskset'
-                args = [ '-c', options.cpus, test.path, *test.args ]
+                args = ['-c', options.cpus, test.path, *test.args]
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -638,14 +644,17 @@ def parse_cmd_line():
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
     parser.add_argument('--cpus', action="store",
-                        help="Run the tests on those CPUs only (in taskset acceptible format). Consider using --jobs too")
+                        help="Run the tests on those CPUs only (in taskset"
+                        " acceptable format). Consider using --jobs too")
     args = parser.parse_args()
 
     if not args.jobs:
         if not args.cpus:
             nr_cpus = multiprocessing.cpu_count()
         else:
-            nr_cpus = int(subprocess.check_output(['taskset', '-c', args.cpus, 'python', '-c', 'import os; print(len(os.sched_getaffinity(0)))']))
+            nr_cpus = int(subprocess.check_output(
+                ['taskset', '-c', args.cpus, 'python', '-c',
+                 'import os; print(len(os.sched_getaffinity(0)))']))
 
         cpus_per_test_job = 1
         sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
@@ -661,8 +670,9 @@ def parse_cmd_line():
             out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
             # [1/1] List configured modes
             # debug release dev
-            args.modes= re.sub(r'.* List configured modes\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n")[-1].split(' ')
-        except Exception as e:
+            args.modes = re.sub(r'.* List configured modes\n(.*)\n', r'\1',
+                                out, 1, re.DOTALL).split("\n")[-1].split(' ')
+        except Exception:
             print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
             raise
 
@@ -686,7 +696,7 @@ def parse_cmd_line():
         out = subprocess.Popen(['ninja', 'unit_test_list'], stdout=subprocess.PIPE).communicate()[0].decode()
         # [1/1] List configured unit tests
         args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n"))
-    except Exception as e:
+    except Exception:
         print(palette.fail("Failed to read output of `ninja unit_test_list`: please run ./configure.py first"))
         raise
 
@@ -829,6 +839,7 @@ def write_junit_report(tmpdir, mode):
     with open(junit_filename, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
+
 def write_consolidated_boost_junit_xml(tmpdir, mode):
     xml = ET.Element("TestLog")
     for suite in TestSuite.suites.values():
@@ -840,6 +851,7 @@ def write_consolidated_boost_junit_xml(tmpdir, mode):
                 xml.extend(test_xml.getroot().findall('.//TestSuite'))
     et = ET.ElementTree(xml)
     et.write(f'{tmpdir}/{mode}/xml/boost.xunit.xml', encoding='unicode')
+
 
 def open_log(tmpdir):
     pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
