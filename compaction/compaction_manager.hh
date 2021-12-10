@@ -182,6 +182,10 @@ private:
     void register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
     void deregister_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
 
+    // gets the table's compaction state
+    // throws std::out_of_range exception if not found.
+    compaction_state& get_compaction_state(table* t);
+
     // Return true if compaction manager and task weren't asked to stop.
     inline bool can_proceed(const lw_shared_ptr<task>& task);
 
@@ -286,10 +290,6 @@ public:
     const stats& get_stats() const {
         return _stats;
     }
-
-    // gets the table's compaction state
-    // throws std::out_of_range exception if not found.
-    compaction_state& get_compaction_state(table* t);
 
     const std::vector<sstables::compaction_info> get_compactions(table* t = nullptr) const;
 
