@@ -305,7 +305,7 @@ private:
      *
      * @param endpoint endpoint to be removed from the current membership.
      */
-    void evict_from_membership(inet_address endpoint);
+    future<> evict_from_membership(inet_address endpoint);
 public:
     /**
      * Removes the endpoint from Gossip but retains endpoint state

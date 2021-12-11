@@ -664,7 +664,7 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
             gossiper.remove_endpoint(endpoint);
-            gossiper.evict_from_membership(endpoint);
+            gossiper.evict_from_membership(endpoint).get();
             logger.info("Finished to force remove node {}", endpoint);
         }).handle_exception([endpoint] (auto ep) {
             logger.warn("Failed to force remove node {}: {}", endpoint, ep);
@@ -723,7 +723,7 @@ void gossiper::do_status_check() {
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-            evict_from_membership(endpoint); // can get rid of the state immediately
+            evict_from_membership(endpoint).get(); // can get rid of the state immediately
         }
 
         // check for dead state removal
@@ -731,7 +731,7 @@ void gossiper::do_status_check() {
         if (!is_alive && (now > expire_time)
              && (!get_token_metadata_ptr()->is_member(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-            evict_from_membership(endpoint);
+            evict_from_membership(endpoint).get();
         }
     }
 
@@ -1107,13 +1107,12 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcep
     return max_version;
 }
 
-// Runs inside seastar::async context
-void gossiper::evict_from_membership(inet_address endpoint) {
-    auto permit = lock_endpoint(endpoint).get0();
+future<> gossiper::evict_from_membership(inet_address endpoint) {
+    auto permit = co_await lock_endpoint(endpoint);
     _unreachable_endpoints.erase(endpoint);
-    container().invoke_on_all([endpoint] (auto& g) {
+    co_await container().invoke_on_all([endpoint] (auto& g) {
         g.endpoint_state_map.erase(endpoint);
-    }).get();
+    });
     _expire_time_endpoint_map.erase(endpoint);
     quarantine_endpoint(endpoint);
     logger.debug("evicting {} from gossip", endpoint);
