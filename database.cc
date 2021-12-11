@@ -72,6 +72,8 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
 
+#include "data_dictionary/impl.hh"
+
 using namespace std::chrono_literals;
 using namespace db;
 
@@ -2249,6 +2251,100 @@ future<> database::drain() {
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
+}
+
+namespace cdc {
+schema_ptr get_base_table(const database& db, const schema& s);
+}
+
+class database::data_dictionary_impl : public data_dictionary::impl {
+    const data_dictionary::database wrap(const ::database& db) const {
+        return make_database(this, &db);
+    }
+    data_dictionary::keyspace wrap(const ::keyspace& ks) const {
+        return make_keyspace(this, &ks);
+    }
+    data_dictionary::table wrap(const ::table& t) const {
+        return make_table(this, &t);
+    }
+    static const ::database& unwrap(data_dictionary::database db) {
+        return *static_cast<const ::database*>(extract(db));
+    }
+    static const ::keyspace& unwrap(data_dictionary::keyspace ks) {
+        return *static_cast<const ::keyspace*>(extract(ks));
+    }
+    static const ::table& unwrap(data_dictionary::table t) {
+        return *static_cast<const ::table*>(extract(t));
+    }
+    friend class database;
+public:
+    virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
+        try {
+            return wrap(unwrap(db).find_keyspace(name));
+        } catch (no_such_keyspace&) {
+            return std::nullopt;
+        }
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view table) const override {
+        try {
+            return wrap(unwrap(db).find_column_family(ks, table));
+        } catch (no_such_column_family&) {
+            return std::nullopt;
+        }
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, utils::UUID id) const override {
+        try {
+            return wrap(unwrap(db).find_column_family(id));
+        } catch (no_such_column_family&) {
+            return std::nullopt;
+        }
+    }
+    virtual schema_ptr get_table_schema(data_dictionary::table t) const override {
+        return unwrap(t).schema();
+    }
+    virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
+        return unwrap(t).views();
+    }
+    virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
+        return const_cast<::table&>(unwrap(t)).get_index_manager();
+    }
+    virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(data_dictionary::keyspace ks) const override {
+        return unwrap(ks).metadata();
+    }
+    virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
+        return unwrap(ks).get_replication_strategy();
+    }
+    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
+            std::optional<sstring> index_name_root) const override {
+        return unwrap(db).get_available_index_name(sstring(ks_name), sstring(table_name), index_name_root);
+    }
+    virtual std::set<sstring> existing_index_names(data_dictionary::database db, std::string_view ks_name, std::string_view cf_to_exclude = {}) const override {
+        return unwrap(db).existing_index_names(sstring(ks_name), sstring(cf_to_exclude));
+    }
+    virtual schema_ptr find_indexed_table(data_dictionary::database db, std::string_view ks_name, std::string_view index_name) const override {
+        return unwrap(db).find_indexed_table(sstring(ks_name), sstring(index_name));
+    }
+    virtual const db::config& get_config(data_dictionary::database db) const override {
+        return unwrap(db).get_config();
+    }
+    virtual const db::extensions& get_extensions(data_dictionary::database db) const override {
+        return unwrap(db).extensions();
+    }
+    virtual const gms::feature_service& get_features(data_dictionary::database db) const override {
+        return unwrap(db).features();
+    }
+    virtual ::database& real_database(data_dictionary::database db) const override {
+        return const_cast<::database&>(unwrap(db));
+    }
+    virtual schema_ptr get_cdc_base_table(data_dictionary::database db, const schema& s) const override {
+        return cdc::get_base_table(unwrap(db), s);
+    }
+};
+
+data_dictionary::database
+database::as_data_dictionary() const {
+    static constinit data_dictionary_impl _impl;
+    return _impl.wrap(*this);
 }
 
 template <typename T>

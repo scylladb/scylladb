@@ -1336,7 +1336,10 @@ private:
     std::unique_ptr<wasm::engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
+    class data_dictionary_impl;
+    friend class data_dictionary_impl;
 public:
+    data_dictionary::database as_data_dictionary() const;
     future<> init_commitlog();
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
