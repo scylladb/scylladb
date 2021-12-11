@@ -611,7 +611,7 @@ private:
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 public:
     void check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
-    void maybe_enable_features();
+    future<> maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
 public:

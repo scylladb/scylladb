@@ -108,11 +108,11 @@ class feature_enabler : public i_endpoint_state_change_subscriber {
 public:
     feature_enabler(gossiper& g) : _g(g) {}
     void on_join(inet_address ep, endpoint_state state) override {
-        _g.maybe_enable_features();
+        _g.maybe_enable_features().get();
     }
     void on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            _g.maybe_enable_features();
+            _g.maybe_enable_features().get();
         }
     }
     void before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { }
@@ -2372,7 +2372,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
     auto do_enable_features = [this] {
         return async([this] {
             if (!std::exchange(_gossip_settled, true)) {
-               maybe_enable_features();
+               maybe_enable_features().get();
             }
         });
     };
@@ -2563,21 +2563,20 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::maybe_enable_features() {
+future<> gossiper::maybe_enable_features() {
     if (!_gossip_settled) {
-        return;
+        co_return;
     }
-    auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
+    auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
-    container().invoke_on_all([&features] (gossiper& g) {
+    co_await container().invoke_on_all([&features] (gossiper& g) {
         // gms::feature::enable should be run within seastar::async context
         return seastar::async([&features, &g] {
             for (auto&& name : features) {
                 g._feature_service.enable(name);
             }
         });
-    }).get();
+    });
 }
 
 locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
