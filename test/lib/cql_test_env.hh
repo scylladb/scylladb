@@ -169,6 +169,8 @@ public:
     virtual sharded<db::batchlog_manager>& batchlog_manager() = 0;
 
     virtual future<> refresh_client_state() = 0;
+
+    data_dictionary::database data_dictionary();
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {});

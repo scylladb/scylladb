@@ -123,6 +123,11 @@ static const sstring testing_superuser = "tester";
 
 // END TODO
 
+data_dictionary::database
+cql_test_env::data_dictionary() {
+    return db().local().as_data_dictionary();
+}
+
 class single_node_cql_env : public cql_test_env {
 public:
     static constexpr std::string_view ks_name = "ks";
