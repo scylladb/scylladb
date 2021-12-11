@@ -2238,15 +2238,14 @@ bool gossiper::is_alive(inet_address ep) const {
     return false;
 }
 
-// Runs inside seastar::async context
-void gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
         std::vector<gms::inet_address> live_nodes;
         for (const auto& node: nodes) {
-            size_t nr_alive = container().map_reduce0([node] (gossiper& g) -> size_t {
+            size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
                 return g.is_alive(node) ? 1 : 0;
-            }, 0, std::plus<size_t>()).get0();
+            }, 0, std::plus<size_t>());
             logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
             if (nr_alive == smp::count) {
                 live_nodes.push_back(node);
@@ -2260,7 +2259,7 @@ void gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::mil
             throw std::runtime_error(format("Failed to mark node as alive in {} ms, nodes={}, live_nodes={}",
                     timeout.count(), nodes, live_nodes));
         }
-        sleep_abortable(std::chrono::milliseconds(100), _abort_source).get();
+        co_await sleep_abortable(std::chrono::milliseconds(100), _abort_source);
     }
 }
 

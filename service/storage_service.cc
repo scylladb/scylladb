@@ -759,7 +759,7 @@ storage_service::get_range_to_address_map(const sstring& keyspace,
 void storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
     try {
         slogger.info("handle_state_replacing: Waiting for replacing node {} to be alive on all shards", replacing_node);
-        _gossiper.wait_alive({replacing_node}, std::chrono::milliseconds(5 * 1000));
+        _gossiper.wait_alive({replacing_node}, std::chrono::milliseconds(5 * 1000)).get();
         slogger.info("handle_state_replacing: Replacing node {} is now alive on all shards", replacing_node);
     } catch (...) {
         slogger.warn("handle_state_replacing: Failed to wait for replacing node {} to be alive on all shards: {}",
@@ -2510,7 +2510,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             // Wait for local node has marked replacing node as alive
             auto nodes = boost::copy_range<std::vector<inet_address>>(req.replace_nodes| boost::adaptors::map_values);
             try {
-                _gossiper.wait_alive(nodes, std::chrono::milliseconds(120 * 1000));
+                _gossiper.wait_alive(nodes, std::chrono::milliseconds(120 * 1000)).get();
             } catch (...) {
                 slogger.warn("replace[{}]: Failed to wait for marking replacing node as up, replace_nodes={}: {}",
                         req.ops_uuid, req.replace_nodes, std::current_exception());
