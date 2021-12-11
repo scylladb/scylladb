@@ -26,7 +26,8 @@
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "mutation.hh"
 #include "cql3/query_processor.hh"
 #include "gms/feature_service.hh"
 
@@ -43,7 +44,7 @@ shared_ptr<functions::function> create_aggregate_statement::create(service::stor
     }
     data_type state_type = prepare_type(proxy, *_stype);
 
-    auto&& db = proxy.get_db().local();
+    auto&& db = proxy.data_dictionary();
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
@@ -64,7 +65,7 @@ shared_ptr<functions::function> create_aggregate_statement::create(service::stor
     return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
 }
 
-std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(database& db, cql_stats& stats) {
+std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_aggregate_statement>(*this));
 }
 

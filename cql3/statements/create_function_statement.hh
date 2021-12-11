@@ -35,7 +35,7 @@ namespace functions {
 namespace statements {
 
 class create_function_statement final : public create_function_statement_base {
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
     virtual shared_ptr<functions::function> create(service::storage_proxy& proxy, functions::function* old) const override;

@@ -44,7 +44,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/ut_name.hh"
-#include "database_fwd.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "schema.hh"
 
 namespace service {
@@ -77,7 +77,7 @@ public:
     class add_or_alter;
     class renames;
 protected:
-    virtual user_type make_updated_type(database& db, user_type to_update) const = 0;
+    virtual user_type make_updated_type(data_dictionary::database db, user_type to_update) const = 0;
 private:
     struct base_visitor {
         virtual future<> operator()(view_ptr view) = 0;
@@ -85,7 +85,7 @@ private:
         virtual future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) = 0;
     };
 
-    future<std::vector<mutation>> prepare_announcement_mutations(database& db, service::migration_manager& mm) const;
+    future<std::vector<mutation>> prepare_announcement_mutations(data_dictionary::database db, service::migration_manager& mm) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {
@@ -96,11 +96,11 @@ public:
     add_or_alter(const ut_name& name, bool is_add,
                  const shared_ptr<column_identifier> field_name,
                  const shared_ptr<cql3_type::raw> field_type);
-    virtual user_type make_updated_type(database& db, user_type to_update) const override;
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual user_type make_updated_type(data_dictionary::database db, user_type to_update) const override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 private:
-    user_type do_add(database& db, user_type to_update) const;
-    user_type do_alter(database& db, user_type to_update) const;
+    user_type do_add(data_dictionary::database db, user_type to_update) const;
+    user_type do_alter(data_dictionary::database db, user_type to_update) const;
 };
 
 
@@ -113,8 +113,8 @@ public:
 
     void add_rename(shared_ptr<column_identifier> previous_name, shared_ptr<column_identifier> new_name);
 
-    virtual user_type make_updated_type(database& db, user_type to_update) const override;
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual user_type make_updated_type(data_dictionary::database db, user_type to_update) const override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 };
 
 }

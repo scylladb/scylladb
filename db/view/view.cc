@@ -123,7 +123,7 @@ cql3::statements::select_statement& view_info::select_statement() const {
         raw->prepare_keyspace(_schema.ks_name());
         raw->set_bound_variables({});
         cql3::cql_stats ignored;
-        auto prepared = raw->prepare(service::get_local_storage_proxy().get_db().local(), ignored, true);
+        auto prepared = raw->prepare(service::get_local_storage_proxy().data_dictionary(), ignored, true);
         _select_statement = static_pointer_cast<cql3::statements::select_statement>(prepared->statement);
     }
     return *_select_statement;

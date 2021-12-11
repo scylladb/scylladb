@@ -64,7 +64,7 @@ public:
                 , _options(std::move(options)) {
     }
 
-    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     void validate(service::storage_proxy&, const service::client_state&) const override;
 

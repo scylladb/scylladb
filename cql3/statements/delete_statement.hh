@@ -42,7 +42,7 @@
 #pragma once
 
 #include "cql3/statements/modification_statement.hh"
-#include "database_fwd.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 namespace cql3 {
 

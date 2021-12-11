@@ -47,7 +47,7 @@
 #include "validation.hh"
 #include "view_info.hh"
 #include "db/extensions.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 
 namespace cql3 {
@@ -63,12 +63,12 @@ alter_view_statement::alter_view_statement(cf_name view_name, std::optional<cf_p
 future<> alter_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     try {
-        const database& db = proxy.local_db();
+        const data_dictionary::database db = proxy.data_dictionary();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view())  {
-            return state.has_column_family_access(db, keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
+            return state.has_column_family_access(db.real_database(), keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
         }
-    } catch (const no_such_column_family& e) {
+    } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
     }
     return make_ready_future<>();
@@ -79,8 +79,8 @@ void alter_view_statement::validate(service::storage_proxy&, const service::clie
     // validated in prepare_schema_mutations()
 }
 
-view_ptr alter_view_statement::prepare_view(database& db) const {
-    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const {
+    schema_ptr schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
     if (!schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
     }
@@ -126,7 +126,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-alter_view_statement::prepare(database& db, cql_stats& stats) {
+alter_view_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_view_statement>(*this));
 }
 

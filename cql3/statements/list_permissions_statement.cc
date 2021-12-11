@@ -60,7 +60,7 @@ cql3::statements::list_permissions_statement::list_permissions_statement(
 }
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_permissions_statement::prepare(
-                database& db, cql_stats& stats) {
+                data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(::make_shared<list_permissions_statement>(*this));
 }
 

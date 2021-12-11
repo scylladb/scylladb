@@ -934,7 +934,7 @@ future<std::vector<mutation>> migration_manager::prepare_view_update_announcemen
 #if 0
     view.metadata.validate();
 #endif
-    auto& db = get_local_storage_proxy().get_db().local();
+    auto db = get_local_storage_proxy().data_dictionary();
     try {
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
         auto& old_view = keyspace->cf_meta_data().at(view->cf_name());

@@ -51,7 +51,7 @@ usertype_field_spec_of(const column_specification& column, size_t field) {
 
 static
 void
-usertype_constructor_validate_assignable_to(const usertype_constructor& u, database& db, const sstring& keyspace, const column_specification& receiver) {
+usertype_constructor_validate_assignable_to(const usertype_constructor& u, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!receiver.type->is_user_type()) {
         throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
     }
@@ -72,7 +72,7 @@ usertype_constructor_validate_assignable_to(const usertype_constructor& u, datab
 
 static
 assignment_testable::test_result
-usertype_constructor_test_assignment(const usertype_constructor& u, database& db, const sstring& keyspace, const column_specification& receiver) {
+usertype_constructor_test_assignment(const usertype_constructor& u, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     try {
         usertype_constructor_validate_assignable_to(u, db, keyspace, receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
@@ -83,7 +83,7 @@ usertype_constructor_test_assignment(const usertype_constructor& u, database& db
 
 static
 expression
-usertype_constructor_prepare_expression(const usertype_constructor& u, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+usertype_constructor_prepare_expression(const usertype_constructor& u, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     usertype_constructor_validate_assignable_to(u, db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
@@ -150,7 +150,7 @@ map_value_spec_of(const column_specification& column) {
 
 static
 void
-map_validate_assignable_to(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+map_validate_assignable_to(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!receiver.type->without_reversed().is_map()) {
         throw exceptions::invalid_request_exception(format("Invalid map literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
@@ -172,7 +172,7 @@ map_validate_assignable_to(const collection_constructor& c, database& db, const 
 
 static
 assignment_testable::test_result
-map_test_assignment(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+map_test_assignment(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!dynamic_pointer_cast<const map_type_impl>(receiver.type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
@@ -201,7 +201,7 @@ map_test_assignment(const collection_constructor& c, database& db, const sstring
 
 static
 expression
-map_prepare_expression(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+map_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     map_validate_assignable_to(c, db, keyspace, *receiver);
 
     auto key_spec = maps::key_spec_of(*receiver);
@@ -254,7 +254,7 @@ set_value_spec_of(const column_specification& column) {
 
 static
 void
-set_validate_assignable_to(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+set_validate_assignable_to(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!receiver.type->without_reversed().is_set()) {
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now
@@ -275,7 +275,7 @@ set_validate_assignable_to(const collection_constructor& c, database& db, const 
 
 static
 assignment_testable::test_result
-set_test_assignment(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+set_test_assignment(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!receiver.type->without_reversed().is_set()) {
         // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
         if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && c.elements.empty()) {
@@ -296,7 +296,7 @@ set_test_assignment(const collection_constructor& c, database& db, const sstring
 
 static
 expression
-set_prepare_expression(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+set_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     set_validate_assignable_to(c, db, keyspace, *receiver);
 
     if (c.elements.empty()) {
@@ -363,7 +363,7 @@ list_value_spec_of(const column_specification& column) {
 
 static
 void
-list_validate_assignable_to(const collection_constructor& c, database& db, const sstring keyspace, const column_specification& receiver) {
+list_validate_assignable_to(const collection_constructor& c, data_dictionary::database db, const sstring keyspace, const column_specification& receiver) {
     if (!receiver.type->without_reversed().is_list()) {
         throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
                 *receiver.name, receiver.type->as_cql3_type()));
@@ -379,7 +379,7 @@ list_validate_assignable_to(const collection_constructor& c, database& db, const
 
 static
 assignment_testable::test_result
-list_test_assignment(const collection_constructor& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+list_test_assignment(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
@@ -396,7 +396,7 @@ list_test_assignment(const collection_constructor& c, database& db, const sstrin
 
 static
 expression
-list_prepare_expression(const collection_constructor& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     list_validate_assignable_to(c, db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -446,7 +446,7 @@ component_spec_of(const column_specification& column, size_t component) {
 
 static
 void
-tuple_constructor_validate_assignable_to(const tuple_constructor& tc, database& db, const sstring& keyspace, const column_specification& receiver) {
+tuple_constructor_validate_assignable_to(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver.type->underlying_type());
     if (!tt) {
         throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
@@ -467,7 +467,7 @@ tuple_constructor_validate_assignable_to(const tuple_constructor& tc, database& 
 
 static
 assignment_testable::test_result
-tuple_constructor_test_assignment(const tuple_constructor& tc, database& db, const sstring& keyspace, const column_specification& receiver) {
+tuple_constructor_test_assignment(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     try {
         tuple_constructor_validate_assignable_to(tc, db, keyspace, receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
@@ -478,7 +478,7 @@ tuple_constructor_test_assignment(const tuple_constructor& tc, database& db, con
 
 static
 expression
-tuple_constructor_prepare_nontuple(const tuple_constructor& tc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     tuple_constructor_validate_assignable_to(tc, db, keyspace, *receiver);
     std::vector<expression> values;
     bool all_terminal = true;
@@ -502,7 +502,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, database& db, co
 
 static
 expression
-tuple_constructor_prepare_tuple(const tuple_constructor& tc, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+tuple_constructor_prepare_tuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     if (tc.elements.size() != receivers.size()) {
         throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), tc.elements.size(), tc));
     }
@@ -566,7 +566,7 @@ untyped_constant_parsed_value(const untyped_constant uc, data_type validator)
 
 static
 assignment_testable::test_result
-untyped_constant_test_assignment(const untyped_constant& uc, database& db, const sstring& keyspace, const column_specification& receiver)
+untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver)
 {
     auto receiver_type = receiver.type->as_cql3_type();
     if (receiver_type.is_collection() || receiver_type.is_user_type()) {
@@ -640,7 +640,7 @@ untyped_constant_test_assignment(const untyped_constant& uc, database& db, const
 
 static
 constant
-untyped_constant_prepare_expression(const untyped_constant& uc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
+untyped_constant_prepare_expression(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",
@@ -652,13 +652,13 @@ untyped_constant_prepare_expression(const untyped_constant& uc, database& db, co
 
 static
 assignment_testable::test_result
-bind_variable_test_assignment(const bind_variable& bv, database& db, const sstring& keyspace, const column_specification& receiver) {
+bind_variable_test_assignment(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
 }
 
 static
 bind_variable
-bind_variable_scalar_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
+bind_variable_scalar_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
 {   
     return bind_variable {
         .shape = bind_variable::shape_type::scalar,
@@ -676,7 +676,7 @@ bind_variable_scalar_in_make_receiver(const column_specification& receiver) {
 
 static
 bind_variable
-bind_variable_scalar_in_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+bind_variable_scalar_in_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return bind_variable {
         .shape = bind_variable::shape_type::scalar,
         .bind_index = bv.bind_index,
@@ -706,7 +706,7 @@ bind_variable_tuple_make_receiver(const std::vector<lw_shared_ptr<column_specifi
 
 static
 bind_variable
-bind_variable_tuple_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+bind_variable_tuple_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return bind_variable {
         .shape = bind_variable::shape_type::tuple,
         .bind_index = bv.bind_index,
@@ -741,7 +741,7 @@ bind_variable_tuple_in_make_receiver(const std::vector<lw_shared_ptr<column_spec
 
 static
 bind_variable
-bind_variable_tuple_in_prepare_expression(const bind_variable& bv, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+bind_variable_tuple_in_prepare_expression(const bind_variable& bv, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return bind_variable {
         .shape = bind_variable::shape_type::tuple_in,
         .bind_index = bv.bind_index,
@@ -751,7 +751,7 @@ bind_variable_tuple_in_prepare_expression(const bind_variable& bv, database& db,
 
 static
 assignment_testable::test_result
-null_test_assignment(database& db,
+null_test_assignment(data_dictionary::database db,
         const sstring& keyspace,
         const column_specification& receiver) {
     return receiver.type->is_counter()
@@ -761,7 +761,7 @@ null_test_assignment(database& db,
 
 static
 constant
-null_prepare_expression(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+null_prepare_expression(data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     if (!is_assignable(null_test_assignment(db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
     }
@@ -776,7 +776,7 @@ cast_display_name(const cast& c) {
 
 static
 lw_shared_ptr<column_specification>
-casted_spec_of(const cast& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+casted_spec_of(const cast& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     auto& type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name,
             ::make_shared<column_identifier>(cast_display_name(c), true), type->prepare(db, keyspace).get_type());
@@ -784,7 +784,7 @@ casted_spec_of(const cast& c, database& db, const sstring& keyspace, const colum
 
 static
 assignment_testable::test_result
-cast_test_assignment(const cast& c, database& db, const sstring& keyspace, const column_specification& receiver) {
+cast_test_assignment(const cast& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     try {
         auto&& casted_type = type->prepare(db, keyspace).get_type();
@@ -802,7 +802,7 @@ cast_test_assignment(const cast& c, database& db, const sstring& keyspace, const
 
 static
 expression
-cast_prepare_expression(const cast& c, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     if (!is_assignable(test_assignment(c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
         throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
@@ -814,7 +814,7 @@ cast_prepare_expression(const cast& c, database& db, const sstring& keyspace, lw
 }
 
 expr::expression
-prepare_function_call(const expr::function_call& fc, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<functions::function>& func) {
             return func;
@@ -875,7 +875,7 @@ prepare_function_call(const expr::function_call& fc, database& db, const sstring
 }
 
 assignment_testable::test_result
-test_assignment_function_call(const cql3::expr::function_call& fc, database& db, const sstring& keyspace, const column_specification& receiver) {
+test_assignment_function_call(const cql3::expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
     // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
@@ -903,7 +903,7 @@ test_assignment_function_call(const cql3::expr::function_call& fc, database& db,
 }
 
 expression
-prepare_expression(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
+prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
         [] (const constant&) -> expression {
             on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
@@ -968,7 +968,7 @@ prepare_expression(const expression& expr, database& db, const sstring& keyspace
 }
 
 expression
-prepare_expression_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
+prepare_expression_multi_column(const expression& expr, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     return expr::visit(overloaded_functor{
         [&] (const bind_variable& bv) -> expression {
             switch (bv.shape) {
@@ -989,7 +989,7 @@ prepare_expression_multi_column(const expression& expr, database& db, const sstr
 }
 
 assignment_testable::test_result
-test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver) {
+test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     return expr::visit(overloaded_functor{
         [&] (const constant&) -> test_result {
@@ -1051,7 +1051,7 @@ test_assignment(const expression& expr, database& db, const sstring& keyspace, c
 }
 
 assignment_testable::test_result
-test_assignment_all(const std::vector<expression>& to_test, database& db, const sstring& keyspace, const column_specification& receiver) {
+test_assignment_all(const std::vector<expression>& to_test, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     test_result res = test_result::EXACT_MATCH;
     for (auto&& e : to_test) {
@@ -1070,7 +1070,7 @@ class assignment_testable_expression : public assignment_testable {
     expression _e;
 public:
     explicit assignment_testable_expression(expression e) : _e(std::move(e)) {}
-    virtual test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
+    virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) const override {
         return expr::test_assignment(_e, db, keyspace, receiver);
     }
     virtual sstring assignment_testable_source_context() const override {

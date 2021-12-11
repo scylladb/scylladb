@@ -45,7 +45,8 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "db/system_keyspace.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "create_keyspace_statement.hh"
@@ -93,7 +94,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
     try {
         service::storage_proxy& proxy = qp.proxy();
-        auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
+        auto old_ksm = proxy.data_dictionary().find_keyspace(_name).metadata();
         const auto& tm = *proxy.get_token_metadata_ptr();
 
         auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm));
@@ -105,13 +106,13 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 keyspace());
 
         return make_ready_future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>(std::make_pair(std::move(ret), std::move(m)));
-    } catch (no_such_keyspace& e) {
+    } catch (data_dictionary::no_such_keyspace& e) {
         return make_exception_future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
     }
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-cql3::statements::alter_keyspace_statement::prepare(database& db, cql_stats& stats) {
+cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
 }
 

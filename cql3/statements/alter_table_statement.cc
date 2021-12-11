@@ -51,7 +51,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "cql3/util.hh"
 #include "view_info.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "db/view/view.hh"
 #include "cql3/query_processor.hh"
 #include "cdc/cdc_extension.hh"
@@ -144,7 +144,7 @@ static data_type validate_alter(const schema& schema, const column_definition& d
     return type;
 }
 
-static void validate_column_rename(database& db, const schema& schema, const column_identifier& from, const column_identifier& to)
+static void validate_column_rename(data_dictionary::database db, const schema& schema, const column_identifier& from, const column_identifier& to)
 {
     auto def = schema.get_column_definition(from.name());
     if (!def) {
@@ -171,7 +171,7 @@ static void validate_column_rename(database& db, const schema& schema, const col
     }
 }
 
-void alter_table_statement::add_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::add_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (is_static) {
         if (!schema.is_compound()) {
             throw exceptions::invalid_request_exception("Static columns are not allowed in COMPACT STORAGE tables");
@@ -241,7 +241,7 @@ void alter_table_statement::add_column(const schema& schema, const table& cf, sc
     }
 }
 
-void alter_table_statement::alter_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::alter_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -263,7 +263,7 @@ void alter_table_statement::alter_column(const schema& schema, const table& cf, 
     }
 }
 
-void alter_table_statement::drop_column(const schema& schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::drop_column(const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -294,8 +294,8 @@ void alter_table_statement::drop_column(const schema& schema, const table& cf, s
     }
 }
 
-std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(database& db) const {
-    auto s = validation::validate_column_family(db, keyspace(), column_family());
+std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db) const {
+    auto s = validation::validate_column_family(db.real_database(), keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
     }
@@ -306,10 +306,10 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
         throw exceptions::configuration_exception("Cannot alter table id.");
     }
 
-    auto& cf = db.find_column_family(s);
+    auto cf = db.find_column_family(s);
     std::vector<view_ptr> view_updates;
 
-    using column_change_fn = std::function<void (const alter_table_statement*, const schema&, const table&, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
+    using column_change_fn = std::function<void (const alter_table_statement*, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
 
     auto invoke_column_change_fn = [&] (column_change_fn fn) {
          for (auto& [raw_name, raw_validator, is_static] : _column_changes) {
@@ -414,7 +414,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp) const {
-  database& db = qp.db();
+  data_dictionary::database db = qp.db();
   auto& mm = qp.get_migration_manager();
   auto [cfm, view_updates] = prepare_schema_update(db);
   auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), std::nullopt);
@@ -430,7 +430,7 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-cql3::statements::alter_table_statement::prepare(database& db, cql_stats& stats) {
+cql3::statements::alter_table_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_table_statement>(*this));
 }
 

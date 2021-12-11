@@ -42,7 +42,7 @@
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
 #include "db/consistency_level_validations.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
@@ -230,8 +230,8 @@ void batch_statement::verify_batch_size(service::storage_proxy& proxy, const std
         return;     // We only warn for batch spanning multiple mutations
     }
 
-    size_t warn_threshold = proxy.get_db().local().get_config().batch_size_warn_threshold_in_kb() * 1024;
-    size_t fail_threshold = proxy.get_db().local().get_config().batch_size_fail_threshold_in_kb() * 1024;
+    size_t warn_threshold = proxy.data_dictionary().get_config().batch_size_warn_threshold_in_kb() * 1024;
+    size_t fail_threshold = proxy.data_dictionary().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
     size_t size = 0;
     for (auto&m : mutations) {
@@ -436,7 +436,7 @@ void batch_statement::build_cas_result_set_metadata() {
 namespace raw {
 
 std::unique_ptr<prepared_statement>
-batch_statement::prepare(database& db, cql_stats& stats) {
+batch_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     auto&& meta = get_prepare_context();
 
     std::optional<sstring> first_ks;

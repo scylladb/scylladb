@@ -56,7 +56,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
 

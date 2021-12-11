@@ -127,14 +127,14 @@ public:
             std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
             std::unique_ptr<cql3::attributes::raw> attrs);
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override {
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override {
         return prepare(db, stats, false);
     }
-    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats, bool for_view);
+    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, bool for_view);
 private:
-    void maybe_jsonize_select_clause(database& db, schema_ptr schema);
+    void maybe_jsonize_select_clause(data_dictionary::database db, schema_ptr schema);
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
-        database& db,
+        data_dictionary::database db,
         schema_ptr schema,
         prepare_context& ctx,
         ::shared_ptr<selection::selection> selection,
@@ -142,7 +142,7 @@ private:
         bool allow_filtering = false);
 
     /** Returns an expression for the limit or nullopt if no limit is set */
-    std::optional<expr::expression> prepare_limit(database& db, prepare_context& ctx, const std::optional<expr::expression>& limit);
+    std::optional<expr::expression> prepare_limit(data_dictionary::database db, prepare_context& ctx, const std::optional<expr::expression>& limit);
 
     // Checks whether it is legal to have ORDER BY in this statement
     static void verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions);
@@ -173,7 +173,7 @@ private:
             db::tri_mode_restriction_t::mode strict_allow_filtering,
             std::vector<sstring>& warnings);
 
-    void ensure_filtering_columns_retrieval(database& db,
+    void ensure_filtering_columns_retrieval(data_dictionary::database db,
                                             selection::selection& selection,
                                             const restrictions::statement_restrictions& restrictions);
 

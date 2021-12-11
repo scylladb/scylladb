@@ -32,7 +32,7 @@ namespace cql3 {
 
 namespace statements {
 
-std::unique_ptr<prepared_statement> drop_function_statement::prepare(database& db, cql_stats& stats) {
+std::unique_ptr<prepared_statement> drop_function_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_function_statement>(*this));
 }
 

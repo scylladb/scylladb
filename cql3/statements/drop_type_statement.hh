@@ -65,7 +65,7 @@ public:
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 private:
     void validate_while_executing(service::storage_proxy&) const;
 };

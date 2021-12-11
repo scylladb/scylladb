@@ -33,7 +33,7 @@
 #include "statement_restrictions.hh"
 #include "multi_column_restriction.hh"
 #include "token_restriction.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "cartesian_product.hh"
 
 #include "cql3/constants.hh"
@@ -380,7 +380,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
     return prefix;
 }
 
-statement_restrictions::statement_restrictions(database& db,
+statement_restrictions::statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
@@ -446,7 +446,7 @@ statement_restrictions::statement_restrictions(database& db,
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
-    auto& cf = db.find_column_family(schema);
+    auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     const expr::allow_local_index allow_local(
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
@@ -576,7 +576,7 @@ const single_column_restrictions::restrictions_map* get_individual_restrictions_
 
 } // anonymous namespace
 
-std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> statement_restrictions::find_idx(secondary_index::secondary_index_manager& sim) const {
+std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
     ::shared_ptr<cql3::restrictions::restrictions> chosen_index_restrictions;
@@ -606,7 +606,7 @@ bool statement_restrictions::has_eq_restriction_on_column(const column_definitio
     return expr::has_eq_restriction_on_column(column, *_where);
 }
 
-std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(database& db) const {
+std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         auto& sim = db.find_column_family(_schema).get_index_manager();
@@ -1537,7 +1537,7 @@ bool statement_restrictions::need_filtering() const {
     if (_has_queriable_ck_index && _uses_secondary_indexing) {
         // In cases where we use an index, clustering column restrictions might cause the need for filtering.
         // TODO: This is overly conservative, there are some cases when this returns true but filtering
-        // is not needed. Because of that the database will sometimes perform filtering when it's not actually needed.
+        // is not needed. Because of that the data_dictionary::database will sometimes perform filtering when it's not actually needed.
         // Query performance shouldn't be affected much, at most we will filter rows that are all correct.
         // Here are some cases to consider:
         // On a table with primary key (p, c1, c2, c3) with an index on c3

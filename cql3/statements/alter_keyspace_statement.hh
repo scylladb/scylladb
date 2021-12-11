@@ -65,7 +65,7 @@ public:
     future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
     void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
     virtual future<::shared_ptr<messages::result_message>> execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 

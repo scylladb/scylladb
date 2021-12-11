@@ -40,7 +40,8 @@
  */
 
 #include "cql3/statements/ks_prop_defs.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "locator/token_metadata.hh"
 #include "locator/abstract_replication_strategy.hh"
 
@@ -127,13 +128,13 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
 
-lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
     auto sc = get_replication_strategy_class().value();
-    return keyspace_metadata::new_keyspace(ks_name, sc,
+    return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             prepare_options(sc, tm, get_replication_options()), get_boolean(KW_DURABLE_WRITES, true));
 }
 
-lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old, const locator::token_metadata& tm) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm) {
     std::map<sstring, sstring> options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
@@ -144,7 +145,7 @@ lw_shared_ptr<keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_p
         options = old_options;
     }
 
-    return keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true));
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true));
 }
 
 

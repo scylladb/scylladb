@@ -282,7 +282,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     return _columns.size() - 1;
 }
 
-::shared_ptr<selection> selection::from_selectors(database& db, schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
+::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
     std::vector<const column_definition*> defs;
 
     ::shared_ptr<selector_factories> factories =

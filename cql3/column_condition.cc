@@ -284,7 +284,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 }
 
 lw_shared_ptr<column_condition>
-column_condition::raw::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
+column_condition::raw::prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const {
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }

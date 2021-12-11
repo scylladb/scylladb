@@ -27,7 +27,8 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "lang/lua.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "database.hh" // for wasm
 #include "cql3/query_processor.hh"
 
 namespace cql3 {
@@ -47,7 +48,7 @@ shared_ptr<functions::function> create_function_statement::create(service::stora
         arg_names.push_back(arg_name->to_string());
     }
 
-    auto&& db = proxy.get_db().local();
+    auto&& db = proxy.data_dictionary();
     if (_language == "lua") {
         auto cfg = lua::make_runtime_config(db.get_config());
         functions::user_function::context ctx = functions::user_function::lua_context {
@@ -58,7 +59,8 @@ shared_ptr<functions::function> create_function_statement::create(service::stora
         return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
             std::move(return_type), _called_on_null_input, std::move(ctx));
     } else if (_language == "xwasm") {
-       wasm::context ctx{db.wasm_engine(), _name.name};
+       // FIXME: need better way to test wasm compilation without real_database()
+       wasm::context ctx{db.real_database().wasm_engine(), _name.name};
        try {
             wasm::compile(ctx, arg_names, _body);
             return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
@@ -70,7 +72,7 @@ shared_ptr<functions::function> create_function_statement::create(service::stora
     return nullptr;
 }
 
-std::unique_ptr<prepared_statement> create_function_statement::prepare(database& db, cql_stats& stats) {
+std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
 }
 

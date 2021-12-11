@@ -28,7 +28,7 @@
 #include "service/migration_manager.hh"
 
 future<> table_helper::setup_table(cql3::query_processor& qp) const {
-    auto& db = qp.db();
+    auto db = qp.db();
 
     if (db.has_schema(_keyspace, _name)) {
         return make_ready_future<>();
@@ -124,7 +124,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& 
             }
         }
         return seastar::async([&qp, &keyspace_name, replication_factor, &qs, tables] {
-            database& db = qp.db();
+            data_dictionary::database db = qp.db();
 
             // Create a keyspace
             if (!db.has_keyspace(keyspace_name)) {
@@ -135,7 +135,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& 
                 qp.get_migration_manager().announce_new_keyspace(ksm, api::min_timestamp).get();
             }
 
-            qs.get_client_state().set_keyspace(db, keyspace_name);
+            qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
 
 
             // Create tables

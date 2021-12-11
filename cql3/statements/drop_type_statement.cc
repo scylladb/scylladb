@@ -46,8 +46,10 @@
 
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/user_types_metadata.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -77,7 +79,7 @@ void drop_type_statement::validate(service::storage_proxy& proxy, const service:
 
 void drop_type_statement::validate_while_executing(service::storage_proxy& proxy) const {
     try {
-        auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
+        auto&& ks = proxy.data_dictionary().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types().get_all_types();
         auto old = all_types.find(_name.get_user_type_name());
         if (old == all_types.end()) {
@@ -138,7 +140,7 @@ void drop_type_statement::validate_while_executing(service::storage_proxy& proxy
             }
         }
 
-    } catch (no_such_keyspace& e) {
+    } catch (data_dictionary::no_such_keyspace& e) {
         throw exceptions::invalid_request_exception(format("Cannot drop type in unknown keyspace {}", keyspace()));
     }
 }
@@ -153,7 +155,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
 drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
     validate_while_executing(qp.proxy());
 
-    database& db = qp.db();
+    data_dictionary::database db = qp.db();
 
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());
@@ -180,7 +182,7 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-drop_type_statement::prepare(database& db, cql_stats& stats) {
+drop_type_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_type_statement>(*this));
 }
 

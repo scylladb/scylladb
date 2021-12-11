@@ -40,7 +40,7 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
@@ -94,7 +94,7 @@ schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions
     return er;
 }
 
-void cf_prop_defs::validate(const database& db, const schema::extensions_map& schema_extensions) const {
+void cf_prop_defs::validate(const data_dictionary::database db, const schema::extensions_map& schema_extensions) const {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {

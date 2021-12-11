@@ -42,10 +42,11 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptors.hpp>
 
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "delete_statement.hh"
 #include "raw/delete_statement.hh"
 #include "utils/overloaded_functor.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -84,7 +85,7 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
 namespace raw {
 
 ::shared_ptr<cql3::statements::modification_statement>
-delete_statement::prepare_internal(database& db, schema_ptr schema, prepare_context& ctx,
+delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
         std::unique_ptr<attributes> attrs, cql_stats& stats) const {
     auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
 

@@ -34,13 +34,14 @@
 #include "cql3/assignment_testable.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
-#include "database_fwd.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "gc_clock.hh"
 #include "range.hh"
 #include "seastarx.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/variant_element.hh"
 #include "cql3/values.hh"
+#include "database_fwd.hh"
 
 class row;
 
@@ -580,8 +581,8 @@ extern expression replace_token(const expression&, const column_definition*);
 extern expression search_and_replace(const expression& e,
         const noncopyable_function<std::optional<expression> (const expression& candidate)>& replace_candidate);
 
-extern expression prepare_expression(const expression& expr, database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
-extern expression prepare_expression_multi_column(const expression& expr, database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
+extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver);
+extern expression prepare_expression_multi_column(const expression& expr, data_dictionary::database db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers);
 
 
 /**
@@ -593,11 +594,11 @@ extern expression prepare_expression_multi_column(const expression& expr, databa
  * Most caller should just call the is_assignable() method on the result, though functions have a use for
  * testing "strong" equality to decide the most precise overload to pick when multiple could match.
  */
-extern assignment_testable::test_result test_assignment(const expression& expr, database& db, const sstring& keyspace, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver);
 
 // Test all elements of exprs for assignment. If all are exact match, return exact match. If any is not assignable,
 // return not assignable. Otherwise, return weakly assignable.
-extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, database& db, const sstring& keyspace, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver);
 
 extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
 

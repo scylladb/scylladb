@@ -44,9 +44,11 @@
 #include "cql3/column_identifier.hh"
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
+#include "mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "boost/range/adaptor/map.hpp"
 #include "data_dictionary/user_types_metadata.hh"
 
@@ -82,7 +84,7 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(database& db, service::migration_manager& mm) const {
+future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(data_dictionary::database db, service::migration_manager& mm) const {
     std::vector<mutation> m;
     auto&& ks = db.find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
@@ -145,7 +147,7 @@ alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
                 _name.get_string_type_name());
 
         co_return std::make_pair(std::move(ret), std::move(m));
-    } catch(no_such_keyspace& e) {
+    } catch(data_dictionary::no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
     }
 }
@@ -158,7 +160,7 @@ alter_type_statement::add_or_alter::add_or_alter(const ut_name& name, bool is_ad
 {
 }
 
-user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_update) const
+user_type alter_type_statement::add_or_alter::do_add(data_dictionary::database db, user_type to_update) const
 {
     if (to_update->idx_of_field(_field_name->name())) {
         throw exceptions::invalid_request_exception(format("Cannot add new field {} to type {}: a field of the same name already exists",
@@ -181,7 +183,7 @@ user_type alter_type_statement::add_or_alter::do_add(database& db, user_type to_
     return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), std::move(new_types), to_update->is_multi_cell());
 }
 
-user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type to_update) const
+user_type alter_type_statement::add_or_alter::do_alter(data_dictionary::database db, user_type to_update) const
 {
     auto idx = to_update->idx_of_field(_field_name->name());
     if (!idx) {
@@ -200,7 +202,7 @@ user_type alter_type_statement::add_or_alter::do_alter(database& db, user_type t
     return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, to_update->field_names(), std::move(new_types), to_update->is_multi_cell());
 }
 
-user_type alter_type_statement::add_or_alter::make_updated_type(database& db, user_type to_update) const
+user_type alter_type_statement::add_or_alter::make_updated_type(data_dictionary::database db, user_type to_update) const
 {
     return _is_add ? do_add(db, to_update) : do_alter(db, to_update);
 }
@@ -215,7 +217,7 @@ void alter_type_statement::renames::add_rename(shared_ptr<column_identifier> pre
     _renames.emplace_back(previous_name, new_name);
 }
 
-user_type alter_type_statement::renames::make_updated_type(database& db, user_type to_update) const
+user_type alter_type_statement::renames::make_updated_type(data_dictionary::database db, user_type to_update) const
 {
     std::vector<bytes> new_names(to_update->field_names());
     for (auto&& rename : _renames) {
@@ -232,12 +234,12 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-alter_type_statement::add_or_alter::prepare(database& db, cql_stats& stats) {
+alter_type_statement::add_or_alter::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_type_statement::add_or_alter>(*this));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-alter_type_statement::renames::prepare(database& db, cql_stats& stats) {
+alter_type_statement::renames::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<alter_type_statement::renames>(*this));
 }
 

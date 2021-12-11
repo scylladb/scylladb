@@ -45,7 +45,7 @@
 #include "service/query_state.hh"
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::grant_statement::prepare(
-                database& db, cql_stats& stats) {
+                data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(::make_shared<grant_statement>(*this));
 }
 

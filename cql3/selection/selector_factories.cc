@@ -49,7 +49,7 @@ namespace cql3 {
 namespace selection {
 
 selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> selectables,
-        database& db, schema_ptr schema,
+        data_dictionary::database db, schema_ptr schema,
         std::vector<const column_definition*>& defs)
     : _contains_write_time_factory(false)
     , _contains_ttl_factory(false)

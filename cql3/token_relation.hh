@@ -95,25 +95,25 @@ public:
         return true;
     }
 
-    ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db,
+    ::shared_ptr<restrictions::restriction> new_EQ_restriction(data_dictionary::database db,
             schema_ptr schema,
             prepare_context& ctx) override;
 
-    ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db,
+    ::shared_ptr<restrictions::restriction> new_IN_restriction(data_dictionary::database db,
             schema_ptr schema,
             prepare_context& ctx) override;
 
-    ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db,
+    ::shared_ptr<restrictions::restriction> new_slice_restriction(data_dictionary::database db,
             schema_ptr schema,
             prepare_context& ctx,
             statements::bound bound,
             bool inclusive) override;
 
     ::shared_ptr<restrictions::restriction> new_contains_restriction(
-            database& db, schema_ptr schema,
+            data_dictionary::database db, schema_ptr schema,
             prepare_context& ctx, bool isKey) override;
 
-    ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db,
+    ::shared_ptr<restrictions::restriction> new_LIKE_restriction(data_dictionary::database db,
             schema_ptr schema,
             prepare_context& ctx) override;
 
@@ -124,7 +124,7 @@ public:
 protected:
     expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                    const expr::expression& raw,
-                                   database& db,
+                                   data_dictionary::database db,
                                    const sstring& keyspace,
                                    prepare_context& ctx) const override;
 };

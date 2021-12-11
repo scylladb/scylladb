@@ -297,7 +297,7 @@ insert_statement::insert_statement(cf_name name,
 { }
 
 ::shared_ptr<cql3::statements::modification_statement>
-insert_statement::prepare_internal(database& db, schema_ptr schema,
+insert_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::INSERT, ctx.bound_variables_size(), schema, std::move(attrs), stats);
@@ -356,7 +356,7 @@ insert_json_statement::insert_json_statement(cf_name name,
     , _default_unset(default_unset) { }
 
 ::shared_ptr<cql3::statements::modification_statement>
-insert_json_statement::prepare_internal(database& db, schema_ptr schema,
+insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
     // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
@@ -381,7 +381,7 @@ update_statement::update_statement(cf_name name,
 { }
 
 ::shared_ptr<cql3::statements::modification_statement>
-update_statement::prepare_internal(database& db, schema_ptr schema,
+update_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);

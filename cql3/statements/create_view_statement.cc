@@ -64,7 +64,7 @@
 #include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "db/view/view.hh"
 #include "service/migration_manager.hh"
@@ -143,7 +143,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-view_ptr create_view_statement::prepare_view(database& db) const {
+view_ptr create_view_statement::prepare_view(data_dictionary::database db) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -177,7 +177,7 @@ view_ptr create_view_statement::prepare_view(database& db) const {
                 _base_name.get_keyspace(), keyspace()));
     }
 
-    schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
+    schema_ptr schema = validation::validate_column_family(db.real_database(), _base_name.get_keyspace(), _base_name.get_column_family());
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on counter tables"));
@@ -187,7 +187,7 @@ view_ptr create_view_statement::prepare_view(database& db) const {
         throw exceptions::invalid_request_exception(format("Materialized views cannot be created against other materialized views"));
     }
 
-    if (cdc::get_base_table(db, *schema)) {
+    if (db.get_cdc_base_table(*schema)) {
         throw exceptions::invalid_request_exception(format("Materialized views cannot be created on CDC Log tables"));
     }
 
@@ -372,7 +372,7 @@ create_view_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-create_view_statement::prepare(database& db, cql_stats& stats) {
+create_view_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     if (!_prepare_ctx.get_variable_specifications().empty()) {
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }

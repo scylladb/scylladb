@@ -100,7 +100,7 @@ drop_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-drop_keyspace_statement::prepare(database& db, cql_stats& stats) {
+drop_keyspace_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_keyspace_statement>(*this));
 }
 

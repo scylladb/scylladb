@@ -42,7 +42,7 @@
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include <optional>
@@ -62,7 +62,7 @@ uint32_t truncate_statement::get_bound_terms() const
     return 0;
 }
 
-std::unique_ptr<prepared_statement> truncate_statement::prepare(database& db,cql_stats& stats)
+std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary::database db,cql_stats& stats)
 {
     return std::make_unique<prepared_statement>(::make_shared<truncate_statement>(*this));
 }

@@ -42,13 +42,13 @@
 #pragma once
 
 #include "types.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"
 #include <iosfwd>
 #include "enum_set.hh"
 
-class database;
-
 namespace data_dictionary {
+class database;
 class user_types_metadata;
 }
 
@@ -85,7 +85,7 @@ public:
         virtual std::optional<sstring> keyspace() const;
         virtual void freeze();
         virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata&) = 0;
-        virtual cql3_type prepare(database& db, const sstring& keyspace);
+        virtual cql3_type prepare(data_dictionary::database db, const sstring& keyspace);
         static shared_ptr<raw> from(cql3_type type);
         static shared_ptr<raw> user_type(ut_name name);
         static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2);

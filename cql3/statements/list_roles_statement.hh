@@ -64,7 +64,7 @@ public:
     list_roles_statement(const std::optional<role_name>& grantee, bool recursive)
         : _grantee(grantee ? sstring(grantee->to_string()) : std::optional<sstring>()), _recursive(recursive) {}
 
-    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
 

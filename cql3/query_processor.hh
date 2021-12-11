@@ -119,7 +119,7 @@ public:
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
-    database& _db;
+    data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
     service::migration_manager& _mm;
     const cql_config& _cql_config;
@@ -157,11 +157,11 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
+    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg);
 
     ~query_processor();
 
-    database& db() {
+    data_dictionary::database db() {
         return _db;
     }
 

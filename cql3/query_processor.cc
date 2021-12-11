@@ -50,7 +50,7 @@
 #include "cql3/util.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "hashers.hh"
 
 namespace cql3 {
@@ -85,7 +85,7 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)

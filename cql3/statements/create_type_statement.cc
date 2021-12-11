@@ -40,12 +40,14 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_type_statement.hh"
 #include "prepared_statement.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/column_identifier.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -75,7 +77,7 @@ future<> create_type_statement::check_access(service::storage_proxy& proxy, cons
     return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::CREATE);
 }
 
-inline bool create_type_statement::type_exists_in(::keyspace& ks) const
+inline bool create_type_statement::type_exists_in(data_dictionary::keyspace ks) const
 {
     auto&& keyspace_types = ks.metadata()->user_types().get_all_types();
     return keyspace_types.contains(_name.get_user_type_name());
@@ -115,7 +117,7 @@ const sstring& create_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-user_type create_type_statement::create_type(database& db) const
+user_type create_type_statement::create_type(data_dictionary::database db) const
 {
     std::vector<bytes> field_names;
     std::vector<data_type> field_types;
@@ -134,7 +136,7 @@ user_type create_type_statement::create_type(database& db) const
 }
 
 std::optional<user_type> create_type_statement::make_type(query_processor& qp) const {
-    database& db = qp.db();
+    data_dictionary::database db = qp.db();
     auto&& ks = db.find_keyspace(keyspace());
 
     // Can happen with if_not_exists
@@ -166,7 +168,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
                 co_return coroutine::make_exception(exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_string())));
             }
         }
-    } catch (no_such_keyspace& e) {
+    } catch (data_dictionary::no_such_keyspace& e) {
         co_return coroutine::exception(std::current_exception());
     }
 
@@ -174,7 +176,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-create_type_statement::prepare(database& db, cql_stats& stats) {
+create_type_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_type_statement>(*this));
 }
 
