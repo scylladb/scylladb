@@ -266,7 +266,7 @@ void storage_service::prepare_to_join(
         _gossiper.check_snitch_name_matches();
         _gossiper.reset_endpoint_state_map().get();
         for (auto ep : loaded_endpoints) {
-            _gossiper.add_saved_endpoint(ep);
+            _gossiper.add_saved_endpoint(ep).get();
         }
     }
 
@@ -1334,7 +1334,7 @@ future<> storage_service::init_server(cql3::query_processor& qp) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
                     }
                     loaded_endpoints.insert(ep);
-                    _gossiper.add_saved_endpoint(ep);
+                    _gossiper.add_saved_endpoint(ep).get();
                 }
             }
             replicate_to_all_cores(std::move(tmptr)).get();

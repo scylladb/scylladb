@@ -2000,11 +2000,10 @@ void gossiper::maybe_initialize_local_state(int generation_nbr) {
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::add_saved_endpoint(inet_address ep) {
+future<> gossiper::add_saved_endpoint(inet_address ep) {
     if (ep == get_broadcast_address()) {
         logger.debug("Attempt to add self as saved endpoint");
-        return;
+        co_return;
     }
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
@@ -2027,7 +2026,7 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     }
     ep_state.mark_dead();
     endpoint_state_map[ep] = ep_state;
-    replicate(ep, ep_state).get();
+    co_await replicate(ep, ep_state);
     _unreachable_endpoints[ep] = now();
     logger.trace("Adding saved endpoint {} {}", ep, ep_state.get_heart_beat_state().get_generation());
 }
