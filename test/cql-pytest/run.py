@@ -134,10 +134,10 @@ atexit.register(cleanup_all)
 # have it listen on a unique IP address so it doesn't collide with other
 # servers run by other concurrent tests. Luckily, Linux allows us to use any
 # IP address in the range 127/8 (i.e., 127.*.*.*). If we pick an IP address
-# based on the server's main process id, we know two severers will not
-# get the same IP address. We avoid 127.0.0.* because CCM (a different test
+# based on the server's main process id, we know two servers will not
+# get the same IP address. We avoid 127.0.*.* because CCM (a different test
 # framework) assumes it will be available for it to run Scylla instances.
-# 127.255.255.255 is also illegal. So for simplicity we use 127.{1-254}.*.*.
+# 127.255.255.255 is also illegal. So we use 127.{1-254}.*.*.
 # This gives us a total of 253*255*255 possible IP addresses - which is
 # significantly more than /proc/sys/kernel/pid_max on any system I know.
 def pid_to_ip(pid):
