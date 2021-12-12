@@ -1004,6 +1004,8 @@ public:
             auto& t = *this;
             auto cf_def = def;
 
+            co_await t._query_state.get_client_state().has_schema_access(t._db.local(), cf_def.keyspace, cf_def.name, auth::permission::ALTER);
+
             auto& cf = t._db.local().find_column_family(cf_def.keyspace, cf_def.name);
             auto schema = cf.schema();
 
@@ -1025,7 +1027,6 @@ public:
             if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
                 fail(unimplemented::cause::MIXED_CF);
             }
-            co_await t._query_state.get_client_state().has_schema_access(t._db.local(), *schema, auth::permission::ALTER);
             co_await t._query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, std::nullopt);
             co_return std::string(t._db.local().get_version().to_sstring());
         });
