@@ -871,20 +871,20 @@ public:
 
     void system_add_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            if (!_db.local().has_keyspace(cf_def.keyspace)) {
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = cf_def] () -> future<std::string> {
+            auto& t = *this;
+            auto cf_def = def;
+            if (!t._db.local().has_keyspace(cf_def.keyspace)) {
                 throw NotFoundException();
             }
-            if (_db.local().has_schema(cf_def.keyspace, cf_def.name)) {
+            if (t._db.local().has_schema(cf_def.keyspace, cf_def.name)) {
                 throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-            return _query_state.get_client_state().has_keyspace_access(_db.local(), cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
-                return _query_processor.local().get_migration_manager().announce_new_column_family(std::move(s)).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
-            });
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
+            co_await t._query_processor.local().get_migration_manager().announce_new_column_family(std::move(s));
+            co_return std::string(t._db.local().get_version().to_sstring());
         });
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
