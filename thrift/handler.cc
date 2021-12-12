@@ -877,16 +877,23 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
 
-            if (!t._db.local().has_keyspace(cf_def.keyspace)) {
-                throw NotFoundException();
-            }
-            if (t._db.local().has_schema(cf_def.keyspace, cf_def.name)) {
-                throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
-            }
+            auto func = [&] (replica::database& db) -> future<std::string> {
+                auto& mm = t._query_processor.local().get_migration_manager();
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-            co_await t._query_processor.local().get_migration_manager().announce_new_column_family(std::move(s));
-            co_return std::string(t._db.local().get_version().to_sstring());
+                co_await mm.schema_read_barrier();
+
+                if (!db.has_keyspace(cf_def.keyspace)) {
+                    throw NotFoundException();
+                }
+                if (db.has_schema(cf_def.keyspace, cf_def.name)) {
+                    throw make_exception<InvalidRequestException>("Column family {} already exists", cf_def.name);
+                }
+
+                auto s = schema_from_thrift(cf_def, cf_def.keyspace);
+                co_await mm.announce(co_await mm.prepare_new_column_family_announcement(std::move(s)));
+                co_return std::string(db.get_version().to_sstring());
+            };
+            co_return co_await t._db.invoke_on(0, func);
         });
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
