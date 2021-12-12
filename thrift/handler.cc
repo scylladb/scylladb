@@ -1000,8 +1000,11 @@ public:
 
     void system_update_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto& cf = _db.local().find_column_family(cf_def.keyspace, cf_def.name);
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = cf_def] () -> future<std::string> {
+            auto& t = *this;
+            auto cf_def = def;
+
+            auto& cf = t._db.local().find_column_family(cf_def.keyspace, cf_def.name);
             auto schema = cf.schema();
 
             if (schema->is_cql3_table()) {
@@ -1022,11 +1025,9 @@ public:
             if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
                 fail(unimplemented::cause::MIXED_CF);
             }
-            return _query_state.get_client_state().has_schema_access(_db.local(), *schema, auth::permission::ALTER).then([this, s = std::move(s)] {
-                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, std::nullopt).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
-            });
+            co_await t._query_state.get_client_state().has_schema_access(t._db.local(), *schema, auth::permission::ALTER);
+            co_await t._query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, std::nullopt);
+            co_return std::string(t._db.local().get_version().to_sstring());
         });
     }
 
