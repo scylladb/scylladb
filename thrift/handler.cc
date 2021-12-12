@@ -952,13 +952,20 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
 
-            thrift_validation::validate_keyspace_not_system(keyspace);
-            if (!_db.local().has_keyspace(keyspace)) {
-                throw NotFoundException();
-            }
+            auto func = [&] (replica::database& db) -> future<std::string> {
+                auto& mm = t._query_processor.local().get_migration_manager();
 
-            co_await t._query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace);
-            co_return std::string(t._db.local().get_version().to_sstring());
+                co_await mm.schema_read_barrier();
+
+                thrift_validation::validate_keyspace_not_system(keyspace);
+                if (!db.has_keyspace(keyspace)) {
+                    throw NotFoundException();
+                }
+
+                co_await mm.announce(mm.prepare_keyspace_drop_announcement(keyspace));
+                co_return std::string(db.get_version().to_sstring());
+            };
+            co_return co_await t._db.invoke_on(0, func);
         });
     }
 
