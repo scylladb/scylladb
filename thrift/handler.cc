@@ -928,10 +928,19 @@ public:
             auto& t = *this;
             auto ks_def = def;
 
-            auto ksm = keyspace_from_thrift(ks_def);
             co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
-            co_await t._query_processor.local().get_migration_manager().announce_new_keyspace(std::move(ksm));
-            co_return std::string(t._db.local().get_version().to_sstring());
+            auto func = [&] (replica::database& db) -> future<std::string> {
+                auto& mm = t._query_processor.local().get_migration_manager();
+
+                auto ksm = keyspace_from_thrift(ks_def);
+
+                co_await mm.schema_read_barrier();
+
+                co_await mm.announce(mm.prepare_new_keyspace_announcement(std::move(ksm)));
+                co_return std::string(db.get_version().to_sstring());
+            };
+
+            co_return co_await t._db.invoke_on(0, func);
         });
     }
 
