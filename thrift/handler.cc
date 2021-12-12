@@ -874,6 +874,9 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [this, def = cf_def] () -> future<std::string> {
             auto& t = *this;
             auto cf_def = def;
+
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
+
             if (!t._db.local().has_keyspace(cf_def.keyspace)) {
                 throw NotFoundException();
             }
@@ -882,7 +885,6 @@ public:
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), cf_def.keyspace, auth::permission::CREATE);
             co_await t._query_processor.local().get_migration_manager().announce_new_column_family(std::move(s));
             co_return std::string(t._db.local().get_version().to_sstring());
         });
