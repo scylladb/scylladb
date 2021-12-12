@@ -950,12 +950,13 @@ public:
             auto& t = *this;
             auto keyspace = ks;
 
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
+
             thrift_validation::validate_keyspace_not_system(keyspace);
             if (!_db.local().has_keyspace(keyspace)) {
                 throw NotFoundException();
             }
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
             co_await t._query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace);
             co_return std::string(t._db.local().get_version().to_sstring());
         });
