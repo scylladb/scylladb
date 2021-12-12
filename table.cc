@@ -2181,6 +2181,7 @@ table::enable_auto_compaction() {
     // FIXME: unmute backlog. turn table backlog back on.
     //      see table::disable_auto_compaction() notes.
     _compaction_disabled_by_user = false;
+    trigger_compaction();
 }
 
 future<>
