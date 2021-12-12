@@ -976,6 +976,8 @@ public:
             auto ks_def = def;
             thrift_validation::validate_keyspace_not_system(ks_def.name);
 
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), ks_def.name, auth::permission::ALTER);
+
             if (!t._db.local().has_keyspace(ks_def.name)) {
                 throw NotFoundException();
             }
@@ -984,7 +986,6 @@ public:
             }
 
             auto ksm = keyspace_from_thrift(ks_def);
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), ks_def.name, auth::permission::ALTER);
             co_await t._query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm));
             co_return std::string(t._db.local().get_version().to_sstring());
         });
