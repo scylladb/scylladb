@@ -898,19 +898,19 @@ public:
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
-            return _query_state.get_client_state().has_column_family_access(_db.local(), current_keyspace(), column_family, auth::permission::DROP).then([this, column_family] {
-                auto& cf = _db.local().find_column_family(current_keyspace(), column_family);
-                if (cf.schema()->is_view()) {
-                    throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
-                }
-                if (!cf.views().empty()) {
-                    throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
-                }
-                return _query_processor.local().get_migration_manager().announce_column_family_drop(current_keyspace(), column_family).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
-            });
+        with_cob(std::move(cob), std::move(exn_cob), [this, cfm = column_family] () -> future<std::string> {
+            auto& t = *this;
+            auto column_family = cfm;
+            co_await t._query_state.get_client_state().has_column_family_access(t._db.local(), t.current_keyspace(), column_family, auth::permission::DROP);
+            auto& cf = t._db.local().find_column_family(t.current_keyspace(), column_family);
+            if (cf.schema()->is_view()) {
+                throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
+            }
+            if (!cf.views().empty()) {
+                throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
+            }
+            co_await t._query_processor.local().get_migration_manager().announce_column_family_drop(t.current_keyspace(), column_family);
+            co_return std::string(t._db.local().get_version().to_sstring());
         });
     }
 
