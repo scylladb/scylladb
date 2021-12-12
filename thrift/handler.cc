@@ -946,17 +946,18 @@ public:
 
     void system_drop_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [this, ks = keyspace] () -> future<std::string> {
+            auto& t = *this;
+            auto keyspace = ks;
+
             thrift_validation::validate_keyspace_not_system(keyspace);
             if (!_db.local().has_keyspace(keyspace)) {
                 throw NotFoundException();
             }
 
-            return _query_state.get_client_state().has_keyspace_access(_db.local(), keyspace, auth::permission::DROP).then([this, keyspace] {
-                return _query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
-            });
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), keyspace, auth::permission::DROP);
+            co_await t._query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace);
+            co_return std::string(t._db.local().get_version().to_sstring());
         });
     }
 
