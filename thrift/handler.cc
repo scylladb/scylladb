@@ -924,13 +924,14 @@ public:
 
     void system_add_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = ks_def] () -> future<std::string> {
+            auto& t = *this;
+            auto ks_def = def;
+
             auto ksm = keyspace_from_thrift(ks_def);
-            return _query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE).then([this, ksm = std::move(ksm)] {
-                return _query_processor.local().get_migration_manager().announce_new_keyspace(std::move(ksm)).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
-            });
+            co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
+            co_await t._query_processor.local().get_migration_manager().announce_new_keyspace(std::move(ksm));
+            co_return std::string(t._db.local().get_version().to_sstring());
         });
     }
 
