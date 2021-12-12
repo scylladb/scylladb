@@ -971,10 +971,12 @@ public:
 
     void system_update_keyspace(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         service_permit permit = obtain_permit();
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [this, def = ks_def] () -> future<std::string> {
+            auto& t = *this;
+            auto ks_def = def;
             thrift_validation::validate_keyspace_not_system(ks_def.name);
 
-            if (!_db.local().has_keyspace(ks_def.name)) {
+            if (!t._db.local().has_keyspace(ks_def.name)) {
                 throw NotFoundException();
             }
             if (!ks_def.cf_defs.empty()) {
@@ -982,11 +984,9 @@ public:
             }
 
             auto ksm = keyspace_from_thrift(ks_def);
-            return _query_state.get_client_state().has_keyspace_access(_db.local(), ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
-                return _query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm)).then([this] {
-                    return std::string(_db.local().get_version().to_sstring());
-                });
-            });
+            co_await t._query_state.get_client_state().has_keyspace_access(t._db.local(), ks_def.name, auth::permission::ALTER);
+            co_await t._query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm));
+            co_return std::string(t._db.local().get_version().to_sstring());
         });
     }
 
