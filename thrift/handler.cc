@@ -902,15 +902,23 @@ public:
             auto& t = *this;
             auto column_family = cfm;
             co_await t._query_state.get_client_state().has_column_family_access(t._db.local(), t.current_keyspace(), column_family, auth::permission::DROP);
-            auto& cf = t._db.local().find_column_family(t.current_keyspace(), column_family);
-            if (cf.schema()->is_view()) {
-                throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
-            }
-            if (!cf.views().empty()) {
-                throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
-            }
-            co_await t._query_processor.local().get_migration_manager().announce_column_family_drop(t.current_keyspace(), column_family);
-            co_return std::string(t._db.local().get_version().to_sstring());
+            auto func = [&column_family, &current_keyspace = t.current_keyspace(), &t] (replica::database& db) -> future<std::string> {
+                auto& mm = t._query_processor.local().get_migration_manager();
+
+                co_await mm.schema_read_barrier();
+
+                auto& cf = db.find_column_family(current_keyspace, column_family);
+                if (cf.schema()->is_view()) {
+                    throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
+                }
+                if (!cf.views().empty()) {
+                    throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
+                }
+
+                co_await mm.announce(co_await mm.prepare_column_family_drop_announcement(current_keyspace, column_family));
+                co_return std::string(db.get_version().to_sstring());
+            };
+            co_return co_await t._db.invoke_on(0, func);
         });
     }
 
