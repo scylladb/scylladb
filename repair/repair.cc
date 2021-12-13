@@ -68,51 +68,44 @@ void node_ops_info::check_abort() {
 }
 
 node_ops_metrics::node_ops_metrics() {
-        // FIXME: indentation
-        namespace sm = seastar::metrics;
-        auto ops_label_type = sm::label("ops");
-        _metrics.add_group("node_ops", {
-            sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
-            sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
-            sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
-            sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
-            sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
-            sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
-        });
-    }
+    namespace sm = seastar::metrics;
+    auto ops_label_type = sm::label("ops");
+    _metrics.add_group("node_ops", {
+        sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+        sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
+        sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+        sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+        sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+        sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+    });
+}
 
 float node_ops_metrics::bootstrap_finished_percentage() {
-        // FIXME: indentation
-        return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
-    }
+    return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
+}
 float node_ops_metrics::replace_finished_percentage() {
-        // FIXME: indentation
-        return replace_total_ranges == 0 ? 1 : float(replace_finished_ranges) / float(replace_total_ranges);
-    }
+    return replace_total_ranges == 0 ? 1 : float(replace_finished_ranges) / float(replace_total_ranges);
+}
 float node_ops_metrics::rebuild_finished_percentage() {
-        // FIXME: indentation
-        return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
-    }
+    return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
+}
 float node_ops_metrics::decommission_finished_percentage() {
-        // FIXME: indentation
-        return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
-    }
+    return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
+}
 float node_ops_metrics::removenode_finished_percentage() {
-        // FIXME: indentation
-        return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
-    }
+    return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
+}
 
 void node_ops_metrics::init() {
-        // FIXME: indentation
-        // Dummy function to call during startup to initialize the thread local
-        // variable node_ops_metrics _node_ops_metrics below.
-    }
+    // Dummy function to call during startup to initialize the thread local
+    // variable node_ops_metrics _node_ops_metrics below.
+}
 
 static thread_local node_ops_metrics _node_ops_metrics;
 
