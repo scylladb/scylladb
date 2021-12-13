@@ -28,21 +28,21 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 
-future<> table_helper::setup_table(cql3::query_processor& qp) const {
+future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& create_cql) {
     auto db = qp.db();
 
-    if (db.has_schema(_keyspace, _name)) {
-        return make_ready_future<>();
-    }
-
-    auto parsed = cql3::query_processor::parse_statement(_create_cql);
+    auto parsed = cql3::query_processor::parse_statement(create_cql);
 
     cql3::statements::raw::cf_statement* parsed_cf_stmt = static_cast<cql3::statements::raw::cf_statement*>(parsed.get());
-    parsed_cf_stmt->prepare_keyspace(_keyspace);
+    (void)parsed_cf_stmt->keyspace(); // This will assert if cql statement did not contain keyspace
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed_cf_stmt->prepare(db, qp.get_cql_stats())->statement);
     auto schema = statement->get_cf_meta_data(db);
+
+    if (db.has_schema(schema->ks_name(), schema->cf_name())) {
+        return make_ready_future<>();
+    }
 
     // Generate the CF UUID based on its KF names. This is needed to ensure that
     // all Nodes that create it would create it with the same UUID and we don't
@@ -56,7 +56,7 @@ future<> table_helper::setup_table(cql3::query_processor& qp) const {
     // "CREATE TABLE" invocation on different Nodes.
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
-    return qp.get_migration_manager().announce_new_column_family(b.build()).discard_result().handle_exception([this] (auto ep) {});;
+    return qp.get_migration_manager().announce_new_column_family(b.build()).discard_result().handle_exception([] (auto ep) {});;
 }
 
 future<> table_helper::cache_table_info(cql3::query_processor& qp, service::query_state& qs) {
@@ -93,7 +93,7 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::quer
     }).handle_exception([this, &qp] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.
-        (void)this->setup_table(qp).discard_result();
+        (void)setup_table(qp, _create_cql).discard_result();
 
         // We throw the bad_column_family exception because the caller
         // expects and accounts this type of errors.
@@ -139,6 +139,6 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
 
     // Create tables
     co_await parallel_for_each(tables, [&qp] (table_helper* t) {
-        return t->setup_table(qp);
+        return table_helper::setup_table(qp, t->_create_cql);
     });
 }

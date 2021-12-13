@@ -65,7 +65,7 @@ public:
      * @return A future that resolves when the operation is complete. Any
      *         possible errors are ignored.
      */
-    future<> setup_table(cql3::query_processor& qp) const;
+    static future<> setup_table(cql3::query_processor& qp, const sstring& create_cql);
 
     /**
      * @return a future that resolves when the given t_helper is ready to be used for
