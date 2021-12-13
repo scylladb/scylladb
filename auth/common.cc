@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "auth/common.hh"
 
 #include <seastar/core/shared_ptr.hh>
@@ -61,9 +62,8 @@ static future<> create_metadata_table_if_missing_impl(
         cql3::query_processor& qp,
         std::string_view cql,
         ::service::migration_manager& mm) {
-    static auto ignore_existing = [] (seastar::noncopyable_function<future<>()> func) {
-        return futurize_invoke(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
-    };
+    assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
+
     auto db = qp.db();
     auto parsed_statement = cql3::query_processor::parse_statement(cql);
     auto& parsed_cf_statement = static_cast<cql3::statements::raw::cf_statement&>(*parsed_statement);
@@ -79,9 +79,13 @@ static future<> create_metadata_table_if_missing_impl(
     schema_builder b(schema);
     b.set_uuid(uuid);
     schema_ptr table = b.build();
-    return ignore_existing([&mm, table = std::move(table)] () {
-        return mm.announce_new_column_family(table);
-    });
+
+    if (!db.has_schema(table->ks_name(), table->cf_name())) {
+        co_await mm.schema_read_barrier();
+        try {
+            co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(table));
+        } catch (exceptions::already_exists_exception&) {}
+    }
 }
 
 future<> create_metadata_table_if_missing(
