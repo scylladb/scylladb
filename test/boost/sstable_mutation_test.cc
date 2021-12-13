@@ -1220,8 +1220,8 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         auto mt2 = make_lw_shared<memtable>(s);
         mt2->apply(m2);
         auto combined_permit = env.make_reader_permit();
-        auto mr = make_combined_reader(s, combined_permit,
-            mt1->make_flat_reader(s, combined_permit), mt2->make_flat_reader(s, combined_permit));
+        auto mr = downgrade_to_v1(make_combined_reader(s, combined_permit,
+            upgrade_to_v2(mt1->make_flat_reader(s, combined_permit)), upgrade_to_v2(mt2->make_flat_reader(s, combined_permit))));
         auto sst = make_sstable_easy(env, dir.path(), std::move(mr), env.manager().configure_writer(), 1, version);
 
         assert_that(sst->as_mutation_source().make_reader(s, env.make_reader_permit()))

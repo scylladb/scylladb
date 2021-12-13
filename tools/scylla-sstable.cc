@@ -535,16 +535,16 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
         std::function<stop_iteration(flat_mutation_reader&, sstables::sstable*)> reader_consumer) {
     sst_log.trace("consume_sstables(): {} sstables, merge={}, no_skips={}", sstables.size(), merge, no_skips);
     if (merge) {
-        std::vector<flat_mutation_reader> readers;
+        std::vector<flat_mutation_reader_v2> readers;
         readers.reserve(sstables.size());
         for (const auto& sst : sstables) {
             if (no_skips) {
-                readers.emplace_back(sst->make_crawling_reader_v1(schema, permit));
+                readers.emplace_back(sst->make_crawling_reader(schema, permit));
             } else {
-                readers.emplace_back(sst->make_reader_v1(schema, permit, query::full_partition_range, schema->full_slice()));
+                readers.emplace_back(sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice()));
             }
         }
-        auto rd = make_combined_reader(schema, permit, std::move(readers));
+        auto rd = downgrade_to_v1(make_combined_reader(schema, permit, std::move(readers)));
 
         reader_consumer(rd, nullptr);
     } else {

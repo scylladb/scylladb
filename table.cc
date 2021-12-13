@@ -154,7 +154,7 @@ table::make_reader(schema_ptr s,
         return (*_virtual_reader).make_reader(s, std::move(permit), range, slice, pc, trace_state, fwd, fwd_mr);
     }
 
-    std::vector<flat_mutation_reader> readers;
+    std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_memtables->size() + 1);
 
     // We're assuming that cache and memtables are both read atomically
@@ -178,7 +178,7 @@ table::make_reader(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
     }
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
@@ -198,12 +198,12 @@ table::make_reader(schema_ptr s,
         // FIXME: remove this workaround (and the `reversed_reads_auto_bypass_cache` option) after:
         // - support for reversed reads is implemented in the cache,
         // - fast forwarding is implemented in reversed sstable readers.
-        readers.emplace_back(_cache.make_reader(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(upgrade_to_v2(_cache.make_reader(s, permit, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
     } else {
-        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(upgrade_to_v2(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
     }
 
-    auto comb_reader = make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
+    auto comb_reader = downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
     if (_config.data_listeners && !_config.data_listeners->empty()) {
         return _config.data_listeners->on_read(s, range, slice, std::move(comb_reader));
     } else {
@@ -233,13 +233,13 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
 
     auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
-        std::vector<flat_mutation_reader> readers;
+        std::vector<flat_mutation_reader_v2> readers;
         readers.reserve(_memtables->size() + 1);
         for (auto&& mt : *_memtables) {
-            readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
+            readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
         }
-        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-        return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
+        readers.emplace_back(upgrade_to_v2(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+        return downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
     });
 
     return make_flat_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
@@ -251,13 +251,13 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_perm
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
 
-    std::vector<flat_mutation_reader> readers;
+    std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_memtables->size() + 1);
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_flat_reader(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
     }
-    readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-    return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
+    readers.emplace_back(upgrade_to_v2(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+    return downgrade_to_v1(make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr));
 }
 
 flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
@@ -2228,11 +2228,11 @@ table::make_reader_excluding_sstables(schema_ptr s,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
-    std::vector<flat_mutation_reader> readers;
+    std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(_memtables->size() + 1);
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(upgrade_to_v2(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr)));
     }
 
     auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);
@@ -2244,8 +2244,8 @@ table::make_reader_excluding_sstables(schema_ptr s,
         effective_sstables->insert(sst);
     });
 
-    readers.emplace_back(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-    return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
+    readers.emplace_back(upgrade_to_v2(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+    return downgrade_to_v1(make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr));
 }
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {

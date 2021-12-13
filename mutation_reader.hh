@@ -53,20 +53,20 @@ public:
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-flat_mutation_reader make_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        std::vector<flat_mutation_reader>,
+        std::vector<flat_mutation_reader_v2>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-flat_mutation_reader make_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector>,
         streamed_mutation::forwarding,
         mutation_reader::forwarding);
-flat_mutation_reader make_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        flat_mutation_reader&& a,
-        flat_mutation_reader&& b,
+        flat_mutation_reader_v2&& a,
+        flat_mutation_reader_v2&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
