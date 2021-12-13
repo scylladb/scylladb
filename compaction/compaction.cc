@@ -1662,7 +1662,7 @@ future<bool> scrub_validate_mode_validate_reader(flat_mutation_reader reader, co
         while (auto mf_opt = co_await reader()) {
             if (cdata.is_stop_requested()) [[unlikely]] {
                 // Compaction manager will catch this exception and re-schedule the compaction.
-                co_return coroutine::make_exception(compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested));
+                throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
             }
 
             const auto& mf = *mf_opt;
