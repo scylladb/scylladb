@@ -767,6 +767,7 @@ scylla_core = (['database.cc',
                 'cql3/functions/error_injection_fcts.cc',
                 'cql3/statements/cf_prop_defs.cc',
                 'cql3/statements/cf_statement.cc',
+                'cql3/statements/call_statement.cc',
                 'cql3/statements/authentication_statement.cc',
                 'cql3/statements/create_keyspace_statement.cc',
                 'cql3/statements/create_table_statement.cc',
@@ -1021,6 +1022,8 @@ scylla_core = (['database.cc',
                 'service/raft/raft_group_registry.cc',
                 'service/raft/discovery.cc',
                 'service/raft/raft_group0.cc',
+                'db/builtin_routine_registry.cc',
+                'db/builtin_routine.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )

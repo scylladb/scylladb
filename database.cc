@@ -51,6 +51,8 @@
 #include "cell_locking.hh"
 #include "view_info.hh"
 #include "db/schema_tables.hh"
+#include "db/query_context.hh"
+#include "db/builtin_routine_registry.hh"
 #include "compaction/compaction_manager.hh"
 #include "gms/feature_service.hh"
 #include "timeout_config.hh"
@@ -346,6 +348,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             std::numeric_limits<size_t>::max())
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
+    , _builtin_routine_registry(std::make_unique<builtin_routine_registry>())
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
     , _enable_incremental_backups(cfg.incremental_backups())

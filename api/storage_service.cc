@@ -35,6 +35,8 @@
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/builtin_routine_registry.hh"
+#include "db/builtin_routine.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 #include "seastar/http/exception.hh"
@@ -505,6 +507,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_scylla_release_version.set(r, [](const_req req) {
         return scylla_version();
     });
+
     ss::get_schema_version.set(r, [&ss](const_req req) {
         return ss.local().get_schema_version();
     });
