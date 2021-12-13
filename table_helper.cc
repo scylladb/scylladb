@@ -20,6 +20,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "table_helper.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -116,34 +117,28 @@ future<> table_helper::insert(cql3::query_processor& qp, service::query_state& q
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
-    if (this_shard_id() == 0) {
-        size_t n = tables.size();
-        for (size_t i = 0; i < n; ++i) {
-            if (tables[i]->_keyspace != keyspace_name) {
-                throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
-            }
-        }
-        return seastar::async([&qp, keyspace_name, replication_factor, &qs, tables] {
-            data_dictionary::database db = qp.db();
-
-            // Create a keyspace
-            if (!db.has_keyspace(keyspace_name)) {
-                std::map<sstring, sstring> opts;
-                opts["replication_factor"] = replication_factor;
-                auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
-                qp.get_migration_manager().announce_new_keyspace(ksm).get();
-            }
-
-            qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
-
-
-            // Create tables
-            size_t n = tables.size();
-            for (size_t i = 0; i < n; ++i) {
-                tables[i]->setup_table(qp).get();
-            }
-        });
-    } else {
-        return make_ready_future<>();
+    if (this_shard_id() != 0) {
+        co_return;
     }
+
+    if (std::any_of(tables.begin(), tables.end(), [&] (table_helper* t) { return t->_keyspace != keyspace_name; })) {
+        throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
+    }
+
+    data_dictionary::database db = qp.db();
+
+    // Create a keyspace
+    if (!db.has_keyspace(keyspace_name)) {
+        std::map<sstring, sstring> opts;
+        opts["replication_factor"] = replication_factor;
+        auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
+        co_await qp.get_migration_manager().announce_new_keyspace(ksm);
+    }
+
+    qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
+
+    // Create tables
+    co_await parallel_for_each(tables, [&qp] (table_helper* t) {
+        return t->setup_table(qp);
+    });
 }
