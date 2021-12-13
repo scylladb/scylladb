@@ -11,7 +11,7 @@ some of the issues that streaming based node operations have.
 
 - Rebuild operation
 
-   It is used to get all the data this node owns form other existing nodes. It
+   It is used to get all the data this node owns from other existing nodes. It
    pulls data from only one of the replicas which might not be the latest copy.
 
 - Removenode operation
