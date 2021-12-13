@@ -266,7 +266,6 @@ public:
     }
 
     void get(thrift_fn::function<void(ColumnOrSuperColumn const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const ConsistencyLevel::type consistency_level) {
-        service_permit permit = obtain_permit();
         return get_slice([cob = std::move(cob), &column_path](auto&& results) {
             if (results.empty()) {
                 throw NotFoundException();
@@ -276,7 +275,6 @@ public:
     }
 
     void get_slice(thrift_fn::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        service_permit permit = obtain_permit();
         return multiget_slice([cob = std::move(cob)](auto&& results) {
             if (!results.empty()) {
                 return cob(std::move(results.begin()->second));
@@ -286,7 +284,6 @@ public:
     }
 
     void get_count(thrift_fn::function<void(int32_t const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        service_permit permit = obtain_permit();
         return multiget_count([cob = std::move(cob)](auto&& results) {
             if (!results.empty()) {
                 return cob(results.begin()->second);
