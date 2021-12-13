@@ -52,8 +52,9 @@ public:
 };
 
 class node_ops_metrics {
+    tracker& _tracker;
 public:
-    node_ops_metrics();
+    node_ops_metrics(tracker& tracker);
 
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
@@ -75,8 +76,6 @@ private:
     float decommission_finished_percentage();
     float removenode_finished_percentage();
     float repair_finished_percentage();
-public:
-    void init();
 };
 
 class repair_service : public seastar::peering_sharded_service<repair_service> {
@@ -89,6 +88,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::view::view_update_generator>& _view_update_generator;
     service::migration_manager& _mm;
     tracker _tracker;
+    node_ops_metrics _node_ops_metrics;
 
     std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
 
@@ -100,8 +100,6 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
-
-    future<> init_metrics();
 
 public:
     repair_service(distributed<gms::gossiper>& gossiper,
@@ -174,6 +172,13 @@ public:
     const tracker& repair_tracker() const {
         return _tracker;
     }
+
+    const node_ops_metrics& get_metrics() const noexcept {
+        return _node_ops_metrics;
+    };
+    node_ops_metrics& get_metrics() noexcept {
+        return _node_ops_metrics;
+    };
 
     // returns a vector with the ids of the active repairs
     future<std::vector<int>> get_active_repairs();

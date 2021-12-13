@@ -3112,6 +3112,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _view_update_generator(vug)
     , _mm(mm)
     , _tracker(max_repair_memory)
+    , _node_ops_metrics(_tracker)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
 {
@@ -3123,7 +3124,6 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 
 future<> repair_service::start() {
     co_await load_history();
-    co_await init_metrics();
     co_await init_ms_handlers();
 }
 
