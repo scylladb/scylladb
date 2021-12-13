@@ -41,7 +41,15 @@ future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& cre
     auto schema = statement->get_cf_meta_data(db);
 
     if (db.has_schema(schema->ks_name(), schema->cf_name())) {
-        return make_ready_future<>();
+        co_return;
+    }
+
+    auto& mm = qp.get_migration_manager();
+
+    co_await mm.schema_read_barrier();
+
+    if (db.has_schema(schema->ks_name(), schema->cf_name())) { // re-check after read barrier
+        co_return;
     }
 
     // Generate the CF UUID based on its KF names. This is needed to ensure that
@@ -56,7 +64,9 @@ future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& cre
     // "CREATE TABLE" invocation on different Nodes.
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
-    return qp.get_migration_manager().announce_new_column_family(b.build()).discard_result().handle_exception([] (auto ep) {});;
+    try {
+        co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(b.build()));
+    } catch (...) {}
 }
 
 future<> table_helper::cache_table_info(cql3::query_processor& qp, service::query_state& qs) {
@@ -93,7 +103,9 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::quer
     }).handle_exception([this, &qp] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.
-        (void)setup_table(qp, _create_cql).discard_result();
+        (void)qp.container().invoke_on(0, [create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
+            co_return co_await table_helper::setup_table(qp, create_cql);
+        });
 
         // We throw the bad_column_family exception because the caller
         // expects and accounts this type of errors.
@@ -126,13 +138,18 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
     }
 
     data_dictionary::database db = qp.db();
+    auto& mm = qp.get_migration_manager();
 
-    // Create a keyspace
     if (!db.has_keyspace(keyspace_name)) {
-        std::map<sstring, sstring> opts;
-        opts["replication_factor"] = replication_factor;
-        auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
-        co_await qp.get_migration_manager().announce_new_keyspace(ksm);
+        co_await mm.schema_read_barrier();
+
+        // Create a keyspace
+        if (!db.has_keyspace(keyspace_name)) {
+            std::map<sstring, sstring> opts;
+            opts["replication_factor"] = replication_factor;
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
+            co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm));
+        }
     }
 
     qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
