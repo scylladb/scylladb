@@ -140,6 +140,12 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
+    tracker& repair_tracker() {
+        return _tracker;
+    }
+    const tracker& repair_tracker() const {
+        return _tracker;
+    }
 };
 
 class repair_info;

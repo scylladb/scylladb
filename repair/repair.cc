@@ -340,7 +340,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(re
 
 static thread_local tracker* _the_tracker = nullptr;
 
-tracker& repair_tracker() {
+static tracker& the_repair_tracker() {
     if (_the_tracker) {
         return *_the_tracker;
     } else {
@@ -350,7 +350,7 @@ tracker& repair_tracker() {
 
 float node_ops_metrics::repair_finished_percentage() {
     if (_the_tracker) {
-        return repair_tracker().report_progress(streaming::stream_reason::repair);
+        return the_repair_tracker().report_progress(streaming::stream_reason::repair);
     }
     return 1;
 }
@@ -521,7 +521,7 @@ future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
 }
 
 void check_in_shutdown() {
-    repair_tracker().check_in_shutdown();
+    the_repair_tracker().check_in_shutdown();
 }
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -969,7 +969,7 @@ private:
 static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // repair all the ranges in limited parallelism
     return parallel_for_each(ri->ranges, [ri] (auto&& range) {
-        return with_semaphore(repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
+        return with_semaphore(the_repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
             return ri->repair_range(range).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
@@ -995,13 +995,13 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
-    repair_tracker().add_repair_info(ri->id.id, ri);
+    the_repair_tracker().add_repair_info(ri->id.id, ri);
     return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
-        repair_tracker().remove_repair_info(ri->id.id);
+        the_repair_tracker().remove_repair_info(ri->id.id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        repair_tracker().remove_repair_info(ri->id.id);
+        the_repair_tracker().remove_repair_info(ri->id.id);
         return make_exception_future<>(std::move(eptr));
     });
 }
@@ -1224,19 +1224,19 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
 
 future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db) {
     return db.invoke_on(0, [] (replica::database& localdb) {
-        return repair_tracker().get_active();
+        return the_repair_tracker().get_active();
     });
 }
 
 future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id) {
     return db.invoke_on(0, [id] (replica::database& localdb) {
-        return repair_tracker().get(id);
+        return the_repair_tracker().get(id);
     });
 }
 
 future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout) {
     return db.invoke_on(0, [id, timeout] (replica::database& localdb) {
-        return repair_tracker().repair_await_completion(id, timeout);
+        return the_repair_tracker().repair_await_completion(id, timeout);
     });
 }
 
@@ -1249,7 +1249,7 @@ future<> repair_service::shutdown() {
 
 future<> repair_abort_all(seastar::sharded<replica::database>& db) {
     return db.invoke_on_all([] (replica::database& localdb) {
-        repair_tracker().abort_all_repairs();
+        the_repair_tracker().abort_all_repairs();
     });
 }
 
@@ -1714,7 +1714,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
 
 future<> abort_repair_node_ops(utils::UUID ops_uuid) {
     return smp::invoke_on_all([ops_uuid] {
-        return repair_tracker().abort_repair_node_ops(ops_uuid);
+        return the_repair_tracker().abort_repair_node_ops(ops_uuid);
     });
 }
 
