@@ -588,6 +588,30 @@ def test_update_item_add(test_table_s):
         test_table_s.put_item(Item={'p': p, 'a': set(['dog'])})
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'a': {'Action': 'ADD', 'Value': 'cat'}})
+    # While numbers, sets and lists *are* supported by ADD, you can't
+    # mix them - adding a number to an attribute which is already a set,
+    # and so on.
+    test_table_s.put_item(Item={'p': p, 'a': set(['dog'])})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Action': 'ADD', 'Value': 2}})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Action': 'ADD', 'Value': ['cat']}})
+    test_table_s.put_item(Item={'p': p, 'a': ['dog']})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Action': 'ADD', 'Value': set(['cat'])}})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Action': 'ADD', 'Value': 3}})
+    test_table_s.put_item(Item={'p': p, 'a': 2})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Action': 'ADD', 'Value': ['dog']}})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Action': 'ADD', 'Value': set(['dog'])}})
 
     # If the entire item doesn't exist, ADD can create it just like we
     # tested above that it can create an attribute.
