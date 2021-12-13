@@ -124,7 +124,7 @@ if __name__ == '__main__':
     except SystemdException:
         md_service = systemd_unit('mdadm.service')
 
-    print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='fRAID{args.raid_level}' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
+    print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type=f'RAID{args.raid_level}' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
     procs=[]
     for disk in disks:
         d = disk.replace('/dev/', '')
