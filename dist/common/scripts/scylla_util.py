@@ -41,6 +41,7 @@ from scylla_sysconfdir import SYSCONFDIR
 from scylla_product import PRODUCT
 
 from multiprocessing import cpu_count
+from abc import ABCMeta, abstractmethod
 
 def scriptsdir_p():
     p = Path(sys.argv[0]).resolve()
@@ -121,15 +122,70 @@ def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval
                 raise
 
 
-class gcp_instance:
+class cloud_instance(metaclass=ABCMeta):
+    @abstractmethod
+    def get_local_disks(self):
+        pass
+
+    @abstractmethod
+    def get_remote_disks(self):
+        pass
+
+    @abstractmethod
+    def private_ipv4(self):
+        pass
+
+    @abstractmethod
+    def is_supported_instance_class(self):
+        pass
+
+    @abstractmethod
+    def instance_class(self):
+        pass
+
+    @abstractmethod
+    def instance_size(self):
+        pass
+
+    @abstractmethod
+    def io_setup(self):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def check():
+        pass
+
+    @property
+    @abstractmethod
+    def user_data(self):
+        pass
+
+    @property
+    @abstractmethod
+    def nvmeDiskCount(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ENDPOINT_SNITCH(self):
+        pass
+
+    @property
+    @abstractmethod
+    def GETTING_STARTED_URL(self):
+        pass
+
+
+class gcp_instance(cloud_instance):
     """Describe several aspects of the current GCP instance"""
 
     EPHEMERAL = "ephemeral"
     PERSISTENT = "persistent"
     ROOT = "root"
-    GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-google/"
+    _GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-google/"
     META_DATA_BASE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/"
-    ENDPOINT_SNITCH = "GoogleCloudSnitch"
+    _ENDPOINT_SNITCH = "GoogleCloudSnitch"
 
     def __init__(self):
         self.__type = None
@@ -138,6 +194,14 @@ class gcp_instance:
         self.__nvmeDiskCount = None
         self.__firstNvmeSize = None
         self.__osDisks = None
+
+    @property
+    def ENDPOINT_SNITCH(self):
+        return self._ENDPOINT_SNITCH
+
+    @property
+    def GETTING_STARTED_URL(self):
+        return self._GETTING_STARTED_URL
 
     @staticmethod
     def is_gce_instance():
@@ -205,11 +269,11 @@ class gcp_instance:
             self.__osDisks = __osDisks
         return self.__osDisks
 
-    def getEphemeralOsDisks(self):
+    def get_local_disks(self):
         """return just transient disks"""
         return self.os_disks[self.EPHEMERAL]
 
-    def getPersistentOsDisks(self):
+    def get_remote_disks(self):
         """return just persistent disks"""
         return self.os_disks[self.PERSISTENT]
 
@@ -384,14 +448,14 @@ class gcp_instance:
             return ""
 
 
-class azure_instance:
+class azure_instance(cloud_instance):
     """Describe several aspects of the current Azure instance"""
 
     EPHEMERAL = "ephemeral"
     PERSISTENT = "persistent"
     ROOT = "root"
-    GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-azure/"
-    ENDPOINT_SNITCH = "AzureSnitch"
+    _GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-azure/"
+    _ENDPOINT_SNITCH = "AzureSnitch"
     META_DATA_BASE_URL = "http://169.254.169.254/metadata/instance"
 
     def __init__(self):
@@ -403,6 +467,14 @@ class azure_instance:
         self.__nvmeDiskCount = None
         self.__firstNvmeSize = None
         self.__osDisks = None
+
+    @property
+    def ENDPOINT_SNITCH(self):
+        return self._ENDPOINT_SNITCH
+
+    @property
+    def GETTING_STARTED_URL(self):
+        return self._GETTING_STARTED_URL
 
     @staticmethod
     def is_azure_instance():
@@ -464,11 +536,11 @@ class azure_instance:
             self.__osDisks = __osDisks
         return self.__osDisks
 
-    def getEphemeralOsDisks(self):
+    def get_local_disks(self):
         """return just transient disks"""
         return self.os_disks[self.EPHEMERAL]
 
-    def getPersistentOsDisks(self):
+    def get_remote_disks(self):
         """return just persistent disks"""
         return self.os_disks[self.PERSISTENT]
 
@@ -575,11 +647,19 @@ class azure_instance:
     def io_setup():
         return run('/opt/scylladb/scripts/scylla_io_setup', shell=True, check=True)
 
-class aws_instance:
+class aws_instance(cloud_instance):
     """Describe several aspects of the current AWS instance"""
-    GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-amazon/"
+    _GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-amazon/"
     META_DATA_BASE_URL = "http://169.254.169.254/latest/"
-    ENDPOINT_SNITCH = "Ec2Snitch"
+    _ENDPOINT_SNITCH = "Ec2Snitch"
+
+    @property
+    def ENDPOINT_SNITCH(self):
+        return self._ENDPOINT_SNITCH
+
+    @property
+    def GETTING_STARTED_URL(self):
+        return self._GETTING_STARTED_URL
 
     def __disk_name(self, dev):
         name = re.compile(r"(?:/dev/)?(?P<devname>[a-zA-Z]+)\d*")
@@ -714,11 +794,15 @@ class aws_instance:
         """Returns all attached disks but root. Include ephemeral and EBS devices"""
         return set(self._disks["ephemeral"] + self._disks["ebs"])
 
-    def ephemeral_disks(self):
+    @property
+    def nvmeDiskCount(self):
+        return len(non_root_disks)
+
+    def get_local_disks(self):
         """Returns all ephemeral disks. Include standard SSDs and NVMe"""
         return set(self._disks["ephemeral"])
 
-    def ebs_disks(self):
+    def get_remote_disks(self):
         """Returns all EBS disks"""
         return set(self._disks["ebs"])
 

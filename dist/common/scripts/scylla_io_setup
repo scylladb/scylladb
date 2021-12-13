@@ -194,7 +194,7 @@ if __name__ == "__main__":
                 sys.exit(1)
             disk_properties = {}
             disk_properties["mountpoint"] = datadir()
-            nr_disks = len(idata.ephemeral_disks())
+            nr_disks = len(idata.get_local_disks())
             ## both i3 and i2 can run with 1 I/O Queue per shard
             if idata.instance() == "i3.large":
                 disk_properties["read_iops"] = 111000
