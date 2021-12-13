@@ -40,8 +40,8 @@ public:
 
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
-    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
+    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
+    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) = 0;
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {

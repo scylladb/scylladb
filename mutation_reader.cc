@@ -321,7 +321,7 @@ private:
 private:
     void maybe_add_readers_at_partition_boundary();
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
-    void add_readers(std::vector<flat_mutation_reader> new_readers);
+    void add_readers(std::vector<flat_mutation_reader_v2> new_readers);
     bool in_gallop_mode() const;
     future<needs_merge> prepare_one(reader_and_last_fragment_kind rk, reader_galloping reader_galloping);
     future<needs_merge> advance_galloping_reader();
@@ -374,10 +374,18 @@ public:
 // Dumb selector implementation for mutation_reader_merger that simply
 // forwards it's list of readers.
 class list_reader_selector : public reader_selector {
-    std::vector<flat_mutation_reader> _readers;
+    std::vector<flat_mutation_reader_v2> _readers;
 
 public:
     explicit list_reader_selector(schema_ptr s, std::vector<flat_mutation_reader> readers)
+        : reader_selector(s, dht::ring_position_view::min()) {
+        _readers.reserve(readers.size());
+        for (auto&& rd : readers) {
+            _readers.push_back(upgrade_to_v2(std::move(rd)));
+        }
+    }
+
+    explicit list_reader_selector(schema_ptr s, std::vector<flat_mutation_reader_v2> readers)
         : reader_selector(s, dht::ring_position_view::min())
         , _readers(std::move(readers)) {
     }
@@ -388,12 +396,12 @@ public:
     list_reader_selector(list_reader_selector&&) = default;
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
-    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>&) override {
+    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>&) override {
         _selector_position = dht::ring_position_view::max();
         return std::exchange(_readers, {});
     }
 
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range&) override {
+    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range&) override {
         return {};
     }
 };
@@ -404,9 +412,9 @@ void mutation_reader_merger::maybe_add_readers(const std::optional<dht::ring_pos
     }
 }
 
-void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader> new_readers) {
+void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader_v2> new_readers) {
     for (auto&& new_reader : new_readers) {
-        _all_readers.emplace_back(upgrade_to_v2(std::move(new_reader)));
+        _all_readers.emplace_back(std::move(new_reader));
         _next.emplace_back(std::prev(_all_readers.end()), mutation_fragment_v2::kind::partition_end);
     }
 }

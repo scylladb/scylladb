@@ -666,10 +666,10 @@ public:
     incremental_reader_selector(incremental_reader_selector&&) = delete;
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
-    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
+    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
         irclogger.trace("{}: {}({})", fmt::ptr(this), __FUNCTION__, seastar::lazy_deref(pos));
 
-        auto readers = std::vector<flat_mutation_reader>();
+        auto readers = std::vector<flat_mutation_reader_v2>();
 
         do {
             auto selection = _selector->select(_selector_position);
@@ -678,9 +678,9 @@ public:
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
                     _selector_position);
 
-            readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
+            readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(selection.sstables
                     | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
-                    | boost::adaptors::transformed([this] (auto& sst) { return downgrade_to_v1(this->create_reader(sst)); }));
+                    | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
         irclogger.trace("{}: created {} new readers", fmt::ptr(this), readers.size());
@@ -694,7 +694,7 @@ public:
         return readers;
     }
 
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
         auto pos = dht::ring_position_view::for_range_start(*_pr);

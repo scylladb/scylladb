@@ -724,12 +724,12 @@ class dummy_incremental_selector : public reader_selector {
     streamed_mutation::forwarding _fwd;
     dht::partition_range _pr;
 
-    flat_mutation_reader pop_reader() {
+    flat_mutation_reader_v2 pop_reader() {
         auto muts = std::move(_readers_mutations.back());
         _readers_mutations.pop_back();
         _position = _readers_mutations.empty() ? dht::ring_position::max() : _readers_mutations.back().front().decorated_key();
         _selector_position = _position;
-        return make_flat_mutation_reader_from_mutations(_schema, _permit, std::move(muts), _pr, _fwd);
+        return upgrade_to_v2(make_flat_mutation_reader_from_mutations(_schema, _permit, std::move(muts), _pr, _fwd));
     }
 public:
     // readers_mutations is expected to be sorted on both levels.
@@ -751,12 +751,12 @@ public:
         // So we can pop the next reader off the back
         std::ranges::reverse(_readers_mutations);
     }
-    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
+    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
         if (_readers_mutations.empty()) {
             return {};
         }
 
-        std::vector<flat_mutation_reader> readers;
+        std::vector<flat_mutation_reader_v2> readers;
 
         if (!pos) {
             readers.emplace_back(pop_reader());
@@ -768,7 +768,7 @@ public:
         }
         return readers;
     }
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) override {
         _pr = pr;
         return create_new_readers(dht::ring_position_view::for_range_start(_pr));
     }
