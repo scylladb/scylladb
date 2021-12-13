@@ -156,7 +156,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
                 } else {
                     _mutation_fragments.emplace(std::move(mf));
                     _stack_size += _mutation_fragments.top().memory_usage();
-                    if (_stack_size > _max_size.hard_limit || (_stack_size > _max_size.soft_limit && _below_soft_limit)) {
+                    if (_stack_size > _max_size.get_unlimited_hard_limit() || (_stack_size > _max_size.get_unlimited_soft_limit() && _below_soft_limit)) {
                         const partition_key* key = nullptr;
                         auto it = buffer().end();
                         --it;
@@ -167,15 +167,15 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader original, query:
                             key = &it->as_partition_start().key().key();
                         }
 
-                        if (_stack_size > _max_size.hard_limit) {
+                        if (_stack_size > _max_size.get_unlimited_hard_limit()) {
                             return make_exception_future<stop_iteration>(std::runtime_error(fmt::format(
                                     "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
-                                    _max_size.hard_limit,
+                                    _max_size.get_unlimited_hard_limit(),
                                     key->with_schema(*_schema))));
                         } else {
                             fmr_logger.warn(
                                     "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
-                                    _max_size.soft_limit,
+                                    _max_size.get_unlimited_soft_limit(),
                                     key->with_schema(*_schema));
                             _below_soft_limit = false;
                         }
