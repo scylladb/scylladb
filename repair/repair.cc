@@ -67,9 +67,8 @@ void node_ops_info::check_abort() {
     }
 }
 
-class node_ops_metrics {
-public:
-    node_ops_metrics() {
+node_ops_metrics::node_ops_metrics() {
+        // FIXME: indentation
         namespace sm = seastar::metrics;
         auto ops_label_type = sm::label("ops");
         _metrics.add_group("node_ops", {
@@ -87,42 +86,33 @@ public:
                     sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
         });
     }
-    uint64_t bootstrap_total_ranges{0};
-    uint64_t bootstrap_finished_ranges{0};
-    uint64_t replace_total_ranges{0};
-    uint64_t replace_finished_ranges{0};
-    uint64_t rebuild_total_ranges{0};
-    uint64_t rebuild_finished_ranges{0};
-    uint64_t decommission_total_ranges{0};
-    uint64_t decommission_finished_ranges{0};
-    uint64_t removenode_total_ranges{0};
-    uint64_t removenode_finished_ranges{0};
-    uint64_t repair_total_ranges_sum{0};
-    uint64_t repair_finished_ranges_sum{0};
-private:
-    seastar::metrics::metric_groups _metrics;
-    float bootstrap_finished_percentage() {
+
+float node_ops_metrics::bootstrap_finished_percentage() {
+        // FIXME: indentation
         return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
     }
-    float replace_finished_percentage() {
+float node_ops_metrics::replace_finished_percentage() {
+        // FIXME: indentation
         return replace_total_ranges == 0 ? 1 : float(replace_finished_ranges) / float(replace_total_ranges);
     }
-    float rebuild_finished_percentage() {
+float node_ops_metrics::rebuild_finished_percentage() {
+        // FIXME: indentation
         return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
     }
-    float decommission_finished_percentage() {
+float node_ops_metrics::decommission_finished_percentage() {
+        // FIXME: indentation
         return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
     }
-    float removenode_finished_percentage() {
+float node_ops_metrics::removenode_finished_percentage() {
+        // FIXME: indentation
         return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
     }
-    float repair_finished_percentage();
-public:
-    void init() {
+
+void node_ops_metrics::init() {
+        // FIXME: indentation
         // Dummy function to call during startup to initialize the thread local
         // variable node_ops_metrics _node_ops_metrics below.
     }
-};
 
 static thread_local node_ops_metrics _node_ops_metrics;
 

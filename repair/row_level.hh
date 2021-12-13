@@ -51,6 +51,34 @@ public:
     gc_clock::time_point repair_time = gc_clock::time_point::max();
 };
 
+class node_ops_metrics {
+public:
+    node_ops_metrics();
+
+    uint64_t bootstrap_total_ranges{0};
+    uint64_t bootstrap_finished_ranges{0};
+    uint64_t replace_total_ranges{0};
+    uint64_t replace_finished_ranges{0};
+    uint64_t rebuild_total_ranges{0};
+    uint64_t rebuild_finished_ranges{0};
+    uint64_t decommission_total_ranges{0};
+    uint64_t decommission_finished_ranges{0};
+    uint64_t removenode_total_ranges{0};
+    uint64_t removenode_finished_ranges{0};
+    uint64_t repair_total_ranges_sum{0};
+    uint64_t repair_finished_ranges_sum{0};
+private:
+    seastar::metrics::metric_groups _metrics;
+    float bootstrap_finished_percentage();
+    float replace_finished_percentage();
+    float rebuild_finished_percentage();
+    float decommission_finished_percentage();
+    float removenode_finished_percentage();
+    float repair_finished_percentage();
+public:
+    void init();
+};
+
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
