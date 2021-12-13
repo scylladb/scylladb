@@ -579,7 +579,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             if isinstance(e, asyncio.TimeoutError):
                 report_error("Test timed out")
             elif isinstance(e, asyncio.CancelledError):
-                print(test.name, end=" ")
+                print(test.shortname, end=" ")
                 report_error("Test was cancelled")
         except Exception as e:
             report_error("Failed to run the test:\n{e}".format(e=e))
