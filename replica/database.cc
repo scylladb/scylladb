@@ -42,6 +42,7 @@
 #include "gms/feature_service.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy.hh"
+#include "db/operation_type.hh"
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
@@ -1931,6 +1932,14 @@ std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
     case db::consistency_level::LOCAL_ONE: return os << "LOCAL_ONE";
     default: abort();
     }
+}
+
+std::ostream& operator<<(std::ostream& os, operation_type op_type) {
+    switch (op_type) {
+    case operation_type::read: return os << "read";
+    case operation_type::write: return os << "write";
+    }
+    abort();
 }
 
 }

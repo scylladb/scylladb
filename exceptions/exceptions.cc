@@ -39,7 +39,8 @@ const std::unordered_map<exception_code, sstring>& exception_map() {
         {exception_code::INVALID, "invalid"},
         {exception_code::CONFIG_ERROR, "config_error"},
         {exception_code::ALREADY_EXISTS, "already_exists"},
-        {exception_code::UNPREPARED, "unprepared"}
+        {exception_code::UNPREPARED, "unprepared"},
+        {exception_code::RATE_LIMIT_ERROR, "rate_limit_error"}
     };
     return map;
 }
@@ -76,6 +77,12 @@ request_failure_exception::request_failure_exception(exception_code code, const 
 overloaded_exception::overloaded_exception(size_t c) noexcept
     : cassandra_exception(exception_code::OVERLOADED, prepare_message("Too many in flight hints: {}", c))
     {}
+
+rate_limit_exception::rate_limit_exception(const sstring& ks, const sstring& cf, db::operation_type op_type_, bool rejected_by_coordinator_) noexcept
+    : cassandra_exception(exception_code::CONFIG_ERROR, prepare_message("Per-partition rate limit reached for {} in table {}.{}, rejected by {}", op_type, ks, cf, rejected_by_coordinator_ ? "coordinator" : "replicas"))
+    , op_type(op_type_)
+    , rejected_by_coordinator(rejected_by_coordinator_)
+    { }
 
 prepared_query_not_found_exception::prepared_query_not_found_exception(bytes id) noexcept
     : request_validation_exception{exception_code::UNPREPARED, prepare_message("No prepared statement with ID {} found.", id)}

@@ -37,6 +37,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
+#include "db/operation_type.hh"
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -483,6 +484,9 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         }), utils::result_catch<exceptions::function_execution_exception>([&] (const auto& ex) {
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_function_failure_error(stream, ex.code(), ex.what(), ex.ks_name, ex.func_name, ex.args, trace_state);
+        }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
+            return make_rate_limit_error(stream, ex.code(), ex.what(), ex.op_type, ex.rejected_by_coordinator, trace_state, client_state);
         }), utils::result_catch<exceptions::cassandra_exception>([&] (const auto& ex) {
             // Note: the CQL protocol specifies that many types of errors have
             // mandatory parameters. These cassandra_exception subclasses MUST
@@ -1272,6 +1276,20 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_function_fail
     response->write_string(ks_name);
     response->write_string(func_name);
     response->write_string_list(args);
+    return response;
+}
+
+std::unique_ptr<cql_server::response> cql_server::connection::make_rate_limit_error(int16_t stream, exceptions::exception_code err, sstring msg, db::operation_type op_type, bool rejected_by_coordinator, const tracing::trace_state_ptr& tr_state, const service::client_state& client_state) const
+{
+    if (!client_state.is_protocol_extension_set(cql_protocol_extension::RATE_LIMIT_ERROR)) {
+        return make_error(stream, exceptions::exception_code::CONFIG_ERROR, std::move(msg), tr_state);
+    }
+
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_byte(static_cast<uint8_t>(op_type));
+    response->write_byte(static_cast<uint8_t>(rejected_by_coordinator));
     return response;
 }
 

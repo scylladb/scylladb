@@ -31,7 +31,8 @@ namespace exceptions {
 using coordinator_exception_container = utils::exception_container<
     mutation_write_timeout_exception,
     read_timeout_exception,
-    read_failure_exception
+    read_failure_exception,
+    rate_limit_exception
 >;
 
 template<typename T = void>
