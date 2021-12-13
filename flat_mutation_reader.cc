@@ -509,7 +509,7 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
     return make_flat_mutation_reader<reader>(std::move(r), single_partition);
 }
 
-class empty_flat_reader final : public flat_mutation_reader::impl {
+class empty_flat_reader final : public flat_mutation_reader_v2::impl {
 public:
     empty_flat_reader(schema_ptr s, reader_permit permit) : impl(std::move(s), std::move(permit)) { _end_of_stream = true; }
     virtual future<> fill_buffer() override { return make_ready_future<>(); }
@@ -520,7 +520,11 @@ public:
 };
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s, reader_permit permit) {
-    return make_flat_mutation_reader<empty_flat_reader>(std::move(s), std::move(permit));
+    return downgrade_to_v1(make_flat_mutation_reader_v2<empty_flat_reader>(std::move(s), std::move(permit)));
+}
+
+flat_mutation_reader_v2 make_empty_flat_reader_v2(schema_ptr s, reader_permit permit) {
+    return make_flat_mutation_reader_v2<empty_flat_reader>(std::move(s), std::move(permit));
 }
 
 flat_mutation_reader
