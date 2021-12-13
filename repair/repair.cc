@@ -969,7 +969,7 @@ private:
 static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
     // repair all the ranges in limited parallelism
     return parallel_for_each(ri->ranges, [ri] (auto&& range) {
-        return with_semaphore(the_repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
+        return with_semaphore(ri->rs.repair_tracker().range_parallelism_semaphore(), 1, [ri, &range] {
             return ri->repair_range(range).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
@@ -995,13 +995,13 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
-    the_repair_tracker().add_repair_info(ri->id.id, ri);
+    ri->rs.repair_tracker().add_repair_info(ri->id.id, ri);
     return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
-        the_repair_tracker().remove_repair_info(ri->id.id);
+        ri->rs.repair_tracker().remove_repair_info(ri->id.id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        the_repair_tracker().remove_repair_info(ri->id.id);
+        ri->rs.repair_tracker().remove_repair_info(ri->id.id);
         return make_exception_future<>(std::move(eptr));
     });
 }
