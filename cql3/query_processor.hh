@@ -108,7 +108,7 @@ class cql_config;
 class query_options;
 class cql_statement;
 
-class query_processor {
+class query_processor : public seastar::peering_sharded_service<query_processor> {
 public:
     class migration_subscriber;
     struct memory_config {
