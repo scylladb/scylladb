@@ -148,6 +148,7 @@ extern const std::string_view ALTERNATOR_TTL;
 extern const std::string_view RANGE_SCAN_DATA_VARIANT;
 extern const std::string_view CDC_GENERATIONS_V2;
 extern const std::string_view UDA;
+extern const std::string_view REDUCED_REVERSED_QUERIES_LIMIT;
 
 }
 

@@ -100,6 +100,7 @@ private:
     gms::feature _range_scan_data_variant;
     gms::feature _cdc_generations_v2;
     gms::feature _uda;
+    gms::feature _reduced_reversed_queries_limit;
 
 public:
 
@@ -176,6 +177,10 @@ public:
 
     bool cluster_supports_user_defined_aggregates() const {
         return bool(_uda);
+    }
+
+    bool cluster_supports_reduced_revenced_queries_limit() const {
+        return bool(_reduced_reversed_queries_limit);
     }
 
     static std::set<sstring> to_feature_set(sstring features_string);
