@@ -326,6 +326,9 @@ public:
     partition_presence_checker make_partition_presence_checker() {
         return (*_presence_checker_factory)();
     }
+
+    enum class version { v1, v2 };
+    version native_version() const { return _fn ? version::v1 : version::v2; }
 };
 
 // Returns a mutation_source which is the sum of given mutation_sources.

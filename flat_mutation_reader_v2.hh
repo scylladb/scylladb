@@ -780,3 +780,14 @@ flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
 future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&);
+
+flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m);
+
+flat_mutation_reader_v2
+make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>);
+
+flat_mutation_reader_v2
+make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr);
+
+flat_mutation_reader_v2
+make_flat_mutation_reader_from_fragments(schema_ptr, reader_permit, std::deque<mutation_fragment_v2>, const dht::partition_range& pr, const query::partition_slice& slice);
