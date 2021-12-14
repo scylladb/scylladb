@@ -401,7 +401,7 @@ void mvcc_partition::apply(const mutation_partition& mp, schema_ptr mp_s) {
             logalloc::allocating_section as;
             as(region(), [&] {
                 mutation_application_stats app_stats;
-                _e.apply(*_s, mp, *mp_s, app_stats);
+                _e.apply(region(), _container.cleaner(), *_s, mp, *mp_s, app_stats);
             });
         }
     });
@@ -713,9 +713,9 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
                 logalloc::reclaim_lock rl(r);
                 auto e = partition_entry(mutation_partition(*s, m3.partition()));
                 auto snap1 = e.read(r, cleaner, s, no_cache_tracker);
-                e.apply(*s, m2.partition(), *s, app_stats);
+                e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
-                e.apply(*s, m1.partition(), *s, app_stats);
+                e.apply(r, cleaner, *s, m1.partition(), *s, app_stats);
 
                 auto expected = e.squashed(*s);
                 auto snap = e.read(r, cleaner, s, no_cache_tracker);
@@ -1350,8 +1350,10 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
 
 SEASTAR_TEST_CASE(test_apply_is_atomic) {
     auto do_test = [](auto&& gen) {
-        failure_injecting_allocation_strategy alloc(standard_allocator());
-        with_allocator(alloc, [&] {
+        logalloc::region r;
+        mutation_cleaner cleaner(r, no_cache_tracker, app_stats_for_tests);
+        failure_injecting_allocation_strategy alloc(r.allocator());
+        with_allocator(r.allocator(), [&] {
             auto target = gen();
             auto second = gen();
             target.partition().make_fully_continuous();
@@ -1368,7 +1370,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
                 alloc.fail_after(fail_offset++);
                 try {
                     mutation_application_stats app_stats;
-                    e.apply(*target.schema(), std::move(m2), *second.schema(), app_stats);
+                    e.apply(r, cleaner, *target.schema(), std::move(m2), *second.schema(), app_stats);
                     alloc.stop_failing();
                     break;
                 } catch (const std::bad_alloc&) {
@@ -1376,7 +1378,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
                     assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
                         .is_equal_to(target)
                         .has_same_continuity(target);
-                    e.apply(*target.schema(), std::move(m2), *second.schema(), app_stats);
+                    e.apply(r, cleaner, *target.schema(), std::move(m2), *second.schema(), app_stats);
                     assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
                         .is_equal_to(expected)
                         .has_same_continuity(expected);
@@ -1416,7 +1418,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                 {
                     mutation_application_stats app_stats;
                     logalloc::reclaim_lock rl(r);
-                    e.apply(*s, m2.partition(), *s, app_stats);
+                    e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 }
 
                 auto snap2 = e.read(r, cleaner, s, nullptr);
@@ -1437,7 +1439,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                 {
                     mutation_application_stats app_stats;
                     logalloc::reclaim_lock rl(r);
-                    e.apply(*s, m2.partition(), *s, app_stats);
+                    e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 }
 
                 auto snap2 = e.read(r, cleaner, s, nullptr);
