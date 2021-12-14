@@ -866,6 +866,19 @@ public:
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 
+    // Expires cells and tombstones. Removes items covered by higher level
+    // tombstones.
+    // Returns true iff the row is still alive.
+    // When empty() after the call, the row can be removed without losing writes
+    // given that tomb will be still in effect for the row after it is removed,
+    // as a range tombstone, partition tombstone, etc.
+    bool compact_and_expire(const schema&,
+                            tombstone tomb,
+                            gc_clock::time_point query_time,
+                            can_gc_fn& can_gc,
+                            gc_clock::time_point gc_before,
+                            compaction_garbage_collector* collector = nullptr);
+
     class printer {
         const schema& _schema;
         const deletable_row& _deletable_row;
