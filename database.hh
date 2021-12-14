@@ -1505,7 +1505,7 @@ public:
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
-    /* throws std::out_of_range if missing */
+    /* throws no_such_column_family if missing */
     const utils::UUID& find_uuid(std::string_view ks, std::string_view cf) const;
     const utils::UUID& find_uuid(const schema_ptr&) const;
 
