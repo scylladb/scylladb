@@ -699,7 +699,7 @@ public:
     virtual future<> close() noexcept = 0;
 };
 
-flat_mutation_reader make_clustering_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_clustering_combined_reader(schema_ptr schema,
         reader_permit,
         streamed_mutation::forwarding,
         std::unique_ptr<position_reader_queue>);

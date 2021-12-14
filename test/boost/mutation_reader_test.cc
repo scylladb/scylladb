@@ -3762,7 +3762,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
                     return make_reader_bounds(s, permit, std::move(mb), fwd);
                 }));
         auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
-        return make_clustering_combined_reader(s, permit, fwd, std::move(q));
+        return downgrade_to_v1(make_clustering_combined_reader(s, permit, fwd, std::move(q)));
     };
 
     auto seed = tests::random::get_int<uint32_t>();
@@ -3794,8 +3794,8 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 
     // Test case with 0 readers
     for (auto fwd: {streamed_mutation::forwarding::no, streamed_mutation::forwarding::yes}) {
-        auto r = make_clustering_combined_reader(g._s, semaphore.make_permit(), fwd,
-                std::make_unique<simple_position_reader_queue>(*g._s, std::vector<reader_bounds>{}));
+        auto r = downgrade_to_v1(make_clustering_combined_reader(g._s, semaphore.make_permit(), fwd,
+                std::make_unique<simple_position_reader_queue>(*g._s, std::vector<reader_bounds>{})));
         assert_that(std::move(r)).produces_end_of_stream();
     }
 }
@@ -3831,7 +3831,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
             pk, query_schema, permit, fwd, reversed);
-        return make_clustering_combined_reader(query_schema, permit, fwd, std::move(q));
+        return downgrade_to_v1(make_clustering_combined_reader(query_schema, permit, fwd, std::move(q)));
     };
 
     auto seed = tests::random::get_int<uint32_t>();
@@ -4112,7 +4112,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 std::sort(rs.begin(), rs.end(), [less = position_in_partition::less_compare(*s)]
                         (const reader_bounds& a, const reader_bounds& b) { return less(a.lower, b.lower); });
                 auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
-                good_readers.emplace(k, make_clustering_combined_reader(s, permit, fwd_sm, std::move(q)));
+                good_readers.emplace(k, downgrade_to_v1(make_clustering_combined_reader(s, permit, fwd_sm, std::move(q))));
             }
 
             std::vector<flat_mutation_reader_v2> readers;
@@ -4140,9 +4140,9 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
         .lower = position_in_partition::before_all_clustered_rows(),
         .upper = position_in_partition::after_all_clustered_rows()
     });
-    auto r = make_clustering_combined_reader(
+    auto r = downgrade_to_v1(make_clustering_combined_reader(
             s, permit, streamed_mutation::forwarding::no,
-            std::make_unique<simple_position_reader_queue>(*s, std::move(rs)));
+            std::make_unique<simple_position_reader_queue>(*s, std::move(rs))));
     auto close_r = deferred_close(r);
 
     auto mf = r().get0();

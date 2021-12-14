@@ -308,8 +308,8 @@ PERF_TEST_F(clustering_combined, ranges_specialized)
                 std::move(mb.lower), std::move(mb.upper)};
         }));
     auto q = std::make_unique<simple_position_reader_queue>(*schema().schema(), std::move(rbs));
-    return consume_all(upgrade_to_v2(make_clustering_combined_reader(
-        schema().schema(), permit(), streamed_mutation::forwarding::no, std::move(q))));
+    return consume_all(make_clustering_combined_reader(
+        schema().schema(), permit(), streamed_mutation::forwarding::no, std::move(q)));
 }
 
 class memtable {

@@ -2760,11 +2760,11 @@ public:
     }
 };
 
-flat_mutation_reader make_clustering_combined_reader(schema_ptr schema,
+flat_mutation_reader_v2 make_clustering_combined_reader(schema_ptr schema,
         reader_permit permit,
         streamed_mutation::forwarding fwd_sm,
         std::unique_ptr<position_reader_queue> rq) {
-    return downgrade_to_v1(make_flat_mutation_reader_v2<merging_reader<clustering_order_reader_merger>>(
+    return make_flat_mutation_reader_v2<merging_reader<clustering_order_reader_merger>>(
             schema, permit, fwd_sm,
-            clustering_order_reader_merger(schema, permit, fwd_sm, std::move(rq))));
+            clustering_order_reader_merger(schema, permit, fwd_sm, std::move(rq)));
 }
