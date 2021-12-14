@@ -627,7 +627,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 
                 e += to_apply;
                 assert_that(s, e.squashed())
-                    .is_equal_to(expected, e_continuity.to_clustering_row_ranges())
+                    .is_equal_to_compacted(expected, e_continuity.to_clustering_row_ranges())
                     .has_same_continuity(before);
             };
 
@@ -685,7 +685,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
                 actual.compact_for_compaction(*s, never_gc, m1.decorated_key(), gc_clock::now());
                 expected.compact_for_compaction(*s, never_gc, m1.decorated_key(), gc_clock::now());
 
-                assert_that(s, actual).is_equal_to(expected);
+                assert_that(s, actual).is_equal_to_compacted(expected);
             }
         }
     });
@@ -725,7 +725,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
                 BOOST_REQUIRE(actual.is_fully_continuous());
 
                 assert_that(s, actual)
-                    .is_equal_to(expected);
+                    .is_equal_to_compacted(expected);
             }
         });
     });
@@ -765,10 +765,10 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
 
                 assert_that(s, actual)
                     .has_same_continuity(expected)
-                    .is_equal_to(expected);
+                    .is_equal_to_compacted(expected);
                 assert_that(s, actual2)
                     .has_same_continuity(expected)
-                    .is_equal_to(expected);
+                    .is_equal_to_compacted(expected);
             }
         });
     });
@@ -1376,15 +1376,15 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
                 } catch (const std::bad_alloc&) {
                     mutation_application_stats app_stats;
                     assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
-                        .is_equal_to(target)
+                        .is_equal_to_compacted(target)
                         .has_same_continuity(target);
                     e.apply(r, cleaner, *target.schema(), std::move(m2), *second.schema(), app_stats);
                     assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
-                        .is_equal_to(expected)
+                        .is_equal_to_compacted(expected)
                         .has_same_continuity(expected);
                 }
                 assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
-                    .is_equal_to(expected)
+                    .is_equal_to_compacted(expected)
                     .has_same_continuity(expected);
             }
         });
@@ -1429,7 +1429,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                 cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
-                assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
+                assert_that(s, e.squashed(*s)).is_equal_to_compacted((m1 + m2).partition());
             }
 
             {
@@ -1450,7 +1450,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                 cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
-                assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
+                assert_that(s, e.squashed(*s)).is_equal_to_compacted((m1 + m2).partition());
             }
         });
     });
