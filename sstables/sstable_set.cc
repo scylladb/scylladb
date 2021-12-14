@@ -472,17 +472,17 @@ class sstable_position_reader_queue : public position_reader_queue {
 
     position_in_partition::tri_compare _cmp;
 
-    std::function<flat_mutation_reader(sstable&)> _create_reader;
+    std::function<flat_mutation_reader_v2(sstable&)> _create_reader;
     std::function<bool(const sstable&)> _filter;
 
     // After construction contains a reader which returns only the partition
     // start (and end, if not in forwarding mode) markers. This is the first
     // returned reader.
-    std::optional<flat_mutation_reader> _dummy_reader;
+    std::optional<flat_mutation_reader_v2> _dummy_reader;
 
     bool _reversed;
 
-    flat_mutation_reader create_reader(sstable& sst) {
+    flat_mutation_reader_v2 create_reader(sstable& sst) {
         return _create_reader(sst);
     }
 
@@ -496,7 +496,7 @@ public:
     // For reversed reads `query_schema` must be reversed (see docs/design-notes/reverse-reads.md).
     sstable_position_reader_queue(const time_series_sstable_set& set,
             schema_ptr query_schema,
-            std::function<flat_mutation_reader(sstable&)> create_reader,
+            std::function<flat_mutation_reader_v2(sstable&)> create_reader,
             std::function<bool(const sstable&)> filter,
             partition_key pk,
             reader_permit permit,
@@ -509,8 +509,8 @@ public:
         , _cmp(*_query_schema)
         , _create_reader(std::move(create_reader))
         , _filter(std::move(filter))
-        , _dummy_reader(make_flat_mutation_reader_from_mutations(_query_schema,
-                std::move(permit), {mutation(_query_schema, std::move(pk))}, _query_schema->full_slice(), fwd_sm))
+        , _dummy_reader(upgrade_to_v2(make_flat_mutation_reader_from_mutations(_query_schema,
+                std::move(permit), {mutation(_query_schema, std::move(pk))}, _query_schema->full_slice(), fwd_sm)))
         , _reversed(reversed)
     {
         while (_it != _end && !this->filter(*_it->second)) {
@@ -584,7 +584,7 @@ public:
 };
 
 std::unique_ptr<position_reader_queue> time_series_sstable_set::make_position_reader_queue(
-        std::function<flat_mutation_reader(sstable&)> create_reader,
+        std::function<flat_mutation_reader_v2(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr query_schema, reader_permit permit,
         streamed_mutation::forwarding fwd_sm, bool reversed) const {
@@ -857,7 +857,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
     stats.clustering_filter_count++;
 
     auto create_reader = [schema, permit, &pr, &slice, &pc, trace_state, fwd_sm] (sstable& sst) {
-        return sst.make_reader_v1(schema, permit, pr, slice, pc, trace_state, fwd_sm);
+        return sst.make_reader(schema, permit, pr, slice, pc, trace_state, fwd_sm);
     };
 
     auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };

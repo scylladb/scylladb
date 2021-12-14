@@ -137,7 +137,7 @@ public:
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     std::unique_ptr<position_reader_queue> make_position_reader_queue(
-        std::function<flat_mutation_reader(sstable&)> create_reader,
+        std::function<flat_mutation_reader_v2(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr schema, reader_permit permit,
         streamed_mutation::forwarding fwd_sm,

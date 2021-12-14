@@ -647,9 +647,6 @@ struct reader_and_upper_bound {
 
     reader_and_upper_bound(flat_mutation_reader_v2 r, position_in_partition bound)
         : reader(std::move(r)), upper_bound(std::move(bound)) {}
-
-    reader_and_upper_bound(flat_mutation_reader r, position_in_partition bound)
-        : reader(upgrade_to_v2(std::move(r))), upper_bound(std::move(bound)) {}
 };
 
 // A queue of mutation readers returning fragments with the same schema from the same single partition.

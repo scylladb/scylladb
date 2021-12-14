@@ -304,7 +304,7 @@ PERF_TEST_F(clustering_combined, ranges_specialized)
     auto rbs = boost::copy_range<std::vector<reader_bounds>>(
         almost_disjoint_clustering_ranges() | boost::adaptors::transformed([this] (auto&& mb) {
             return reader_bounds{
-                make_flat_mutation_reader_from_mutations(schema().schema(), permit(), {std::move(mb.m)}),
+                upgrade_to_v2(make_flat_mutation_reader_from_mutations(schema().schema(), permit(), {std::move(mb.m)})),
                 std::move(mb.lower), std::move(mb.upper)};
         }));
     auto q = std::make_unique<simple_position_reader_queue>(*schema().schema(), std::move(rbs));

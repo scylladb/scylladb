@@ -3641,8 +3641,8 @@ static reader_bounds make_reader_bounds(
     }
 
     return reader_bounds {
-        .r = mb.m ? make_flat_mutation_reader_from_mutations(s, permit, {std::move(*mb.m)}, *slice, fwd)
-                  : make_empty_flat_reader(s, permit),
+        .r = mb.m ? upgrade_to_v2(make_flat_mutation_reader_from_mutations(s, permit, {std::move(*mb.m)}, *slice, fwd))
+                  : make_empty_flat_reader_v2(s, permit),
         .lower = std::move(mb.lower),
         .upper = std::move(mb.upper)
     };
@@ -3826,7 +3826,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
         auto permit = env.make_reader_permit();
         auto q = sst_set.make_position_reader_queue(
             [query_schema, &pr, &query_slice, fwd, permit] (sstable& sst) {
-                return sst.make_reader_v1(query_schema, permit, pr,
+                return sst.make_reader(query_schema, permit, pr,
                                           query_slice, seastar::default_priority_class(), nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
@@ -4136,7 +4136,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
     auto permit = semaphore.make_permit();
     std::vector<reader_bounds> rs;
     rs.push_back({
-        .r = make_empty_flat_reader(s, permit),
+        .r = make_empty_flat_reader_v2(s, permit),
         .lower = position_in_partition::before_all_clustered_rows(),
         .upper = position_in_partition::after_all_clustered_rows()
     });

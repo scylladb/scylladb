@@ -27,7 +27,7 @@
  * of fragments returned by the reader. The bounds don't need to be exact.
  */
 struct reader_bounds {
-    flat_mutation_reader r;
+    flat_mutation_reader_v2 r;
     position_in_partition lower;
     position_in_partition upper;
 };
