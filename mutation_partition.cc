@@ -322,6 +322,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
             rows_entry& e = *i;
             can_gc_fn never_gc = [](tombstone) { return false; };
 
+            ++app_stats.rows_compacted_with_tombstones;
             bool all_dead = e.dummy() || !e.row().compact_and_expire(s,
                                                                      tomb,
                                                                      gc_clock::time_point::min(),  // no TTL expiration
@@ -333,6 +334,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                     (e.continuous() && (next_i != _rows.end() && next_i->continuous()));
 
             if (all_dead && e.row().empty() && inside_continuous_range) {
+                ++app_stats.rows_dropped_by_tombstones;
                 i = _rows.erase(i);
                 if (tracker) {
                     tracker->on_remove();
