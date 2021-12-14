@@ -395,7 +395,7 @@ public:
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
         }
         memory::scoped_critical_alloc_section dfg;
-        assert_that(*mo).is_equal_to(m, ck_ranges);
+        assert_that(*mo).is_equal_to_compacted(m, ck_ranges);
         return *this;
     }
 

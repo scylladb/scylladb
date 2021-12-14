@@ -191,6 +191,12 @@ public:
     unsigned shard_of() const {
         return dht::shard_of(*schema(), token());
     }
+
+    // Returns a mutation which contains the same writes but in a minimal form.
+    // Drops data covered by tombstones.
+    // Does not drop expired tombstones.
+    // Does not expire TTLed data.
+    mutation compacted() const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
