@@ -500,8 +500,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
             throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
         }
 
-        auto m = co_await mm.prepare_column_family_drop_announcement(keyspace_name, table_name, service::migration_manager::drop_views::yes);
-        auto m2 = mm.prepare_keyspace_drop_announcement(keyspace_name);
+        auto m = co_await mm.prepare_column_family_drop_announcement(keyspace_name, table_name, api::new_timestamp(), service::migration_manager::drop_views::yes);
+        auto m2 = mm.prepare_keyspace_drop_announcement(keyspace_name, api::new_timestamp());
 
         std::move(m2.begin(), m2.end(), std::back_inserter(m));
 
@@ -755,7 +755,7 @@ future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map
         schema_builder builder(s);
         builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
 
-        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), std::nullopt);
+        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), api::new_timestamp());
 
         co_await mm.announce(std::move(m));
     });
@@ -1045,12 +1045,12 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         // The code should be rewritten in a way that allows creating mutations
         // for all the changes in a single mutation array before announcing.
         // See https://github.com/scylladb/scylla/issues/9868
-        co_await mm.announce(co_await mm.prepare_new_column_family_announcement(schema));
+        co_await mm.announce(co_await mm.prepare_new_column_family_announcement(schema, api::new_timestamp()));
 
         std::vector<mutation> m;
 
         co_await parallel_for_each(std::move(view_builders), [&mm, schema, &m] (schema_builder builder) -> future<> {
-            auto vm = co_await mm.prepare_new_view_announcement(view_ptr(builder.build()));
+            auto vm = co_await mm.prepare_new_view_announcement(view_ptr(builder.build()), api::new_timestamp());
             std::move(vm.begin(), vm.end(), std::back_inserter(m));
         });
 
@@ -1060,7 +1060,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
             schema_builder builder(schema);
             builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
 
-            co_await mm.announce(co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), std::nullopt));
+            co_await mm.announce(co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), api::new_timestamp()));
         }
 
         co_await wait_for_schema_agreement(mm, db::timeout_clock::now() + 10s);
@@ -1129,7 +1129,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         auto schema = builder.build();
 
-        auto m = co_await mm.prepare_column_family_update_announcement(schema, false,  std::vector<view_ptr>(), std::nullopt);
+        auto m = co_await mm.prepare_column_family_update_announcement(schema, false,  std::vector<view_ptr>(), api::new_timestamp());
 
         co_await mm.announce(std::move(m));
 
@@ -4183,7 +4183,7 @@ static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_n
     auto opts = get_network_topology_options(gossiper, rf);
     auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
 
-    co_return mm.prepare_new_keyspace_announcement(ksm);
+    co_return mm.prepare_new_keyspace_announcement(ksm, api::new_timestamp());
 }
 
 future<> executor::start() {

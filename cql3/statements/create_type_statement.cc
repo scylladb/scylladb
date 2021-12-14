@@ -121,13 +121,13 @@ std::optional<user_type> create_type_statement::make_type(query_processor& qp) c
     return type;
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_type_statement::prepare_schema_mutations(query_processor& qp) const {
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
     try {
         auto t = make_type(qp);
         if (t) {
-            m = co_await qp.get_migration_manager().prepare_new_type_announcement(*t);
+            m = co_await qp.get_migration_manager().prepare_new_type_announcement(*t, ts);
             using namespace cql_transport;
 
             ret = ::make_shared<event::schema_change>(

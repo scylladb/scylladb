@@ -253,7 +253,7 @@ future<> system_distributed_keyspace::start() {
                     "org.apache.cassandra.locator.SimpleStrategy",
                     {{"replication_factor", "3"}},
                     true /* durable_writes */);
-            co_await _mm.announce(_mm.prepare_new_keyspace_announcement(ksm));
+            co_await _mm.announce(_mm.prepare_new_keyspace_announcement(ksm, api::new_timestamp()));
         } catch (exceptions::already_exists_exception&) {}
     } else {
         dlogger.info("{} keyspase is already present. Not creating", NAME);
@@ -268,7 +268,7 @@ future<> system_distributed_keyspace::start() {
                     "org.apache.cassandra.locator.EverywhereStrategy",
                     {},
                     true /* durable_writes */);
-            co_await _mm.announce(_mm.prepare_new_keyspace_announcement(ksm));
+            co_await _mm.announce(_mm.prepare_new_keyspace_announcement(ksm, api::new_timestamp()));
         } catch (exceptions::already_exists_exception&) {}
     } else {
         dlogger.info("{} keyspase is already present. Not creating", NAME_EVERYWHERE);

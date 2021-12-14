@@ -78,7 +78,7 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
 
     co_await mm.schema_read_barrier();
 
-    auto [ret, m] = co_await prepare_schema_mutations(qp);
+    auto [ret, m] = co_await prepare_schema_mutations(qp, api::new_timestamp());
 
     if (!m.empty()) {
         co_await mm.announce(std::move(m));

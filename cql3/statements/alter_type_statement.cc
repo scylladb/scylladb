@@ -56,7 +56,7 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(data_dictionary::database db, service::migration_manager& mm) const {
+future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(data_dictionary::database db, service::migration_manager& mm, api::timestamp_type ts) const {
     std::vector<mutation> m;
     auto&& ks = db.find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
@@ -78,7 +78,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     auto&& updated = make_updated_type(db, to_update->second);
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
-    auto res = co_await mm.prepare_update_type_announcement(updated);
+    auto res = co_await mm.prepare_update_type_announcement(updated, ts);
     std::move(res.begin(), res.end(), std::back_inserter(m));
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
@@ -94,10 +94,10 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
         }
         if (modified) {
             if (schema->is_view()) {
-                auto res = co_await mm.prepare_view_update_announcement(view_ptr(cfm.build()));
+                auto res = co_await mm.prepare_view_update_announcement(view_ptr(cfm.build()), ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
-                auto res = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, {}, std::nullopt);
+                auto res = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, {}, ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             }
         }
@@ -107,9 +107,9 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
+alter_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     try {
-        auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager());
+        auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager(), ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(

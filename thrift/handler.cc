@@ -889,7 +889,7 @@ public:
                 }
 
                 auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-                co_return co_await mm.prepare_new_column_family_announcement(std::move(s));
+                co_return co_await mm.prepare_new_column_family_announcement(std::move(s), api::new_timestamp());
             });
         });
     }
@@ -910,7 +910,7 @@ public:
                     throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views {}", column_family);
                 }
 
-                co_return co_await mm.prepare_column_family_drop_announcement(current_keyspace, column_family);
+                co_return co_await mm.prepare_column_family_drop_announcement(current_keyspace, column_family, api::new_timestamp());
             });
         });
     }
@@ -924,7 +924,7 @@ public:
             co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
 
             co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, data_dictionary::database db) -> future<std::vector<mutation>> {
-                co_return mm.prepare_new_keyspace_announcement(keyspace_from_thrift(ks_def));
+                co_return mm.prepare_new_keyspace_announcement(keyspace_from_thrift(ks_def), api::new_timestamp());
             });
         });
     }
@@ -943,7 +943,7 @@ public:
                     throw NotFoundException();
                 }
 
-                co_return mm.prepare_keyspace_drop_announcement(keyspace);
+                co_return mm.prepare_keyspace_drop_announcement(keyspace, api::new_timestamp());
             });
         });
     }
@@ -966,7 +966,7 @@ public:
                 }
 
                 auto ksm = keyspace_from_thrift(ks_def);
-                co_return mm.prepare_keyspace_update_announcement(std::move(ksm));
+                co_return mm.prepare_keyspace_update_announcement(std::move(ksm), api::new_timestamp());
             });
         });
     }
@@ -1001,7 +1001,7 @@ public:
                 if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
                     fail(unimplemented::cause::MIXED_CF);
                 }
-                co_return co_await mm.prepare_column_family_update_announcement(std::move(s), true, std::vector<view_ptr>(), std::nullopt);
+                co_return co_await mm.prepare_column_family_update_announcement(std::move(s), true, std::vector<view_ptr>(), api::new_timestamp());
             });
         });
     }

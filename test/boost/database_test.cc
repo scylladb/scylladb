@@ -144,11 +144,11 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
             auto& mm = e.migration_manager().local();
             try {
                 e.local_db().find_column_family(s->ks_name(), s->cf_name());
-                mm.announce(mm.prepare_column_family_drop_announcement(s->ks_name(), s->cf_name()).get()).get();
+                mm.announce(mm.prepare_column_family_drop_announcement(s->ks_name(), s->cf_name(), api::new_timestamp()).get()).get();
             } catch (const replica::no_such_column_family&) {
                 // expected
             }
-            mm.announce(mm.prepare_new_column_family_announcement(s).get()).get();
+            mm.announce(mm.prepare_new_column_family_announcement(s, api::new_timestamp()).get()).get();
             replica::column_family& cf = e.local_db().find_column_family(s);
             for (auto&& m : partitions) {
                 e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();

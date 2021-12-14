@@ -196,7 +196,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
         attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
         attrs.validate();
 
-        auto muts = mml.prepare_new_keyspace_announcement(attrs.as_ks_metadata(ks_name, *tm));
+        auto muts = mml.prepare_new_keyspace_announcement(attrs.as_ks_metadata(ks_name, *tm), api::new_timestamp());
         std::move(muts.begin(), muts.end(), std::back_inserter(ks_mutations));
     }
 
@@ -212,7 +212,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             co_return;
         }
         logger.info("Create keyspace: {}, table: {} for redis.", ks_name, cf_name);
-        auto muts = co_await mml.prepare_new_column_family_announcement(schema);
+        auto muts = co_await mml.prepare_new_column_family_announcement(schema, api::new_timestamp());
         std::move(muts.begin(), muts.end(), std::back_inserter(table_mutations));
     }, db, std::ref(mml), std::ref(table_mutations));
 

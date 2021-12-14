@@ -101,44 +101,42 @@ public:
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
 
-    std::vector<mutation> prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm);
+    std::vector<mutation> prepare_keyspace_update_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type);
 
-    std::vector<mutation> prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm);
+    std::vector<mutation> prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type);
 
 
     // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
     // with identical timestamps, which can prevent an undeeded schema exchange
-    future<std::vector<mutation>> prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt);
-
-    future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm);
+    future<std::vector<mutation>> prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, api::timestamp_type ts);
 
     future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp);
 
-    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type);
+    future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func);
+    future<std::vector<mutation>> prepare_new_function_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate);
+    future<std::vector<mutation>> prepare_new_aggregate_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func);
+    future<std::vector<mutation>> prepare_function_drop_announcement(shared_ptr<cql3::functions::user_function> func, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate);
+    future<std::vector<mutation>> prepare_aggregate_drop_announcement(shared_ptr<cql3::functions::user_aggregate> aggregate, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type);
+    future<std::vector<mutation>> prepare_update_type_announcement(user_type updated_type, api::timestamp_type);
 
-    std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name);
+    std::vector<mutation> prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type);
 
     class drop_views_tag;
     using drop_views = bool_class<drop_views_tag>;
-    future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
+    future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type, drop_views drop_views = drop_views::no);
 
-    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type);
+    future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
+    future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view);
+    future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view, api::timestamp_type);
 
-    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name);
+    future<std::vector<mutation>> prepare_view_drop_announcement(const sstring& ks_name, const sstring& cf_name, api::timestamp_type);
 
     // the function need to be called if a user wants to access most up-to-date schema state
     future<> schema_read_barrier();
@@ -168,7 +166,7 @@ private:
     future<> uninit_messaging_service();
 
     future<std::vector<mutation>> include_keyspace(const keyspace_metadata& keyspace, std::vector<mutation> mutations);
-    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type);
+    future<std::vector<mutation>> do_prepare_new_type_announcement(user_type new_type, api::timestamp_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 

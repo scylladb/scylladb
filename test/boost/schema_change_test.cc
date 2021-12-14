@@ -44,7 +44,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
 
             auto& mm = e.migration_manager().local();
 
-            mm.announce(mm.prepare_new_column_family_announcement(old_schema).get()).get();
+            mm.announce(mm.prepare_new_column_family_announcement(old_schema, api::new_timestamp()).get()).get();
 
             auto old_table_version = e.db().local().find_schema(old_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             auto new_schema = partial.build();
             BOOST_REQUIRE_NE(new_schema->version(), old_schema->version());
 
-            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), std::nullopt).get()).get();
+            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), api::new_timestamp()).get()).get();
 
             BOOST_REQUIRE_NE(e.db().local().find_schema(old_schema->id())->version(), old_table_version);
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
@@ -72,7 +72,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             auto old_schema = builder.build();
 
             auto& mm = e.migration_manager().local();
-            mm.announce(mm.prepare_new_column_family_announcement(old_schema).get()).get();
+            mm.announce(mm.prepare_new_column_family_announcement(old_schema, api::new_timestamp()).get()).get();
 
             auto s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_EQUAL(*old_schema, *s);
@@ -82,7 +82,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             builder.set_gc_grace_seconds(1);
             auto new_schema = builder.build();
 
-            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), std::nullopt).get()).get();
+            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), api::new_timestamp()).get()).get();
 
             s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_NE(*old_schema, *s);
@@ -104,7 +104,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                     .build();
 
             auto& mm = e.migration_manager().local();
-            mm.announce(mm.prepare_new_column_family_announcement(table_schema).get()).get();
+            mm.announce(mm.prepare_new_column_family_announcement(table_schema, api::new_timestamp()).get()).get();
 
             auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -152,7 +152,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
                     .with_column("v2", bytes_type)
                     .build();
 
-            mm.announce(mm.prepare_new_column_family_announcement(s1).get()).get();
+            mm.announce(mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get()).get();
             auto old_version = e.db().local().find_schema(s1->id())->version();
 
             // Apply s0 -> s2 change.
@@ -295,7 +295,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                     .with_column("v1", bytes_type)
                     .build();
 
-            mm.announce(mm.prepare_new_column_family_announcement(s1).get()).get();
+            mm.announce(mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get()).get();
 
             auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
 

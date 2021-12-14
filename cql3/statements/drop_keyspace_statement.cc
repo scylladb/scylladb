@@ -50,12 +50,12 @@ const sstring& drop_keyspace_statement::keyspace() const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
+drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     std::vector<mutation> m;
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     try {
-        m = qp.get_migration_manager().prepare_keyspace_drop_announcement(_keyspace);
+        m = qp.get_migration_manager().prepare_keyspace_drop_announcement(_keyspace, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

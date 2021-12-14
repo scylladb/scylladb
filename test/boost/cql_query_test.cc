@@ -3842,7 +3842,7 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
 
         schema_ptr view_schema = view_builder.build();
         auto& mm = e.migration_manager().local();
-        mm.announce(mm.prepare_new_view_announcement(view_ptr(view_schema)).get()).get();
+        mm.announce(mm.prepare_new_view_announcement(view_ptr(view_schema), api::new_timestamp()).get()).get();
 
         // Verify that deleting and restoring columns behaves as expected - i.e. the row is deleted and regenerated
         cquery_nofail(e, "INSERT INTO t (p, c, v1, v2) VALUES (1, 2, 3, 4)");

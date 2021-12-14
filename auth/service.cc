@@ -146,7 +146,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
                     opts,
                     true);
 
-            co_return co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm));
+            co_return co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, api::new_timestamp()));
         }
     }
 }
