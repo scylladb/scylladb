@@ -142,10 +142,10 @@ public:
         return _t->schema();
     }
     unsigned min_compaction_threshold() const noexcept override {
-        return _t->min_compaction_threshold();
+        return _t.schema()->min_compaction_threshold();
     }
     bool compaction_enforce_min_threshold() const noexcept override {
-        return _t->compaction_enforce_min_threshold();
+        return true;
     }
     const sstables::sstable_set& get_sstable_set() const override {
         return _t->get_sstable_set();

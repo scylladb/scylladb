@@ -861,23 +861,6 @@ public:
         _config.enable_incremental_backups = val;
     }
 
-    bool compaction_enforce_min_threshold() const {
-        return _config.compaction_enforce_min_threshold || _is_bootstrap_or_replace;
-    }
-
-    unsigned min_compaction_threshold() {
-        // During receiving stream operations, the less we compact the faster streaming is. For
-        // bootstrap and replace thereThere are no readers so it is fine to be less aggressive with
-        // compactions as long as we don't ignore them completely (this could create a problem for
-        // when streaming ends)
-        if (_is_bootstrap_or_replace) {
-            auto target = std::min(schema()->max_compaction_threshold(), 16);
-            return std::max(schema()->min_compaction_threshold(), target);
-        } else {
-            return schema()->min_compaction_threshold();
-        }
-    }
-
     /*!
      * \brief get sstables by key
      * Return a set of the sstables names that contain the given

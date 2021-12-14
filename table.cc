@@ -2391,11 +2391,19 @@ public:
         return _t.schema();
     }
     unsigned min_compaction_threshold() const noexcept override {
-        return _t.min_compaction_threshold();
+        // During receiving stream operations, the less we compact the faster streaming is. For
+        // bootstrap and replace thereThere are no readers so it is fine to be less aggressive with
+        // compactions as long as we don't ignore them completely (this could create a problem for
+        // when streaming ends)
+        if (_t._is_bootstrap_or_replace) {
+            auto target = std::min(_t.schema()->max_compaction_threshold(), 16);
+            return std::max(_t.schema()->min_compaction_threshold(), target);
+        } else {
+            return _t.schema()->min_compaction_threshold();
+        }
     }
     bool compaction_enforce_min_threshold() const noexcept override {
-        // FIXME: move compaction_enforce_min_threshold() impl to here once compaction strategy switches to table_state.
-        return _t.compaction_enforce_min_threshold();
+        return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
     }
     const sstables::sstable_set& get_sstable_set() const override {
         return _t.get_sstable_set();
