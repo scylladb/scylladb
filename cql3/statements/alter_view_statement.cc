@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -75,12 +76,10 @@ future<> alter_view_statement::check_access(service::storage_proxy& proxy, const
 
 void alter_view_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
-    // validated in announce_migration()
+    // validated in prepare_schema_mutations()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
+view_ptr alter_view_statement::prepare_view(database& db) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
@@ -110,15 +109,20 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
                 "the corresponding data in the parent table.");
     }
 
-    return qp.get_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
-        using namespace cql_transport;
+    return view_ptr(builder.build());
+}
 
-        return ::make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TABLE,
-                keyspace(),
-                column_family());
-    });
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> alter_view_statement::prepare_schema_mutations(query_processor& qp) const {
+    auto m = co_await qp.get_migration_manager().prepare_view_update_announcement(prepare_view(qp.db()));
+
+    using namespace cql_transport;
+    auto ret = ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

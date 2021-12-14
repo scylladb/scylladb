@@ -75,11 +75,12 @@ public:
 
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 private:
     schema_ptr lookup_indexed_table(service::storage_proxy& proxy) const;
+    schema_ptr make_drop_idex_schema(query_processor& qp) const;
 };
 
 }

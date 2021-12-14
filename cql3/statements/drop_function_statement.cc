@@ -19,12 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_function_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -34,21 +36,26 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(database& d
     return std::make_unique<prepared_statement>(make_shared<drop_function_statement>(*this));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement::announce_migration(
-        query_processor& qp) const {
-    if (!_func) {
-        return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_function_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    auto func = validate_while_executing(qp.proxy());
+
+    if (func) {
+        auto user_func = dynamic_pointer_cast<functions::user_function>(func);
+        if (!user_func) {
+            throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", func));
+        }
+        if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name()); bool(aggregate)) {
+            throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
+        }
+        m = co_await qp.get_migration_manager().prepare_function_drop_announcement(user_func);
+        ret = create_schema_change(*func, false);
     }
-    auto user_func = dynamic_pointer_cast<functions::user_function>(_func);
-    if (!user_func) {
-        throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", _func));
-    }
-    if (auto aggregate = functions::functions::used_by_user_aggregate(user_func->name()); bool(aggregate)) {
-        throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", _func, *aggregate));
-    }
-    return qp.get_migration_manager().announce_function_drop(user_func).then([this] {
-        return create_schema_change(*_func, false);
-    });
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 drop_function_statement::drop_function_statement(functions::function_name name,

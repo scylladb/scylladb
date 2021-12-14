@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_table_statement.hh"
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
@@ -82,7 +83,7 @@ future<> alter_table_statement::check_access(service::storage_proxy& proxy, cons
 
 void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    // validated in announce_migration()
+    // validated in prepare_schema_mutations()
 }
 
 static data_type validate_alter(const schema& schema, const column_definition& def, const cql3_type& validator)
@@ -293,9 +294,7 @@ void alter_table_statement::drop_column(const schema& schema, const table& cf, s
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
+std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(database& db) const {
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
@@ -410,15 +409,24 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         break;
     }
 
-    return qp.get_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), std::nullopt)
-        .then([this] {
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::UPDATED,
-                    event::schema_change::target_type::TABLE,
-                    keyspace(),
-                    column_family());
-        });
+    return make_pair(std::move(cfm), std::move(view_updates));
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+alter_table_statement::prepare_schema_mutations(query_processor& qp) const {
+  database& db = qp.db();
+  auto& mm = qp.get_migration_manager();
+  auto [cfm, view_updates] = prepare_schema_update(db);
+  auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), std::nullopt);
+
+  using namespace cql_transport;
+  auto ret = ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
+
+  co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

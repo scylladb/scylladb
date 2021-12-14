@@ -37,6 +37,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
@@ -70,8 +71,11 @@ future<> drop_type_statement::check_access(service::storage_proxy& proxy, const 
     return state.has_keyspace_access(proxy.local_db(), keyspace(), auth::permission::DROP);
 }
 
-void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
-{
+void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
+    // validation is done at execution time
+}
+
+void drop_type_statement::validate_while_executing(service::storage_proxy& proxy) const {
     try {
         auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types().get_all_types();
@@ -139,13 +143,16 @@ void drop_type_statement::validate(service::storage_proxy& proxy, const service:
     }
 }
 
+
 const sstring& drop_type_statement::keyspace() const
 {
     return _name.get_keyspace();
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(query_processor& qp) const
-{
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_type_statement::prepare_schema_mutations(query_processor& qp) const {
+    validate_while_executing(qp.proxy());
+
     database& db = qp.db();
 
     // Keyspace exists or we wouldn't have validated otherwise
@@ -154,20 +161,22 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::ann
     const auto& all_types = ks.metadata()->user_types().get_all_types();
     auto to_drop = all_types.find(_name.get_user_type_name());
 
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
     // Can happen with if_exists
-    if (to_drop == all_types.end()) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
-    }
+    if (to_drop != all_types.end()) {
+        m = co_await qp.get_migration_manager().prepare_type_drop_announcement(to_drop->second);
 
-    return qp.get_migration_manager().announce_type_drop(to_drop->second).then([this] {
         using namespace cql_transport;
-
-        return ::make_shared<event::schema_change>(
+        ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::DROPPED,
                 event::schema_change::target_type::TYPE,
                 keyspace(),
                 _name.get_string_type_name());
-    });
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

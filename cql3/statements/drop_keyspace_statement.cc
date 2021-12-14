@@ -39,12 +39,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "transport/event.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -75,25 +77,26 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(query_processor& qp) const
-{
-    return make_ready_future<>().then([this, &mm = qp.get_migration_manager()] {
-        return mm.announce_keyspace_drop(_keyspace);
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::DROPPED,
-                    event::schema_change::target_type::KEYSPACE,
-                    this->keyspace());
-        } catch (const exceptions::configuration_exception& e) {
-            if (_if_exists) {
-                return ::shared_ptr<cql_transport::event::schema_change>();
-            }
-            throw e;
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_keyspace_statement::prepare_schema_mutations(query_processor& qp) const {
+    std::vector<mutation> m;
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+
+    try {
+        m = qp.get_migration_manager().prepare_keyspace_drop_announcement(_keyspace);
+
+        using namespace cql_transport;
+        ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::DROPPED,
+                event::schema_change::target_type::KEYSPACE,
+                keyspace());
+    } catch (const exceptions::configuration_exception& e) {
+        if (!_if_exists) {
+            co_return coroutine::exception(std::current_exception());
         }
-    });
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

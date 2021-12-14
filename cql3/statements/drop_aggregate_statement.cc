@@ -19,12 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_aggregate_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"
+#include "mutation.hh"
 
 namespace cql3 {
 
@@ -34,18 +36,22 @@ std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(database& 
     return std::make_unique<prepared_statement>(make_shared<drop_aggregate_statement>(*this));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_aggregate_statement::announce_migration(
-        query_processor& qp) const {
-    if (!_func) {
-        return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+drop_aggregate_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    auto func = validate_while_executing(qp.proxy());
+    if (func) {
+        auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(func);
+        if (!user_aggr) {
+            throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
+        }
+        m = co_await qp.get_migration_manager().prepare_aggregate_drop_announcement(user_aggr);
+        ret = create_schema_change(*func, false);
     }
-    auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(_func);
-    if (!user_aggr) {
-        throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", _func));
-    }
-    return qp.get_migration_manager().announce_aggregate_drop(user_aggr).then([this] {
-        return create_schema_change(*_func, false);
-    });
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 drop_aggregate_statement::drop_aggregate_statement(functions::function_name name,

@@ -78,7 +78,8 @@ public:
 
     future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
     void validate(service::storage_proxy&, const service::client_state& state) const override;
-    future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor&) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
+
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 private:
@@ -93,6 +94,8 @@ private:
                                               const sstring& name,
                                               index_metadata_kind kind,
                                               const index_options_map& options);
+    std::vector<::shared_ptr<index_target>> validate_while_executing(service::storage_proxy& proxy) const;
+    schema_ptr build_index_schema(query_processor& qp) const;
 };
 
 }

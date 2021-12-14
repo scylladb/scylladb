@@ -104,24 +104,27 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
-    auto schema = get_cf_meta_data(qp.db());
-    auto& mm = qp.get_migration_manager();
-    try {
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+create_table_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
 
-        co_await mm.announce_new_column_family(std::move(schema));
+    try {
+        m = co_await qp.get_migration_manager().prepare_new_column_family_announcement(get_cf_meta_data(qp.db()));
+
         using namespace cql_transport;
-        co_return ::make_shared<event::schema_change>(
+        ret = ::make_shared<event::schema_change>(
             event::schema_change::change_type::CREATED,
             event::schema_change::target_type::TABLE,
-            this->keyspace(),
-            this->column_family());
+            keyspace(),
+            column_family());
     } catch (const exceptions::already_exists_exception& e) {
-        if (_if_not_exists) {
-            co_return ::shared_ptr<cql_transport::event::schema_change>();
+        if (!_if_not_exists) {
+            co_return coroutine::exception(std::current_exception());
         }
-        throw e;
     }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 /**
@@ -457,7 +460,7 @@ std::optional<sstring> check_restricted_table_properties(
     // Note: In the current implementation, CREATE TABLE calls this function
     // after cfprops.validate() was called, but ALTER TABLE calls this
     // function before cfprops.validate() (there, validate() is only called
-    // in announce_migration(), in the middle of execute).
+    // in prepare_schema_mutations(), in the middle of execute).
     auto strategy = cfprops.get_compaction_strategy_class();
     if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
         switch(proxy.local_db().get_config().restrict_dtcs()) {

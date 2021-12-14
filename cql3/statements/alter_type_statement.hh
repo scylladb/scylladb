@@ -45,6 +45,7 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/ut_name.hh"
 #include "database_fwd.hh"
+#include "schema.hh"
 
 namespace service {
 class migration_manager;
@@ -70,14 +71,21 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
+
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
     class add_or_alter;
     class renames;
 protected:
     virtual user_type make_updated_type(database& db, user_type to_update) const = 0;
 private:
-    future<> do_announce_migration(database& db, service::migration_manager& mm) const;
+    struct base_visitor {
+        virtual future<> operator()(view_ptr view) = 0;
+        virtual future<> operator()(user_type type) = 0;
+        virtual future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) = 0;
+    };
+
+    future<std::vector<mutation>> prepare_announcement_mutations(database& db, service::migration_manager& mm) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {

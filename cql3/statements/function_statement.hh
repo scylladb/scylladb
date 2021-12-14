@@ -45,13 +45,15 @@ protected:
     function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types);
     void create_arg_types(service::storage_proxy& proxy) const;
     data_type prepare_type(service::storage_proxy& proxy, cql3_type::raw &t) const;
+    virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const = 0;
 };
 
 // common logic for creating UDF and UDA
 class create_function_statement_base : public function_statement {
 protected:
     virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
-    virtual void create(service::storage_proxy& proxy, functions::function* old) const = 0;
+    virtual shared_ptr<functions::function> create(service::storage_proxy& proxy, functions::function* old) const = 0;
+    virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const override;
 
     bool _or_replace;
     bool _if_not_exists;
@@ -64,11 +66,10 @@ protected:
 class drop_function_statement_base : public function_statement {
 protected:
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
+    virtual shared_ptr<functions::function> validate_while_executing(service::storage_proxy&) const override;
 
     bool _args_present;
     bool _if_exists;
-
-    mutable shared_ptr<functions::function> _func{};
 
     drop_function_statement_base(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
             bool args_present, bool if_exists);

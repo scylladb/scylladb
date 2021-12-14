@@ -82,8 +82,8 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<> alter_type_statement::do_announce_migration(database& db, service::migration_manager& mm) const
-{
+future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(database& db, service::migration_manager& mm) const {
+    std::vector<mutation> m;
     auto&& ks = db.find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
@@ -102,10 +102,10 @@ future<> alter_type_statement::do_announce_migration(database& db, service::migr
     }
 
     auto&& updated = make_updated_type(db, to_update->second);
-
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
-    co_await mm.announce_type_update(updated);
+    auto res = co_await mm.prepare_update_type_announcement(updated);
+    std::move(res.begin(), res.end(), std::back_inserter(m));
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
         auto cfm = schema_builder(schema);
@@ -120,26 +120,32 @@ future<> alter_type_statement::do_announce_migration(database& db, service::migr
         }
         if (modified) {
             if (schema->is_view()) {
-                co_await mm.announce_view_update(view_ptr(cfm.build()));
+                auto res = co_await mm.prepare_view_update_announcement(view_ptr(cfm.build()));
+                std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
-                co_await mm.announce_column_family_update(cfm.build(), false, {}, std::nullopt);
+                auto res = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, {}, std::nullopt);
+                std::move(res.begin(), res.end(), std::back_inserter(m));
             }
         }
     }
+
+    co_return m;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(query_processor& qp) const
-{
-    database& db = qp.db();
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+alter_type_statement::prepare_schema_mutations(query_processor& qp) const {
     try {
-        co_await do_announce_migration(db, qp.get_migration_manager());
+        auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager());
+
         using namespace cql_transport;
-        co_return ::make_shared<event::schema_change>(
+        auto ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
                 event::schema_change::target_type::TYPE,
                 keyspace(),
                 _name.get_string_type_name());
-    } catch (no_such_keyspace& e) {
+
+        co_return std::make_pair(std::move(ret), std::move(m));
+    } catch(no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
     }
 }

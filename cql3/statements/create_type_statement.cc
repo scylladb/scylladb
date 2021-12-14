@@ -37,6 +37,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_type_statement.hh"
 #include "prepared_statement.hh"
 #include "database.hh"
@@ -82,15 +83,6 @@ inline bool create_type_statement::type_exists_in(::keyspace& ks) const
 
 void create_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    try {
-        auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
-        if (type_exists_in(ks) && !_if_not_exists) {
-            throw exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_string()));
-        }
-    } catch (no_such_keyspace& e) {
-        throw exceptions::invalid_request_exception(format("Cannot add type in unknown keyspace {}", keyspace()));
-    }
-
     if (_column_types.size() > max_udt_fields) {
         throw exceptions::invalid_request_exception(format("A user type cannot have more than {} fields", max_udt_fields));
     }
@@ -141,29 +133,44 @@ user_type create_type_statement::create_type(database& db) const
         std::move(field_names), std::move(field_types), true /* multi cell */);
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(query_processor& qp) const
-{
+std::optional<user_type> create_type_statement::make_type(query_processor& qp) const {
     database& db = qp.db();
-
-    // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());
 
     // Can happen with if_not_exists
     if (type_exists_in(ks)) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
+        return std::nullopt;
     }
 
     auto type = create_type(db);
     check_for_duplicate_names(type);
-    return qp.get_migration_manager().announce_new_type(type).then([this] {
-        using namespace cql_transport;
+    return type;
+}
 
-        return ::make_shared<event::schema_change>(
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_type_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+    try {
+        auto t = make_type(qp);
+        if (t) {
+            m = co_await qp.get_migration_manager().prepare_new_type_announcement(*t);
+            using namespace cql_transport;
+
+            ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,
                 event::schema_change::target_type::TYPE,
                 keyspace(),
                 _name.get_string_type_name());
-    });
+        } else {
+            if (!_if_not_exists) {
+                co_return coroutine::make_exception(exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_string())));
+            }
+        }
+    } catch (no_such_keyspace& e) {
+        co_return coroutine::exception(std::current_exception());
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

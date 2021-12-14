@@ -222,7 +222,7 @@ static future<> add_new_columns_if_missing(database& db, ::service::migration_ma
             return make_ready_future<>();
         }
         schema_ptr table = b.build();
-        return mm.announce_column_family_update(table, false, {}, api::timestamp_type(1)).handle_exception([] (const std::exception_ptr&) {});
+        return mm.announce_column_family_update(table, false, api::timestamp_type(1)).handle_exception([] (const std::exception_ptr&) {});
     } catch (...) {
         dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
         return make_ready_future<>();

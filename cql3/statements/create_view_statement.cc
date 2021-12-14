@@ -47,6 +47,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/column_identifier.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/create_view_statement.hh"
@@ -142,7 +143,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(query_processor& qp) const {
+view_ptr create_view_statement::prepare_view(database& db) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -152,7 +153,6 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    auto&& db = qp.db();
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate(db, schema_extensions);
 
@@ -346,24 +346,29 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
-    return make_ready_future<>().then([definition = view_ptr(builder.build()), &mm = qp.get_migration_manager()]() mutable {
-        return mm.announce_new_view(definition);
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            using namespace cql_transport;
-            return ::make_shared<event::schema_change>(
-                    event::schema_change::change_type::CREATED,
-                    event::schema_change::target_type::TABLE,
-                    this->keyspace(),
-                    this->column_family());
-        } catch (const exceptions::already_exists_exception& e) {
-            if (_if_not_exists) {
-                return ::shared_ptr<cql_transport::event::schema_change>();
-            }
-            throw e;
+    return view_ptr(builder.build());
+}
+
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+create_view_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+    auto definition = prepare_view(qp.db());
+    try {
+        m = co_await qp.get_migration_manager().prepare_new_view_announcement(std::move(definition));
+        using namespace cql_transport;
+        ret = ::make_shared<event::schema_change>(
+                event::schema_change::change_type::CREATED,
+                event::schema_change::target_type::TABLE,
+                keyspace(),
+                column_family());
+    } catch (const exceptions::already_exists_exception& e) {
+        if (!_if_not_exists) {
+            co_return coroutine::exception(std::current_exception());
         }
-    });
+    }
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

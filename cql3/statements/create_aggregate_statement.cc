@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_aggregate_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
@@ -33,7 +34,7 @@ namespace cql3 {
 
 namespace statements {
 
-void create_aggregate_statement::create(service::storage_proxy& proxy, functions::function* old) const {
+shared_ptr<functions::function> create_aggregate_statement::create(service::storage_proxy& proxy, functions::function* old) const {
     if (!proxy.features().cluster_supports_user_defined_aggregates()) {
         throw exceptions::invalid_request_exception("Cluster does not support user-defined aggregates, upgrade the whole cluster in order to use UDA");
     }
@@ -60,22 +61,25 @@ void create_aggregate_statement::create(service::storage_proxy& proxy, functions
     auto initcond_term = expr::evaluate(prepare_expression(_ival, db, _name.keyspace, {column_spec}), query_options::DEFAULT);
     bytes_opt initcond = std::move(initcond_term.value).to_bytes();
 
-    _aggregate = ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
-    return;
+    return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(final_func));
 }
 
 std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_aggregate_statement>(*this));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_aggregate_statement::announce_migration(
-        query_processor& qp) const {
-    if (!_aggregate) {
-        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+create_aggregate_statement::prepare_schema_mutations(query_processor& qp) const {
+    ::shared_ptr<cql_transport::event::schema_change> ret;
+    std::vector<mutation> m;
+
+    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(validate_while_executing(qp.proxy()));
+    if (aggregate) {
+        m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate);
+        ret = create_schema_change(*aggregate, true);
     }
-    return qp.get_migration_manager().announce_new_aggregate(_aggregate).then([this] {
-        return create_schema_change(*_aggregate, true);
-    });
+
+    co_return std::make_pair(std::move(ret), std::move(m));
 }
 
 create_aggregate_statement::create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
