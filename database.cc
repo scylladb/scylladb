@@ -959,6 +959,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     } catch (std::out_of_range&) {
         on_internal_error(dblog, fmt::format("drop_column_family {}.{}: UUID={} not found", ks_name, cf_name, uuid));
     }
+    dblog.debug("Dropping {}.{}", ks_name, cf_name);
     co_await remove(*cf);
     cf->clear_views();
     co_return co_await cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
@@ -2137,6 +2138,7 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
 }
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
+    dblog.debug("Truncating {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
     return with_gate(cf.async_gate(), [this, &ks, &cf, tsf = std::move(tsf), with_snapshot] () mutable -> future<> {
         const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
         const auto should_flush = auto_snapshot;
