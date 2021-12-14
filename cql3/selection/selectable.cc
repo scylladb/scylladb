@@ -24,6 +24,7 @@
 #include "field_selector.hh"
 #include "writetime_or_ttl.hh"
 #include "selector_factories.hh"
+#include "simple_selector.hh"
 #include "cql3/query_options.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/castas_fcts.hh"
@@ -37,6 +38,31 @@ namespace cql3 {
 namespace selection {
 
 seastar::logger slogger("cql3_selection");
+
+class selectable_column : public selectable {
+    column_identifier _ci;
+public:
+    explicit selectable_column(column_identifier ci) : _ci(std::move(ci)) {}
+    virtual ::shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr schema,
+        std::vector<const column_definition*>& defs) override;
+    virtual sstring to_string() const override {
+        return _ci.to_string();
+    }
+};
+
+::shared_ptr<selector::factory>
+selectable_column::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
+    auto def = get_column_definition(*schema, _ci);
+    if (!def) {
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
+    }
+    // Do not allow explicitly selecting hidden columns. We also skip them on
+    // "SELECT *" (see selection::wildcard()).
+    if (def->is_hidden_from_cql()) {
+        throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
+    }
+    return simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
+}
 
 shared_ptr<selector::factory>
 selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
@@ -153,9 +179,9 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
         },
         [&] (const expr::column_value& column) -> shared_ptr<selectable> {
-            // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
+            // There is no path that reaches here, but expr::column_value and selectable_column are logically the same,
             // so bridge them.
-            return ::make_shared<column_identifier>(column.col->name(), column.col->name_as_text());
+            return ::make_shared<selectable_column>(column_identifier(column.col->name(), column.col->name_as_text()));
         },
         [&] (const expr::token& tok) -> shared_ptr<selectable> {
             // expr::token implicitly the partition key as arguments, but
@@ -165,12 +191,12 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             auto args = boost::copy_range<std::vector<shared_ptr<selectable>>>(
                 s.partition_key_columns()
                 | boost::adaptors::transformed([&] (const column_definition& cdef) {
-                    return ::make_shared<column_identifier>(cdef.name(), cdef.name_as_text());
+                    return ::make_shared<selectable_column>(column_identifier(cdef.name(), cdef.name_as_text()));
                 }));
             return ::make_shared<selectable::with_function>(std::move(name), std::move(args));
         },
         [&] (const expr::unresolved_identifier& ui) -> shared_ptr<selectable> {
-            return ui.ident->prepare(s);
+            return make_shared<selectable_column>(*ui.ident->prepare(s));
         },
         [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
             auto unresolved_id = expr::as<expr::unresolved_identifier>(cma.column);
@@ -204,7 +230,7 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
             return make_shared<selectable::with_field_selection>(prepare_selectable(s, fs.structure),
-                    static_pointer_cast<column_identifier>(fs.field->prepare(s)));
+                    fs.field->prepare(s));
         },
         [&] (const expr::null&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "null found its way to selector context");

@@ -41,8 +41,6 @@
 
 #pragma once
 
-#include "cql3/selection/selectable.hh"
-
 #include "schema.hh"
 
 #include <algorithm>
@@ -57,7 +55,7 @@ class column_identifier_raw;
  * Represents an identifer for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned
  */
-class column_identifier final : public selection::selectable {
+class column_identifier final {
 public:
     bytes bytes_;
 private:
@@ -80,7 +78,7 @@ public:
 
     const bytes& name() const;
 
-    virtual sstring to_string() const override;
+    sstring to_string() const;
 
     sstring to_cql_string() const;
 
@@ -94,9 +92,6 @@ public:
         return new ColumnIdentifier(allocator.clone(bytes), text);
     }
 #endif
-
-    virtual ::shared_ptr<selection::selector::factory> new_selector_factory(database& db, schema_ptr schema,
-        std::vector<const column_definition*>& defs) override;
 
     using raw = column_identifier_raw;
 };
@@ -115,7 +110,7 @@ public:
     column_identifier_raw(sstring raw_text, bool keep_case);
 
     // for selectable::with_expression::raw:
-    ::shared_ptr<selection::selectable> prepare(const schema& s) const;
+    ::shared_ptr<column_identifier> prepare(const schema& s) const;
 
     ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s) const;
 
