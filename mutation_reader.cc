@@ -41,7 +41,17 @@ static constexpr size_t merger_small_vector_size = 4;
 template<typename T>
 using merger_vector = utils::small_vector<T, merger_small_vector_size>;
 
-using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment>::iterator>;
+using stream_id_t = const flat_mutation_reader*;
+
+struct mutation_fragment_and_stream_id {
+    mutation_fragment fragment;
+    stream_id_t stream_id;
+
+    mutation_fragment_and_stream_id(mutation_fragment fragment, stream_id_t stream_id) : fragment(std::move(fragment)), stream_id(stream_id)
+    { }
+};
+
+using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment_and_stream_id>::iterator>;
 
 template<typename Producer>
 concept FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range) {
@@ -85,7 +95,7 @@ concept FragmentProducer = requires(Producer p, dht::partition_range part_range,
 template<class Producer>
 requires FragmentProducer<Producer>
 class mutation_fragment_merger {
-    using iterator = merger_vector<mutation_fragment>::iterator;
+    using iterator = merger_vector<mutation_fragment_and_stream_id>::iterator;
 
     const schema_ptr _schema;
     Producer _producer;
@@ -107,11 +117,11 @@ class mutation_fragment_merger {
         return _it == _end;
     }
 
-    const mutation_fragment& top() const {
+    const mutation_fragment_and_stream_id& top() const {
         return *_it;
     }
 
-    mutation_fragment pop() {
+    mutation_fragment_and_stream_id pop() {
         return std::move(*_it++);
     }
 
@@ -127,10 +137,10 @@ public:
                 return mutation_fragment_opt();
             }
             auto current = pop();
-            while (!empty() && current.mergeable_with(top())) {
-                current.apply(*_schema, pop());
+            while (!empty() && current.fragment.mergeable_with(top().fragment)) {
+                current.fragment.apply(*_schema, pop().fragment);
             }
-            return current;
+            return std::move(current.fragment);
         });
     }
 
@@ -209,7 +219,7 @@ private:
     merger_vector<reader_and_last_fragment_kind> _next;
     // Readers that reached EOS.
     merger_vector<reader_and_last_fragment_kind> _halted_readers;
-    merger_vector<mutation_fragment> _current;
+    merger_vector<mutation_fragment_and_stream_id> _current;
     // Optimisation for cases where only a single reader emits a particular
     // partition. If _single_reader.reader is not null that reader is
     // guaranteed to be the only one having relevant data until the partition
@@ -394,8 +404,8 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
                     // If this assumption is correct, we do one key comparison instead of pushing to/popping from the heap.
                     if (_fragment_heap.empty() || position_in_partition::less_compare(*_schema)(mfo->position(), _fragment_heap.front().fragment.position())) {
                         _current.clear();
-                        _current.push_back(std::move(*mfo));
-                        _galloping_reader.last_kind = _current.back().mutation_fragment_kind();
+                        _current.emplace_back(std::move(*mfo), &*_galloping_reader.reader);
+                        _galloping_reader.last_kind = _current.back().fragment.mutation_fragment_kind();
                         return make_ready_future<needs_merge>(needs_merge::no);
                     }
 
@@ -477,14 +487,14 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         if (_single_reader.reader->is_buffer_empty()) {
             if (_single_reader.reader->is_end_of_stream()) {
                 _current.clear();
-                return make_ready_future<mutation_fragment_batch>(_current);
+                return make_ready_future<mutation_fragment_batch>(_current, &_single_reader);
             }
             return _single_reader.reader->fill_buffer().then([this] { return operator()(); });
         }
         _current.clear();
-        _current.emplace_back(_single_reader.reader->pop_mutation_fragment());
-        _single_reader.last_kind = _current.back().mutation_fragment_kind();
-        if (_current.back().is_end_of_partition()) {
+        _current.emplace_back(_single_reader.reader->pop_mutation_fragment(), &*_single_reader.reader);
+        _single_reader.last_kind = _current.back().fragment.mutation_fragment_kind();
+        if (_current.back().fragment.is_end_of_partition()) {
             _next.emplace_back(std::exchange(_single_reader.reader, {}), mutation_fragment::kind::partition_end);
         }
         return make_ready_future<mutation_fragment_batch>(_current);
@@ -528,7 +538,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         while (!_reader_heap.empty() && key(_fragment_heap).equal(*_schema, key(_reader_heap)));
         if (_fragment_heap.size() == 1) {
             _single_reader = { _fragment_heap.back().reader, mutation_fragment::kind::partition_start };
-            _current.emplace_back(std::move(_fragment_heap.back().fragment));
+            _current.emplace_back(std::move(_fragment_heap.back().fragment), &*_single_reader.reader);
             _fragment_heap.clear();
             _gallop_mode_hits = 0;
             return make_ready_future<mutation_fragment_batch>(_current);
@@ -540,11 +550,11 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         boost::range::pop_heap(_fragment_heap, fragment_heap_compare(*_schema));
         auto& n = _fragment_heap.back();
         const auto kind = n.fragment.mutation_fragment_kind();
-        _current.emplace_back(std::move(n.fragment));
+        _current.emplace_back(std::move(n.fragment), &*n.reader);
         _next.emplace_back(n.reader, kind);
         _fragment_heap.pop_back();
     }
-    while (!_fragment_heap.empty() && equal(_current.back().position(), _fragment_heap.front().fragment.position()));
+    while (!_fragment_heap.empty() && equal(_current.back().fragment.position(), _fragment_heap.front().fragment.position()));
 
     if (_next.size() == 1 && _next.front().reader == _galloping_reader.reader) {
         ++_gallop_mode_hits;
@@ -2311,7 +2321,7 @@ class clustering_order_reader_merger {
 
     // operator() returns a mutation_fragment_batch, which is a range (a pair of iterators);
     // this is where the actual data is stored, i.e. the range points to _current_batch.
-    merger_vector<mutation_fragment> _current_batch;
+    merger_vector<mutation_fragment_and_stream_id> _current_batch;
 
     // _unpeeked_readers stores readers for which we don't know the next fragment that they'll return.
     // Before we return the next batch of fragments, we must peek all readers here (and move them to
@@ -2486,7 +2496,7 @@ class clustering_order_reader_merger {
                     if (_reader_queue->empty(mf->position())
                             && (_peeked_readers.empty()
                                     || _cmp(mf->position(), _peeked_readers.front()->reader.peek_buffer().position()) < 0)) {
-                        _current_batch.push_back(_galloping_reader->reader.pop_mutation_fragment());
+                        _current_batch.emplace_back(_galloping_reader->reader.pop_mutation_fragment(), &_galloping_reader->reader);
 
                         return make_ready_future<mutation_fragment_batch>(_current_batch);
                     }
@@ -2581,7 +2591,7 @@ public:
                 // Not forwarding, so all readers must be exhausted.
                 // Return a partition end fragment unless all readers have been empty from the beginning.
                 if (_partition_start_fetched) {
-                    _current_batch.push_back(mutation_fragment(*_schema, _permit, partition_end()));
+                    _current_batch.emplace_back(mutation_fragment(*_schema, _permit, partition_end()), nullptr);
                 }
                 _should_emit_partition_end = false;
             }
@@ -2595,9 +2605,9 @@ public:
             auto mf = r->reader.pop_mutation_fragment();
             _peeked_readers.pop_back();
             _unpeeked_readers.push_back(std::move(r));
-            _current_batch.push_back(std::move(mf));
+            _current_batch.emplace_back(std::move(mf), &_unpeeked_readers.back()->reader);
         } while (!_peeked_readers.empty()
-                    && _cmp(_current_batch.back().position(), _peeked_readers.front()->reader.peek_buffer().position()) == 0);
+                    && _cmp(_current_batch.back().fragment.position(), _peeked_readers.front()->reader.peek_buffer().position()) == 0);
 
         if (_unpeeked_readers.size() == 1 && _unpeeked_readers.front() == _galloping_reader) {
             // The first condition says that only one reader was moved from the heap,
