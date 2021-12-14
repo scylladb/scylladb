@@ -326,12 +326,12 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     return *new_version;
 }
 
-void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema,
+void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, const mutation_partition& mp, const schema& mp_schema,
         mutation_application_stats& app_stats) {
-    apply(s, mutation_partition(mp_schema, mp), mp_schema, app_stats);
+    apply(r, cleaner, s, mutation_partition(mp_schema, mp), mp_schema, app_stats);
 }
 
-void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema,
+void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, mutation_partition&& mp, const schema& mp_schema,
         mutation_application_stats& app_stats) {
     // A note about app_stats: it may happen that mp has rows that overwrite other rows
     // in older partition_version. Those overwrites will be counted when their versions get merged.
@@ -339,11 +339,20 @@ void partition_entry::apply(const schema& s, mutation_partition&& mp, const sche
         mp.upgrade(mp_schema, s);
     }
     auto new_version = current_allocator().construct<partition_version>(std::move(mp));
+    partition_snapshot_ptr snp; // Should die after new_version is inserted
     if (!_snapshot) {
         try {
-            _version->partition().apply_monotonically(s, std::move(new_version->partition()), no_cache_tracker, app_stats);
-            current_allocator().destroy(new_version);
-            return;
+            if (_version->partition().apply_monotonically(s,
+                      std::move(new_version->partition()),
+                      no_cache_tracker,
+                      app_stats,
+                      is_preemptible::yes) == stop_iteration::yes) {
+                current_allocator().destroy(new_version);
+                return;
+            } else {
+                // Apply was preempted. Let the cleaner finish the job when snapshot dies
+                snp = read(r, cleaner, s.shared_from_this(), no_cache_tracker);
+            }
         } catch (...) {
             // fall through
         }

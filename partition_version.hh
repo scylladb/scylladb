@@ -538,8 +538,19 @@ public:
     // Assumes this instance and mp are fully continuous.
     // Use only on non-evictable entries.
     // Must not be called when is_locked().
-    void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema, mutation_application_stats& app_stats);
-    void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema, mutation_application_stats& app_stats);
+    void apply(logalloc::region&,
+               mutation_cleaner&,
+               const schema& s,
+               const mutation_partition& mp,
+               const schema& mp_schema,
+               mutation_application_stats& app_stats);
+
+    void apply(logalloc::region&,
+               mutation_cleaner&,
+               const schema& s,
+               mutation_partition&& mp,
+               const schema& mp_schema,
+               mutation_application_stats& app_stats);
 
     // Adds mutation_partition represented by "other" to the one represented
     // by this entry.
