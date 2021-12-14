@@ -1317,17 +1317,8 @@ uint32_t mutation_partition::do_compact(const schema& s,
             return stop_iteration::no;
         }
         deletable_row& row = e.row();
-        const auto higher_tomb = std::max(_tombstone, range_tombstone_for_row(s, e.key()));
-        row_tombstone tomb = row.deleted_at();
-        tomb.apply(higher_tomb);
-
-        bool is_live = row.marker().compact_and_expire(tomb.tomb(), query_time, can_gc, gc_before);
-        is_live |= row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before, row.marker());
-
-        if (should_purge_row_tombstone(row.deleted_at()) || row.deleted_at().tomb() <= higher_tomb) {
-            row.remove_tombstone();
-        }
-
+        tombstone tomb = range_tombstone_for_row(s, e.key());
+        bool is_live = row.compact_and_expire(s, tomb, query_time, can_gc, gc_before, nullptr);
         return stop_iteration(is_live && ++row_count == row_limit);
     };
 
@@ -1672,6 +1663,29 @@ bool lazy_row::compact_and_expire(
 std::ostream& operator<<(std::ostream& os, const lazy_row::printer& p) {
     return os << row::printer(p._schema, p._kind, p._row.get());
 }
+
+bool deletable_row::compact_and_expire(const schema& s,
+                                       tombstone tomb,
+                                       gc_clock::time_point query_time,
+                                       can_gc_fn& can_gc,
+                                       gc_clock::time_point gc_before,
+                                       compaction_garbage_collector* collector)
+{
+    auto should_purge_row_tombstone = [&] (const row_tombstone& t) {
+        return t.max_deletion_time() < gc_before && can_gc(t.tomb());
+    };
+
+    apply(tomb);
+    bool is_live = marker().compact_and_expire(deleted_at().tomb(), query_time, can_gc, gc_before);
+    is_live |= cells().compact_and_expire(s, column_kind::regular_column, deleted_at(), query_time, can_gc, gc_before, marker(), collector);
+
+    if (deleted_at().tomb() <= tomb || should_purge_row_tombstone(deleted_at())) {
+        remove_tombstone();
+    }
+
+    return is_live;
+}
+
 
 deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
 {
