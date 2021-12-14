@@ -28,6 +28,7 @@
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 #include "utils/error_injection.hh"
@@ -569,6 +570,74 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
     { auto rd = std::move(rd1); }
 
     mt->cleaner().drain().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_range_tombstones_are_compacted_with_data) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    auto s = ss.schema();
+    auto mt = make_lw_shared<replica::memtable>(ss.schema());
+
+    auto pk = ss.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+
+    auto old_tombstone = ss.new_tombstone(); // older than any write, does not cover anything
+
+    {
+        mutation m(ss.schema(), pk);
+        ss.add_row(m, ss.make_ckey(1), "v1");
+        ss.add_row(m, ss.make_ckey(2), "v1");
+        ss.add_row(m, ss.make_ckey(3), "v1");
+        ss.add_row(m, ss.make_ckey(4), "v1");
+        mt->apply(m);
+    }
+
+    mutation rt_m(ss.schema(), pk);
+    auto rt = ss.delete_range(rt_m, ss.make_ckey_range(2,3));
+    mt->apply(rt_m);
+    mt->cleaner().drain().get();
+
+    assert_that(mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr))
+            .produces_partition_start(pk)
+            .produces_row_with_key(ss.make_ckey(1))
+            .produces_range_tombstone_change({rt.position(), rt.tomb})
+            .produces_range_tombstone_change({rt.end_position(), {}})
+            .produces_row_with_key(ss.make_ckey(4))
+            .produces_partition_end()
+            .produces_end_of_stream();
+
+    {
+        mutation m(ss.schema(), pk);
+        m.partition().apply(old_tombstone);
+        mt->apply(m);
+        mt->cleaner().drain().get();
+    }
+
+    // No change
+    assert_that(mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr))
+            .produces_partition_start(pk, {old_tombstone})
+            .produces_row_with_key(ss.make_ckey(1))
+            .produces_range_tombstone_change({rt.position(), rt.tomb})
+            .produces_range_tombstone_change({rt.end_position(), {}})
+            .produces_row_with_key(ss.make_ckey(4))
+            .produces_partition_end()
+            .produces_end_of_stream();
+
+    auto new_tomb = ss.new_tombstone();
+
+    {
+        mutation m(ss.schema(), pk);
+        m.partition().apply(new_tomb);
+        mt->apply(m);
+        mt->cleaner().drain().get();
+    }
+
+    assert_that(mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr))
+            .produces_partition_start(pk, {new_tomb})
+            .produces_range_tombstone_change({rt.position(), rt.tomb})
+            .produces_range_tombstone_change({rt.end_position(), {}})
+            .produces_partition_end()
+            .produces_end_of_stream();
 }
 
 SEASTAR_TEST_CASE(test_hash_is_cached) {

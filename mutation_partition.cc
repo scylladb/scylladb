@@ -305,14 +305,104 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
     _static_row_continuous |= p._static_row_continuous;
 
+    rows_entry::tri_compare cmp(s);
+    auto del = current_deleter<rows_entry>();
+
+    // Compacts rows in [i, end) with the tombstone.
+    // Erases entries which are left empty by compaction.
+    // Does not affect continuity.
+    auto apply_tombstone_to_rows = [&] (apply_resume::stage stage, tombstone tomb, rows_type::iterator i, rows_type::iterator end) -> stop_iteration {
+        if (!preemptible) {
+            // Compaction is attempted only in preemptible contexts because it can be expensive to perform and is not
+            // necessary for correctness.
+            return stop_iteration::yes;
+        }
+
+        while (i != end) {
+            rows_entry& e = *i;
+            can_gc_fn never_gc = [](tombstone) { return false; };
+
+            bool all_dead = e.dummy() || !e.row().compact_and_expire(s,
+                                                                     tomb,
+                                                                     gc_clock::time_point::min(),  // no TTL expiration
+                                                                     never_gc,                     // no GC
+                                                                     gc_clock::time_point::min()); // no GC
+
+            auto next_i = std::next(i);
+            bool inside_continuous_range = !tracker ||
+                    (e.continuous() && (next_i != _rows.end() && next_i->continuous()));
+
+            if (all_dead && e.row().empty() && inside_continuous_range) {
+                i = _rows.erase(i);
+                if (tracker) {
+                    tracker->on_remove();
+                }
+                del(&e);
+            } else {
+                i = next_i;
+            }
+
+            if (need_preempt() && i != end) {
+                res = apply_resume(stage, i->position());
+                return stop_iteration::no;
+            }
+        }
+        return stop_iteration::yes;
+    };
+
+    if (res._stage <= apply_resume::stage::range_tombstone_compaction) {
+        bool filtering_tombstones = res._stage == apply_resume::stage::range_tombstone_compaction;
+        for (const range_tombstone_entry& rt : p._row_tombstones) {
+            position_in_partition_view pos = rt.position();
+            if (filtering_tombstones) {
+                if (cmp(res._pos, rt.end_position()) >= 0) {
+                    continue;
+                }
+                filtering_tombstones = false;
+                if (cmp(res._pos, rt.position()) > 0) {
+                    pos = res._pos;
+                }
+            }
+            auto i = _rows.lower_bound(pos, cmp);
+            if (i == _rows.end()) {
+                break;
+            }
+            auto end = _rows.lower_bound(rt.end_position(), cmp);
+
+            auto tomb = _tombstone;
+            tomb.apply(rt.tombstone().tomb);
+
+            if (apply_tombstone_to_rows(apply_resume::stage::range_tombstone_compaction, tomb, i, end) == stop_iteration::no) {
+                return stop_iteration::no;
+            }
+        }
+    }
+
     if (_row_tombstones.apply_monotonically(s, std::move(p._row_tombstones), preemptible) == stop_iteration::no) {
         app_stats.has_any_tombstones |= !_row_tombstones.empty();
+        res = apply_resume::merging_range_tombstones();
         return stop_iteration::no;
     }
     app_stats.has_any_tombstones |= !_row_tombstones.empty();
 
-    rows_entry::tri_compare cmp(s);
-    auto del = current_deleter<rows_entry>();
+    if (p._tombstone) {
+        // p._tombstone is already applied to _tombstone
+        rows_type::iterator i;
+        if (res._stage == apply_resume::stage::partition_tombstone_compaction) {
+            i = _rows.lower_bound(res._pos, cmp);
+        } else {
+            i = _rows.begin();
+        }
+        if (apply_tombstone_to_rows(apply_resume::stage::partition_tombstone_compaction,
+                                               _tombstone, i, _rows.end()) == stop_iteration::no) {
+            return stop_iteration::no;
+        }
+        // TODO: Drop redundant range tombstones
+        p._tombstone = {};
+    }
+
+    res = apply_resume::merging_rows();
+
     auto p_i = p._rows.begin();
     auto i = _rows.begin();
     while (p_i != p._rows.end()) {

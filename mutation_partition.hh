@@ -1046,6 +1046,10 @@ struct mutation_application_stats {
 struct apply_resume {
     enum class stage {
         start,
+        range_tombstone_compaction,
+        merging_range_tombstones,
+        partition_tombstone_compaction,
+        merging_rows,
         done
     };
 
@@ -1081,6 +1085,14 @@ struct apply_resume {
     }
 
     operator bool() const { return _stage != stage::done; }
+
+    static apply_resume merging_rows() {
+        return {stage::merging_rows, position_in_partition::for_partition_start()};
+    }
+
+    static apply_resume merging_range_tombstones() {
+        return {stage::merging_range_tombstones, position_in_partition::for_partition_start()};
+    }
 
     static apply_resume done() {
         return {stage::done, position_in_partition::for_partition_start()};
