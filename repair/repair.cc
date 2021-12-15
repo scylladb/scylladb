@@ -382,7 +382,7 @@ void tracker::done(repair_uniq_id id, bool succeeded) {
     }
     _done_cond.broadcast();
 }
-repair_status tracker::get(int id) {
+repair_status tracker::get(int id) const {
     if (id >= _next_repair_command) {
         throw std::runtime_error(format("unknown repair id {}", id));
     }
