@@ -256,6 +256,9 @@ public:
     static constexpr phase_type default_phase = 0; // For use with non-evictable snapshots
     static constexpr phase_type min_phase = 1; // Use 1 to prevent underflow on apply_to_incomplete()
     static constexpr phase_type max_phase = std::numeric_limits<phase_type>::max();
+
+    // Ordinal number of a partition version within a snapshot. Starts with 0.
+    using version_number_type = size_t;
 public:
     // Used for determining reference stability.
     // References and iterators into versions owned by the snapshot
@@ -292,6 +295,7 @@ private:
     mutation_cleaner* _cleaner;
     cache_tracker* _tracker;
     boost::intrusive::slist_member_hook<> _cleaner_hook;
+    std::optional<std::pair<version_number_type, apply_resume>> _version_merging_state;
     bool _locked = false;
     friend class partition_entry;
     friend class mutation_cleaner_impl;

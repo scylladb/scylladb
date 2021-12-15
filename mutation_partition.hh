@@ -1043,6 +1043,50 @@ struct mutation_application_stats {
     }
 };
 
+struct apply_resume {
+    enum class stage {
+        start,
+        done
+    };
+
+    position_in_partition _pos;
+    stage _stage;
+
+    apply_resume()
+        : _pos(position_in_partition::for_partition_start())
+        , _stage(stage::start)
+    { }
+
+    apply_resume(stage s, position_in_partition_view pos)
+        : _pos(with_allocator(standard_allocator(), [&] {
+                return position_in_partition(pos);
+            }))
+        , _stage(s)
+    { }
+
+    ~apply_resume() {
+        with_allocator(standard_allocator(), [&] {
+           auto pos = std::move(_pos);
+        });
+    }
+
+    apply_resume(apply_resume&&) noexcept = default;
+
+    apply_resume& operator=(apply_resume&& o) noexcept {
+        if (this != &o) {
+            this->~apply_resume();
+            new (this) apply_resume(std::move(o));
+        }
+        return *this;
+    }
+
+    operator bool() const { return _stage != stage::done; }
+
+    static apply_resume done() {
+        return {stage::done, position_in_partition::for_partition_start()};
+    }
+};
+
 // Represents a set of writes made to a single partition.
 //
 // The object is schema-dependent. Each instance is governed by some
@@ -1214,13 +1258,21 @@ public:
     //
     // The operation can be driven to completion like this:
     //
-    //   while (apply_monotonically(..., is_preemtable::yes) == stop_iteration::no) { }
+    //   apply_resume res;
+    //   while (apply_monotonically(..., is_preemtable::yes, &res) == stop_iteration::no) { }
     //
     // If is_preemptible::no is passed as argument then stop_iteration::no is never returned.
+    //
+    // If is_preemptible::yes is passed, apply_resume must also be passed,
+    // same instance each time until stop_iteration::yes is returned.
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*,
-            mutation_application_stats& app_stats, is_preemptible = is_preemptible::no);
+            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-            mutation_application_stats& app_stats, is_preemptible = is_preemptible::no);
+            mutation_application_stats& app_stats, is_preemptible, apply_resume&);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
+            mutation_application_stats& app_stats);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
+            mutation_application_stats& app_stats);
 
     // Weak exception guarantees.
     // Assumes this and p are not owned by a cache_tracker.
