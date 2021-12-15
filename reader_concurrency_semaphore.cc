@@ -30,7 +30,6 @@
 #include "utils/exceptions.hh"
 #include "schema.hh"
 #include "utils/human_readable.hh"
-#include "flat_mutation_reader.hh"
 
 logger rcslog("reader_concurrency_semaphore");
 
@@ -660,7 +659,7 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     }
 }
 
-reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
+reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader) noexcept {
     auto& permit_impl = *reader.permit()._impl;
     permit_impl.on_register_as_inactive();
     // Implies _inactive_reads.empty(), we don't queue new readers before
@@ -701,7 +700,7 @@ void reader_concurrency_semaphore::set_notify_handler(inactive_read_handle& irh,
     }
 }
 
-flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
+flat_mutation_reader_v2_opt reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
     if (!irh) {
         return {};
     }
@@ -767,7 +766,7 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     co_return;
 }
 
-flat_mutation_reader reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
+flat_mutation_reader_v2 reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
     auto reader = std::move(ir.reader);
     ir.detach();
     reader.permit()._impl->on_evicted();
@@ -797,7 +796,7 @@ void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason)
     close_reader(detach_inactive_reader(ir, reason));
 }
 
-void reader_concurrency_semaphore::close_reader(flat_mutation_reader reader) {
+void reader_concurrency_semaphore::close_reader(flat_mutation_reader_v2 reader) {
     // It is safe to discard the future since it is waited on indirectly
     // by closing the _close_readers_gate in stop().
     (void)with_gate(_close_readers_gate, [reader = std::move(reader)] () mutable {

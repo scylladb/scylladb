@@ -1109,7 +1109,7 @@ public:
 
 void evictable_reader::do_pause(flat_mutation_reader reader) {
     assert(!_irh);
-    _irh = _permit.semaphore().register_inactive_read(std::move(reader));
+    _irh = _permit.semaphore().register_inactive_read(upgrade_to_v2(std::move(reader)));
 }
 
 void evictable_reader::maybe_pause(flat_mutation_reader reader) {
@@ -1121,7 +1121,10 @@ void evictable_reader::maybe_pause(flat_mutation_reader reader) {
 }
 
 flat_mutation_reader_opt evictable_reader::try_resume() {
-    return _permit.semaphore().unregister_inactive_read(std::move(_irh));
+    if (auto reader_opt = _permit.semaphore().unregister_inactive_read(std::move(_irh))) {
+        return downgrade_to_v1(std::move(*reader_opt));
+    }
+    return {};
 }
 
 void evictable_reader::update_next_position(flat_mutation_reader& reader) {

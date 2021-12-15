@@ -255,7 +255,7 @@ void querier_cache::insert_querier(
 
     auto& sem = q.permit().semaphore();
 
-    auto irh = sem.register_inactive_read(querier_utils::get_reader(q));
+    auto irh = sem.register_inactive_read(upgrade_to_v2(querier_utils::get_reader(q)));
     if (!irh) {
         ++stats.resource_based_evictions;
         return;
@@ -340,7 +340,7 @@ std::optional<Querier> querier_cache::lookup_querier(
         throw std::runtime_error("lookup_querier(): found querier that is evicted");
     }
     reader_opt->set_timeout(timeout);
-    querier_utils::set_reader(q, std::move(*reader_opt));
+    querier_utils::set_reader(q, downgrade_to_v1(std::move(*reader_opt)));
     --stats.population;
 
     const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);

@@ -25,7 +25,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include "reader_permit.hh"
-#include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_v2.hh"
 
 namespace bi = boost::intrusive;
 
@@ -123,12 +123,12 @@ private:
     };
 
     struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
-        flat_mutation_reader reader;
+        flat_mutation_reader_v2 reader;
         eviction_notify_handler notify_handler;
         timer<lowres_clock> ttl_timer;
         inactive_read_handle* handle = nullptr;
 
-        explicit inactive_read(flat_mutation_reader reader_) noexcept
+        explicit inactive_read(flat_mutation_reader_v2 reader_) noexcept
             : reader(std::move(reader_))
         { }
         ~inactive_read();
@@ -198,7 +198,7 @@ private:
     std::optional<future<>> _execution_loop_future;
 
 private:
-    [[nodiscard]] flat_mutation_reader detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
+    [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
     void evict(inactive_read&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
@@ -226,7 +226,7 @@ private:
     std::runtime_error stopped_exception();
 
     // closes reader in the background.
-    void close_reader(flat_mutation_reader reader);
+    void close_reader(flat_mutation_reader_v2 reader);
 
     future<> execution_loop() noexcept;
 
@@ -283,7 +283,7 @@ public:
     ///
     /// The semaphore takes ownership of the passed in reader for the duration
     /// of its inactivity and it may evict it to free up resources if necessary.
-    inactive_read_handle register_inactive_read(flat_mutation_reader ir) noexcept;
+    inactive_read_handle register_inactive_read(flat_mutation_reader_v2 ir) noexcept;
 
     /// Set the inactive read eviction notification handler and optionally eviction ttl.
     ///
@@ -303,7 +303,7 @@ public:
     ///
     /// If the read was not evicted, the inactive read object, passed in to the
     /// register call, will be returned. Otherwise a nullptr is returned.
-    flat_mutation_reader_opt unregister_inactive_read(inactive_read_handle irh);
+    flat_mutation_reader_v2_opt unregister_inactive_read(inactive_read_handle irh);
 
     /// Try to evict an inactive read.
     ///
