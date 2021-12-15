@@ -4040,6 +4040,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             auto& dk = m.decorated_key();
 
             std::optional<std::pair<position_in_partition, position_in_partition>> bounds;
+            position_in_partition::less_compare less{*s};
             mutation good(m.schema(), dk);
             std::optional<mutation> bad;
             auto rd = make_flat_mutation_reader_from_mutations(s, semaphore.make_permit(), {m});
@@ -4055,7 +4056,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                         auto upper = mf.is_range_tombstone() ? mf.as_range_tombstone().end : mf.position();
                         if (!bounds) {
                             bounds = std::pair{mf.position(), upper};
-                        } else {
+                        } else if (less(bounds->second, upper)) {
                             bounds->second = upper;
                         }
                     }
