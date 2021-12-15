@@ -121,11 +121,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   read parts of items or to just count them, is not yet supported.
   https://github.com/scylladb/scylla/issues/5058
 
-* The ScanIndexForward=false of the Query operation - to read a partition
-  in reverse order - is currently implemented inefficiently, and limited
-  by default to partitions of size 100 MB.
-  https://github.com/scylladb/scylla/issues/7586
-
 * Alternator does not yet support the DynamoDB API calls that control which
   table is available in which data center (DC): CreateGlobalTable,
   UpdateGlobalTable, DescribeGlobalTable, ListGlobalTables,
