@@ -39,7 +39,7 @@
 #include "db/system_keyspace.hh"
 #include "seastar/http/exception.hh"
 #include <seastar/core/coroutine.hh>
-#include "repair/repair.hh"
+#include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
 #include "log.hh"
@@ -271,14 +271,14 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
                 });
     });
 
-    ss::get_active_repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
-        return get_active_repairs(ctx.db).then([] (std::vector<int> res){
+    ss::get_active_repair_async.set(r, [&repair] (std::unique_ptr<request> req) {
+        return repair.local().get_active_repairs().then([] (std::vector<int> res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
 
-    ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {
-        return repair_get_status(ctx.db, boost::lexical_cast<int>( req->get_query_param("id")))
+    ss::repair_async_status.set(r, [&repair] (std::unique_ptr<request> req) {
+        return repair.local().get_status(boost::lexical_cast<int>( req->get_query_param("id")))
                 .then_wrapped([] (future<repair_status>&& fut) {
             ss::ns_repair_async_status::return_type_wrapper res;
             try {
@@ -290,7 +290,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         });
     });
 
-    ss::repair_await_completion.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::repair_await_completion.set(r, [&repair] (std::unique_ptr<request> req) {
         int id;
         using clock = std::chrono::steady_clock;
         clock::time_point expire;
@@ -311,7 +311,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         } catch (std::exception& e) {
             return make_exception_future<json::json_return_type>(httpd::bad_param_exception(e.what()));
         }
-        return repair_await_completion(ctx.db, id, expire)
+        return repair.local().await_completion(id, expire)
                 .then_wrapped([] (future<repair_status>&& fut) {
             ss::ns_repair_async_status::return_type_wrapper res;
             try {
@@ -323,14 +323,14 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         });
     });
 
-    ss::force_terminate_all_repair_sessions.set(r, [&ctx](std::unique_ptr<request> req) {
-        return repair_abort_all(ctx.db).then([] {
+    ss::force_terminate_all_repair_sessions.set(r, [&repair] (std::unique_ptr<request> req) {
+        return repair.local().abort_all().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::force_terminate_all_repair_sessions_new.set(r, [&ctx](std::unique_ptr<request> req) {
-        return repair_abort_all(ctx.db).then([] {
+    ss::force_terminate_all_repair_sessions_new.set(r, [&repair] (std::unique_ptr<request> req) {
+        return repair.local().abort_all().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

@@ -103,21 +103,7 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
 // instead of just "RUNNING".
 enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 
-// repair_get_status() returns a future because it needs to run code on a
-// different CPU (cpu 0) and that might be a deferring operation.
-future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id);
-
-// If the repair job is finished (SUCCESSFUL or FAILED), it returns immediately.
-// It blocks if the repair job is still RUNNING until timeout.
-future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout);
-
-// returns a vector with the ids of the active repairs
-future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db);
-
 void check_in_shutdown();
-
-// Abort all the repairs
-future<> repair_abort_all(seastar::sharded<replica::database>& db);
 
 enum class repair_checksum {
     legacy = 0,

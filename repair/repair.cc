@@ -1222,21 +1222,21 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
     });
 }
 
-future<std::vector<int>> get_active_repairs(seastar::sharded<replica::database>& db) {
-    return db.invoke_on(0, [] (replica::database& localdb) {
-        return the_repair_tracker().get_active();
+future<std::vector<int>> repair_service::get_active_repairs() {
+    return container().invoke_on(0, [] (repair_service& rs) {
+        return rs.repair_tracker().get_active();
     });
 }
 
-future<repair_status> repair_get_status(seastar::sharded<replica::database>& db, int id) {
-    return db.invoke_on(0, [id] (replica::database& localdb) {
-        return the_repair_tracker().get(id);
+future<repair_status> repair_service::get_status(int id) {
+    return container().invoke_on(0, [id] (repair_service& rs) {
+        return rs.repair_tracker().get(id);
     });
 }
 
-future<repair_status> repair_await_completion(seastar::sharded<replica::database>& db, int id, std::chrono::steady_clock::time_point timeout) {
-    return db.invoke_on(0, [id, timeout] (replica::database& localdb) {
-        return the_repair_tracker().repair_await_completion(id, timeout);
+future<repair_status> repair_service::await_completion(int id, std::chrono::steady_clock::time_point timeout) {
+    return container().invoke_on(0, [id, timeout] (repair_service& rs) {
+        return rs.repair_tracker().repair_await_completion(id, timeout);
     });
 }
 
@@ -1247,9 +1247,9 @@ future<> repair_service::shutdown() {
     }
 }
 
-future<> repair_abort_all(seastar::sharded<replica::database>& db) {
-    return db.invoke_on_all([] (replica::database& localdb) {
-        the_repair_tracker().abort_all_repairs();
+future<> repair_service::abort_all() {
+    return container().invoke_on_all([] (repair_service& rs) {
+        return rs.repair_tracker().abort_all_repairs();
     });
 }
 
