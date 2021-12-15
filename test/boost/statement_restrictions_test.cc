@@ -41,7 +41,7 @@ query::clustering_row_ranges slice(
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
     return restrictions::statement_restrictions(
-            env.local_db(),
+            env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
             statements::statement_type::SELECT,
             where_clause,

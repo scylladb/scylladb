@@ -46,7 +46,7 @@
 #include "cql3/operation.hh"
 #include "cql3/relation.hh"
 
-#include "database_fwd.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 #include <vector>
 
@@ -80,7 +80,7 @@ public:
         std::vector<relation_ptr> where_clause,
         conditions_vector conditions, bool if_exists);
 protected:
-    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
                 prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
 };
 

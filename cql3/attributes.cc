@@ -150,7 +150,7 @@ void attributes::fill_prepare_context(prepare_context& ctx) {
     }
 }
 
-std::unique_ptr<attributes> attributes::raw::prepare(database& db, const sstring& ks_name, const sstring& cf_name) const {
+std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const {
     std::optional<expr::expression> ts, ttl, to;
 
     if (timestamp.has_value()) {

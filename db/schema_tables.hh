@@ -55,7 +55,12 @@
 #include <vector>
 #include <map>
 
+namespace data_dictionary {
 class keyspace_metadata;
+}
+
+using keyspace_metadata = data_dictionary::keyspace_metadata;
+
 class database;
 
 namespace query {

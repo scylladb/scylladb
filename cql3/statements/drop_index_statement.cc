@@ -45,7 +45,8 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "schema_builder.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "mutation.hh"
 #include "gms/feature_service.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/index_name.hh"
@@ -81,7 +82,7 @@ void drop_index_statement::validate(service::storage_proxy& proxy, const service
 {
     // validated in lookup_indexed_table()
 
-    auto& db = proxy.get_db().local();
+    auto db = proxy.data_dictionary();
     if (db.has_keyspace(keyspace())) {
         auto schema = db.find_indexed_table(keyspace(), _index_name);
         if (schema) {
@@ -122,14 +123,14 @@ drop_index_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-drop_index_statement::prepare(database& db, cql_stats& stats) {
+drop_index_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     _cql_stats = &stats;
     return std::make_unique<prepared_statement>(make_shared<drop_index_statement>(*this));
 }
 
 schema_ptr drop_index_statement::lookup_indexed_table(service::storage_proxy& proxy) const
 {
-    auto& db = proxy.get_db().local();
+    auto& db = proxy.data_dictionary();
     if (!db.has_keyspace(keyspace())) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }

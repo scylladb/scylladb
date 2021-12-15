@@ -64,7 +64,7 @@ static future<> create_metadata_table_if_missing_impl(
     static auto ignore_existing = [] (seastar::noncopyable_function<future<>()> func) {
         return futurize_invoke(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
     };
-    auto& db = qp.db();
+    auto db = qp.db();
     auto parsed_statement = cql3::query_processor::parse_statement(cql);
     auto& parsed_cf_statement = static_cast<cql3::statements::raw::cf_statement&>(*parsed_statement);
 

@@ -20,7 +20,7 @@
  */
 
 #include "cql3/statements/sl_prop_defs.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "duration.hh"
 #include "concrete_types.hh"
 #include <boost/algorithm/string/predicate.hpp>

@@ -42,7 +42,8 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/schema_altering_statement.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "mutation.hh"
 #include "cql3/query_processor.hh"
 #include "transport/messages/result_message.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -127,7 +128,7 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
     bool internal = state.get_client_state().is_internal();
     if (internal) {
         auto replication_type = locator::replication_strategy_type::everywhere_topology;
-        database& db = qp.db();
+        data_dictionary::database db = qp.db();
         if (_cf_name && _cf_name->has_keyspace()) {
            const auto& ks = db.find_keyspace(_cf_name->get_keyspace());
            replication_type = ks.get_replication_strategy().get_type();

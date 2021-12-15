@@ -27,6 +27,8 @@
 #include "bytes.hh"
 #include "types/user.hh"
 
+namespace data_dictionary {
+
 class user_types_metadata {
     std::unordered_map<bytes, user_type> _user_types;
 public:
@@ -46,3 +48,5 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& os, const user_types_metadata& m);
 };
+
+}

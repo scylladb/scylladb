@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "data_dictionary/data_dictionary.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/column_specification.hh"
 
@@ -48,8 +49,6 @@
 
 #include <optional>
 #include <vector>
-
-class database;
 
 namespace cql3 {
 
@@ -74,7 +73,7 @@ public:
 
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) = 0;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) = 0;
 };
 
 }

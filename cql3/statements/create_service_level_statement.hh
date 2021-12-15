@@ -37,7 +37,7 @@ class create_service_level_statement final : public service_level_statement {
 
 public:
     create_service_level_statement(sstring service_level, shared_ptr<sl_prop_defs> attrs, bool if_not_exists);
-    std::unique_ptr<cql3::statements::prepared_statement> prepare(database &db, cql_stats &stats) override;
+    std::unique_ptr<cql3::statements::prepared_statement> prepare(data_dictionary::database db, cql_stats &stats) override;
     void validate(service::storage_proxy&, const service::client_state&) const override;
     virtual future<> check_access(service::storage_proxy& sp, const service::client_state&) const override;
     virtual future<::shared_ptr<cql_transport::messages::result_message>>

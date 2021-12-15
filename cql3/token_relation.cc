@@ -79,7 +79,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
 }
 
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_EQ_restriction(
-        database& db, schema_ptr schema,
+        data_dictionary::database db, schema_ptr schema,
         prepare_context& ctx) {
     auto column_defs = get_column_definitions(*schema);
     auto e = to_expression(to_receivers(*schema, column_defs), _value, db,
@@ -91,7 +91,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
 }
 
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_IN_restriction(
-        database& db, schema_ptr schema,
+        data_dictionary::database db, schema_ptr schema,
         prepare_context& ctx) {
     throw exceptions::invalid_request_exception(
             format("{} cannot be used with the token function",
@@ -99,7 +99,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
 }
 
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_slice_restriction(
-        database& db, schema_ptr schema,
+        data_dictionary::database db, schema_ptr schema,
         prepare_context& ctx,
         statements::bound bound,
         bool inclusive) {
@@ -113,7 +113,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
 }
 
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_contains_restriction(
-        database& db, schema_ptr schema,
+        data_dictionary::database db, schema_ptr schema,
         prepare_context& ctx, bool isKey) {
     throw exceptions::invalid_request_exception(
             format("{} cannot be used with the token function",
@@ -121,7 +121,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
 }
 
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_LIKE_restriction(
-        database&, schema_ptr, prepare_context&) {
+        data_dictionary::database, schema_ptr, prepare_context&) {
     throw exceptions::invalid_request_exception("LIKE cannot be used with the token function");
 }
 
@@ -131,7 +131,7 @@ sstring cql3::token_relation::to_string() const {
 
 cql3::expr::expression cql3::token_relation::to_expression(
         const std::vector<lw_shared_ptr<column_specification>>& receivers,
-        const expr::expression& raw, database& db, const sstring& keyspace,
+        const expr::expression& raw, data_dictionary::database db, const sstring& keyspace,
         prepare_context& ctx) const {
     auto e = expr::prepare_expression(raw, db, keyspace, receivers.front());
     expr::fill_prepare_context(e, ctx);

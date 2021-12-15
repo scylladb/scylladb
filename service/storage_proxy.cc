@@ -1849,6 +1849,11 @@ storage_proxy::storage_proxy(distributed<database>& db, gms::gossiper& gossiper,
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
 }
 
+const data_dictionary::database
+storage_proxy::data_dictionary() const {
+    return _db.local().as_data_dictionary();
+}
+
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
 storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) noexcept : id(x.id), p(x.p) { x.id = 0; };
 

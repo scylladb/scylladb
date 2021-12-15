@@ -23,7 +23,7 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
 #include "db/config.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_proxy.hh"
 
@@ -53,7 +53,7 @@ data_type function_statement::prepare_type(service::storage_proxy& proxy, cql3_t
     if (t.is_user_type() && t.is_frozen()) {
         throw exceptions::invalid_request_exception("User defined argument and return types should not be frozen");
     }
-    auto&& db = proxy.get_db().local();
+    auto&& db = proxy.data_dictionary();
     // At the CQL level the argument and return types should not have
     // the frozen keyword.
     // We and cassandra 3 support only frozen UDT arguments and

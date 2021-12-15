@@ -150,7 +150,7 @@ public:
      */
     statement_restrictions(schema_ptr schema, bool allow_filtering);
 
-    statement_restrictions(database& db,
+    statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
@@ -223,10 +223,10 @@ public:
 
     /**
      * Builds a possibly empty collection of column definitions that will be used for filtering
-     * @param db - the database context
+     * @param db - the data_dictionary::database context
      * @return A list with the column definitions needed for filtering.
      */
-    std::vector<const column_definition*> get_column_defs_for_filtering(database& db) const;
+    std::vector<const column_definition*> get_column_defs_for_filtering(data_dictionary::database db) const;
 
     /**
      * Gives a score that the index has - index with the highest score will be chosen
@@ -236,11 +236,11 @@ public:
 
     /**
      * Determines the index to be used with the restriction.
-     * @param db - the database context (for extracting index manager)
+     * @param db - the data_dictionary::database context (for extracting index manager)
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
      * In case the index is returned, second parameter returns the index restriction it uses.
      */
-    std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> find_idx(secondary_index::secondary_index_manager& sim) const;
+    std::pair<std::optional<secondary_index::index>, ::shared_ptr<cql3::restrictions::restrictions>> find_idx(const secondary_index::secondary_index_manager& sim) const;
 
     /**
      * Checks if the partition key has some unrestricted components.

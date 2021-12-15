@@ -74,7 +74,7 @@ protected:
     schema_altering_statement(cf_name name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
     /**
-     * When a new database object (keyspace, table) is created, the creator needs to be granted all applicable
+     * When a new data_dictionary::database object (keyspace, table) is created, the creator needs to be granted all applicable
      * permissions on it.
      *
      * By default, this function does nothing.

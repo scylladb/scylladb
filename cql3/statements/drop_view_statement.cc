@@ -46,7 +46,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "view_info.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 namespace cql3 {
 
@@ -61,12 +61,12 @@ drop_view_statement::drop_view_statement(cf_name view_name, bool if_exists)
 future<> drop_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     try {
-        const database& db = proxy.local_db();
+        const data_dictionary::database db = proxy.data_dictionary();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view()) {
-            return state.has_column_family_access(db, keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
+            return state.has_column_family_access(db.real_database(), keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
         }
-    } catch (const no_such_column_family& e) {
+    } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
     }
     return make_ready_future<>();
@@ -101,7 +101,7 @@ drop_view_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-drop_view_statement::prepare(database& db, cql_stats& stats) {
+drop_view_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_view_statement>(*this));
 }
 

@@ -159,7 +159,7 @@ future<> default_authorizer::start() {
                 _migration_manager).then([this] {
             _finished = do_after_system_ready(_as, [this] {
                 return async([this] {
-                    wait_for_schema_agreement(_migration_manager, _qp.db(), _as).get0();
+                    wait_for_schema_agreement(_migration_manager, _qp.db().real_database(), _as).get0();
 
                     if (legacy_metadata_exists()) {
                         if (!any_granted().get0()) {

@@ -57,7 +57,7 @@ namespace cql3 {
 expression
 single_column_relation::to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                       const expr::expression& raw,
-                                      database& db,
+                                      data_dictionary::database db,
                                       const sstring& keyspace,
                                       prepare_context& ctx) const {
     // TODO: optimize vector away, accept single column_specification
@@ -68,7 +68,7 @@ single_column_relation::to_expression(const std::vector<lw_shared_ptr<column_spe
 }
 
 ::shared_ptr<restrictions::restriction>
-single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prepare_context& ctx) {
+single_column_relation::new_EQ_restriction(data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
     const column_definition& column_def = to_column_definition(*schema, *_entity);
     auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
     if (column_def.is_partition_key()) {
@@ -90,7 +90,7 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, prep
 }
 
 ::shared_ptr<restrictions::restriction>
-single_column_relation::new_IN_restriction(database& db, schema_ptr schema, prepare_context& ctx) {
+single_column_relation::new_IN_restriction(data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
     using namespace restrictions;
     const column_definition& column_def = to_column_definition(*schema, *_entity);
     auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
@@ -127,7 +127,7 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, prep
 
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_LIKE_restriction(
-        database& db, schema_ptr schema, prepare_context& ctx) {
+        data_dictionary::database db, schema_ptr schema, prepare_context& ctx) {
     const column_definition& column_def = to_column_definition(*schema, *_entity);
     if (!column_def.type->is_string()) {
         throw exceptions::invalid_request_exception(

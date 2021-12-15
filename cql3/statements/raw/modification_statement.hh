@@ -72,16 +72,16 @@ protected:
     modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
 
 public:
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
-    ::shared_ptr<cql3::statements::modification_statement> prepare(database& db, prepare_context& ctx, cql_stats& stats) const;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
+    ::shared_ptr<cql3::statements::modification_statement> prepare(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) const;
 protected:
-    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
         prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const = 0;
 
     // Helper function used by child classes to prepare conditions for a prepared statement.
     // Must be called before processing WHERE clause, because to perform sanity checks there
     // we need to know what kinds of conditions (static, regular) the statement has.
-    void prepare_conditions(database& db, const schema& schema, prepare_context& ctx,
+    void prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
             cql3::statements::modification_statement& stmt) const;
 };
 

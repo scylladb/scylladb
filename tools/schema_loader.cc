@@ -103,7 +103,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         }
         auto raw_statement = cql3::query_processor::parse_statement(
                 fmt::format("CREATE KEYSPACE {} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}", name));
-        auto prepared_statement = raw_statement->prepare(db, cql_stats);
+        auto prepared_statement = raw_statement->prepare(db.as_data_dictionary(), cql_stats);
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         assert(p);
@@ -119,16 +119,16 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
         throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
     }
     for (auto& raw_statement : raw_statements) {
-        auto prepared_statement = raw_statement->prepare(db, cql_stats);
+        auto prepared_statement = raw_statement->prepare(db.as_data_dictionary(), cql_stats);
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
             db.create_keyspace(p->get_keyspace_metadata(*token_metadata.local().get()), erm_factory.local()).get();
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
-            auto type = p->create_type(db);
+            auto type = p->create_type(db.as_data_dictionary());
             find_or_create_keyspace(p->keyspace()).add_user_type(std::move(type));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
-            schemas.push_back(p->get_cf_meta_data(db));
+            schemas.push_back(p->get_cf_meta_data(db.as_data_dictionary()));
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",

@@ -93,13 +93,13 @@ public:
      */
     static ::shared_ptr<selector_factories> create_factories_and_collect_column_definitions(
                 std::vector<::shared_ptr<selectable>> selectables,
-                database& db, schema_ptr schema,
+                data_dictionary::database db, schema_ptr schema,
                 std::vector<const column_definition*>& defs) {
         return ::make_shared<selector_factories>(std::move(selectables), db, std::move(schema), defs);
     }
 
     selector_factories(std::vector<::shared_ptr<selectable>> selectables,
-            database& db, schema_ptr schema, std::vector<const column_definition*>& defs);
+            data_dictionary::database db, schema_ptr schema, std::vector<const column_definition*>& defs);
 public:
     /**
      * Adds a new <code>Selector.Factory</code> for a column that is needed only for ORDER BY or post

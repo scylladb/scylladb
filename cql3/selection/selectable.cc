@@ -43,7 +43,7 @@ class selectable_column : public selectable {
     column_identifier _ci;
 public:
     explicit selectable_column(column_identifier ci) : _ci(std::move(ci)) {}
-    virtual ::shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr schema,
+    virtual ::shared_ptr<selector::factory> new_selector_factory(data_dictionary::database db, schema_ptr schema,
         std::vector<const column_definition*>& defs) override;
     virtual sstring to_string() const override {
         return _ci.to_string();
@@ -51,7 +51,7 @@ public:
 };
 
 ::shared_ptr<selector::factory>
-selectable_column::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
+selectable_column::new_selector_factory(data_dictionary::database db, schema_ptr schema, std::vector<const column_definition*>& defs) {
     auto def = get_column_definition(*schema, _ci);
     if (!def) {
         throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _ci.text()));
@@ -65,7 +65,7 @@ selectable_column::new_selector_factory(database& db, schema_ptr schema, std::ve
 }
 
 shared_ptr<selector::factory>
-selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+selectable::writetime_or_ttl::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& def = s->get_column_definition(_id->name());
     if (!def || def->is_hidden_from_cql()) {
         throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _id));
@@ -90,7 +90,7 @@ selectable::writetime_or_ttl::to_string() const {
 }
 
 shared_ptr<selector::factory>
-selectable::with_function::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+selectable::with_function::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
 
     // resolve built-in functions before user defined functions
@@ -118,7 +118,7 @@ make_count_rows_function_expression() {
 }
 
 shared_ptr<selector::factory>
-selectable::with_anonymous_function::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+selectable::with_anonymous_function::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
     return abstract_function_selector::new_factory(_function, std::move(factories));
 }
@@ -129,7 +129,7 @@ selectable::with_anonymous_function::to_string() const {
 }
 
 shared_ptr<selector::factory>
-selectable::with_field_selection::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+selectable::with_field_selection::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factory = _selected->new_selector_factory(db, s, defs);
     auto&& type = factory->new_instance()->get_type();
     if (!type->underlying_type()->is_user_type()) {
@@ -153,7 +153,7 @@ selectable::with_field_selection::to_string() const {
 }
 
 shared_ptr<selector::factory>
-selectable::with_cast::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+selectable::with_cast::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
     std::vector<shared_ptr<selectable>> args{_arg};
     auto&& factories = selector_factories::create_factories_and_collect_column_definitions(args, db, s, defs);
     auto&& fun = functions::castas_functions::get(_type.get_type(), factories->new_instances());

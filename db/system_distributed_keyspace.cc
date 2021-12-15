@@ -266,7 +266,7 @@ future<> system_distributed_keyspace::start() {
     }
 
     _started = true;
-    co_await add_new_columns_if_missing(_qp.db(), _mm);
+    co_await add_new_columns_if_missing(_qp.db().real_database(), _mm);
 }
 
 future<> system_distributed_keyspace::stop() {
@@ -393,7 +393,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
         cdc::generation_id_v1 gen_id,
         const cdc::topology_description& description,
         context ctx) {
-    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db());
+    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
     return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
@@ -406,7 +406,7 @@ future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_topology_description(
         cdc::generation_id_v1 gen_id,
         context ctx) {
-    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db());
+    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
     return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
@@ -496,7 +496,7 @@ system_distributed_keyspace::insert_cdc_generation(
 
     const size_t concurrency = 10;
 
-    auto ms = co_await get_cdc_generation_mutations(_qp.db(), id, ctx.num_token_owners, concurrency, desc);
+    auto ms = co_await get_cdc_generation_mutations(_qp.db().real_database(), id, ctx.num_token_owners, concurrency, desc);
     co_await max_concurrent_for_each(ms, concurrency, [&] (mutation& m) -> future<> {
         co_await _sp.mutate(
             { std::move(m) },
@@ -591,7 +591,7 @@ system_distributed_keyspace::create_cdc_desc(
         context ctx) {
     using namespace std::chrono_literals;
 
-    auto ms = co_await get_cdc_streams_descriptions_v2_mutation(_qp.db(), time, desc);
+    auto ms = co_await get_cdc_streams_descriptions_v2_mutation(_qp.db().real_database(), time, desc);
     co_await max_concurrent_for_each(ms, 20, [&] (mutation& m) -> future<> {
         // We use the storage_proxy::mutate API since CQL is not the best for handling large batches.
         co_await _sp.mutate(

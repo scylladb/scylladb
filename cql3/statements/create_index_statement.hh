@@ -81,7 +81,7 @@ public:
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 private:
     void validate_for_local_index(const schema& schema) const;
     void validate_for_frozen_collection(const index_target& target) const;

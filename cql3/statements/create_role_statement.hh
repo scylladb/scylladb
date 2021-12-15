@@ -68,7 +68,7 @@ public:
                 , _if_not_exists(if_not_exists) {
     }
 
-    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     future<> grant_permissions_to_creator(const service::client_state&) const;
 

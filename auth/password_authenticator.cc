@@ -160,7 +160,7 @@ future<> password_authenticator::start() {
 
          _stopped = do_after_system_ready(_as, [this] {
              return async([this] {
-                 wait_for_schema_agreement(_migration_manager, _qp.db(), _as).get0();
+                 wait_for_schema_agreement(_migration_manager, _qp.db().real_database(), _as).get0();
 
                  if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash).get0()) {
                      if (legacy_metadata_exists()) {

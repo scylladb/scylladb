@@ -37,7 +37,7 @@ attach_service_level_statement::attach_service_level_statement(sstring service_l
 
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::attach_service_level_statement::prepare(
-        database &db, cql_stats &stats) {
+        data_dictionary::database db, cql_stats &stats) {
     return std::make_unique<prepared_statement>(::make_shared<attach_service_level_statement>(*this));
 }
 

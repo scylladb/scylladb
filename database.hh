@@ -72,7 +72,9 @@
 #include <unordered_set>
 #include "utils/disk-error-handler.hh"
 #include "utils/updateable_value.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
+#include "data_dictionary/keyspace_metadata.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
@@ -1091,67 +1093,9 @@ public:
     compaction::table_state& as_table_state() const noexcept;
 };
 
-class user_types_metadata;
+using user_types_metadata = data_dictionary::user_types_metadata;
 
-class keyspace_metadata final {
-    sstring _name;
-    sstring _strategy_name;
-    locator::replication_strategy_config_options _strategy_options;
-    std::unordered_map<sstring, schema_ptr> _cf_meta_data;
-    bool _durable_writes;
-    user_types_metadata _user_types;
-public:
-    keyspace_metadata(std::string_view name,
-                 std::string_view strategy_name,
-                 locator::replication_strategy_config_options strategy_options,
-                 bool durable_writes,
-                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    keyspace_metadata(std::string_view name,
-                 std::string_view strategy_name,
-                 locator::replication_strategy_config_options strategy_options,
-                 bool durable_writes,
-                 std::vector<schema_ptr> cf_defs,
-                 user_types_metadata user_types);
-    static lw_shared_ptr<keyspace_metadata>
-    new_keyspace(std::string_view name,
-                 std::string_view strategy_name,
-                 locator::replication_strategy_config_options options,
-                 bool durables_writes,
-                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    void validate(const locator::topology&) const;
-    const sstring& name() const {
-        return _name;
-    }
-    const sstring& strategy_name() const {
-        return _strategy_name;
-    }
-    const locator::replication_strategy_config_options& strategy_options() const {
-        return _strategy_options;
-    }
-    const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
-        return _cf_meta_data;
-    }
-    bool durable_writes() const {
-        return _durable_writes;
-    }
-    user_types_metadata& user_types() {
-        return _user_types;
-    }
-    const user_types_metadata& user_types() const {
-        return _user_types;
-    }
-    void add_or_update_column_family(const schema_ptr& s) {
-        _cf_meta_data[s->cf_name()] = s;
-    }
-    void remove_column_family(const schema_ptr& s) {
-        _cf_meta_data.erase(s->cf_name());
-    }
-    void add_user_type(const user_type ut);
-    void remove_user_type(const user_type ut);
-    std::vector<schema_ptr> tables() const;
-    std::vector<view_ptr> views() const;
-    friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
-};
+using keyspace_metadata = data_dictionary::keyspace_metadata;
 
 class keyspace {
 public:
@@ -1252,18 +1196,8 @@ public:
     void mark_as_populated();
 };
 
-class no_such_keyspace : public std::runtime_error {
-public:
-    no_such_keyspace(std::string_view ks_name);
-};
-
-class no_such_column_family : public std::runtime_error {
-public:
-    no_such_column_family(const utils::UUID& uuid);
-    no_such_column_family(std::string_view ks_name, std::string_view cf_name);
-    no_such_column_family(std::string_view ks_name, const utils::UUID& uuid);
-};
-
+using no_such_keyspace = data_dictionary::no_such_keyspace;
+using no_such_column_family = data_dictionary::no_such_column_family;
 
 struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
@@ -1402,7 +1336,10 @@ private:
     std::unique_ptr<wasm::engine> _wasm_engine;
     utils::cross_shard_barrier _stop_barrier;
 
+    class data_dictionary_impl;
+    friend class data_dictionary_impl;
 public:
+    data_dictionary::database as_data_dictionary() const;
     future<> init_commitlog();
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);

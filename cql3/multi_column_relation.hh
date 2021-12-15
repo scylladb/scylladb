@@ -149,7 +149,7 @@ public:
     virtual bool is_multi_column() const override { return true; }
 
 protected:
-    virtual shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
+    virtual shared_ptr<restrictions::restriction> new_EQ_restriction(data_dictionary::database db, schema_ptr schema,
                                                                      prepare_context& ctx) override {
         auto rs = receivers(db, *schema);
         std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
@@ -160,7 +160,7 @@ protected:
         return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, std::move(e));
     }
 
-    virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
+    virtual shared_ptr<restrictions::restriction> new_IN_restriction(data_dictionary::database db, schema_ptr schema,
                                                                      prepare_context& ctx) override {
         auto rs = receivers(db, *schema);
         std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
@@ -183,7 +183,7 @@ protected:
         }
     }
 
-    virtual shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
+    virtual shared_ptr<restrictions::restriction> new_slice_restriction(data_dictionary::database db, schema_ptr schema,
                                                                         prepare_context& ctx,
                                                                         statements::bound bound, bool inclusive) override {
         auto rs = receivers(db, *schema);
@@ -195,13 +195,13 @@ protected:
         return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, std::move(e), _mode);
     }
 
-    virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
+    virtual shared_ptr<restrictions::restriction> new_contains_restriction(data_dictionary::database db, schema_ptr schema,
                                                                            prepare_context& ctx, bool is_key) override {
         throw exceptions::invalid_request_exception(format("{} cannot be used for Multi-column relations", get_operator()));
     }
 
     virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(
-            database& db, schema_ptr schema, prepare_context& ctx) override {
+            data_dictionary::database db, schema_ptr schema, prepare_context& ctx) override {
         throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
     }
 
@@ -213,14 +213,14 @@ protected:
     }
 
     virtual expr::expression to_expression(const std::vector<lw_shared_ptr<column_specification>>& receivers,
-                                           const expr::expression& raw, database& db, const sstring& keyspace,
+                                           const expr::expression& raw, data_dictionary::database db, const sstring& keyspace,
                                            prepare_context& ctx) const override {
         auto e = prepare_expression_multi_column(raw, db, keyspace, receivers);
         expr::fill_prepare_context(e, ctx);
         return e;
     }
 
-    std::vector<const column_definition*> receivers(database& db, const schema& schema) {
+    std::vector<const column_definition*> receivers(data_dictionary::database db, const schema& schema) {
         using namespace statements::request_validations;
 
         int previous_position = -1;

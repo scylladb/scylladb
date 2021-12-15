@@ -87,7 +87,7 @@
 #include "cql_type_parser.hh"
 #include "db/timeout_clock.hh"
 #include "database.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 
 #include "index/target_parser.hh"
 #include "lang/lua.hh"
@@ -231,7 +231,7 @@ using namespace v3;
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
-    auto& ks = qp.db().find_keyspace(ksname);
+    auto ks = qp.db().find_keyspace(ksname);
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables

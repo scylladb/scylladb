@@ -70,7 +70,7 @@ public:
     static lw_shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
             const function& fun, size_t i);
 public:
-    static shared_ptr<function> get(database& db,
+    static shared_ptr<function> get(data_dictionary::database db,
                                     const sstring& keyspace,
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
@@ -78,7 +78,7 @@ public:
                                     const sstring& receiver_cf,
                                     const column_specification* receiver = nullptr);
     template <typename AssignmentTestablePtrRange>
-    static shared_ptr<function> get(database& db,
+    static shared_ptr<function> get(data_dictionary::database db,
                                     const sstring& keyspace,
                                     const function_name& name,
                                     AssignmentTestablePtrRange&& provided_args,
@@ -102,13 +102,13 @@ private:
 
     // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
     // case where there is no override for a given function. This is thus probably worth the minor code duplication.
-    static void validate_types(database& db,
+    static void validate_types(data_dictionary::database db,
                               const sstring& keyspace,
                               shared_ptr<function> fun,
                               const std::vector<shared_ptr<assignment_testable>>& provided_args,
                               const sstring& receiver_ks,
                               const sstring& receiver_cf);
-    static assignment_testable::test_result match_arguments(database& db, const sstring& keyspace,
+    static assignment_testable::test_result match_arguments(data_dictionary::database db, const sstring& keyspace,
             shared_ptr<function> fun,
             const std::vector<shared_ptr<assignment_testable>>& provided_args,
             const sstring& receiver_ks,

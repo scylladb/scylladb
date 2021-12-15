@@ -48,12 +48,14 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "request_validations.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "index/target_parser.hh"
 #include "gms/feature_service.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/index_name.hh"
 #include "cql3/statements/index_prop_defs.hh"
+#include "index/secondary_index_manager.hh"
+#include "mutation.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>
@@ -91,8 +93,8 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
 }
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(service::storage_proxy& proxy) const {
-    auto& db = proxy.get_db().local();
-    auto schema = validation::validate_column_family(db, keyspace(), column_family());
+    auto db = proxy.data_dictionary();
+    auto schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");
@@ -279,7 +281,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
 schema_ptr create_index_statement::build_index_schema(query_processor& qp) const {
     auto targets = validate_while_executing(qp.proxy());
 
-    database& db = qp.db();
+    data_dictionary::database db = qp.db();
     auto schema = db.find_schema(keyspace(), column_family());
 
     sstring accepted_name = _index_name;
@@ -346,7 +348,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp) const {
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-create_index_statement::prepare(database& db, cql_stats& stats) {
+create_index_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     _cql_stats = &stats;
     return std::make_unique<prepared_statement>(make_shared<create_index_statement>(*this));
 }

@@ -44,7 +44,7 @@
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/expression.hh"
-#include "database_fwd.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 #include <vector>
 
@@ -75,7 +75,7 @@ public:
                   std::vector<expr::expression> column_values,
                   bool if_not_exists);
 
-    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
                 prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
 
 };
@@ -96,7 +96,7 @@ public:
      */
     insert_json_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, expr::expression json_value, bool if_not_exists, bool default_unset);
 
-    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
                 prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
 
 };

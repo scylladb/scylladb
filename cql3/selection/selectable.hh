@@ -58,7 +58,7 @@ class selectable;
 class selectable {
 public:
     virtual ~selectable() {}
-    virtual ::shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
+    virtual ::shared_ptr<selector::factory> new_selector_factory(data_dictionary::database db, schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
     virtual sstring to_string() const = 0;
 protected:
     static size_t add_and_get_index(const column_definition& def, std::vector<const column_definition*>& defs) {
@@ -92,7 +92,7 @@ public:
 
     virtual sstring to_string() const override;
 
-    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
+    virtual shared_ptr<selector::factory> new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 };
 
 class selectable::with_anonymous_function : public selectable {
@@ -105,7 +105,7 @@ public:
 
     virtual sstring to_string() const override;
 
-    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
+    virtual shared_ptr<selector::factory> new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 };
 
 class selectable::with_cast : public selectable {
@@ -118,7 +118,7 @@ public:
 
     virtual sstring to_string() const override;
 
-    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
+    virtual shared_ptr<selector::factory> new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 };
 
 }

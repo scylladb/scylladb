@@ -53,7 +53,7 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include "db/config.hh"
 #include "transport/messages/result_message.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/execution_stage.hh>
 #include "utils/UUID_gen.hh"
 #include "partition_slice_builder.hh"
@@ -126,11 +126,11 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
 }
 
 future<> modification_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    const database& db = proxy.local_db();
-    auto f = state.has_column_family_access(db, keyspace(), column_family(), auth::permission::MODIFY);
+    const data_dictionary::database db = proxy.data_dictionary();
+    auto f = state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
-        f = f.then([this, &state, &db] {
-           return state.has_column_family_access(db, keyspace(), column_family(), auth::permission::SELECT);
+        f = f.then([this, &state, db] {
+           return state.has_column_family_access(db.real_database(), keyspace(), column_family(), auth::permission::SELECT);
         });
     }
     return f;
@@ -393,7 +393,7 @@ void modification_statement::build_cas_result_set_metadata() {
 }
 
 void
-modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, prepare_context& ctx) {
+modification_statement::process_where_clause(data_dictionary::database db, std::vector<relation_ptr> where_clause, prepare_context& ctx) {
     _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, ctx,
             applies_only_to_static_columns(), _selects_a_collection, false);
     /*
@@ -463,8 +463,8 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
 namespace raw {
 
 std::unique_ptr<prepared_statement>
-modification_statement::prepare(database& db, cql_stats& stats) {
-    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+modification_statement::prepare(data_dictionary::database db, cql_stats& stats) {
+    schema_ptr schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
     auto meta = get_prepare_context();
     auto statement = prepare(db, meta, stats);
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
@@ -472,8 +472,8 @@ modification_statement::prepare(database& db, cql_stats& stats) {
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(database& db, prepare_context& ctx, cql_stats& stats) const {
-    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+modification_statement::prepare(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) const {
+    schema_ptr schema = validation::validate_column_family(db.real_database(), keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->fill_prepare_context(ctx);
@@ -506,7 +506,7 @@ modification_statement::prepare(database& db, prepare_context& ctx, cql_stats& s
 }
 
 void
-modification_statement::prepare_conditions(database& db, const schema& schema, prepare_context& ctx,
+modification_statement::prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
         cql3::statements::modification_statement& stmt) const
 {
     if (_if_not_exists || _if_exists || !_conditions.empty()) {

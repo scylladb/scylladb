@@ -47,7 +47,10 @@
 #include <seastar/core/shared_ptr.hh>
 #include "utils/atomic_vector.hh"
 
+namespace data_dictionary {
 class keyspace_metadata;
+}
+using keyspace_metadata = data_dictionary::keyspace_metadata;
 class view_ptr;
 class user_type_impl;
 using user_type = seastar::shared_ptr<const user_type_impl>;

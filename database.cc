@@ -65,12 +65,14 @@
 #include "db/large_data_handler.hh"
 #include "db/data_listeners.hh"
 
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/util/memory_diagnostics.hh>
 
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
+
+#include "data_dictionary/impl.hh"
 
 using namespace std::chrono_literals;
 using namespace db;
@@ -106,24 +108,6 @@ make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_sou
             compaction_manager::maintenance_scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
             dbcfg.available_memory,
             as);
-}
-
-lw_shared_ptr<keyspace_metadata>
-keyspace_metadata::new_keyspace(std::string_view name,
-                                std::string_view strategy_name,
-                                locator::replication_strategy_config_options options,
-                                bool durables_writes,
-                                std::vector<schema_ptr> cf_defs)
-{
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
-}
-
-void keyspace_metadata::add_user_type(const user_type ut) {
-    _user_types.add_type(ut);
-}
-
-void keyspace_metadata::remove_user_type(const user_type ut) {
-    _user_types.remove_type(ut);
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
@@ -1186,66 +1170,12 @@ keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid
     });
 }
 
-no_such_keyspace::no_such_keyspace(std::string_view ks_name)
-    : runtime_error{format("Can't find a keyspace {}", ks_name)}
-{
-}
-
-no_such_column_family::no_such_column_family(const utils::UUID& uuid)
-    : runtime_error{format("Can't find a column family with UUID {}", uuid)}
-{
-}
-
-no_such_column_family::no_such_column_family(std::string_view ks_name, std::string_view cf_name)
-    : runtime_error{format("Can't find a column family {} in keyspace {}", cf_name, ks_name)}
-{
-}
-
-no_such_column_family::no_such_column_family(std::string_view ks_name, const utils::UUID& uuid)
-    : runtime_error{format("Can't find a column family with UUID {} in keyspace {}", uuid, ks_name)}
-{
-}
-
 column_family& database::find_column_family(const schema_ptr& schema) {
     return find_column_family(schema->id());
 }
 
 const column_family& database::find_column_family(const schema_ptr& schema) const {
     return find_column_family(schema->id());
-}
-
-keyspace_metadata::keyspace_metadata(std::string_view name,
-             std::string_view strategy_name,
-             locator::replication_strategy_config_options strategy_options,
-             bool durable_writes,
-             std::vector<schema_ptr> cf_defs)
-    : keyspace_metadata(name,
-                        strategy_name,
-                        std::move(strategy_options),
-                        durable_writes,
-                        std::move(cf_defs),
-                        user_types_metadata{}) { }
-
-keyspace_metadata::keyspace_metadata(std::string_view name,
-             std::string_view strategy_name,
-             locator::replication_strategy_config_options strategy_options,
-             bool durable_writes,
-             std::vector<schema_ptr> cf_defs,
-             user_types_metadata user_types)
-    : _name{name}
-    , _strategy_name{locator::abstract_replication_strategy::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
-    , _strategy_options{std::move(strategy_options)}
-    , _durable_writes{durable_writes}
-    , _user_types{std::move(user_types)}
-{
-    for (auto&& s : cf_defs) {
-        _cf_meta_data.emplace(s->cf_name(), s);
-    }
-}
-
-void keyspace_metadata::validate(const locator::topology& topology) const {
-    using namespace locator;
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), strategy_options(), topology);
 }
 
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
@@ -1260,19 +1190,6 @@ void database::validate_new_keyspace(keyspace_metadata& ksm) {
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }
-}
-
-std::vector<schema_ptr> keyspace_metadata::tables() const {
-    return boost::copy_range<std::vector<schema_ptr>>(_cf_meta_data
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([] (auto&& s) { return !s->is_view(); }));
-}
-
-std::vector<view_ptr> keyspace_metadata::views() const {
-    return boost::copy_range<std::vector<view_ptr>>(_cf_meta_data
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered(std::mem_fn(&schema::is_view))
-            | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
@@ -2336,37 +2253,98 @@ future<> database::drain() {
     co_await _commitlog->shutdown();
 }
 
-std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
-    os << "org.apache.cassandra.config.UTMetaData@" << &m;
-    return os;
+namespace cdc {
+schema_ptr get_base_table(const database& db, const schema& s);
 }
 
-std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
-    os << "KSMetaData{";
-    os << "name=" << m._name;
-    os << ", strategyClass=" << m._strategy_name;
-    os << ", strategyOptions={";
-    int n = 0;
-    for (auto& p : m._strategy_options) {
-        if (n++ != 0) {
-            os << ", ";
-        }
-        os << p.first << "=" << p.second;
+class database::data_dictionary_impl : public data_dictionary::impl {
+    const data_dictionary::database wrap(const ::database& db) const {
+        return make_database(this, &db);
     }
-    os << "}";
-    os << ", cfMetaData={";
-    n = 0;
-    for (auto& p : m._cf_meta_data) {
-        if (n++ != 0) {
-            os << ", ";
-        }
-        os << p.first << "=" << p.second;
+    data_dictionary::keyspace wrap(const ::keyspace& ks) const {
+        return make_keyspace(this, &ks);
     }
-    os << "}";
-    os << ", durable_writes=" << m._durable_writes;
-    os << ", userTypes=" << m._user_types;
-    os << "}";
-    return os;
+    data_dictionary::table wrap(const ::table& t) const {
+        return make_table(this, &t);
+    }
+    static const ::database& unwrap(data_dictionary::database db) {
+        return *static_cast<const ::database*>(extract(db));
+    }
+    static const ::keyspace& unwrap(data_dictionary::keyspace ks) {
+        return *static_cast<const ::keyspace*>(extract(ks));
+    }
+    static const ::table& unwrap(data_dictionary::table t) {
+        return *static_cast<const ::table*>(extract(t));
+    }
+    friend class database;
+public:
+    virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
+        try {
+            return wrap(unwrap(db).find_keyspace(name));
+        } catch (no_such_keyspace&) {
+            return std::nullopt;
+        }
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view table) const override {
+        try {
+            return wrap(unwrap(db).find_column_family(ks, table));
+        } catch (no_such_column_family&) {
+            return std::nullopt;
+        }
+    }
+    virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, utils::UUID id) const override {
+        try {
+            return wrap(unwrap(db).find_column_family(id));
+        } catch (no_such_column_family&) {
+            return std::nullopt;
+        }
+    }
+    virtual schema_ptr get_table_schema(data_dictionary::table t) const override {
+        return unwrap(t).schema();
+    }
+    virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
+        return unwrap(t).views();
+    }
+    virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
+        return const_cast<::table&>(unwrap(t)).get_index_manager();
+    }
+    virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(data_dictionary::keyspace ks) const override {
+        return unwrap(ks).metadata();
+    }
+    virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
+        return unwrap(ks).get_replication_strategy();
+    }
+    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
+            std::optional<sstring> index_name_root) const override {
+        return unwrap(db).get_available_index_name(sstring(ks_name), sstring(table_name), index_name_root);
+    }
+    virtual std::set<sstring> existing_index_names(data_dictionary::database db, std::string_view ks_name, std::string_view cf_to_exclude = {}) const override {
+        return unwrap(db).existing_index_names(sstring(ks_name), sstring(cf_to_exclude));
+    }
+    virtual schema_ptr find_indexed_table(data_dictionary::database db, std::string_view ks_name, std::string_view index_name) const override {
+        return unwrap(db).find_indexed_table(sstring(ks_name), sstring(index_name));
+    }
+    virtual const db::config& get_config(data_dictionary::database db) const override {
+        return unwrap(db).get_config();
+    }
+    virtual const db::extensions& get_extensions(data_dictionary::database db) const override {
+        return unwrap(db).extensions();
+    }
+    virtual const gms::feature_service& get_features(data_dictionary::database db) const override {
+        return unwrap(db).features();
+    }
+    virtual ::database& real_database(data_dictionary::database db) const override {
+        return const_cast<::database&>(unwrap(db));
+    }
+    virtual schema_ptr get_cdc_base_table(data_dictionary::database db, const schema& s) const override {
+        return cdc::get_base_table(unwrap(db), s);
+    }
+};
+
+data_dictionary::database
+database::as_data_dictionary() const {
+    static constinit data_dictionary_impl _impl;
+    return _impl.wrap(*this);
 }
 
 template <typename T>

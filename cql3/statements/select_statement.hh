@@ -197,7 +197,7 @@ class indexed_table_select_statement : public select_statement {
 public:
     static constexpr size_t max_base_table_query_concurrency = 4096;
 
-    static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
+    static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
                                                                     schema_ptr schema,
                                                                     uint32_t bound_terms,
                                                                     lw_shared_ptr<const parameters> parameters,

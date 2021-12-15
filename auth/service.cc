@@ -141,7 +141,7 @@ service::service(
 }
 
 future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
-    auto& db = _qp.db();
+    auto db = _qp.db();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
         locator::replication_strategy_config_options opts{{"replication_factor", "1"}};

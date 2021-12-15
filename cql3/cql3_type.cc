@@ -26,8 +26,9 @@
 #include "cql3_type.hh"
 #include "cql3/util.hh"
 #include "ut_name.hh"
-#include "database.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/user_types_metadata.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
@@ -69,11 +70,11 @@ cql3_type::kind_enum_set::prepared cql3_type::get_kind() const {
     return kind_enum_set::prepare(get_cql3_kind(*_type));
 }
 
-cql3_type cql3_type::raw::prepare(database& db, const sstring& keyspace) {
+cql3_type cql3_type::raw::prepare(data_dictionary::database db, const sstring& keyspace) {
     try {
         auto&& ks = db.find_keyspace(keyspace);
         return prepare_internal(keyspace, ks.metadata()->user_types());
-    } catch (no_such_keyspace& nsk) {
+    } catch (data_dictionary::no_such_keyspace& nsk) {
         throw exceptions::invalid_request_exception("Unknown keyspace " + keyspace);
     }
 }
@@ -98,10 +99,10 @@ public:
         : _type{type}
     { }
 public:
-    virtual cql3_type prepare(database& db, const sstring& keyspace) override {
+    virtual cql3_type prepare(data_dictionary::database db, const sstring& keyspace) override {
         return _type;
     }
-    cql3_type prepare_internal(const sstring&, const user_types_metadata&) override {
+    cql3_type prepare_internal(const sstring&, const data_dictionary::user_types_metadata&) override {
         return _type;
     }
 
@@ -158,7 +159,7 @@ public:
         return true;
     }
 
-    virtual cql3_type prepare_internal(const sstring& keyspace, const user_types_metadata& user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
         assert(_values); // "Got null values type for a collection";
 
         if (!is_frozen() && _values->supports_freezing() && !_values->is_frozen()) {
@@ -225,7 +226,7 @@ public:
         _frozen = true;
     }
 
-    virtual cql3_type prepare_internal(const sstring& keyspace, const user_types_metadata& user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
         if (_name.has_keyspace()) {
             // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
             // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
@@ -284,7 +285,7 @@ public:
         }
         _frozen = true;
     }
-    virtual cql3_type prepare_internal(const sstring& keyspace, const user_types_metadata& user_types) override {
+    virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
         if (!is_frozen()) {
             freeze();
         }

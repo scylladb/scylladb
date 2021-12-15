@@ -42,7 +42,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/ut_name.hh"
-#include "database_fwd.hh"
+#include "data_dictionary/data_dictionary.hh"
 
 namespace cql3 {
 
@@ -70,16 +70,16 @@ public:
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     static void check_for_duplicate_names(user_type type);
 
 private:
-    bool type_exists_in(::keyspace& ks) const;
+    bool type_exists_in(data_dictionary::keyspace ks) const;
     std::optional<user_type> make_type(query_processor& qp) const;
 
 public:
-    user_type create_type(database& db) const;
+    user_type create_type(data_dictionary::database db) const;
 };
 
 }

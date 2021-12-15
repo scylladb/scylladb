@@ -52,7 +52,9 @@ class token_metadata;
 
 };
 
+namespace data_dictionary {
 class keyspace_metadata;
+}
 
 namespace cql3 {
 
@@ -95,14 +97,14 @@ public:
 
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 
-    lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm);
 };
 
 std::optional<sstring> check_restricted_replication_strategy(

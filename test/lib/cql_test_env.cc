@@ -123,6 +123,11 @@ static const sstring testing_superuser = "tester";
 
 // END TODO
 
+data_dictionary::database
+cql_test_env::data_dictionary() {
+    return db().local().as_data_dictionary();
+}
+
 class single_node_cql_env : public cql_test_env {
 public:
     static constexpr std::string_view ks_name = "ks";
@@ -633,7 +638,8 @@ public:
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            auto local_data_dict = seastar::sharded_parameter([] (const database& db) { return db.as_data_dictionary(); }, std::ref(db));
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             // In main.cc we call db::system_keyspace::setup which calls

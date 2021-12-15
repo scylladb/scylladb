@@ -106,14 +106,14 @@ public:
     future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp) const override;
 
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 
-    schema_ptr get_cf_meta_data(const database&) const;
+    schema_ptr get_cf_meta_data(const data_dictionary::database) const;
 
     class raw_statement;
 
@@ -121,7 +121,7 @@ public:
 private:
     std::vector<column_definition> get_columns() const;
 
-    void apply_properties_to(schema_builder& builder, const database&) const;
+    void apply_properties_to(schema_builder& builder, const data_dictionary::database) const;
 
     void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const;
 };
@@ -144,7 +144,7 @@ private:
 public:
     raw_statement(cf_name name, bool if_not_exists);
 
-    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
     cf_properties& properties() {
         return _properties;

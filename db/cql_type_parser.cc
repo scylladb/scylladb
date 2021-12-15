@@ -47,7 +47,7 @@
 #include "cql3/util.hh"
 #include "cql_type_parser.hh"
 #include "types.hh"
-#include "user_types_metadata.hh"
+#include "data_dictionary/user_types_metadata.hh"
 
 static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
     return cql3::util::do_with_parser(str,
@@ -180,11 +180,11 @@ public:
         return created;
     }
 private:
-    keyspace_metadata& _ks;
+    data_dictionary::keyspace_metadata& _ks;
     std::vector<entry> _definitions;
 };
 
-db::cql_type_parser::raw_builder::raw_builder(keyspace_metadata &ks)
+db::cql_type_parser::raw_builder::raw_builder(data_dictionary::keyspace_metadata &ks)
     : _impl(std::make_unique<impl>(ks))
 {}
 

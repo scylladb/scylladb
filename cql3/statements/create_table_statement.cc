@@ -55,7 +55,7 @@
 #include "auth/service.hh"
 #include "schema_builder.hh"
 #include "db/extensions.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "types/user.hh"
 #include "gms/feature_service.hh"
 #include "service/migration_manager.hh"
@@ -134,13 +134,13 @@ create_table_statement::prepare_schema_mutations(query_processor& qp) const {
  * @return a CFMetaData instance corresponding to the values parsed from this statement
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
-schema_ptr create_table_statement::get_cf_meta_data(const database& db) const {
+schema_ptr create_table_statement::get_cf_meta_data(const data_dictionary::database db) const {
     schema_builder builder{keyspace(), column_family(), _id};
     apply_properties_to(builder, db);
     return builder.build(_use_compact_storage ? schema_builder::compact_storage::yes : schema_builder::compact_storage::no);
 }
 
-void create_table_statement::apply_properties_to(schema_builder& builder, const database& db) const {
+void create_table_statement::apply_properties_to(schema_builder& builder, const data_dictionary::database db) const {
     auto&& columns = get_columns();
     for (auto&& column : columns) {
         builder.with_column_ordered(column);
@@ -170,7 +170,7 @@ void create_table_statement::add_column_metadata_from_aliases(schema_builder& bu
 }
 
 std::unique_ptr<prepared_statement>
-create_table_statement::prepare(database& db, cql_stats& stats) {
+create_table_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     // Cannot happen; create_table_statement is never instantiated as a raw statement
     // (instead we instantiate create_table_statement::raw_statement)
     abort();
@@ -192,7 +192,7 @@ create_table_statement::raw_statement::raw_statement(cf_name name, bool if_not_e
     , _if_not_exists{if_not_exists}
 { }
 
-std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepare(database& db, cql_stats& stats) {
+std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     // Column family name
     const sstring& cf_name = _cf_name->get_column_family();
     std::regex name_regex("\\w+");
@@ -463,7 +463,7 @@ std::optional<sstring> check_restricted_table_properties(
     // in prepare_schema_mutations(), in the middle of execute).
     auto strategy = cfprops.get_compaction_strategy_class();
     if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
-        switch(proxy.local_db().get_config().restrict_dtcs()) {
+        switch(proxy.data_dictionary().get_config().restrict_dtcs()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "DateTieredCompactionStrategy is deprecated, and "

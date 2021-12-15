@@ -67,7 +67,7 @@ use_statement::use_statement(sstring keyspace)
 {
 }
 
-std::unique_ptr<prepared_statement> use_statement::prepare(database& db, cql_stats& stats)
+std::unique_ptr<prepared_statement> use_statement::prepare(data_dictionary::database db, cql_stats& stats)
 {
     return std::make_unique<prepared_statement>(::make_shared<cql3::statements::use_statement>(_keyspace));
 }
@@ -96,7 +96,7 @@ void use_statement::validate(service::storage_proxy&, const service::client_stat
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    state.get_client_state().set_keyspace(qp.db(), _keyspace);
+    state.get_client_state().set_keyspace(qp.db().real_database(), _keyspace);
     auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
 }

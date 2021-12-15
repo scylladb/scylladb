@@ -48,9 +48,11 @@
 
 #include "seastarx.hh"
 
-class user_types_metadata;
 class types_metadata;
+
+namespace data_dictionary {
 class keyspace_metadata;
+}
 
 namespace db {
 namespace cql_type_parser {
@@ -59,7 +61,7 @@ data_type parse(const sstring& keyspace, const sstring& type);
 
 class raw_builder {
 public:
-    raw_builder(keyspace_metadata &ks);
+    raw_builder(data_dictionary::keyspace_metadata &ks);
     ~raw_builder();
 
     void add(sstring name, std::vector<sstring> field_names, std::vector<sstring> field_types);

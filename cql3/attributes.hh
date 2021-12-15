@@ -85,7 +85,7 @@ public:
         std::optional<cql3::expr::expression> time_to_live;
         std::optional<cql3::expr::expression> timeout;
 
-        std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) const;
+        std::unique_ptr<attributes> prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const;
     private:
         lw_shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const;
 

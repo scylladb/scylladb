@@ -27,7 +27,7 @@
 #include "cql3/constants.hh"
 #include "cql3/user_types.hh"
 #include "cql3/type_json.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
@@ -191,7 +191,7 @@ make_to_json_function(data_type t) {
 
 inline
 shared_ptr<function>
-make_from_json_function(database& db, const sstring& keyspace, data_type t) {
+make_from_json_function(data_dictionary::database db, const sstring& keyspace, data_type t) {
     return make_native_scalar_function<true>("fromjson", t, {utf8_type},
             [&db, keyspace, t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
         try {
@@ -209,7 +209,7 @@ make_from_json_function(database& db, const sstring& keyspace, data_type t) {
 }
 
 shared_ptr<function>
-functions::get(database& db,
+functions::get(data_dictionary::database db,
         const sstring& keyspace,
         const function_name& name,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
@@ -376,7 +376,7 @@ functions::find(const function_name& name, const std::vector<data_type>& arg_typ
 // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
 // case where there is no override for a given function. This is thus probably worth the minor code duplication.
 void
-functions::validate_types(database& db,
+functions::validate_types(data_dictionary::database db,
                           const sstring& keyspace,
                           shared_ptr<function> fun,
                           const std::vector<shared_ptr<assignment_testable>>& provided_args,
@@ -407,7 +407,7 @@ functions::validate_types(database& db,
 }
 
 assignment_testable::test_result
-functions::match_arguments(database& db, const sstring& keyspace,
+functions::match_arguments(data_dictionary::database db, const sstring& keyspace,
         shared_ptr<function> fun,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,

@@ -43,7 +43,9 @@
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "prepared_statement.hh"
-#include "database.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/keyspace_metadata.hh"
+#include "mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
@@ -135,7 +137,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-cql3::statements::create_keyspace_statement::prepare(database& db, cql_stats& stats) {
+cql3::statements::create_keyspace_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
@@ -172,7 +174,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     // may have in the future - multiple racks or DCs. So depending on how
     // protective we are configured, let's prevent it or allow with a warning:
     if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
-        switch(proxy.local_db().get_config().restrict_replication_simplestrategy()) {
+        switch(proxy.data_dictionary().get_config().restrict_replication_simplestrategy()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "SimpleStrategy replication class is not recommended, and "
@@ -210,7 +212,7 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
     });
 }
 
-lw_shared_ptr<keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm) {
     _attrs->validate();
     return _attrs->as_ks_metadata(_name, tm);
 }
