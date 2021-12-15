@@ -2334,6 +2334,11 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
     static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
 
+    if (force_after && *force_after == 0) {
+        logger.warn("Skipped to wait for gossip to settle by user request since skip_wait_for_gossip_to_settle is set zero. Do not use this in production!");
+        return make_ready_future<>();
+    }
+
     return seastar::async([this, initial_delay, force_after] {
         int32_t total_polls = 0;
         int32_t num_okay = 0;
@@ -2390,7 +2395,8 @@ future<> gossiper::wait_for_gossip_to_settle() {
 future<> gossiper::wait_for_range_setup() {
     logger.info("Waiting for pending range setup...");
     auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
-    return wait_for_gossip(ring_delay);
+    auto force_after = _cfg.skip_wait_for_gossip_to_settle();
+    return wait_for_gossip(ring_delay, force_after);
 }
 
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
