@@ -318,14 +318,6 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(re
 
 static thread_local tracker* _the_tracker = nullptr;
 
-static tracker& the_repair_tracker() {
-    if (_the_tracker) {
-        return *_the_tracker;
-    } else {
-        throw std::runtime_error("The repair tracker is not initialized yet");
-    }
-}
-
 float node_ops_metrics::repair_finished_percentage() {
     return _tracker.report_progress(streaming::stream_reason::repair);
 }
@@ -1687,9 +1679,9 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> abort_repair_node_ops(utils::UUID ops_uuid) {
-    return smp::invoke_on_all([ops_uuid] {
-        return the_repair_tracker().abort_repair_node_ops(ops_uuid);
+future<> repair_service::abort_repair_node_ops(utils::UUID ops_uuid) {
+    return container().invoke_on_all([ops_uuid] (repair_service& rs) {
+        rs.repair_tracker().abort_repair_node_ops(ops_uuid);
     });
 }
 

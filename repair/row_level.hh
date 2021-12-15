@@ -192,6 +192,8 @@ public:
 
     // Abort all the repairs
     future<> abort_all();
+
+    future<> abort_repair_node_ops(utils::UUID ops_uuid);
 };
 
 class repair_info;

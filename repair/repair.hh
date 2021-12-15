@@ -87,8 +87,6 @@ struct node_ops_info {
     void check_abort();
 };
 
-future<> abort_repair_node_ops(utils::UUID ops_uuid);
-
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
 // repair_start() starts the requested repair on this node. It returns an
