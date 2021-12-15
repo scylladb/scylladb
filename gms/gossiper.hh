@@ -305,7 +305,7 @@ private:
      *
      * @param endpoint endpoint to be removed from the current membership.
      */
-    void evict_from_membership(inet_address endpoint);
+    future<> evict_from_membership(inet_address endpoint);
 public:
     /**
      * Removes the endpoint from Gossip but retains endpoint state
@@ -445,7 +445,7 @@ public:
     bool is_alive(inet_address ep) const;
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
-    void wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
+    future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
@@ -535,7 +535,7 @@ public:
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */
-    void add_saved_endpoint(inet_address ep);
+    future<> add_saved_endpoint(inet_address ep);
 
     future<> add_local_application_state(application_state state, versioned_value value);
 
@@ -612,7 +612,7 @@ private:
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 public:
     void check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
-    void maybe_enable_features();
+    future<> maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
 public:

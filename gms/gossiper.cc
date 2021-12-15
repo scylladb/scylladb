@@ -108,11 +108,11 @@ class feature_enabler : public i_endpoint_state_change_subscriber {
 public:
     feature_enabler(gossiper& g) : _g(g) {}
     void on_join(inet_address ep, endpoint_state state) override {
-        _g.maybe_enable_features();
+        _g.maybe_enable_features().get();
     }
     void on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            _g.maybe_enable_features();
+            _g.maybe_enable_features().get();
         }
     }
     void before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { }
@@ -664,7 +664,7 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
             gossiper.remove_endpoint(endpoint);
-            gossiper.evict_from_membership(endpoint);
+            gossiper.evict_from_membership(endpoint).get();
             logger.info("Finished to force remove node {}", endpoint);
         }).handle_exception([endpoint] (auto ep) {
             logger.warn("Failed to force remove node {}: {}", endpoint, ep);
@@ -723,7 +723,7 @@ void gossiper::do_status_check() {
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-            evict_from_membership(endpoint); // can get rid of the state immediately
+            evict_from_membership(endpoint).get(); // can get rid of the state immediately
         }
 
         // check for dead state removal
@@ -731,7 +731,7 @@ void gossiper::do_status_check() {
         if (!is_alive && (now > expire_time)
              && (!get_token_metadata_ptr()->is_member(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-            evict_from_membership(endpoint);
+            evict_from_membership(endpoint).get();
         }
     }
 
@@ -1107,13 +1107,12 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcep
     return max_version;
 }
 
-// Runs inside seastar::async context
-void gossiper::evict_from_membership(inet_address endpoint) {
-    auto permit = lock_endpoint(endpoint).get0();
+future<> gossiper::evict_from_membership(inet_address endpoint) {
+    auto permit = co_await lock_endpoint(endpoint);
     _unreachable_endpoints.erase(endpoint);
-    container().invoke_on_all([endpoint] (auto& g) {
+    co_await container().invoke_on_all([endpoint] (auto& g) {
         g.endpoint_state_map.erase(endpoint);
-    }).get();
+    });
     _expire_time_endpoint_map.erase(endpoint);
     quarantine_endpoint(endpoint);
     logger.debug("evicting {} from gossip", endpoint);
@@ -2005,11 +2004,10 @@ void gossiper::maybe_initialize_local_state(int generation_nbr) {
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::add_saved_endpoint(inet_address ep) {
+future<> gossiper::add_saved_endpoint(inet_address ep) {
     if (ep == get_broadcast_address()) {
         logger.debug("Attempt to add self as saved endpoint");
-        return;
+        co_return;
     }
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
@@ -2032,7 +2030,7 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     }
     ep_state.mark_dead();
     endpoint_state_map[ep] = ep_state;
-    replicate(ep, ep_state).get();
+    co_await replicate(ep, ep_state);
     _unreachable_endpoints[ep] = now();
     logger.trace("Adding saved endpoint {} {}", ep, ep_state.get_heart_beat_state().get_generation());
 }
@@ -2244,15 +2242,14 @@ bool gossiper::is_alive(inet_address ep) const {
     return false;
 }
 
-// Runs inside seastar::async context
-void gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
         std::vector<gms::inet_address> live_nodes;
         for (const auto& node: nodes) {
-            size_t nr_alive = container().map_reduce0([node] (gossiper& g) -> size_t {
+            size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
                 return g.is_alive(node) ? 1 : 0;
-            }, 0, std::plus<size_t>()).get0();
+            }, 0, std::plus<size_t>());
             logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
             if (nr_alive == smp::count) {
                 live_nodes.push_back(node);
@@ -2266,7 +2263,7 @@ void gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::mil
             throw std::runtime_error(format("Failed to mark node as alive in {} ms, nodes={}, live_nodes={}",
                     timeout.count(), nodes, live_nodes));
         }
-        sleep_abortable(std::chrono::milliseconds(100), _abort_source).get();
+        co_await sleep_abortable(std::chrono::milliseconds(100), _abort_source);
     }
 }
 
@@ -2379,7 +2376,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
     auto do_enable_features = [this] {
         return async([this] {
             if (!std::exchange(_gossip_settled, true)) {
-               maybe_enable_features();
+               maybe_enable_features().get();
             }
         });
     };
@@ -2570,21 +2567,20 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     }
 }
 
-// Runs inside seastar::async context
-void gossiper::maybe_enable_features() {
+future<> gossiper::maybe_enable_features() {
     if (!_gossip_settled) {
-        return;
+        co_return;
     }
-    auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
+    auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
-    container().invoke_on_all([&features] (gossiper& g) {
+    co_await container().invoke_on_all([&features] (gossiper& g) {
         // gms::feature::enable should be run within seastar::async context
         return seastar::async([&features, &g] {
             for (auto&& name : features) {
                 g._feature_service.enable(name);
             }
         });
-    }).get();
+    });
 }
 
 locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
