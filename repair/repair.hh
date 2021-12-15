@@ -103,8 +103,6 @@ future<int> repair_start(seastar::sharded<repair_service>& repair,
 // instead of just "RUNNING".
 enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 
-void check_in_shutdown();
-
 enum class repair_checksum {
     legacy = 0,
     streamed = 1,
@@ -201,6 +199,7 @@ public:
     void check_failed_ranges();
     void abort();
     void check_in_abort();
+    void check_in_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);

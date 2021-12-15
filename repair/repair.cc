@@ -520,8 +520,8 @@ future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
     });
 }
 
-void check_in_shutdown() {
-    the_repair_tracker().check_in_shutdown();
+void repair_info::check_in_shutdown() {
+    rs.repair_tracker().check_in_shutdown();
 }
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -1013,7 +1013,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // itself does very little (mainly tell other nodes and CPUs what to do).
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     seastar::sharded<replica::database>& db = get_db();
-    check_in_shutdown();
+    repair_tracker().check_in_shutdown();
 
     repair_options options(options_map);
 

@@ -2640,7 +2640,7 @@ private:
 
     // Step A: Negotiate sync boundary to use
     op_status negotiate_sync_boundary(repair_meta& master) {
-        check_in_shutdown();
+        _ri.check_in_shutdown();
         _ri.check_in_abort();
         _sync_boundaries.clear();
         _combined_hashes.clear();
@@ -2700,7 +2700,7 @@ private:
 
     // Step B: Get missing rows from peer nodes so that local node contains all the rows
     op_status get_missing_rows_from_follower_nodes(repair_meta& master) {
-        check_in_shutdown();
+        _ri.check_in_shutdown();
         _ri.check_in_abort();
         // `combined_hashes` contains the combined hashes for the
         // `_working_row_buf`. Like `_row_buf`, `_working_row_buf` contains
@@ -2832,7 +2832,7 @@ private:
     void send_missing_rows_to_follower_nodes(repair_meta& master) {
         // At this time, repair master contains all the rows between (_last_sync_boundary, _current_sync_boundary]
         // So we can figure out which rows peer node are missing and send the missing rows to them
-        check_in_shutdown();
+        _ri.check_in_shutdown();
         _ri.check_in_abort();
         repair_hash_set local_row_hash_sets = master.working_row_hashes().get0();
         auto sz = _all_live_peer_nodes.size();
@@ -2902,7 +2902,7 @@ private:
 public:
     future<> run() {
         return seastar::async([this] {
-            check_in_shutdown();
+            _ri.check_in_shutdown();
             _ri.check_in_abort();
             auto repair_meta_id = repair_meta::get_next_repair_meta_id().get0();
             auto algorithm = get_common_diff_detect_algorithm(_ri.messaging.local(), _all_live_peer_nodes);
