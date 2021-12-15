@@ -132,11 +132,11 @@ void migration_manager::init_messaging_service()
         auto src = netw::messaging_service::get_source(cinfo);
         auto f = make_ready_future<>();
         if (cm) {
-            f = do_with(std::move(*cm), get_local_shared_storage_proxy(), [this, src] (const std::vector<canonical_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+            f = do_with(std::move(*cm), [this, src] (const std::vector<canonical_mutation>& mutations) {
                 return merge_schema_in_background(src, mutations);
             });
         } else {
-            f = do_with(std::move(fm), get_local_shared_storage_proxy(), [this, src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+            f = do_with(std::move(fm), [this, src] (const std::vector<frozen_mutation>& mutations) {
                 return merge_schema_in_background(src, mutations);
             });
         }
