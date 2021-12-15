@@ -629,10 +629,6 @@ std::vector<mutation> migration_manager::prepare_keyspace_update_announcement(lw
     return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
 }
 
-future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm) {
-    return announce(prepare_keyspace_update_announcement(std::move(ksm)));
-}
-
 std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_shared_ptr<keyspace_metadata> ksm) {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
@@ -640,10 +636,6 @@ std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_sh
     db.validate_new_keyspace(*ksm);
     mlogger.info("Create new Keyspace: {}", ksm);
     return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
-}
-
-future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
-    return announce(prepare_new_keyspace_announcement(std::move(ksm)));
 }
 
 future<> migration_manager::announce_new_column_family(schema_ptr cfm)
@@ -829,10 +821,6 @@ std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(cons
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
     return db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
-}
-
-future<> migration_manager::announce_keyspace_drop(const sstring& ks_name) {
-    return announce(prepare_keyspace_drop_announcement(ks_name));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,
