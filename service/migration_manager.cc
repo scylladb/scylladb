@@ -675,7 +675,9 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
             std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(mutations));
             co_await coroutine::maybe_yield();
         }
-        get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
+        co_await seastar::async([&] {
+            get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
+        });
         co_return co_await include_keyspace(*keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
