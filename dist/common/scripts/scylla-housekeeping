@@ -100,7 +100,7 @@ def version_compare(a, b):
 def create_uuid_file(fl):
     with open(args.uuid_file, 'w') as myfile:
         myfile.write(str(uuid.uuid1()) + "\n")
-        os.fchmod(myfile, 0o644)
+    os.chmod(args.uuid_file, 0o644)
 
 
 def sanitize_version(version):
