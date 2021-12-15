@@ -952,21 +952,19 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
     if (_raft_gr.is_enabled()) {
+        assert(this_shard_id() == 0);
         auto schema_features = _feat.cluster_schema_features();
         auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-        auto func = [&adjusted_schema] (migration_manager& mm) -> future<> {
-            raft::command cmd;
-            ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
-            // todo: add schema version into command, to apply
-            // only on condition the version is the same.
-            // qqq: what happens if there is a command in between?
-            // there is a new schema version, apply skipped, but
-            // we don't get a proper error.
-            co_return co_await mm._raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
-            // TODO: return "retry" error if apply is a no-op - check
-            // new schema version
-        };
-        co_return co_await container().invoke_on(0, func);
+        raft::command cmd;
+        ser::serialize(cmd, std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end()));
+        // todo: add schema version into command, to apply
+        // only on condition the version is the same.
+        // qqq: what happens if there is a command in between?
+        // there is a new schema version, apply skipped, but
+        // we don't get a proper error.
+        co_return co_await _raft_gr.group0().add_entry(std::move(cmd), raft::wait_type::applied);
+        // TODO: return "retry" error if apply is a no-op - check
+        // new schema version
     } else {
         auto f = db::schema_tables::merge_schema(_storage_proxy.container(), _feat, schema);
 
@@ -991,9 +989,8 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
 
 future<> migration_manager::schema_read_barrier() {
     if (_raft_gr.is_enabled()) {
-        return container().invoke_on(0, [] (migration_manager& mm) {
-            return mm._raft_gr.group0().read_barrier();
-        });
+        assert(this_shard_id() == 0);
+        return _raft_gr.group0().read_barrier();
     }
     return make_ready_future();
 }
