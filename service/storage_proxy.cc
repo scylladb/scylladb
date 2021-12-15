@@ -1348,14 +1348,22 @@ endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_v
 }
 
 query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
-    // Unpaged and reverse queries.
-    // FIXME: some reversed queries are no longer unlimited.
-    // To filter these out we need to know if it's a single partition query.
-    // Take the partition key range as a parameter? This would require changing many call sites
-    // where the partition key range is not immediately available.
-    // For now we ignore the issue, return the 'wrong' limit for some reversed queries, and wait until all reversed queries are fixed.
-    if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
+    if (!slice.options.contains<query::partition_slice::option::allow_short_read>()) { // Unpaged
         return _db.local().get_unlimited_query_max_result_size();
+    } else if (slice.options.contains<query::partition_slice::option::reversed>()) { // Reversed queries
+        if (_features.cluster_supports_reduced_revenced_queries_limit()) {
+            // If the whole cluster supports new more efficient reversed
+            // queries, then we can use regular limit. We still need to set
+            // unlimited_* limits for reversing_reader that's still used for
+            // KA/LA sstables.
+            auto limit = _db.local().get_unlimited_query_max_result_size();
+            limit.soft_limit = query::result_memory_limiter::maximum_result_size;
+            limit.hard_limit = query::result_memory_limiter::maximum_result_size;
+            return limit;
+        } else {
+            return _db.local().get_unlimited_query_max_result_size();
+        }
+
     } else {
         return query::max_result_size(query::result_memory_limiter::maximum_result_size);
     }
