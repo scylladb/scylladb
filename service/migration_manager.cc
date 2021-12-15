@@ -638,11 +638,6 @@ std::vector<mutation> migration_manager::prepare_new_keyspace_announcement(lw_sh
     return db::schema_tables::make_create_keyspace_mutations(ksm, api::new_timestamp());
 }
 
-future<> migration_manager::announce_new_column_family(schema_ptr cfm)
-{
-    return announce_new_column_family(std::move(cfm), api::new_timestamp());
-}
-
 future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm)
 {
     return prepare_new_column_family_announcement(std::move(cfm), api::new_timestamp());
@@ -659,10 +654,6 @@ future<std::vector<mutation>> migration_manager::include_keyspace(
     mutation m = co_await db::schema_tables::read_keyspace_mutation(_storage_proxy.container(), keyspace.name());
     mutations.push_back(std::move(m));
     co_return std::move(mutations);
-}
-
-future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp) {
-    co_await announce(co_await prepare_new_column_family_announcement(std::move(cfm), timestamp));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp) {
@@ -723,10 +714,6 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_update_an
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
                                                          cfm->cf_name(), cfm->ks_name())));
     }
-}
-
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::optional<api::timestamp_type> ts_opt) {
-    co_return co_await announce(co_await prepare_column_family_update_announcement(std::move(cfm), from_thrift, {}, ts_opt));
 }
 
 future<std::vector<mutation>> migration_manager::do_prepare_new_type_announcement(user_type new_type) {
@@ -873,12 +860,6 @@ future<std::vector<mutation>> migration_manager::prepare_column_family_drop_anno
     }
 }
 
-future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
-                                                        const sstring& cf_name,
-                                                        drop_views drop_views) {
-    co_return co_await announce(co_await prepare_column_family_drop_announcement(ks_name, cf_name, drop_views));
-}
-
 future<std::vector<mutation>> migration_manager::prepare_type_drop_announcement(user_type dropped_type) {
     auto& db = _storage_proxy.get_db().local();
     auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
@@ -904,10 +885,6 @@ future<std::vector<mutation>> migration_manager::prepare_new_view_announcement(v
     } catch (const replica::no_such_keyspace& e) {
         co_return coroutine::make_exception(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
     }
-}
-
-future<> migration_manager::announce_new_view(view_ptr view) {
-    co_return co_await announce(co_await prepare_new_view_announcement(std::move(view)));
 }
 
 future<std::vector<mutation>> migration_manager::prepare_view_update_announcement(view_ptr view) {

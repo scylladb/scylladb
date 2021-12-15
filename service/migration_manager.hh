@@ -136,13 +136,10 @@ public:
 
     // The timestamp parameter can be used to ensure that all nodes update their internal tables' schemas
     // with identical timestamps, which can prevent an undeeded schema exchange
-    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::optional<api::timestamp_type> timestamp);
     future<std::vector<mutation>> prepare_column_family_update_announcement(schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, std::optional<api::timestamp_type> ts_opt);
 
-    future<> announce_new_column_family(schema_ptr cfm);
     future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm);
 
-    future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp);
     future<std::vector<mutation>> prepare_new_column_family_announcement(schema_ptr cfm, api::timestamp_type timestamp);
 
     future<std::vector<mutation>> prepare_new_type_announcement(user_type new_type);
@@ -161,12 +158,10 @@ public:
 
     class drop_views_tag;
     using drop_views = bool_class<drop_views_tag>;
-    future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
     future<std::vector<mutation>> prepare_column_family_drop_announcement(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
 
     future<std::vector<mutation>> prepare_type_drop_announcement(user_type dropped_type);
 
-    future<> announce_new_view(view_ptr view);
     future<std::vector<mutation>> prepare_new_view_announcement(view_ptr view);
 
     future<std::vector<mutation>> prepare_view_update_announcement(view_ptr view);
