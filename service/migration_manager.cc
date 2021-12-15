@@ -174,7 +174,6 @@ void migration_manager::init_messaging_service()
         return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
     _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
-        get_local_storage_proxy().get_stats().replica_cross_shard_ops += shard != this_shard_id();
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
         return container().invoke_on(shard, [v] (auto&& sp) {
             mlogger.debug("Schema version request for {}", v);
