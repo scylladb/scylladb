@@ -248,7 +248,6 @@ private:
     void done(repair_uniq_id id, bool succeeded);
 public:
     explicit tracker(size_t max_repair_memory);
-    ~tracker();
     repair_status get(int id) const;
     repair_uniq_id next_repair_command();
     future<> shutdown();
