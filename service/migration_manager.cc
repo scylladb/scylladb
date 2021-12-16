@@ -166,8 +166,6 @@ void migration_manager::init_messaging_service()
                 return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
             }));
             return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(std::move(fm), std::move(cm)));
-        }).finally([p = get_local_shared_storage_proxy()] {
-            // keep local proxy alive
         });
     });
     _messaging.register_schema_check([] {
