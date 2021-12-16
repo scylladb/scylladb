@@ -64,7 +64,7 @@ void raft_group_registry::init_rpc_verbs() {
            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request)] (raft_rpc& rpc) mutable {
             rpc.append_entries(std::move(from), std::move(append_request));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
@@ -72,7 +72,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_reply reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, reply = std::move(reply)] (raft_rpc& rpc) mutable {
             rpc.append_entries_reply(std::move(from), std::move(reply));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
@@ -80,7 +80,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_request vote_request) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_request] (raft_rpc& rpc) mutable {
             rpc.request_vote(std::move(from), std::move(vote_request));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
@@ -88,7 +88,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_reply vote_reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_reply] (raft_rpc& rpc) mutable {
             rpc.request_vote_reply(std::move(from), std::move(vote_reply));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
@@ -96,7 +96,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::timeout_now timeout_now) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, timeout_now] (raft_rpc& rpc) mutable {
             rpc.timeout_now_request(std::move(from), std::move(timeout_now));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
@@ -104,7 +104,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum read_quorum) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum] (raft_rpc& rpc) mutable {
             rpc.read_quorum_request(std::move(from), std::move(read_quorum));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
@@ -112,7 +112,7 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum_reply read_quorum_reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum_reply] (raft_rpc& rpc) mutable {
             rpc.read_quorum_reply(std::move(from), std::move(read_quorum_reply));
-            return make_ready_future<>();
+            return netw::messaging_service::no_wait();
         });
     });
 
