@@ -1348,12 +1348,13 @@ endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_v
 }
 
 query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
-    // Unpaged and reverse queries.
-    // FIXME: some reversed queries are no longer unlimited.
-    // To filter these out we need to know if it's a single partition query.
-    // Take the partition key range as a parameter? This would require changing many call sites
-    // where the partition key range is not immediately available.
-    // For now we ignore the issue, return the 'wrong' limit for some reversed queries, and wait until all reversed queries are fixed.
+    if (_features.cluster_supports_separate_page_size_and_safety_limit()) {
+        auto max_size = _db.local().get_unlimited_query_max_result_size();
+        return query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
+    }
+    // FIXME: Remove the code below once SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT
+    //        cluster feature is released for more than 2 years and can be
+    //        retired.
     if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
         return _db.local().get_unlimited_query_max_result_size();
     } else {
