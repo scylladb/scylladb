@@ -474,50 +474,6 @@ public:
     future<> send_replication_finished(msg_addr id, inet_address from);
 
     // RAFT verbs
-    void register_raft_send_snapshot(std::function<future<raft::snapshot_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func);
-    future<> unregister_raft_send_snapshot();
-    future<raft::snapshot_reply> send_raft_snapshot(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot);
-
-    void register_raft_append_entries(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::append_request)>&& func);
-    future<> unregister_raft_append_entries();
-    future<> send_raft_append_entries(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::append_request& append_request);
-
-    void register_raft_append_entries_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::append_reply)>&& func);
-    future<> unregister_raft_append_entries_reply();
-    future<> send_raft_append_entries_reply(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::append_reply& reply);
-
-    void register_raft_vote_request(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::vote_request)>&& func);
-    future<> unregister_raft_vote_request();
-    future<> send_raft_vote_request(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::vote_request& vote_request);
-
-    void register_raft_vote_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::vote_reply)>&& func);
-    future<> unregister_raft_vote_reply();
-    future<> send_raft_vote_reply(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::vote_reply& vote_reply);
-
-    void register_raft_timeout_now(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::timeout_now)>&& func);
-    future<> unregister_raft_timeout_now();
-    future<> send_raft_timeout_now(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::timeout_now& timeout_now);
-
-    void register_raft_read_quorum(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum)>&& func);
-    future<> unregister_raft_read_quorum();
-    future<> send_raft_read_quorum(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::read_quorum& check_quorum);
-
-    void register_raft_read_quorum_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::read_quorum_reply)>&& func);
-    future<> unregister_raft_read_quorum_reply();
-    future<> send_raft_read_quorum_reply(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::read_quorum_reply& check_quorum_reply);
-
-    void register_raft_execute_read_barrier_on_leader(std::function<future<raft::read_barrier_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id)>&& func);
-    future<> unregister_raft_execute_read_barrier_on_leader();
-    future<raft::read_barrier_reply> send_raft_execute_read_barrier_on_leader(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id);
-
-    void register_raft_add_entry(std::function<future<raft::add_entry_reply> (const rpc::client_info&, rpc::opt_time_point, raft::group_id, raft::server_id from_id, raft::server_id dst_id, raft::command cmd)>&& func);
-    future<> unregister_raft_add_entry();
-    future<raft::add_entry_reply> send_raft_add_entry(msg_addr id, clock_type::time_point timeout, raft::group_id, raft::server_id from_id, raft::server_id dst_id, const raft::command& cmd);
-
-    void register_raft_modify_config(std::function<future<raft::add_entry_reply>(const rpc::client_info&, rpc::opt_time_point, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, std::vector<raft::server_address> add, std::vector<raft::server_id> del)>&& func);
-    future<> unregister_raft_modify_config();
-    future<raft::add_entry_reply> send_raft_modify_config(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const std::vector<raft::server_address>& add, const std::vector<raft::server_id>& del);
-
     void register_group0_peer_exchange(std::function<future<service::group0_peer_exchange> (const rpc::client_info&, rpc::opt_time_point, std::vector<raft::server_address>)>&& func);
     future<> unregister_group0_peer_exchange();
     future<service::group0_peer_exchange> send_group0_peer_exchange(msg_addr id, clock_type::time_point timeout, const std::vector<raft::server_address>& peers);
