@@ -254,8 +254,6 @@ private:
     seastar::gate _gate;
     // Set when the repair service is being shutdown
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
-    // Triggered when service is being shutdown
-    seastar::abort_source _shutdown_as;
     // Triggered when all repairs are requested to be aborted.
     // It is immediately initialized again after an abort.
     seastar::abort_source _abort_all_as;
@@ -277,7 +275,6 @@ public:
     repair_uniq_id next_repair_command();
     future<> shutdown();
     void check_in_shutdown();
-    seastar::abort_source& get_shutdown_abort_source();
     void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
     void remove_repair_info(int id);
     lw_shared_ptr<repair_info> get_repair_info(int id);

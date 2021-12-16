@@ -426,7 +426,6 @@ repair_uniq_id tracker::next_repair_command() {
 
 future<> tracker::shutdown() {
     _shutdown.store(true, std::memory_order_relaxed);
-    _shutdown_as.request_abort();
     return _gate.close();
 }
 
@@ -434,10 +433,6 @@ void tracker::check_in_shutdown() {
     if (_shutdown.load(std::memory_order_relaxed)) {
         throw std::runtime_error(format("Repair service is being shutdown"));
     }
-}
-
-seastar::abort_source& tracker::get_shutdown_abort_source() {
-    return _shutdown_as;
 }
 
 void tracker::add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
