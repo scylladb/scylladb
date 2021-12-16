@@ -610,8 +610,12 @@ void storage_service::bootstrap() {
     if (!_db.local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
-
-        if (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
+        int retry = 0;
+        while (get_token_metadata_ptr()->count_normal_token_owners() == 0) {
+            if (retry++ < 500) {
+                sleep_abortable(std::chrono::milliseconds(10), _abort_source).get();
+                continue;
+            }
             // We're joining an existing cluster, so there are normal nodes in the cluster.
             // We've waited for tokens to arrive.
             // But we didn't see any normal token owners. Something's wrong, we cannot proceed.
