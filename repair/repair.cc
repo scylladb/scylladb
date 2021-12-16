@@ -479,15 +479,7 @@ void tracker::abort_all_repairs() {
         auto& ri = x.second;
         ri->abort();
     }
-    if (this_shard_id() == 0) {
-        _abort_all_as.request_abort();
-        _abort_all_as = seastar::abort_source();
-    }
     rlogger.info0("Aborted {} repair job(s)", count);
-}
-
-seastar::abort_source& tracker::get_abort_all_abort_source() {
-    return _abort_all_as;
 }
 
 void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
