@@ -72,6 +72,8 @@ class versioned_value;
 
 namespace service {
 
+class storage_proxy;
+
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
@@ -87,13 +89,14 @@ private:
     static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
     netw::messaging_service& _messaging;
+    service::storage_proxy& _storage_proxy;
     gms::gossiper& _gossiper;
     seastar::abort_source _as;
     service::raft_group_registry& _raft_gr;
     serialized_action _schema_push;
     utils::UUID _schema_version_to_publish;
 public:
-    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
+    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms, service::storage_proxy&, gms::gossiper& gossiper, service::raft_group_registry& raft_gr);
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
