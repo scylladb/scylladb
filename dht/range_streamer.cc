@@ -251,25 +251,6 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_ran
 }
 
 future<> range_streamer::stream_async() {
-    return seastar::async([this] {
-        int sleep_time = 60;
-        for (;;) {
-            try {
-                do_stream_async().get();
-                break;
-            } catch (...) {
-                logger.warn("{} failed to stream. Will retry in {} seconds ...", _description, sleep_time);
-                sleep_abortable(std::chrono::seconds(sleep_time), _abort_source).get();
-                sleep_time *= 1.5;
-                if (++_nr_retried >= _nr_max_retry) {
-                    throw;
-                }
-            }
-        }
-    });
-}
-
-future<> range_streamer::do_stream_async() {
     auto nr_ranges_remaining = nr_ranges_to_stream();
     logger.info("{} starts, nr_ranges_remaining={}", _description, nr_ranges_remaining);
     auto start = lowres_clock::now();

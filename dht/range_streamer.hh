@@ -142,7 +142,6 @@ private:
     }
 public:
     future<> stream_async();
-    future<> do_stream_async();
     size_t nr_ranges_to_stream();
 private:
     distributed<replica::database>& _db;
@@ -155,9 +154,6 @@ private:
     streaming::stream_reason _reason;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
-    // Retry the stream plan _nr_max_retry times
-    unsigned _nr_retried = 0;
-    unsigned _nr_max_retry = 5;
     // Number of tx and rx ranges added
     unsigned _nr_tx_added = 0;
     unsigned _nr_rx_added = 0;
