@@ -88,4 +88,8 @@ public:
         }
         return std::nullopt;
     }
+
+    bool discardable() const {
+        return !has_active_tombstone();
+    }
 };

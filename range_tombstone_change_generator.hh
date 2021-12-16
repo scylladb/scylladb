@@ -132,4 +132,8 @@ public:
         _range_tombstones.clear();
         _lower_bound = position_in_partition::before_all_clustered_rows();
     }
+
+    bool discardable() const {
+        return _range_tombstones.empty();
+    }
 };
