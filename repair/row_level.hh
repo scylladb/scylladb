@@ -60,11 +60,11 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     service::migration_manager& _mm;
+    tracker _tracker;
 
     std::unordered_map<utils::UUID, repair_history> _finished_ranges_history;
 
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
-    std::unique_ptr<tracker> _tracker;
     bool _stopped = false;
 
     size_t _max_repair_memory;

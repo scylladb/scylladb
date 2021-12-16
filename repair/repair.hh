@@ -254,19 +254,17 @@ private:
     seastar::gate _gate;
     // Set when the repair service is being shutdown
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
-    // Map repair id into repair_info. The vector has smp::count elements, each
-    // element will be accessed by only one shard.
-    std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
-    // Each element in the vector is the semaphore used to control the maximum
-    // ranges that can be repaired in parallel. Each element will be accessed
-    // by one shared.
-    std::vector<named_semaphore> _range_parallelism_semaphores;
+    // Map repair id into repair_info.
+    std::unordered_map<int, lw_shared_ptr<repair_info>> _repairs;
+    // The semaphore used to control the maximum
+    // ranges that can be repaired in parallel.
+    named_semaphore _range_parallelism_semaphore;
     static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
     seastar::condition_variable _done_cond;
     void start(repair_uniq_id id);
     void done(repair_uniq_id id, bool succeeded);
 public:
-    explicit tracker(size_t nr_shards, size_t max_repair_memory);
+    explicit tracker(size_t max_repair_memory);
     ~tracker();
     repair_status get(int id);
     repair_uniq_id next_repair_command();

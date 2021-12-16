@@ -338,7 +338,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(re
     co_return std::list<gms::inet_address>(participating_hosts.begin(), participating_hosts.end());
 }
 
-static tracker* _the_tracker = nullptr;
+static thread_local tracker* _the_tracker = nullptr;
 
 tracker& repair_tracker() {
     if (_the_tracker) {
@@ -355,16 +355,14 @@ float node_ops_metrics::repair_finished_percentage() {
     return 1;
 }
 
-tracker::tracker(size_t nr_shards, size_t max_repair_memory)
+tracker::tracker(size_t max_repair_memory)
     : _shutdown(false)
-    , _repairs(nr_shards) {
-    auto nr = std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range() / 4));
+    , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range() / 4)),
+            named_semaphore_exception_factory{"repair range parallelism"})
+{
+    auto nr = _range_parallelism_semaphore.available_units();
     rlogger.info("Setting max_repair_memory={}, max_repair_memory_per_range={}, max_repair_ranges_in_parallel={}",
         max_repair_memory, max_repair_memory_per_range(), nr);
-    _range_parallelism_semaphores.reserve(nr_shards);
-    while (nr_shards--) {
-        _range_parallelism_semaphores.emplace_back(named_semaphore(nr, named_semaphore_exception_factory{"repair range parallelism"}));
-    }
     _the_tracker = this;
 }
 
@@ -436,16 +434,16 @@ void tracker::check_in_shutdown() {
 }
 
 void tracker::add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
-    _repairs[this_shard_id()].emplace(id, ri);
+    _repairs.emplace(id, ri);
 }
 
 void tracker::remove_repair_info(int id) {
-    _repairs[this_shard_id()].erase(id);
+    _repairs.erase(id);
 }
 
 lw_shared_ptr<repair_info> tracker::get_repair_info(int id) {
-    auto it = _repairs[this_shard_id()].find(id);
-    if (it != _repairs[this_shard_id()].end()) {
+    auto it = _repairs.find(id);
+    if (it != _repairs.end()) {
         return it->second;
     }
     return {};
@@ -475,7 +473,7 @@ size_t tracker::nr_running_repair_jobs() {
 
 void tracker::abort_all_repairs() {
     size_t count = nr_running_repair_jobs();
-    for (auto& x : _repairs[this_shard_id()]) {
+    for (auto& x : _repairs) {
         auto& ri = x.second;
         ri->abort();
     }
@@ -483,7 +481,7 @@ void tracker::abort_all_repairs() {
 }
 
 void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
-    for (auto& x : _repairs[this_shard_id()]) {
+    for (auto& x : _repairs) {
         auto& ri = x.second;
         if (ri->ops_uuid() && ri->ops_uuid().value() == ops_uuid) {
             rlogger.info0("Aborted repair jobs for ops_uuid={}", ops_uuid);
@@ -495,7 +493,7 @@ void tracker::abort_repair_node_ops(utils::UUID ops_uuid) {
 float tracker::report_progress(streaming::stream_reason reason) {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
-    for (auto& x : _repairs[this_shard_id()]) {
+    for (auto& x : _repairs) {
         auto& ri = x.second;
         if (ri->reason == reason) {
             nr_ranges_total += ri->nr_ranges_total;
@@ -506,7 +504,7 @@ float tracker::report_progress(streaming::stream_reason reason) {
 }
 
 named_semaphore& tracker::range_parallelism_semaphore() {
-    return _range_parallelism_semaphores[this_shard_id()];
+    return _range_parallelism_semaphore;
 }
 
 future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
@@ -1243,8 +1241,8 @@ future<repair_status> repair_await_completion(seastar::sharded<replica::database
 }
 
 future<> repair_service::shutdown() {
+    co_await repair_tracker().shutdown();
     if (this_shard_id() == 0) {
-        co_await repair_tracker().shutdown();
         co_await shutdown_all_row_level_repair();
     }
 }

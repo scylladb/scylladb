@@ -3111,12 +3111,12 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sys_dist_ks(sys_dist_ks)
     , _view_update_generator(vug)
     , _mm(mm)
+    , _tracker(max_repair_memory)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
 {
     if (this_shard_id() == 0) {
         _gossip_helper = make_shared<row_level_repair_gossip_helper>();
-        _tracker = std::make_unique<tracker>(smp::count, max_repair_memory);
         _gossiper.local().register_(_gossip_helper);
     }
 }
