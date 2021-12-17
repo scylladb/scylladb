@@ -3,7 +3,6 @@
 #
 # Copyright (C) 2015-present ScyllaDB
 #
-
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -30,6 +29,7 @@ import xml.etree.ElementTree as ET
 import yaml
 
 from scripts import coverage
+from test.pylib.artifact_registry import ArtifactRegistry
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -68,6 +68,7 @@ class TestSuite(ABC):
 
     # All existing test suites, one suite per path/mode.
     suites = dict()
+    artifacts = ArtifactRegistry()
     _next_id = 0
 
     def __init__(self, path, cfg, options, mode):
@@ -77,6 +78,7 @@ class TestSuite(ABC):
         self.options = options
         self.mode = mode
         self.tests = []
+        self.pending_test_count = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
@@ -150,6 +152,15 @@ class TestSuite(ABC):
     async def add_test(self, shortname):
         pass
 
+    async def run(self, test, options):
+        try:
+            await test.run(options)
+        finally:
+            self.pending_test_count -= 1
+            if self.pending_test_count == 0:
+                await TestSuite.artifacts.cleanup_after_suite(self)
+        return test
+
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
         return self.tests
@@ -177,6 +188,7 @@ class TestSuite(ABC):
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
                     await self.add_test(shortname)
+                    self.pending_test_count += 1
 
             for p in patterns:
                 if p in t:
@@ -719,7 +731,7 @@ def parse_cmd_line():
     def prepare_dir(dirname, pattern):
         # Ensure the dir exists
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
-        # Remove old artefacts
+        # Remove old artifacts
         for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
             pathlib.Path(p).unlink()
 
@@ -793,7 +805,7 @@ async def run_all_tests(signaled, options):
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 await reap(done, pending, signaled)
-            pending.add(asyncio.create_task(test.run(options)))
+            pending.add(asyncio.create_task(test.suite.run(test, options)))
         # Wait & reap ALL tasks but signaled_task
         # Do not use asyncio.ALL_COMPLETED to print a nice progress report
         while len(pending) > 1:
@@ -802,6 +814,8 @@ async def run_all_tests(signaled, options):
 
     except asyncio.CancelledError:
         return
+    finally:
+        await TestSuite.artifacts.cleanup_before_exit()
 
     console.print_end_blurb()
 
