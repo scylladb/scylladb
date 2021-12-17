@@ -292,7 +292,7 @@ struct compaction_writer {
         : compaction_writer(nullptr, std::move(writer), std::move(sst)) {}
 };
 
-class compacting_sstable_writer {
+class compacted_fragments_writer {
     compaction& _c;
     std::optional<compaction_writer> _compaction_writer = {};
     using creator_func_t = std::function<compaction_writer(const dht::decorated_key&)>;
@@ -311,20 +311,20 @@ private:
         });
     }
 public:
-    explicit compacting_sstable_writer(compaction& c, creator_func_t cpw, stop_func_t scw)
+    explicit compacted_fragments_writer(compaction& c, creator_func_t cpw, stop_func_t scw)
             : _c(c)
             , _create_compaction_writer(std::move(cpw))
             , _stop_compaction_writer(std::move(scw)) {
     }
-    explicit compacting_sstable_writer(compaction& c, creator_func_t cpw, stop_func_t scw, utils::observable<>& sro)
+    explicit compacted_fragments_writer(compaction& c, creator_func_t cpw, stop_func_t scw, utils::observable<>& sro)
             : _c(c)
             , _create_compaction_writer(std::move(cpw))
             , _stop_compaction_writer(std::move(scw))
             , _stop_request_observer(make_stop_request_observer(sro)) {
     }
-    compacting_sstable_writer(compacting_sstable_writer&& other);
-    compacting_sstable_writer& operator=(const compacting_sstable_writer&) = delete;
-    compacting_sstable_writer(const compacting_sstable_writer&) = delete;
+    compacted_fragments_writer(compacted_fragments_writer&& other);
+    compacted_fragments_writer& operator=(const compacted_fragments_writer&) = delete;
+    compacted_fragments_writer(const compacted_fragments_writer&) = delete;
 
     void consume_new_partition(const dht::decorated_key& dk);
 
@@ -605,8 +605,8 @@ protected:
     // result in data resurrection.
     // When compaction finishes, all the temporary sstables generated here will be deleted and removed
     // from table's sstable set.
-    compacting_sstable_writer get_gc_compacting_sstable_writer() {
-        return compacting_sstable_writer(*this,
+    compacted_fragments_writer get_gc_compacted_fragments_writer() {
+        return compacted_fragments_writer(*this,
              [this] (const dht::decorated_key&) { return create_gc_compaction_writer(); },
              [this] (compaction_writer* cw) { stop_gc_compaction_writer(cw); },
              _stop_request_observable);
@@ -698,7 +698,7 @@ private:
         auto consumer = make_interposer_consumer([this] (flat_mutation_reader reader) mutable {
             return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
-                auto cfc = make_stable_flattened_mutations_consumer<compacting_sstable_writer>(get_compacting_sstable_writer());
+                auto cfc = make_stable_flattened_mutations_consumer<compacted_fragments_writer>(get_compacted_fragments_writer());
                 reader.consume_in_thread(std::move(cfc));
             });
         });
@@ -719,19 +719,19 @@ private:
                 auto close_reader = deferred_close(reader);
 
                 if (enable_garbage_collected_sstable_writer()) {
-                    using compact_mutations = compact_for_compaction<compacting_sstable_writer, compacting_sstable_writer>;
+                    using compact_mutations = compact_for_compaction<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
                         max_purgeable_func(),
-                        get_compacting_sstable_writer(),
-                        get_gc_compacting_sstable_writer());
+                        get_compacted_fragments_writer(),
+                        get_gc_compacted_fragments_writer());
 
                     reader.consume_in_thread(std::move(cfc));
                     return;
                 }
-                using compact_mutations = compact_for_compaction<compacting_sstable_writer, noop_compacted_fragments_consumer>;
+                using compact_mutations = compact_for_compaction<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
                     max_purgeable_func(),
-                    get_compacting_sstable_writer(),
+                    get_compacted_fragments_writer(),
                     noop_compacted_fragments_consumer());
 
                 reader.consume_in_thread(std::move(cfc));
@@ -800,8 +800,8 @@ private:
     // stop current writer
     virtual void stop_sstable_writer(compaction_writer* writer) = 0;
 
-    compacting_sstable_writer get_compacting_sstable_writer() {
-        return compacting_sstable_writer(*this,
+    compacted_fragments_writer get_compacted_fragments_writer() {
+        return compacted_fragments_writer(*this,
             [this] (const dht::decorated_key& dk) { return create_compaction_writer(dk); },
             [this] (compaction_writer* cw) { stop_sstable_writer(cw); });
     }
@@ -859,10 +859,10 @@ public:
 
     static future<compaction_result> run(std::unique_ptr<compaction> c);
 
-    friend class compacting_sstable_writer;
+    friend class compacted_fragments_writer;
 };
 
-compacting_sstable_writer::compacting_sstable_writer(compacting_sstable_writer&& other)
+compacted_fragments_writer::compacted_fragments_writer(compacted_fragments_writer&& other)
         : _c(other._c)
         , _compaction_writer(std::move(other._compaction_writer))
         , _create_compaction_writer(std::move(other._create_compaction_writer))
@@ -872,14 +872,14 @@ compacting_sstable_writer::compacting_sstable_writer(compacting_sstable_writer&&
     }
 }
 
-void compacting_sstable_writer::maybe_abort_compaction() {
+void compacted_fragments_writer::maybe_abort_compaction() {
     if (_c._cdata.is_stop_requested()) [[unlikely]] {
         // Compaction manager will catch this exception and re-schedule the compaction.
         throw compaction_stopped_exception(_c._schema->ks_name(), _c._schema->cf_name(), _c._cdata.stop_requested);
     }
 }
 
-void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
+void compacted_fragments_writer::consume_new_partition(const dht::decorated_key& dk) {
     maybe_abort_compaction();
     if (!_compaction_writer) {
         _compaction_writer = _create_compaction_writer(dk);
@@ -891,7 +891,7 @@ void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& 
     _unclosed_partition = true;
 }
 
-stop_iteration compacting_sstable_writer::consume_end_of_partition() {
+stop_iteration compacted_fragments_writer::consume_end_of_partition() {
     auto ret = _compaction_writer->writer.consume_end_of_partition();
     _unclosed_partition = false;
     if (ret == stop_iteration::yes) {
@@ -902,7 +902,7 @@ stop_iteration compacting_sstable_writer::consume_end_of_partition() {
     return ret;
 }
 
-void compacting_sstable_writer::consume_end_of_stream() {
+void compacted_fragments_writer::consume_end_of_stream() {
     if (_compaction_writer) {
         _stop_compaction_writer(&*_compaction_writer);
         _compaction_writer = std::nullopt;
