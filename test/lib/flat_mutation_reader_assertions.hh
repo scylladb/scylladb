@@ -324,6 +324,7 @@ public:
 
     flat_reader_assertions& produces_partition_end() {
         testlog.trace("Expecting partition end");
+        check_rts();
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected partition end but got end of stream"));
@@ -331,7 +332,6 @@ public:
         if (!mfopt->is_end_of_partition()) {
             BOOST_FAIL(format("Expected partition end but got {}", mutation_fragment::printer(*_reader.schema(), *mfopt)));
         }
-        check_rts();
         return *this;
     }
 
