@@ -1578,10 +1578,6 @@ public:
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
     }
 
-    void on_new_partition() override {}
-
-    virtual void on_end_of_compaction() override {}
-
     void stop_sstable_writer(compaction_writer* writer) override {
         if (writer) {
             finish_new_sstable(writer);
