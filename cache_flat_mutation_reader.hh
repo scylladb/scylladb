@@ -726,6 +726,7 @@ void cache_flat_mutation_reader::add_range_tombstone_to_buffer(range_tombstone&&
         _lower_bound = position_in_partition(rt.position());
         _lower_bound_changed = true;
     }
+    clogger.trace("csm {}: push({})", fmt::ptr(this), rt);
     push_mutation_fragment(*_schema, _permit, std::move(rt));
     _read_context.cache()._tracker.on_range_tombstone_read();
 }
