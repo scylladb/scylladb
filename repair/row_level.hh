@@ -67,6 +67,9 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     std::unique_ptr<tracker> _tracker;
     bool _stopped = false;
 
+    size_t _max_repair_memory;
+    seastar::semaphore _memory_sem;
+
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
 
@@ -135,6 +138,8 @@ public:
     sharded<db::system_distributed_keyspace>& get_sys_dist_ks() noexcept { return _sys_dist_ks; }
     sharded<db::view::view_update_generator>& get_view_update_generator() noexcept { return _view_update_generator; }
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
+    size_t max_repair_memory() const { return _max_repair_memory; }
+    seastar::semaphore& memory_sem() { return _memory_sem; }
 };
 
 class repair_info;

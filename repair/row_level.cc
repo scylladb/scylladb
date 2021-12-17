@@ -2908,6 +2908,16 @@ public:
             auto schema_version = s->version();
             bool table_dropped = false;
 
+            auto& mem_sem = _ri.rs.memory_sem();
+            auto max = _ri.rs.max_repair_memory();
+            auto wanted = (_all_live_peer_nodes.size() + 1) * tracker::max_repair_memory_per_range();
+            wanted = std::min(max, wanted);
+            rlogger.trace("repair[{}]: Started to get memory budget, wanted={}, available={}, max_repair_memory={}",
+                    _ri.id.uuid, wanted, mem_sem.current(), max);
+            auto mem_permit = seastar::get_units(mem_sem, wanted).get0();
+            rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
+                    _ri.id.uuid, wanted, mem_sem.current(), max);
+
             auto permit = _ri.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
 
             repair_meta master(_ri.db,
@@ -3093,6 +3103,8 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _sys_dist_ks(sys_dist_ks)
     , _view_update_generator(vug)
     , _mm(mm)
+    , _max_repair_memory(max_repair_memory)
+    , _memory_sem(max_repair_memory)
 {
     if (this_shard_id() == 0) {
         _gossip_helper = make_shared<row_level_repair_gossip_helper>();
