@@ -308,7 +308,7 @@ public:
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
     flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt_, const query::clustering_row_ranges& ck_ranges = {}) {
-        testlog.trace("Expect {}", rt_);
+        testlog.trace("Expect {}, ranges={}", rt_, ck_ranges);
         auto rt = trim(maybe_drop_deletion_time(rt_), ck_ranges);
         _check_rts = true;
         // If looking at any tombstones (which is likely), read them.
